@@ -2,7 +2,7 @@
 
 > **Tài liệu Kiến trúc Xác thực (Authentication) & Ủy quyền Ứng dụng (Authorization)**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** Thiết kế cơ sở nền tảng (Baseline Design) — Chuẩn bị cho pha RLS Design & Migrations.
+> **Trạng thái:** FROZEN BASELINE — Auth Decision 05 đã chốt; Auth Open Decisions 01–04 vẫn giữ nguyên để phê duyệt riêng trước implementation.
 > **Tham chiếu hợp đồng bất biến:** `docs/PROJECT_MASTER.md`, `docs/DATA_CONTRACT.md`, `docs/SUPABASE_SCHEMA_DESIGN.md`.
 
 ---
@@ -31,7 +31,7 @@
    - Mọi thao tác đọc/ghi dữ liệu đều bắt buộc phải được tái thẩm định quyền độc lập ở tầng Máy chủ tin cậy (Next.js Server Actions / Route Handlers) và tầng Cơ sở dữ liệu (RLS & Database Constraints).
 3. **Bảo vệ tuyệt đối Số điện thoại Khách hàng (Zero Phone Exposure):**
    - Tài khoản `SALE` và `TECHNICIAN` tuyệt đối không nhận được chuỗi số điện thoại (`raw_phone` và `normalized_phone`) dưới bất kỳ hình thức nào.
-   - Luồng gọi điện của SALE chỉ truyền `customer_id`; máy chủ tin cậy truy xuất số từ schema cách ly `private.customer_private_contacts` và chuyển tiếp trực tiếp sang tổng đài viễn thông qua API Server-to-Server.
+   - Luồng gọi điện của SALE chỉ truyền định danh không nhạy cảm `customer_id` hoặc `interaction_id`; máy chủ tin cậy phân giải Customer cùng Company, truy xuất số từ schema cách ly `private.customer_private_contacts` và chuyển tiếp trực tiếp sang tổng đài viễn thông qua API Server-to-Server.
 4. **Bất biến lịch sử & Không cascade xóa tác nhân (Historical Preservation):**
    - Khi một nhân sự nghỉ việc (`status = 'INACTIVE'`), toàn bộ dấu vết lịch sử trong quá khứ (`interactions.actor_user_id`, `surveys.completed_by`, `appointments.assignee_id`, `audit_logs.user_id`) phải được bảo toàn vĩnh viễn. Không bao giờ xóa cứng bản ghi hoặc null hóa các khóa ngoại lịch sử.
 5. **Thiết kế sẵn sàng cho Multi-Company (Multi-Tenant Ready):**
@@ -340,8 +340,26 @@ Mỗi yêu cầu nghiệp vụ gửi tới hệ thống đều phải trải qua
        ├──> Sai vai trò yêu cầu ─────────> Trả về HTTP 403 Forbidden (Không đủ đặc quyền vai trò)
        │
        ▼  Quyền hợp lệ
-[Bước 6: Thực thi Nghiệp vụ & Ghi Audit Log nếu nhạy cảm]
+[Bước 6: Thẩm định Điều kiện Riêng của Tài nguyên]
+       │  Kiểm tra phân công hiện hành, quyền sở hữu và trạng thái vòng đời liên quan
+       ├──> Không thỏa mãn ──────────────> Trả về HTTP 403/404 theo quy tắc mặt nạ tài nguyên
+       │
+       ▼  Điều kiện tài nguyên hợp lệ
+[Bước 7: Thực thi Nghiệp vụ & Ghi Audit Log nếu nhạy cảm]
 ```
+
+Chuỗi trên là mô hình ủy quyền canonical đã khóa cho Auth, RLS và mọi đường ghi/đọc ứng dụng:
+
+```text
+authenticated?
+  → user ACTIVE?
+  → company membership ACTIVE?
+  → same company as target resource?
+  → role allowed?
+  → resource-specific authorization condition?
+```
+
+Đối với `TECHNICIAN`, điều kiện riêng của tài nguyên bắt buộc bao gồm một phân công kỹ thuật viên hiện hành. Phân công chỉ hiện hành khi trạng thái thuộc `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; quyền dựa trên phân công chấm dứt ở `COMPLETED`, `CANCELLED`, `REJECTED`.
 
 ### 6.2. Sẵn sàng cho Multi-Company (Multi-Tenant Safety)
 - Trong giai đoạn hiện tại, toàn hệ thống có đúng 1 Company. Tuy nhiên, kiến trúc hàm phân giải thẩm quyền tuyệt đối không sử dụng hardcoded company ID hay giả định global singleton.
@@ -363,9 +381,10 @@ Hệ thống triển khai chính xác ma trận quyền hạn tối thiểu (Lea
 | :--- | :---: | :---: | :---: | :--- |
 | **Xem số điện thoại thật (`raw_phone`)** | **CÓ** (Phải qua API riêng có ghi vết bắt buộc vào `audit_logs`) | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Bảng nằm ở schema `private`; SALE/TECH không có quyền và không có view nào trả về phone. |
 | **Xem số điện thoại chuẩn hóa (`normalized_phone`)** | **CÓ** | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Phân loại dữ liệu nhạy cảm PII; cấm trả về client của SALE/TECH. |
-| **Bấm gọi khách hàng (Click-to-Call)** | **CÓ** (Tùy cấu hình) | **CÓ** (Chỉ truyền `customer_id`, máy chủ tự quay số qua tổng đài) | **TUYỆT ĐỐI CẤM** (Chưa duyệt quy trình gọi) | Server Action kiểm tra quyền, server lấy phone từ `private` schema chuyển SIP PBX. |
+| **Bấm gọi khách hàng (Click-to-Call)** | **CÓ** (Tùy cấu hình) | **CÓ** (Chỉ truyền `customer_id` hoặc `interaction_id`, máy chủ tự quay số qua tổng đài) | **TUYỆT ĐỐI CẤM** (Chưa duyệt quy trình gọi) | Server Action phân giải tài nguyên cùng Company, kiểm tra quyền, lấy phone từ `private` schema và chuyển tới SIP PBX. |
 | **Xuất danh bạ / Export Contacts** | **CÓ** (Theo cấu hình quản trị có kiểm soát) | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Server Action từ chối mọi yêu cầu export từ non-BOSS. |
-| **Xem dữ liệu khách hàng CRM cơ bản** | **CÓ** | **CÓ** (Tên, mã `customer_code`, lịch sử tương tác, báo giá) | **CHỈ XEM CÔNG VIỆC GIAO** (Địa chỉ khảo sát, lịch hẹn) | RLS và Server Component layout filter. |
+| **Xem dữ liệu khách hàng CRM cơ bản** | **CÓ** | **CÓ** (Tên, mã `customer_code`, lịch sử tương tác, báo giá) | **CHỈ PHẠM VI JOB HIỆN HÀNH** (Customer, Survey, địa chỉ và tài nguyên liên quan) | Bắt buộc có active assignment canonical; không mở lịch sử Customer. |
+| **Xem danh bạ nhân sự an toàn cùng Company** | **CÓ** | **CÓ** | **CÓ** | Chỉ qua Safe Staff Directory gồm `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần; không đọc trực tiếp hồ sơ đầy đủ. |
 | **Hộp thư tích hợp (Facebook/Zalo chat)** | **CÓ** | **CÓ** (Chat trực tiếp, phân công hội thoại) | **KHÔNG** | Phân quyền route và RLS bảng `conversations`. |
 | **Xem bảng giá & Quản lý chính sách giá (`pricing_policies`)** | **CÓ** (Toàn quyền đọc trực tiếp, ban hành, chỉnh sửa bản nháp, kích hoạt) | **TUYỆT ĐỐI CẤM ĐỌC TRỰC TIẾP** (Chỉ nhận kết quả thương mại đã tính: PriceCalculation / Báo giá / Đơn hàng) | **TUYỆT ĐỐI CẤM** | RLS bảng `pricing_policies` chỉ cho phép `BOSS_ADMIN`. |
 | **Chốt đơn hàng & Tạo báo giá** | **CÓ** | **CÓ** (Tính giá từ thông số, tạo đơn hàng) | **KHÔNG** | Logic nghiệp vụ Server Action. |
@@ -374,7 +393,7 @@ Hệ thống triển khai chính xác ma trận quyền hạn tối thiểu (Lea
 | **Xem thông tin tiền trên Đơn hàng (`orders`)** | **CÓ** | **CÓ** (Chỉ xem `final_amount`, `deposit_status`, công nợ cần thu của đơn) | **KHÔNG** | Column selection an toàn tại Server Action / View. |
 | **Xác nhận đặt cọc thủ công** | **CÓ** (Kiểm tra khi đối soát tự động không khớp) | **TUYỆT ĐỐI CẤM** (Hệ thống tự động khớp hoặc Sếp duyệt) | **TUYỆT ĐỐI CẤM** | Server Action kiểm tra role `BOSS_ADMIN`. |
 | **Tải lên hợp đồng đã ký (`signed_file_ref`)** | **CÓ** | **CÓ** (Sau khi khách ký, tải lên để kích hoạt xưởng) | **KHÔNG** | Server Action kiểm tra vai trò và quyền cập nhật hợp đồng. |
-| **Nhập kết quả khảo sát đo đạc** | **CÓ** | **KHÔNG** | **CÓ** (Chỉ nhập cho lịch hẹn được phân công hợp lệ `assignee_id`) | Thẩm định quyền phân công hiện tại từ `appointments.assignee_id` (không dùng `completed_by` làm căn cứ ủy quyền hiện tại). |
+| **Nhập kết quả khảo sát đo đạc** | **CÓ** | **KHÔNG** | **CÓ** (Chỉ nhập cho lịch hẹn được phân công ở `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`) | Thẩm định quyền hiện hành từ `appointments.assignee_id`; không dùng `completed_by` làm căn cứ ủy quyền. |
 | **Quản trị thành viên & Phân vai trò** | **CÓ** | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Server Action quản trị, chặn nhân viên tự đổi quyền. |
 
 ### 7.2. Ràng buộc bất biến: Duy nhất 1 SALE active trong mỗi Company
@@ -436,6 +455,7 @@ graph TB
    - Chỉ tồn tại trong môi trường runtime của máy chủ Node.js (Next.js Server Components, Server Actions, Route Handlers).
    - Tuyệt đối không import file cấu hình chứa Service Role Key vào bất kỳ tệp nào có chỉ thị `'use client'`.
    - Tuyệt đối không log Service Role Key ra console hoặc commit vào git repository.
+   - Service Role bỏ qua RLS và không phải là cơ chế ủy quyền. Với thao tác do người dùng khởi xướng, mã máy chủ phải tự kiểm tra lần lượt: danh tính đã xác thực, Company, membership, trạng thái membership, role, Company/scope của tài nguyên mục tiêu và quyền riêng của tài nguyên; chỉ sau đó mới được thực hiện thao tác đặc quyền.
 
 ### 8.2. Trách nhiệm của các thành phần Next.js
 - **Client Components (`'use client'`):**
@@ -566,8 +586,8 @@ sequenceDiagram
     participant CallsDB as DB: public.calls & interactions
     actor Customer as Khách hàng
 
-    Sale->>Server: Bấm "GỌI KHÁCH" (Chỉ gửi { customer_id: "..." })
-    Server->>Server: 1. Xác thực session & role = 'SALE' & status = 'ACTIVE'
+    Sale->>Server: Bấm "GỌI KHÁCH" (Chỉ gửi customer_id hoặc interaction_id)
+    Server->>Server: 1. Xác thực session, Company, membership, role, scope tài nguyên
     Server->>PrivateDB: 2. Lấy raw_phone trong bộ nhớ an toàn của server
     PrivateDB-->>Server: Trả về raw_phone
     Server->>PBX: 3. Gọi API Click-to-Call (Truyền raw_phone của khách & máy nhánh SALE)
@@ -577,6 +597,8 @@ sequenceDiagram
     Server-->>Sale: 6. Trả về phản hồi cho SALE: { call_id: "...", status: "CALLING" }
     Note over Sale: TRÌNH DUYỆT SALE HOÀN TOÀN KHÔNG CÓ SỐ ĐIỆN THOẠI
 ```
+
+Đối với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` không được xuất hiện qua truy vấn trực tiếp, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, transcript đã làm sạch hoặc thông báo lỗi. Nội dung được gọi là “sanitized” nhưng vẫn chứa số điện thoại phải bị xem là chưa làm sạch và bị từ chối theo nguyên tắc fail closed.
 
 ---
 
@@ -743,8 +765,9 @@ Trong pha RLS Design, cần thiết kế các hàm PostgreSQL mang thuộc tính
 2. **`has_company_role(target_company_id uuid, required_role text) RETURNS boolean`:**
    - Kiểm tra xem `auth.uid()` có bản ghi trong `public.company_members` với `company_id = target_company_id`, `role = required_role` và `status = 'ACTIVE'` hay không.
 3. **`is_assigned_technician(appointment_id uuid) RETURNS boolean`:**
-   - Kiểm tra xem `appointments.assignee_id = auth.uid()` (dựa trên phân công khảo sát/lắp đặt hợp lệ hiện tại hoặc phân công lại được duyệt theo nghiệp vụ Appointment/Survey).
-   - **Lưu ý kiến trúc cốt tử:** Tuyệt đối không dùng trường lịch sử `surveys.completed_by = auth.uid()` làm quy tắc tự động cấp quyền truy cập hiện tại. `completed_by` chỉ là bằng chứng lịch sử ghi nhận ai đã hoàn thành khảo sát thực tế. Việc kỹ thuật viên có quyền đọc lại dữ liệu khảo sát sau khi hoàn thành hay không là một quyết định phân quyền cần được phê duyệt (xem Auth Open Decision 05).
+   - Kiểm tra `appointments.assignee_id = auth.uid()` trên phân công khảo sát/lắp đặt hợp lệ hiện tại hoặc phân công lại đã được duyệt.
+   - Vị từ bắt buộc đồng thời kiểm tra người dùng đã xác thực, `user_profiles.status = 'ACTIVE'`, membership cùng Company ở trạng thái `ACTIVE`, role `TECHNICIAN`, đúng Company của tài nguyên và trạng thái phân công thuộc `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`.
+   - Khi trạng thái chuyển sang `COMPLETED`, `CANCELLED` hoặc `REJECTED`, quyền đọc/ghi dựa trên phân công đó chấm dứt. Tuyệt đối không dùng trường lịch sử `surveys.completed_by = auth.uid()` để cấp quyền hiện tại hoặc quyền xem lại lịch sử.
 
 ### 17.3. Danh sách các bảng nhạy cảm yêu cầu chính sách RLS nghiêm ngặt
 - `private.customer_private_contacts`: Không cấp quyền cho `anon` và `authenticated`, không mở PostgREST.
@@ -756,8 +779,8 @@ Trong pha RLS Design, cần thiết kế các hàm PostgreSQL mang thuộc tính
   - `TECHNICIAN`: **TUYỆT ĐỐI CẤM ĐỌC** `pricing_policies`.
 - `company_members`:
   - `BOSS_ADMIN`: Được quyền đọc (`SELECT`), thêm mới (`INSERT`) và cập nhật (`UPDATE`) các bản ghi `company_members` trong phạm vi Company được ủy quyền. Thao tác xóa cứng vật lý thông thường trong ứng dụng (hard DELETE) bị nghiêm cấm vì `company_members` là bản ghi có trạng thái không được xóa (Stateful Non-Deletable Record). Mọi hành động vô hiệu hóa nhân sự hoặc thu hồi quyền truy cập nghiệp vụ bắt buộc phải sử dụng: `company_members.status = 'INACTIVE'`.
-  - `SALE` và `TECHNICIAN`: **Mặc định KHÔNG được cấp quyền đọc trực tiếp toàn bộ danh sách thành viên (`broad direct SELECT`)**. Người dùng non-BOSS chỉ được phép đọc dữ liệu tối thiểu về membership của chính mình (`self-membership`) hoặc dữ liệu định danh nhân sự tối thiểu phục vụ các ca sử dụng ứng dụng đã được phê duyệt chính thức.
-  - Chính sách `SELECT` chi tiết và các ngoại lệ hiển thị tối thiểu sẽ được chuẩn hóa và chốt chính thức trong giai đoạn **RLS DESIGN**.
+  - `SALE` và `TECHNICIAN`: **Không được cấp quyền đọc trực tiếp toàn bộ danh sách thành viên (`broad direct SELECT`)**. Người dùng non-BOSS chỉ được đọc membership của chính mình hoặc Safe Staff Directory cùng Company với allowlist `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần.
+  - Theo **RLS Decision 01 — DECIDED / FROZEN**, Safe Staff Directory được phát hành qua Restricted View nếu dataset tự thân an toàn, hoặc Server DTO nếu cần logic quyền bổ sung; không expose trực tiếp bảng profile/membership đầy đủ.
   - Các hàm trợ giúp ủy quyền (Authorization Helpers) phía máy chủ và cơ sở dữ liệu được phép nội bộ kiểm tra bảng `company_members` khi cần thiết để xác thực `auth.uid()`, `role` và tính hợp lệ của `ACTIVE` membership.
 
 ---
@@ -778,6 +801,11 @@ Dưới đây là các quyết định kiến trúc xác thực và phân quyề
    - Kết hợp kiểm tra nghiệp vụ trước khi mời/đổi role tại Next.js Server Action và khóa cứng bằng Partial Unique Index `uq_company_members_single_active_sale` tại PostgreSQL.
 5. **Quyết định 5 — Bảo toàn lịch sử nhân sự khi nghỉ việc:**
    - Khi nhân sự nghỉ việc, chỉ chuyển `company_members.status = 'INACTIVE'`. Tuyệt đối không xóa bản ghi hoặc null hóa khóa ngoại của nhân viên đó trên các bảng lịch sử tương tác, khảo sát, đơn hàng và audit.
+6. **[AUTH DECISION 05 — DECIDED / FROZEN] Quyền Survey của Kỹ thuật viên theo Phân công Hiện hành:**
+   - **Decision:** Kỹ thuật viên không được xem toàn bộ lịch sử Survey của Customer. Kỹ thuật viên chỉ được đọc Survey liên quan trực tiếp tới Job đang được giao, hoặc Customer của Job đang được giao.
+   - **Authorization/Security Rule:** Bắt buộc đồng thời có người dùng đã xác thực, `user_profiles.status = 'ACTIVE'`, membership `ACTIVE`, cùng Company với tài nguyên, role `TECHNICIAN` và phân công kỹ thuật viên hiện hành. Phân công hiện hành dùng các trạng thái `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; quyền kết thúc tại `COMPLETED`, `CANCELLED`, `REJECTED`.
+   - **Rationale:** Áp dụng quyền tối thiểu cho công việc hiện tại và không phơi bày lịch sử Customer ngoài phạm vi tác nghiệp.
+   - **Implementation Consequence:** `surveys.completed_by` chỉ là bằng chứng lịch sử. Nếu sau này cần cho xem lại công việc đã hoàn tất, phải thiết kế một permission riêng; không được coi historical access là active assignment.
 
 ---
 
@@ -802,10 +830,6 @@ Các vấn đề kiến trúc liên quan đến Auth cần thống nhất trư�
      - *Thời gian chờ do không hoạt động (Inactivity Timeout):* Có tự động ngắt phiên sau một khoảng thời gian người dùng không thao tác hay không?
      - *Thời hạn tối đa của phiên làm việc (Maximum Session Lifetime / Time-box):* Phiên làm việc tổng thể kéo dài tối đa bao lâu trước khi người dùng buộc phải đăng nhập lại?
      - *Hành vi đa phiên (Multi-session Behavior):* Cho phép một tài khoản đăng nhập đồng thời trên nhiều thiết bị/trình duyệt hay giới hạn duy nhất 1 phiên hoạt động?
-5. **[AUTH OPEN DECISION 05] Quyền đọc dữ liệu khảo sát lịch sử của Kỹ thuật viên sau khi hoàn thành (Technician Post-Completion Survey Read Access):**
-   - *Vấn đề:* Sau khi kỹ thuật viên hoàn thành khảo sát đo đạc thực tế (`surveys.completed_by`), kỹ thuật viên có quyền tiếp tục đọc lại thông tin khảo sát/đơn hàng đó hay không, hay quyền truy cập chỉ giới hạn trong thời gian có lịch hẹn khảo sát đang phân công (`appointments.assignee_id`)?
-   - *Lưu ý kiến trúc:* Hợp đồng kiến trúc đóng băng (`DATA_CONTRACT.md`) xác định `completed_by` là bằng chứng lịch sử ghi nhận nhân sự thực hiện, không tự động trao quyền truy cập hiện tại. Nếu doanh nghiệp yêu cầu kỹ thuật viên được đọc lại hồ sơ khảo sát do chính mình thực hiện trong quá khứ, quy tắc này cần được phê duyệt chính thức trước khi thiết kế RLS cho bảng `surveys`.
-
 ---
 
 ## 20. Items Required Before Auth Implementation
@@ -813,8 +837,9 @@ Các vấn đề kiến trúc liên quan đến Auth cần thống nhất trư�
 Trước khi nhóm phát triển tiến hành viết mã nguồn xác thực hoặc cấu hình Supabase Auth thật, các hạng mục sau đây bắt buộc phải được hoàn tất và phê duyệt:
 
 - [ ] **Phê duyệt toàn bộ nội dung tài liệu `docs/AUTH_DESIGN.md`:** Thống nhất các ranh giới tin cậy, ma trận vai trò và luồng phân giải quyền.
-- [ ] **Hoàn thành thiết kế chính sách RLS (`docs/SUPABASE_RLS_DESIGN.md`):** Đặc tả chi tiết từng câu lệnh SQL Policy cho 29 bảng vật lý.
-- [ ] **Chốt Auth Open Decisions 01, 02, 03, 04, 05:** Thống nhất chính sách MFA, thời hạn lời mời, thu hồi phiên khi đổi mật khẩu, chính sách vòng đời phiên và quyền đọc dữ liệu khảo sát lịch sử của kỹ thuật viên.
+- [x] **Hoàn thành thiết kế chính sách RLS (`docs/SUPABASE_RLS_DESIGN.md`):** Baseline RLS và các quyết định RLS 01–05 đã được đóng băng; migration/policy SQL thực tế vẫn thuộc pha implementation.
+- [x] **Chốt Auth Decision 05:** Kỹ thuật viên không có quyền đọc lịch sử Survey sau khi phân công kết thúc; quyền chỉ tồn tại trong phân công hiện hành canonical.
+- [ ] **Chốt Auth Open Decisions 01, 02, 03, 04:** Thống nhất chính sách MFA, thời hạn lời mời, thu hồi phiên khi đổi mật khẩu và chính sách vòng đời phiên.
 - [ ] **Cấu hình Template Email Supabase Auth:** Chuẩn hóa nội dung email mời thành viên (`Invite User`) và email đặt lại mật khẩu (`Reset Password`) bằng tiếng Việt chuyên nghiệp, đúng nhận diện thương hiệu.
 - [ ] **Chuẩn bị các biến môi trường an toàn:** Thiết lập tệp `.env.example` phân định rõ ràng giữa `NEXT_PUBLIC_SUPABASE_ANON_KEY` và `SUPABASE_SERVICE_ROLE_KEY`.
 - [ ] **Rà soát tính nhất quán giữa Auth Helpers và Server Actions:** Bảo đảm mọi Server Action trong dự án đều tuân thủ nguyên tắc gọi hàm `require_company_role()` ở bước đầu tiên.

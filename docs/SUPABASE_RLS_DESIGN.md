@@ -2,7 +2,7 @@
 
 > **Tài liệu Thiết kế Kiến trúc Phân quyền Cấp Dòng (Row Level Security - RLS) & Ranh giới Dữ liệu**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FROZEN BASELINE — RLS Architecture Approved; implementation remains blocked by the Open Decisions listed in Section 25.
+> **Trạng thái:** FROZEN BASELINE — Các quyết định RLS 01–05 trong Section 25 đã được chốt; implementation chỉ còn phụ thuộc các Open Decisions ngoài phạm vi được liệt kê tại Section 25.
 > **Tham chiếu hợp đồng bất biến:**
 > - [`docs/PROJECT_MASTER.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/PROJECT_MASTER.md) (Quy tắc Nghiệp vụ Tổng thể)
 > - [`docs/DATA_CONTRACT.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/DATA_CONTRACT.md) (Quy ước Dữ liệu Chung)
@@ -115,6 +115,21 @@ public.companies (Tenant Boundary)
 > Mọi quyền truy cập dữ liệu nghiệp vụ bắt buộc phải đồng thời thỏa mãn:
 > 1. `user_profiles.status = 'ACTIVE'`
 > 2. `company_members.status = 'ACTIVE'` trong đúng `company_id` của dòng dữ liệu mục tiêu.
+
+### 2.1. Chuỗi Ủy quyền Canonical
+
+Mọi policy, trusted server endpoint và application authorization phải thực hiện cùng một chuỗi kiểm tra theo đúng thứ tự logic:
+
+```text
+authenticated?
+  → user ACTIVE?
+  → company membership ACTIVE?
+  → same company as target row?
+  → role allowed?
+  → resource-specific authorization condition?
+```
+
+Đối với `TECHNICIAN`, điều kiện cuối bắt buộc là tồn tại phân công kỹ thuật viên hiện hành cho Job/tài nguyên mục tiêu. Không được bỏ qua bất kỳ bước nào chỉ vì đường ghi dùng Service Role hoặc chạy trên trusted server.
 
 ---
 
@@ -275,7 +290,7 @@ classDiagram
     1. Bản ghi `company_members` có `role = 'TECHNICIAN'` và `status = 'ACTIVE'` tại Company của lịch hẹn.
     2. Tồn tại quan hệ phân công trực tiếp tới lịch hẹn mục tiêu: `appointments.assignee_id = auth.uid()`.
     3. Lịch hẹn và nhiệm vụ phân công phải đang ở **trạng thái vòng đời còn hiệu lực hành động** (active/actionable lifecycle state).
-  - **Không suy diễn trạng thái chưa chốt:** Do danh mục định danh trạng thái chính thức (`Schema Open Decision 07`), vòng đời dự thảo/hoàn thành khảo sát (`Schema Open Decision 08`) và quyền đọc lịch sử sau hoàn thành (`Auth Open Decision 05`) chưa đóng băng, định từ "active assignment predicate" chính thức sẽ được hoàn thiện khi các quyết định này được chốt (chi tiết tại Mục 25).
+  - **Trạng thái canonical đã khóa:** Phân công hiện hành chỉ gồm `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`. Các trạng thái `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc ngay quyền truy cập dựa trên phân công.
   - **Bất biến lịch sử:** Trường `surveys.completed_by` tiếp tục giữ vai trò là **chứng cứ lịch sử**, tuyệt đối không tự động biến thành căn cứ ủy quyền hiện hành.
   - **Suy diễn quyền Lắp đặt & Bảo hành:**
     - Đối với `installations`: Kỹ thuật viên tiếp cận thông qua lịch hẹn lắp đặt liên kết hợp lệ (`installations.appointment_id → appointments.assignee_id = auth.uid()`).
@@ -300,7 +315,7 @@ classDiagram
         AND cm.role = 'TECHNICIAN'
         AND cm.status = 'ACTIVE'
         AND up.status = 'ACTIVE'
-        -- Vị từ vòng đời bổ sung (active appointment predicate) sẽ được chốt theo Open Decision
+        AND a.status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')
     );
   $$;
   ```
@@ -393,10 +408,14 @@ Hệ thống phân định rõ ranh giới giữa truy vấn chịu sự kiểm 
   - Sếp quản trị mời/hủy kích hoạt thành viên (`inviteMemberAction`, `deactivateMemberAction`).
 - **Yêu cầu kiểm soát an ninh bắt buộc (Strict Pre-Authorization):**
   1. Xác thực danh tính người dùng cuối qua phiên máy chủ, trích xuất `verified_user_id = auth.uid()`.
-  2. Thẩm tra tài khoản `user_profiles.status = 'ACTIVE'`.
-  3. Thẩm tra tư cách thành viên `company_members.status = 'ACTIVE'` và vai trò `role` được phép cho hành động.
-  4. Thẩm tra tài nguyên mục tiêu (`target_company_id`, `customer_id`, ...) thuộc đúng Company mà người dùng có quyền.
-  5. Chỉ sau khi toàn bộ chuỗi kiểm tra trên vượt qua mới sử dụng Service Role Client (hoặc hàm `SECURITY DEFINER` nội bộ) để đọc/ghi, đồng thời ghi vết kiểm toán (`audit_logs`) nếu hành động thuộc diện nhạy cảm.
+  2. Phân giải Company mục tiêu từ tài nguyên/route đã được kiểm tra, không tin cậy Company do client tự khai báo.
+  3. Thẩm tra `user_profiles.status = 'ACTIVE'`.
+  4. Thẩm tra `company_members.status = 'ACTIVE'` trong đúng Company.
+  5. Thẩm tra `company_members.role` được phép cho hành động.
+  6. Thẩm tra tài nguyên mục tiêu thuộc đúng Company/scope và thỏa mãn điều kiện quyền riêng của tài nguyên (ví dụ phân công kỹ thuật hiện hành).
+  7. Chỉ sau khi toàn bộ chuỗi kiểm tra vượt qua mới sử dụng Service Role Client hoặc hàm `SECURITY DEFINER` nội bộ để đọc/ghi, đồng thời ghi `audit_logs` nếu hành động nhạy cảm.
+
+Service Role bypass RLS 100% và vì vậy không bao giờ được coi là authorization mechanism.
 
 #### Ngữ cảnh B: Webhook từ Đối tác Ngoại vi (Provider Webhook)
 - **Ví dụ nghiệp vụ:**
@@ -525,7 +544,7 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
 | **Category A** | **Column-level PostgreSQL GRANT/REVOKE** | `UPDATE`, `INSERT` | Cấu hình quyền cột trực tiếp trong SQL: `GRANT UPDATE (full_name) ON user_profiles TO authenticated;`. |
 | **Category B** | **Safe Server-Only Mutation** | `INSERT`, `UPDATE` | Đóng hoàn toàn quyền ghi trực tiếp từ PostgREST (`REVOKE INSERT, UPDATE ... FROM authenticated;`). Đột biến chỉ thực thi qua Server Actions hoặc Route Handlers chạy dưới quyền tin cậy. |
 | **Category C** | **Trusted Narrow RPC / Database Function** | `UPDATE` nghiệp vụ | Khóa quyền cập nhật trực tiếp trên bảng, chỉ cấp quyền `EXECUTE` cho một hàm RPC nhận đúng các tham số nghiệp vụ được phép thay đổi. |
-| **Category D** | **Safe Projection / View / Server DTO for Reads** | `SELECT` | **CẤM ngộ nhận rằng SELECT projection của client có thể bảo vệ dữ liệu nếu client có quyền SELECT trực tiếp trên base table**. Một chính sách RLS `SELECT` trên base table chỉ được phép tồn tại nếu mọi cột trong bảng đó đều được cố ý ủy quyền cho vai trò đó đọc. Nếu vai trò chỉ được xem một tập con các cột, hệ thống bắt buộc phải áp dụng một trong hai giải pháp: (1) Khóa quyền `SELECT` trực tiếp trên base table và cung cấp một **PostgreSQL View an toàn** chỉ chứa các cột được phép; HOẶC (2) Buộc truy vấn qua **Trusted Server DTO**.<br><br>*Lưu ý sống còn về Server DTO:* Nếu quyền `SELECT` trên base table đã bị thu hồi (`REVOKE SELECT`) khỏi role `authenticated`, thì một client máy chủ chạy dưới danh nghĩa người dùng (User-Scoped Server Client) cũng sẽ chịu nguyên vẹn hạn chế đó của PostgreSQL engine. Do đó, giải pháp Server DTO bắt buộc phải trích xuất dữ liệu thông qua một **đường dẫn máy chủ có đặc quyền (Trusted Privileged Server Path / Service Role)** sau khi đã tự thẩm tra quyền truy cập trong mã nguồn máy chủ, hoặc thông qua một **View / RPC an toàn** được thiết kế riêng. Tuyệt đối không bao giờ ngụ ý rằng việc chuyển cùng một câu lệnh `SELECT` của user từ trình duyệt sang Server Component có thể tự động qua mặt được các giới hạn phân quyền `GRANT` của cơ sở dữ liệu! |
+| **Category D** | **Safe Projection / View / Server DTO for Reads** | `SELECT` | **CẤM ngộ nhận rằng SELECT projection của client có thể bảo vệ dữ liệu nếu client có quyền SELECT trực tiếp trên base table**. Một chính sách RLS `SELECT` trên base table chỉ được phép tồn tại nếu mọi cột trong bảng đó đều được cố ý ủy quyền cho vai trò đó đọc. Restricted Database View chỉ được dùng cho dataset tự thân an toàn như Safe Staff Directory, lookup hoặc summary không nhạy cảm. Dữ liệu nhạy cảm bắt buộc đi qua **Trusted Server DTO / trusted server endpoint** với explicit field allowlist và full authorization; direct base-table/browser SELECT bị thu hồi.<br><br>*Lưu ý sống còn về Server DTO:* Nếu quyền `SELECT` trên base table đã bị thu hồi (`REVOKE SELECT`) khỏi role `authenticated`, thì một client máy chủ chạy dưới danh nghĩa người dùng (User-Scoped Server Client) cũng sẽ chịu nguyên vẹn hạn chế đó của PostgreSQL engine. Do đó, giải pháp Server DTO bắt buộc phải trích xuất dữ liệu thông qua một **đường dẫn máy chủ có đặc quyền (Trusted Privileged Server Path / Service Role)** sau khi đã tự thẩm tra quyền truy cập trong mã nguồn máy chủ. Tuyệt đối không bao giờ ngụ ý rằng việc chuyển cùng một câu lệnh `SELECT` của user từ trình duyệt sang Server Component có thể tự động qua mặt được các giới hạn phân quyền `GRANT` của cơ sở dữ liệu! |
 | **Category E** | **Database Trigger / Constraint for Immutable Fields** | `UPDATE` | Sử dụng Trigger mức hàng so sánh `OLD` và `NEW` (`IF NEW.col IS DISTINCT FROM OLD.col THEN RAISE EXCEPTION ...`), hoặc ràng buộc kiểm tra để bảo đảm các trường bất biến (như hợp đồng đã ký, số tiền cọc, tenant key) không bao giờ bị can thiệp. |
 
 ---
@@ -548,10 +567,11 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
   - Vận hành Inbox hội thoại: Đọc và phản hồi tin nhắn thông qua **nội dung đã được làm sạch số điện thoại (Phone-Sanitized Message Content)** qua trusted server projection. CẤM truy cập trực tiếp nội dung thô `interactions.content` nếu nội dung đó có thể chứa số điện thoại do khách gõ vào.
   - Cuộc gọi: Nhận metadata cuộc gọi; gọi ra qua Click-to-Call bảo mật (tổng đài PBX quay số, trình duyệt SALE không nhận chuỗi phone).
   - Tính giá: Gửi yêu cầu tính giá (**REQUEST/TRIGGER Price Calculation**) qua Server Action để Pricing Engine tính toán; CẤM trực tiếp INSERT bản ghi `price_calculations`.
-  - Đơn hàng: Khởi xướng tạo đơn hàng qua luồng máy chủ tin cậy dựa trên PriceCalculation đã duyệt; đọc thông tin thương mại qua Safe View / Server DTO (Category D).
+  - Đơn hàng: Khởi xướng tạo đơn hàng qua luồng máy chủ tin cậy dựa trên PriceCalculation đã duyệt; đọc thông tin thương mại qua trusted Server DTO với explicit field allowlist (Category D).
   - Hợp đồng: Kích hoạt quy trình sinh hợp đồng tự động của hệ thống sau khi cọc được xác nhận; nộp bản hợp đồng đã ký (`signed_file_ref`) qua Safe Server Mutation (Category B).
   - Vận hành hiện trường: Xem tiến độ lệnh sản xuất (`production_orders`) và lịch lắp đặt (`installations`) phục vụ chăm sóc khách hàng.
   - Hồ sơ phong cách: Xem và review hồ sơ phong cách tư vấn của chính mình trong Company (`sales_style_profiles`).
+  - Danh bạ nhân sự an toàn cùng Company: chỉ nhận `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần qua Safe Staff Directory; không đọc trực tiếp bảng profile/membership đầy đủ.
 - **CẤM TUYỆT ĐỐI TIẾP CẬN HOẶC THAO TÁC:**
   - Bảng số điện thoại thật `private.customer_private_contacts`.
   - Bản bóc băng thô `call_transcripts.transcript`, tệp ghi âm cuộc gọi gốc trong bucket `call-recordings`, và **nội dung tin nhắn thô `interactions.content`** (chống rò rỉ số điện thoại qua dữ liệu phi cấu trúc; SALE chỉ được nhận bản trích xuất đã làm sạch số điện thoại).
@@ -571,6 +591,8 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
   - Khảo sát: Lịch hẹn (`appointments`) và Khảo sát (`surveys`) mà mình được phân công (`assignee_id = auth.uid()`).
   - Lắp đặt: Bản ghi `installations` gắn với lịch hẹn lắp đặt hợp lệ mà mình được phân công (`appointment_id → appointments.assignee_id = auth.uid()`).
   - Bảo hành: Bản ghi `warranty_tickets` được giao trực tiếp (`assigned_to = auth.uid()`) kết hợp tư cách thành viên `TECHNICIAN ACTIVE` trong cùng Company.
+- Phân công chỉ hiện hành ở `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; quyền dẫn xuất tới Job, Customer, Survey và tài nguyên liên quan chấm dứt ở `COMPLETED`, `CANCELLED`, `REJECTED`.
+- Không được xem toàn bộ lịch sử Survey của Customer và không được tiếp tục đọc chỉ vì `surveys.completed_by = auth.uid()`. Nếu sản phẩm sau này cần quyền xem lại completed jobs, phải thiết kế permission riêng.
 - Được xem địa chỉ khảo sát/lắp đặt, tải ảnh hiện trường, nhập thông số đo đạc, biên bản bàn giao.
 - **CẤM TUYỆT ĐỐI TIẾP CẬN:**
   - Bảng số điện thoại thật.
@@ -591,7 +613,7 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 | STT | Tên Bảng Vật lý | Phạm vi Company | Quyền `SELECT` | Quyền `INSERT` | Quyền `UPDATE` | Quyền `DELETE` | Ghi chú Ranh giới Dữ liệu / Cơ chế Thực thi |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | `companies` | Root | Active Member của cty | Cấm (DB Owner) | BOSS_ADMIN | CẤM | Chỉ xem thông tin cty của chính mình |
-| 2 | `user_profiles` | No Business | Self + Coworkers hẹp | Cấm (DB Trigger) | Self (`full_name`) | CẤM | Category A/E bảo vệ cột; cấm sửa status qua client |
+| 2 | `user_profiles` | No Business | Self; coworker chỉ qua Safe Staff Directory | Cấm (DB Trigger) | Self (`full_name`) | CẤM | Category A/D/E; cấm broad direct SELECT và cấm sửa status qua client |
 | 3 | `company_members` | Direct | BOSS_ADMIN + Self | Cấm browser direct INSERT; Lời mời tạo INACTIVE qua Trusted Server Path (Cat B) | Cấm browser direct UPDATE; Sếp quản trị role/status & kích hoạt qua Trusted Server Path (Cat B/E) | CẤM | Không hard DELETE; non-BOSS chỉ xem chính mình; lời mời/kích hoạt/quản trị role & status qua Trusted Server Path có kiểm toán; kiểm tra 1-SALE-active; khóa cứng company_id & user_id (Cat E) |
 | 4 | `customers` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Không có cột phone; TECH chỉ xem qua Appointment; Category E khóa tenant |
 | 5 | `customer_stage_histories`| Direct | BOSS_ADMIN, SALE | Cấm (DB Trigger) | CẤM | CẤM | Strict Append-Only; trigger ghi nhận tự động |
@@ -600,13 +622,13 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 | 8 | `conversations` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Kỹ thuật viên không có quyền truy cập |
 | 9 | `calls` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Metadata cuộc gọi; Server Action/PBX ghi |
 | 10 | `call_attempts` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Lưu vết số lần gọi ra; Server Action/PBX ghi |
-| 11 | `call_transcripts` | Inferred | BOSS_ADMIN (Audit); SALE: KHÔNG CẤP MẶC ĐỊNH | Cấm (AI Worker)  | CẤM | CẤM | Nguy cơ lộ phone trong nội dung bóc băng; SALE chỉ nhận bản sanitized (Open Decision 03) |
-| 12 | `appointments` | Direct | BOSS, SALE, Tech Giao| BOSS_ADMIN, SALE | BOSS, SALE, Tech Giao| CẤM | Tech chỉ xem/sửa khi được phân công và vòng đời actionable (Open Decision 02); Category B/C/E |
-| 13 | `surveys` | Inferred | BOSS, SALE, Tech Giao| BOSS, Tech Giao  | BOSS, Tech Giao  | CẤM | Gắn với Appointment; Tech chỉ sửa số đo hiện trường (Category B/C/E); Open Decision 05 |
+| 11 | `call_transcripts` | Inferred | BOSS_ADMIN (Audit); SALE cấm direct SELECT, chỉ nhận sanitized derivative `SUCCEEDED` qua Server DTO | Cấm (AI Worker)  | CẤM | CẤM | `sanitization_status` thuộc contract derivative đề xuất, không ngụ ý thêm cột vào base table; mọi trạng thái khác fail closed |
+| 12 | `appointments` | Direct | BOSS, SALE, Tech có phân công hiện hành | BOSS_ADMIN, SALE | BOSS, SALE, Tech có phân công hiện hành | CẤM | Phân công hiện hành chỉ gồm `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; Category B/C/E |
+| 13 | `surveys` | Inferred | BOSS, SALE, Tech có phân công hiện hành | BOSS, Tech có phân công hiện hành | BOSS, Tech có phân công hiện hành | CẤM | Tech chỉ truy cập qua Job hiện hành; `completed_by` không cấp quyền lịch sử; Category B/C/E |
 | 14 | `pricing_policies` | Direct | BOSS_ADMIN ONLY | BOSS_ADMIN ONLY | BOSS_ADMIN (Chỉ sửa khi DRAFT; cấm sửa khi ACTIVE — Cat E) | CẤM | **SALE & TECH TUYỆT ĐỐI BỊ CẤM TRUY VẤN**; Khi status = 'ACTIVE' các trường cốt lõi (company_id, version, conditions, price_rules, effective_at) là bất biến cấp CSDL (Cat E trigger); đổi logic giá phải tạo version mới |
 | 15 | `price_calculations` | Inferred | BOSS_ADMIN, SALE | Cấm (Pricing Engine Server-Only / Cat B) | CẤM | CẤM | Snapshot bất biến; Pricing Engine tạo sau khi thẩm tra policy/survey/amount; client chỉ trigger |
 | 16 | `payment_transactions` | Direct | BOSS_ADMIN ONLY | Cấm (Webhook/Server Bounded Write) | BOSS đối soát qua Trusted Server Path (Cat B/E)| CẤM | Cấm sửa trường đối tác gốc; Sếp chỉ cập nhật đối soát/matching qua luồng máy chủ có kiểm toán |
-| 17 | `orders` | Direct | BOSS, SALE (qua Cat D Safe View / Server DTO)| Cấm browser direct INSERT; Khởi tạo qua Trusted Server Path (Cat B)| Đột biến qua Server Action/RPC (Cat B/C); cấm sửa tenant/tài chính | CẤM | SALE cấm tự set deposit_status = CONFIRMED; final_amount gắn với pricing; quan hệ bất biến (Cat E) |
+| 17 | `orders` | Direct | BOSS, SALE qua trusted Server DTO | Cấm browser direct INSERT; Khởi tạo qua Trusted Server Path (Cat B)| Đột biến qua Server Action/RPC (Cat B/C); cấm sửa tenant/tài chính | CẤM | Explicit allowlist; SALE cấm tự set deposit_status = CONFIRMED; final_amount gắn với pricing; quan hệ bất biến (Cat E) |
 | 18 | `contracts` | Inferred | BOSS_ADMIN, SALE | Cấm (Hệ thống sinh tự động sau cọc — Cat B)| SALE Upload bản ký qua Server Mutation (Cat B/E); BOSS theo quy trình | CẤM | Hợp đồng sinh tự động từ template sau khi xác nhận cọc; SALE cấm INSERT tùy tiện; bản ký là bất biến |
 | 19 | `production_orders` | Inferred | BOSS, SALE (Tiến độ)| KHÔNG CẤP MẶC ĐỊNH| KHÔNG CẤP MẶC ĐỊNH| CẤM | Tạo/sửa lệnh sản xuất thuộc luồng vận hành tin cậy; SALE chỉ đọc tiến độ |
 | 20 | `installations` | Inferred | BOSS, SALE, Tech Giao| KHÔNG CẤP MẶC ĐỊNH| BOSS, Tech Giao  | CẤM | Tạo mới thuộc luồng vận hành sau QC; Tech cập nhật dữ liệu nghiệm thu (Category B/C/E) |
@@ -645,10 +667,11 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
   4. Truy xuất `raw_phone` qua Service Role Client hoặc hàm `SECURITY DEFINER` nội bộ và trả về Modal an toàn của Sếp.
 
 ### 12.3. Luồng SALE gọi khách không lộ số (Zero-Phone Click-to-Call)
-- SALE bấm "GỌI KHÁCH" → Trình duyệt chỉ gửi payload `{ customer_id: "..." }`.
-- Máy chủ tin cậy thẩm định quyền SALE active.
+- SALE bấm "GỌI KHÁCH" → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`.
+- Máy chủ tin cậy thẩm định đầy đủ quyền SALE active và phân giải Customer mục tiêu cùng Company.
 - Máy chủ đọc `raw_phone` trong bộ nhớ đệm an toàn, bắn lệnh quay số sang tổng đài SIP/Viettel PBX qua API Server-to-Server.
 - Trình duyệt SALE chỉ nhận kết quả: `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ chuỗi số điện thoại nào lọt về máy khách.
+- Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, transcript đã làm sạch và thông báo lỗi.
 
 ### 12.4. Mở rộng Bất biến Zero-Phone cho Dữ liệu Tin nhắn Phi Cấu trúc (Unstructured Message Content Boundary)
 - **Cảnh báo từ DATA_CONTRACT:** Bất biến Zero-Phone không chỉ áp dụng cho các cột số điện thoại định danh khách hàng, bóc băng cuộc gọi hay file ghi âm. `DATA_CONTRACT.md` chỉ rõ rằng `Interaction.content` có thể chứa thông tin nhạy cảm. Khách hàng hoàn toàn có thể tự tay gõ số điện thoại trực tiếp vào tin nhắn Facebook, Zalo, hoặc Website Chat.
@@ -662,7 +685,14 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
     - Quyền `SELECT` trực tiếp trên base table `interactions` đối với `SALE` là **KHÔNG CẤP MẶC ĐỊNH (NOT GRANTED BY DEFAULT)** tại những nơi số điện thoại có thể xuất hiện trong nội dung thô.
     - SALE tiếp cận nội dung tin nhắn phục vụ vận hành Inbox thông qua **Category D (Safe Projection / Trusted Server Path)** đã được làm sạch số điện thoại.
   - **Bảo toàn Yêu cầu Vận hành:** Quyết định này tuyệt đối **KHÔNG làm suy giảm khả năng vận hành Inbox của SALE**. Màn hình Inbox của SALE trong tương lai sẽ hiển thị nội dung tin nhắn đã được che/làm sạch số điện thoại (Phone-Sanitized Content) thay vì để lộ số điện thoại thô.
-  - Kiến trúc lưu trữ/làm sạch cụ thể được định danh tại **RLS OPEN DECISION 05**.
+  - Kiến trúc lưu trữ/làm sạch đã được khóa tại **RLS DECISION 05**: Raw Interaction và Sanitized Interaction là hai security zones riêng biệt.
+
+### 12.5. Raw Interaction và Sanitized Interaction — Hai Security Zones
+
+- **Raw Interaction:** Chứa dữ liệu nguồn nguyên vẹn, có thể gồm raw transcript, số điện thoại, PII, provider payload, recording reference và external metadata. Vùng này private/restricted, không accessible trực tiếp từ SALE frontend, không trả về SALE API JSON, client props, DOM, browser/client logs. Nội dung nguồn phải được bảo toàn theo chính sách historical event/append-only phù hợp.
+- **Sanitized Interaction:** Là dữ liệu phái sinh dành cho SALE, tối thiểu cần metadata tương đương `raw_interaction_id`, `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version`. Đây là yêu cầu kiến trúc; task này không tự thêm cột vào physical schema.
+- Trạng thái làm sạch tối thiểu là `PENDING`, `SUCCEEDED`, `FAILED`; có thể thêm `NOT_REQUIRED` chỉ khi use case được định nghĩa rõ. Với transcript/content dành cho SALE, `NOT_PROCESSED` cũng phải được xử lý như chưa làm sạch.
+- Chỉ `sanitization_status = 'SUCCEEDED'` mới được phép phát hành nội dung sanitized cho SALE. `PENDING`, `FAILED`, `NOT_PROCESSED` phải deny/omit theo nguyên tắc **FAIL CLOSED**; thất bại làm sạch không bao giờ fallback về raw content.
 
 ---
 
@@ -672,7 +702,7 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 - **Đặc thù:** Bảng danh tính người dùng toàn cục, không có cột `company_id`.
 - **Chính sách `SELECT`:**
   - Người dùng được quyền đọc hồ sơ của chính mình: `id = auth.uid()`.
-  - Thành viên cùng công ty được quyền đọc danh tính tối thiểu của đồng nghiệp phục vụ hiển thị nghiệp vụ thông qua **Category D (Safe View / Server Projection)** (xem chi tiết tại RLS Open Decision 01). Tuyệt đối không cho phép duyệt toàn bộ người dùng hệ thống như danh bạ công cộng qua direct base-table SELECT.
+  - Thành viên `SALE` và `TECHNICIAN` cùng Company được đọc **Safe Staff Directory** qua Category D. Allowlist chỉ gồm `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần. Có thể dùng Restricted Database View nếu dataset tự thân hoàn toàn an toàn, hoặc Server DTO nếu cần logic quyền bổ sung. Tuyệt đối không cho phép duyệt toàn bộ người dùng hệ thống qua direct base-table SELECT.
 - **Chính sách `INSERT`:**
   - CẤM gọi từ client. Chỉ được thêm bản ghi tự động thông qua Database Trigger `on_auth_user_created` khi Supabase Auth khởi tạo user.
 - **Chính sách `UPDATE`:**
@@ -690,7 +720,8 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
   - Tuy nhiên, quyền năng này **KHÔNG ĐỒNG NGHĨA VỚI QUYỀN DIRECT INSERT / UPDATE TỪ TRÌNH DUYỆT**. Toàn bộ đột biến dữ liệu thành viên bắt buộc phải qua luồng máy chủ tin cậy (**Category B — Safe Server-Only Mutation / Context A Privileged Path**).
 - **Chính sách `SELECT`:**
   - `BOSS_ADMIN`: Được đọc toàn bộ danh sách thành viên trong phạm vi Company của mình: `has_company_role(company_id, 'BOSS_ADMIN')`.
-  - `SALE` và `TECHNICIAN`: **Mặc định KHÔNG được cấp quyền đọc toàn bộ danh sách thành viên (No broad direct SELECT)**. Chỉ được phép đọc bản ghi membership của chính mình (`user_id = auth.uid()`) hoặc danh tính đồng nghiệp được phê duyệt qua view/DTO tối thiểu (**Category D**; xem RLS Open Decision 01).
+  - `SALE` và `TECHNICIAN`: **Không được cấp quyền đọc toàn bộ base table (No broad direct SELECT)**. Chỉ được đọc membership của chính mình hoặc Safe Staff Directory cùng Company qua Restricted View/Server DTO với explicit allowlist `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu cần.
+  - Safe Staff Directory không được expose personal phone, login email, auth metadata, personal address, private/internal account information hoặc bất kỳ trường nhạy cảm bảo mật nào.
 - **Chính sách `INSERT`:**
   - **CẤM HOÀN TOÀN DIRECT CLIENT/BROWSER `INSERT`** (`REVOKE INSERT ON public.company_members FROM authenticated;`).
   - Client trình duyệt của `BOSS_ADMIN` tuyệt đối không được phép gửi lệnh `INSERT` trực tiếp để tạo bản ghi thành viên với trạng thái `ACTIVE` tùy tiện hoặc bỏ qua quy trình liên kết lời mời (invitation binding).
@@ -731,8 +762,8 @@ Quyền truy cập của Kỹ thuật viên hiện trường (`TECHNICIAN`) gắ
 > - Thẩm quyền của kỹ thuật viên hiện trường tại thời điểm thực hiện thao tác bắt buộc phải thỏa mãn đồng thời 3 điều kiện:
 >   1. **Tư cách thành viên:** `company_members.role = 'TECHNICIAN'` và `company_members.status = 'ACTIVE'` tại Company mục tiêu.
 >   2. **Quan hệ phân công hợp lệ:** Bản ghi mục tiêu liên kết trực tiếp với định danh của kỹ thuật viên (`assignee_id = auth.uid()`).
->   3. **Trạng thái vòng đời có hiệu lực hành động (Currently Actionable Lifecycle State):** Nhiệm vụ và lịch hẹn phải đang ở trạng thái còn được phép thực thi (chưa bị hủy, chưa đóng, hoặc trong cửa sổ tác nghiệp được phê duyệt).
-> - **Chặn triển khai (Implementation Blocker):** Do danh mục định danh trạng thái chính thức (`Schema Open Decision 07`), vòng đời dự thảo/hoàn thành khảo sát (`Schema Open Decision 08`) và quyền đọc lịch sử sau hoàn thành (`Auth Open Decision 05`) chưa đóng băng, hệ thống **không tự ý phát minh tập hợp trạng thái hợp lệ** vào thời điểm này. Vị từ phân công hiện hành đầy đủ ("Active Assignment Predicate") được định danh là **RLS OPEN DECISION 02** và chặn việc viết mã migration RLS chính thức.
+>   3. **Trạng thái vòng đời có hiệu lực:** Phân công phải thuộc `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`.
+> - `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền truy cập dựa trên phân công. Đây là **RLS DECISION 02 — DECIDED / FROZEN** và phải được dùng thống nhất trong Auth, RLS và application authorization.
 
 ### 14.2. Các Luồng Dẫn xuất Thẩm quyền Hiện trường Hợp lệ (Valid Field Authorization Paths)
 
@@ -742,7 +773,7 @@ Hệ thống chỉ công nhận 3 luồng dẫn xuất thẩm quyền hiện tr�
    - Kỹ thuật viên chỉ tiếp cận lịch hẹn khảo sát và bản ghi đo đạc khi:
      - `appointments.assignee_id = auth.uid()`
      - Đang là `TECHNICIAN ACTIVE` tại cùng Company.
-     - Lịch hẹn đang trong trạng thái tác nghiệp hợp lệ (Active Appointment Predicate).
+     - Lịch hẹn có `status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`.
    ```sql
    -- DESIGN PSEUDOCODE / NOT MIGRATION SQL
    CREATE POLICY surveys_select_assigned_technician
@@ -760,7 +791,7 @@ Hệ thống chỉ công nhận 3 luồng dẫn xuất thẩm quyền hiện tr�
      - `installations.appointment_id → appointments.id`
      - `appointments.assignee_id = auth.uid()`
      - Đang là `TECHNICIAN ACTIVE` tại cùng Company của lịch hẹn và công trình.
-     - Lịch hẹn lắp đặt đang trong trạng thái tác nghiệp hợp lệ.
+     - Lịch hẹn lắp đặt có `status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`.
 
 3. **Phiếu Bảo hành Hiện trường (`warranty_tickets`):**
    - Kỹ thuật viên tiếp cận phiếu bảo hành thông qua:
@@ -776,7 +807,7 @@ Hệ thống chỉ công nhận 3 luồng dẫn xuất thẩm quyền hiện tr�
 ### 14.4. Khóa Cứng: `completed_by` Là Chứng Cứ Lịch Sử, Không Phải Căn Cứ Cấp Quyền
 - Cột `surveys.completed_by` chỉ là **bằng chứng lịch sử** ghi nhận ai là người đã nộp số đo trong thực tế.
 - Tuyệt đối không dùng điều kiện `surveys.completed_by = auth.uid()` để tự động cấp quyền truy cập hiện tại. Nếu kỹ thuật viên được điều chuyển, quyền truy cập phải đi theo phân công hiện hành.
-- Quyết định về việc kỹ thuật viên có được đọc lại hồ sơ khảo sát cũ sau khi hoàn thành hay không được ghi nhận tại **AUTH OPEN DECISION 05**.
+- **AUTH DECISION 05 — DECIDED / FROZEN:** Kỹ thuật viên không được đọc toàn bộ lịch sử Survey của Customer và không được tiếp tục đọc chỉ vì từng là `completed_by`. Quyền chỉ tồn tại khi có phân công hiện hành; completed jobs muốn xem lại sau này phải có permission riêng.
 
 ---
 
@@ -849,10 +880,8 @@ Hệ thống chỉ công nhận 3 luồng dẫn xuất thẩm quyền hiện tr�
   - Các khóa quan hệ (`company_id`, `customer_id`, `price_calculation_id`) bị đóng băng vĩnh viễn bằng **Category E (Trigger)**.
 - **3. Ranh giới Đọc Dữ liệu Đơn hàng (Read Boundary — Category D):**
   - CẢNH BÁO: Không được tuyên bố SELECT projection của client có thể bảo vệ dữ liệu nếu client vẫn giữ quyền direct SELECT trên base table.
-  - Để bảo vệ các trường đối soát tài chính nội bộ, hệ thống áp dụng **Category D**:
-    - **Phương án D1 (PostgreSQL Secure View):** Khóa quyền `SELECT` trên base table `orders`, cấp quyền đọc qua View an toàn (`orders_commercial_summary_view`).
-    - **Phương án D2 (Trusted Server DTO):** Đóng direct PostgREST access, truy vấn qua Server Components của Next.js với Server DTO đã lọc cột (thực thi qua privileged server path sau khi tự thẩm tra quyền).
-    - Lựa chọn cụ thể ghi nhận tại **RLS OPEN DECISION 04**.
+  - **RLS DECISION 04 — DECIDED / FROZEN:** Đóng direct PostgREST/base-table access cho browser đối với `orders` và các dataset nhạy cảm; dữ liệu được phát hành qua **Trusted Server DTO / trusted server endpoint** sử dụng explicit field allowlist sau khi thẩm định đầy đủ quyền.
+  - Restricted Database View chỉ được dùng cho dataset tự thân hoàn toàn an toàn như Safe Staff Directory, lookup không nhạy cảm hoặc summary không nhạy cảm; không dùng View như đường mặc định cho customer contact, raw phone, sensitive order fields, pricing operations, contracts, payments/webhooks, raw interaction data, privileged mutations hoặc click-to-call.
 
 ---
 
@@ -951,7 +980,8 @@ Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Toàn b�
 - **Nguy cơ rò rỉ:** DATA_CONTRACT cảnh báo rõ ràng rằng nội dung đàm thoại và tệp ghi âm cuộc gọi có thể chứa số điện thoại đọc bằng miệng, địa chỉ nhà riêng và thông tin cá nhân tối mật.
 - **Quy tắc cấp quyền:**
   - `BOSS_ADMIN`: Được phép nghe/tải tệp ghi âm thô theo chính sách bảo mật và kiểm toán được duyệt.
-  - `SALE`: **MẶC ĐỊNH KHÔNG ĐƯỢC CẤP QUYỀN ĐỌC TỆP GHI ÂM GỐC (NOT GRANTED BY DEFAULT / OPEN DECISION 03)**. SALE chỉ có thể tiếp cận tệp ghi âm nếu sau này có quy trình xử lý máy chủ làm mờ/lọc bỏ đoạn đọc số điện thoại (Audio Redaction) hoặc luồng stream kiểm duyệt được phê duyệt.
+  - `SALE`: **KHÔNG ĐƯỢC ĐỌC TỆP GHI ÂM GỐC**. SALE chỉ được đọc sanitized transcript qua trusted Server DTO khi `sanitization_status = 'SUCCEEDED'`.
+  - `PENDING`, `FAILED`, `NOT_PROCESSED` bắt buộc deny/omit; tuyệt đối không fallback sang raw transcript hoặc raw recording nếu sanitization thất bại.
   - Metadata cuộc gọi (thời lượng, thời điểm, trạng thái gọi) vẫn hiển thị cho SALE trên giao diện CRM.
 
 ### 20.2. Quy tắc Thẩm quyền Storage Đa Doanh nghiệp (Multi-Company Storage Scoping)
@@ -1048,14 +1078,14 @@ Bảng đánh giá rủi ro an ninh toàn diện và giải pháp thiết kế R
 | **9** | **Rò rỉ Service Role Key ra Client** | **THẢM HỌA** | Không bao giờ gắn tiền tố `NEXT_PUBLIC_`, chỉ lưu trong runtime Node.js của Server. |
 | **10**| **Service Role thao tác thiếu kiểm tra quyền (Bypass RLS không kiểm soát)** | **NGHIÊM TRỌNG** | Phân định rạch ròi 3 ngữ cảnh: (A) User-initiated: buộc xác thực `verified_user_id` và quyền tài nguyên; (B) Provider Webhook: xác thực chữ ký HMAC, deduplication và ánh xạ Company tin cậy (không đòi hỏi `verified_user_id` giả mạo); (C) Background Worker: xác thực job identity và giới hạn phạm vi tài nguyên. |
 | **11**| **Rò rỉ số điện thoại thật cho SALE/TECH qua bảng khách hàng** | **NGHIÊM TRỌNG** | Tách số điện thoại sang schema `private`. Bảng `customers` ở schema `public` không có cột phone. |
-| **12**| **Rò rỉ số điện thoại qua nội dung bóc băng ghi âm hoặc tệp âm thanh (Phone leakage through transcript/recording content)** | **NGHIÊM TRỌNG** | Áp dụng bất biến Zero-Phone; cấm `SALE` truy cập trực tiếp bản thô `call_transcripts.transcript` và bucket `call-recordings` mặc định; `BOSS_ADMIN` truy cập theo kiểm toán; SALE chỉ nhận bản phái sinh đã làm sạch (RLS Open Decision 03). |
-| **13**| **Rò rỉ số điện thoại qua nội dung tin nhắn hội thoại (`interactions.content`) hoặc dữ liệu phi cấu trúc** | **NGHIÊM TRỌNG** | Mở rộng Zero-Phone cho toàn bộ nội dung phi cấu trúc. Phân biệt raw source content vs sanitized derivative; bảo toàn nguyên vẹn 100% dữ liệu sự kiện gốc cho kiểm toán/bằng chứng; cấm SALE direct raw SELECT; Inbox hiển thị qua trusted projection / Category D đã lọc sạch số điện thoại (RLS Open Decision 05). |
+| **12**| **Rò rỉ số điện thoại qua nội dung bóc băng ghi âm hoặc tệp âm thanh (Phone leakage through transcript/recording content)** | **NGHIÊM TRỌNG** | Áp dụng bất biến Zero-Phone; cấm `SALE` truy cập raw transcript và raw recording; chỉ phát hành sanitized transcript qua Server DTO khi trạng thái `SUCCEEDED`, mọi trạng thái khác fail closed (RLS Decision 03). |
+| **13**| **Rò rỉ số điện thoại qua nội dung tin nhắn hội thoại (`interactions.content`) hoặc dữ liệu phi cấu trúc** | **NGHIÊM TRỌNG** | Tách Raw Interaction và Sanitized Interaction thành hai security zones; cấm SALE direct raw SELECT; chỉ phát hành derivative `SUCCEEDED`, không fallback raw (RLS Decision 05). |
 | **14**| **Rò rỉ tài chính nhạy cảm cho SALE** | **CAO** | Bảng `payment_transactions` và `finance_summaries` cấm hoàn toàn quyền `SELECT` của SALE. |
 | **15**| **Ghi đè hoặc làm sai lệch dữ liệu nguồn của đối tác ngân hàng khi đối soát** | **NGHIÊM TRỌNG** | Dữ liệu đối tác (`provider_ref`, `amount`, `sender_account`) là bất biến cấp CSDL bằng Trigger Category E; Sếp chỉ cập nhật đối soát qua luồng máy chủ tin cậy (Category B). |
 | **16**| **SALE đọc trộm quy tắc bảng giá gốc** | **CAO** | Bảng `pricing_policies` cấm hoàn toàn quyền `SELECT` của SALE. SALE chỉ đọc `price_calculations`. |
 | **17**| **Client tự tạo hoặc làm sai lệch kết quả tính giá (`price_calculations`)** | **CAO** | Bảng `price_calculations` cấm client direct INSERT. Bản ghi do Pricing Engine tạo độc quyền (Category B) sau khi thẩm định policy version và số đo khảo sát. |
-| **18**| **Kỹ thuật viên can thiệp việc ngoài phân công hoặc hết hạn tác nghiệp**| **CAO** | RLS bắt buộc kiểm tra đồng thời: `TECHNICIAN ACTIVE` + quan hệ phân công (`assignee_id = auth.uid()`) + trạng thái vòng đời có hiệu lực hành động (Actionable Lifecycle State - RLS Open Decision 02). |
-| **19**| **Rò rỉ cột nhạy cảm qua lệnh `SELECT *` từ client** | **CAO** | Thừa nhận RLS chỉ là ranh giới cấp dòng; áp dụng **Category D (Safe Database Views hoặc Server DTO)**, từ chối direct SELECT trên base table nhạy cảm (`orders`, `user_profiles`, `call_transcripts`). |
+| **18**| **Kỹ thuật viên can thiệp việc ngoài phân công hoặc hết hạn tác nghiệp**| **CAO** | RLS bắt buộc kiểm tra đồng thời toàn bộ chuỗi canonical và phân công ở `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền (RLS Decision 02). |
+| **19**| **Rò rỉ cột nhạy cảm qua lệnh `SELECT *` từ client** | **CAO** | Thừa nhận RLS chỉ là ranh giới cấp dòng; từ chối direct SELECT trên base table nhạy cảm và dùng trusted Server DTO với explicit allowlist. Restricted View chỉ dành cho dataset tự thân an toàn như Safe Staff Directory. |
 | **20**| **Tự ý tạo hoặc sửa đổi hợp đồng trái phép** | **NGHIÊM TRỌNG** | Bảng `contracts` cấm client direct INSERT; hợp đồng sinh tự động từ hệ thống sau khi xác nhận cọc; bản ký là bản chụp bất biến (Category E trigger). |
 | **21**| **Tự ý tạo đơn hàng hoặc sửa đổi tiền/cọc (`orders`) từ trình duyệt** | **NGHIÊM TRỌNG** | Base table `orders` cấm client direct INSERT; tạo đơn qua luồng máy chủ từ PriceCalculation đã duyệt; SALE cấm tự set `deposit_status = CONFIRMED`; trigger Category E khóa các trường cốt lõi. |
 | **22**| **Giả mạo phân công kỹ thuật viên** | **CAO** | Chỉ có `BOSS_ADMIN` hoặc `SALE` mới có quyền gán `assignee_id`. Kỹ thuật viên không thể tự gán việc. |
@@ -1084,7 +1114,7 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
    - `payment_transactions` và `finance_summaries` chỉ dành riêng cho Sếp. SALE chỉ đọc thông tin thương mại cần thiết trên `orders` qua Category D.
    - Dữ liệu nguồn từ đối tác ngân hàng (`provider_ref`, `amount`, `sender_account`) bị đóng băng vĩnh viễn cấp cơ sở dữ liệu (**Category E**); Sếp chỉ đối soát qua luồng máy chủ có kiểm toán.
 5. **Quyết định 5 — Kỹ thuật viên Phân quyền theo Phân công Hiện hành trong Vòng đời có Hiệu lực Hành động:**
-   - Kỹ thuật viên chỉ truy cập công việc được giao khi đồng thời thỏa mãn: `TECHNICIAN ACTIVE` + quan hệ phân công (`assignee_id = auth.uid()`) + trạng thái vòng đời actionable.
+   - Kỹ thuật viên chỉ truy cập công việc được giao khi đồng thời thỏa mãn: user `ACTIVE` + `TECHNICIAN ACTIVE` trong cùng Company + quan hệ phân công (`assignee_id = auth.uid()`) + trạng thái `ASSIGNED`, `ACCEPTED` hoặc `IN_PROGRESS`.
    - Tuyệt đối không dùng trường lịch sử `surveys.completed_by` làm căn cứ cấp quyền tự động.
    - Dẫn xuất quyền lắp đặt qua lịch hẹn lắp đặt liên kết (`installations.appointment_id → appointments`); dẫn xuất bảo hành qua `warranty_tickets.assigned_to = auth.uid()` cùng Company.
 6. **Quyết định 6 — Cấm Triệt để Quyền Xóa Cứng (Hard DELETE) trên Dữ liệu Nghiệp vụ:**
@@ -1123,64 +1153,54 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
 16. **Quyết định 16 — Hồ sơ Phong cách Tư vấn `sales_style_profiles` do Pipeline AI Sinh Tự động:**
     - `sales_style_profiles` do AI/style analysis pipeline phân tích và sinh tự động phục vụ mô phỏng văn phong theo Data Contract; cấm client direct INSERT và UPDATE.
     - SALE và Sếp chỉ đọc/review nội dung trong Company; thay đổi phong cách sinh version mới (`version N+1`).
+17. **[RLS DECISION 01 — DECIDED / FROZEN] Safe Staff Directory:**
+    - **Decision:** `SALE` và `TECHNICIAN` được xem Safe Staff Directory trong cùng Company.
+    - **Authorization/Security Rule:** Explicit allowlist gồm `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần. Cấm personal phone, login email, auth metadata, personal address, private/internal account information và security-sensitive fields; không expose trực tiếp bảng profile/membership đầy đủ.
+    - **Rationale:** Nhân sự cần dữ liệu nhận diện tối thiểu để phân công và phối hợp, nhưng không cần hồ sơ cá nhân hoặc thông tin xác thực đầy đủ.
+    - **Implementation Consequence:** Dùng Restricted View khi dataset tự thân an toàn; dùng Server DTO khi cần logic quyền bổ sung. Cả hai chỉ phát hành các trường allowlist.
+18. **[RLS DECISION 02 — DECIDED / FROZEN] Active Technician Assignment Predicate:**
+    - **Decision:** Phân công hiện hành chỉ gồm `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; `COMPLETED`, `CANCELLED`, `REJECTED` là các trạng thái không hiện hành.
+    - **Authorization/Security Rule:** Quyền tới Job, Customer, Survey và tài nguyên liên quan bắt buộc qua chuỗi canonical: authenticated + user `ACTIVE` + membership `ACTIVE` + same Company + role `TECHNICIAN` + active assignment. Historical completion không phải active assignment.
+    - **Rationale:** Một định nghĩa duy nhất ngăn từng table hoặc API tự diễn giải khác nhau và giữ quyền ở mức tối thiểu cần thiết cho công việc hiện tại.
+    - **Implementation Consequence:** Auth helpers, RLS policies và application authorization phải dùng đúng cùng tập trạng thái; quyền kết thúc ngay khi assignment chuyển sang trạng thái không hiện hành.
+19. **[RLS DECISION 03 — DECIDED / FROZEN] SALE Transcript và Recording:**
+    - **Decision:** SALE chỉ được nhận sanitized transcript; raw transcript và raw recording không thuộc phạm vi truy cập của SALE.
+    - **Authorization/Security Rule:** Chỉ phát hành qua trusted Server DTO khi `sanitization_status = 'SUCCEEDED'`. Cấm raw transcript, raw conversation text, raw recording, unsanitized interaction content, raw provider payload hoặc content chứa raw customer phone.
+    - **Rationale:** Transcript, recording và provider payload có thể mang PII hoặc raw phone ngoài các cột dữ liệu có cấu trúc.
+    - **Implementation Consequence:** `PENDING`, `FAILED`, `NOT_PROCESSED` phải deny/omit theo nguyên tắc fail closed; tuyệt đối không fallback raw.
+20. **[RLS DECISION 04 — DECIDED / FROZEN] Database View và Server DTO:**
+    - **Decision:** Dữ liệu nhạy cảm bắt buộc qua trusted Server DTO/server endpoint; Database View chỉ dùng cho dataset tự thân an toàn.
+    - **Authorization/Security Rule:** Server DTO phải dùng explicit field allowlist và đầy đủ chuỗi authorization canonical cho customer contact/raw phone, sensitive order fields, pricing operations, contracts, payments/webhooks, raw interaction data, privileged mutations và click-to-call.
+    - **Rationale:** RLS là bảo vệ cấp dòng, còn các dataset nhạy cảm cần kiểm soát phát hành cấp trường và ngữ cảnh nghiệp vụ.
+    - **Implementation Consequence:** View chỉ áp dụng cho Safe Staff Directory, lookup không nhạy cảm hoặc summary không nhạy cảm; các nhóm nhạy cảm không được phát hành qua direct base-table/browser access.
+21. **[RLS DECISION 05 — DECIDED / FROZEN] Raw và Sanitized Interaction Storage:**
+    - **Decision:** Raw Interaction và Sanitized Interaction là hai security zones riêng biệt. Raw private/restricted và được bảo toàn; sanitized là derivative dành cho SALE.
+    - **Authorization/Security Rule:** Raw không được tới SALE frontend/API/props/DOM/client logs. Chỉ sanitized content có `sanitization_status = 'SUCCEEDED'` mới được phát hành.
+    - **Rationale:** Tách nguồn gốc phục vụ kiểm toán khỏi dữ liệu SALE-safe vừa bảo toàn bằng chứng vừa ngăn PII lan sang client.
+    - **Implementation Consequence:** Thiết kế derivative cần metadata tương đương `raw_interaction_id`, `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version`; chưa tự thêm column trong task này. Trạng thái tối thiểu là `PENDING`, `SUCCEEDED`, `FAILED`; `NOT_REQUIRED` chỉ dùng khi use case được định nghĩa rõ. `FAILED NEVER FALLS BACK TO RAW`.
 
 ---
 
-## 25. Open Decisions
+## 25. Decision Resolution Register and Remaining Open Decisions
 
-Các quyết định mở về kiến trúc ảnh hưởng đến hành vi RLS cần được phê duyệt trước khi viết migration SQL:
+### 25.1. Các Quyết định Đã Chốt trong Task này
 
-### 25.1. Các Quyết định CHẶN Triển khai RLS (Blocks RLS Implementation)
-1. **[AUTH OPEN DECISION 05] Quyền đọc dữ liệu khảo sát lịch sử của Kỹ thuật viên sau khi hoàn thành nhiệm vụ:**
-   - *Vấn đề:* Sau khi kỹ thuật viên hoàn thành khảo sát thực tế (`surveys.completed_by`), kỹ thuật viên có được quyền tiếp tục đọc lại thông tin khảo sát/đơn hàng đó trong tương lai hay không, hay quyền truy cập lập tức bị thu hồi khi lịch hẹn kết thúc?
-   - *Tác động RLS & Ranh giới Thẩm quyền Lịch sử (Historical Read Invariant):*
-     - Khẳng định nguyên tắc: Cột `completed_by` chỉ là **bằng chứng lịch sử (historical evidence)**, tuyệt đối **KHÔNG PHẢI là căn cứ cấp quyền tự động hiện hành (not current assignment authorization)**.
-     - **`completed_by` đơn lẻ tuyệt đối không bao giờ được phép cấp quyền truy cập**, vì điều kiện lỏng lẻo này sẽ mở đường cho một kỹ thuật viên cũ đã bị vô hiệu hóa (`INACTIVE`) hoặc đã chuyển công ty tiếp tục đọc trộm dữ liệu khảo sát kinh doanh.
-     - Nếu doanh nghiệp sau này phê duyệt quyền đọc lịch sử (Historical Read), điều kiện thẩm quyền BẮT BUỘC phải thỏa mãn đồng thời toàn bộ các điều kiện định danh hiện hành của tài khoản:
-       - `user_profiles.status = 'ACTIVE'`
-       - `company_members.status = 'ACTIVE'` tại đúng Company của hồ sơ khảo sát mục tiêu
-       - `company_members.role = 'TECHNICIAN'`
-       - Thuộc cùng Company (`company_id`)
-       - `completed_by = auth.uid()` chỉ đóng vai trò là điều kiện phụ xác nhận quyền sở hữu lịch sử.
-     - *Khái niệm vị từ ủy quyền:* Phải kết hợp chặt chẽ: `ACTIVE TECHNICIAN tại Company mục tiêu AND completed_by = auth.uid()` (ví dụ: `is_active_member(company_id) AND has_company_role(company_id, 'TECHNICIAN') AND completed_by = auth.uid()`). Nếu doanh nghiệp không phê duyệt quyền đọc lịch sử, kỹ thuật viên chỉ được phép đọc khi lịch hẹn khảo sát đang trong trạng thái còn hiệu lực tác nghiệp hiện hành (Active Assignment Predicate).
-2. **[RLS OPEN DECISION 01] Phạm vi hiển thị thông tin đồng nghiệp trong `company_members` cho non-BOSS:**
-   - *Vấn đề:* Ngoài việc xem bản ghi của chính mình (`self-membership`), nhân viên `SALE` và `TECHNICIAN` có được phép đọc danh sách họ tên và vai trò của các đồng nghiệp khác trong cùng Company để phục vụ việc chọn người giao việc hay không?
-   - *Nguyên tắc bắt buộc:* RLS không thể lọc cột đơn lẻ. Nếu đồng nghiệp cần xem danh bạ hạn chế, các lựa chọn hợp lệ duy nhất thuộc **Category D**:
-     - **Phương án A:** Tạo một **Safe Database View** (`company_staff_directory_view`) chỉ chứa các cột không nhạy cảm (`id`, `user_id`, `role`, `status`) và cấp quyền `SELECT` trên View này.
-     - **Phương án B:** Truy vấn thông qua **Trusted Server DTO** (máy chủ Next.js sử dụng privileged server client để trích xuất danh bạ tối thiểu sau khi xác thực caller).
-     - *Chính sách base-table:* Tuyệt đối không cấp policy SELECT trực tiếp trên base table `company_members` cho non-BOSS trừ khi toàn bộ các cột trong bảng đó được cố ý cho phép đọc.
-3. **[RLS OPEN DECISION 02] Vị từ Phân công Kỹ thuật viên Hiện hành (Active Technician Assignment Predicate):**
-   - *Vấn đề:* Tập hợp trạng thái vòng đời cụ thể nào của `appointments` và `installations` được coi là "actionable" để kỹ thuật viên được phép đọc/ghi dữ liệu?
-   - *Phụ thuộc hợp đồng:* Phụ thuộc trực tiếp vào **`[SCHEMA OPEN DECISION 07]`** (danh mục định danh trạng thái chính thức) và **`[SCHEMA OPEN DECISION 08]`** (vòng đời dự thảo/hoàn thành khảo sát).
-   - *Tác động RLS:* Quyết định biểu thức WHERE chính xác trong hàm `is_assigned_technician()` và các policy liên quan. Chặn triển khai policy kỹ thuật viên cho đến khi các trạng thái này được đóng băng.
-4. **[RLS OPEN DECISION 03] Chính sách An toàn Tiếp cận Bóc băng (`call_transcripts`) và Ghi âm (`call-recordings`) cho `SALE`:**
-   - *Vấn đề:* DATA_CONTRACT cảnh báo nội dung đàm thoại chứa số điện thoại đọc miệng. Do đó SALE không thể được cấp quyền đọc thô trực tiếp. Doanh nghiệp cần lựa chọn giải pháp: (A) Xây dựng pipeline bóc băng AI tự động làm sạch (Redaction Pipeline) che số điện thoại trước khi lưu vào cột transcript hiển thị cho SALE; HOẶC (B) Cấm hoàn toàn quyền đọc transcript và file ghi âm đối với SALE (chỉ cung cấp AI Summary/Key Insights không chứa số điện thoại).
-   - *Tác động RLS:* Quyết định cấp hay từ chối policy `SELECT` trên `call_transcripts` và bucket Storage `call-recordings` đối với `SALE`.
-5. **[RLS OPEN DECISION 04] Ranh giới Bảo vệ Cấp Cột cho Bảng Đơn hàng `orders` và các Bảng Nhạy cảm:**
-   - *Vấn đề:* RLS không thể ẩn từng cột. Nếu client giữ quyền `SELECT` trực tiếp trên `public.orders`, client có thể đọc toàn bộ các cột tài chính nhạy cảm bằng `SELECT *`.
-   - *Lựa chọn thiết kế:* (A) Tạo Secure Database Views (`orders_commercial_view` — Category D) cho PostgREST; HOẶC (B) Đóng hoàn toàn PostgREST direct access trên `orders` đối với browser, buộc truy vấn qua Server Components / Server DTOs của Next.js (thực thi qua privileged server path sau khi tự thẩm định quyền).
-   - *Tác động RLS:* Xác định bảng nào được cấp policy `SELECT TO authenticated` và bảng nào chỉ cấp `SELECT` trên View hoặc chỉ mở cho Service Role.
-6. **[RLS OPEN DECISION 05] Chiến lược Lưu trữ Dữ liệu Nguồn Gốc và Phái sinh Làm sạch Tin nhắn Phi Cấu trúc (`interactions.content`):**
-   - *Bất biến Kiến trúc Bắt buộc (Mandatory Source Preservation Invariant):*
-     - **DỮ LIỆU NGUỒN GỐC (RAW SOURCE INTERACTION):** Luôn luôn phải được **BẢO TỒN NGUYÊN VẸN** trong vùng lưu trữ/bảng/trường được bảo vệ nghiêm ngặt theo thiết kế cuối cùng để phục vụ kiểm toán, pháp lý, truy vết bằng chứng tranh chấp và huấn luyện AI; tuyệt đối không bao giờ để lộ trực tiếp cho `SALE` khi có khả năng chứa số điện thoại.
-     - **BẢN PHÁI SINH ĐÃ LÀM SẠCH (SANITIZED DERIVATIVE):** Được tạo ra phục vụ riêng cho màn hình Inbox của `SALE` với toàn bộ chuỗi số điện thoại đã được phát hiện và che/xóa bỏ.
-     - **CẤM TUYỆT ĐỐI:** Tuyệt đối không chấp nhận bất kỳ phương án nào "làm sạch trước khi lưu mà vứt bỏ/hủy hoại dữ liệu nguồn gốc ban đầu", vì hành vi này xung đột trực tiếp với yêu cầu lưu trữ hồ sơ lịch sử/nguồn gốc đã đóng băng trong Data Contract.
-   - *Các Phương án Triển khai Hợp lệ (Valid Implementation Alternatives):*
-     - **Phương án A (Lưu trữ song song nguồn gốc + phái sinh):** Lưu dữ liệu nguồn thô song song cùng bản phái sinh `sanitized_content` (nếu thiết kế schema sau này phê duyệt bổ sung cột). Bản thô chỉ Sếp/hệ thống đọc, SALE đọc bản đã làm sạch.
-     - **Phương án B (Tách ranh giới bảo mật cơ sở dữ liệu):** Lưu dữ liệu nguồn thô trong một ranh giới bảo vệ cấp cao hơn (bảng riêng biệt hoặc schema bảo mật) và cung cấp bản phái sinh đã che số điện thoại cho SALE thông qua **Safe Database View** hoặc **Trusted Server DTO (Category D)**.
-     - **Phương án C (Lưu thô nguyên vẹn và làm sạch động khi đọc):** Giữ nguyên vẹn dữ liệu tin nhắn nguồn thô trong bảng `interactions` mà không sửa đổi schema, và chỉ tiến hành che/làm sạch số điện thoại theo thời gian thực trên đường dẫn đọc tin cậy của máy chủ (**Trusted Read Path / Server DTO**) trước khi trả về cho màn hình Inbox của SALE.
-   - *Tác động RLS:* Không sửa đổi schema hiện tại. Xác định cấu trúc quyền `SELECT` trên `interactions` đối với role `SALE`: cấm SELECT thô trực tiếp từ trình duyệt, đảm bảo SALE vận hành Inbox bằng bản phái sinh đã được che số điện thoại, trong khi dữ liệu sự kiện gốc luôn được bảo toàn toàn vẹn 100%.
+- **AUTH DECISION 05 — DECIDED / FROZEN:** Không có quyền đọc lịch sử Survey dựa trên `completed_by`; chỉ có quyền từ phân công hiện hành.
+- **RLS DECISIONS 01–05 — DECIDED / FROZEN:** Safe Staff Directory; canonical active assignment; sanitized-only transcript/recording policy; Server DTO cho dữ liệu nhạy cảm; và tách Raw/Sanitized Interaction thành hai security zones.
+- **Schema OD07/OD08 — phần authorization đã DECIDED / FROZEN:** Trạng thái phân công canonical đã khóa; lựa chọn lưu nháp Survey còn mở nhưng không được dùng để mở rộng quyền lịch sử.
 
-### 25.2. Các Quyết định Kế thừa từ Schema Design (Carried Forward Schema Open Decisions)
-1. **[SCHEMA OPEN DECISION 07] Danh mục Định danh Trạng thái Chính thức (Canonical Persisted Status Identifiers):**
-   - Định danh các token trạng thái chuẩn (`SCHEDULED`, `COMPLETED`, `CANCELLED`, v.v.) cho các thực thể lịch hẹn, khảo sát, lắp đặt, bảo hành. Trực tiếp quyết định cú pháp của Active Assignment Predicate trong RLS.
-2. **[SCHEMA OPEN DECISION 08] Vòng đời Dự thảo và Hoàn thành Khảo sát (Survey Draft/Completion Lifecycle):**
-   - Quy định rõ khi nào bản ghi khảo sát chuyển từ trạng thái đang thực hiện sang hoàn tất đóng băng, quyết định thời điểm chấm dứt quyền ghi của kỹ thuật viên.
+### 25.2. Các Quyết định Schema vẫn OPEN
 
-### 25.3. Các Quyết định KHÔNG Chặn RLS (Can Be Resolved Before Migration / Later Implementation)
+- `SCHEMA OPEN DECISION 07` vẫn mở đối với các categorical identifiers ngoài tập trạng thái phân công kỹ thuật đã khóa.
+- `SCHEMA OPEN DECISION 08` vẫn mở đối với lựa chọn vật lý Survey chỉ tạo khi hoàn tất hay cho phép lưu nháp. Quyền TECHNICIAN không phụ thuộc lựa chọn này.
+- Các Schema Open Decisions 01–06 và 09 vẫn giữ nguyên trạng thái OPEN trong `SUPABASE_SCHEMA_DESIGN.md`.
+
+### 25.3. Các Quyết định khác KHÔNG Chặn RLS Design
 1. **[AUTH OPEN DECISION 01] Cơ chế xác thực 2 bước (MFA) cho tài khoản Sếp:** Thuộc cấu hình Supabase Auth, không ảnh hưởng đến cú pháp policy RLS.
-2. **[AUTH OPEN DECISION 04] Chính sách vòng đời phiên làm việc (Session Lifetime Policy):** Quản lý qua cookie và Supabase Auth config.
-3. **[STORAGE OPEN DECISION 01] Thời gian sống chi tiết (TTL) của Signed URLs cho từng loại tệp:** Có thể tinh chỉnh từ 15 đến 60 phút trong cấu hình backend máy chủ.
+2. **[AUTH OPEN DECISION 02] Thời hạn lời mời thành viên:** Thuộc cấu hình Auth và quy trình vận hành.
+3. **[AUTH OPEN DECISION 03] Thu hồi phiên khi đổi mật khẩu:** Thuộc chính sách session/Auth.
+4. **[AUTH OPEN DECISION 04] Chính sách vòng đời phiên làm việc (Session Lifetime Policy):** Quản lý qua cookie và Supabase Auth config.
+5. **[STORAGE OPEN DECISION 01] Thời gian sống chi tiết (TTL) của Signed URLs cho từng loại tệp:** Có thể tinh chỉnh từ 15 đến 60 phút trong cấu hình backend máy chủ.
 
 ---
 
@@ -1189,11 +1209,11 @@ Các quyết định mở về kiến trúc ảnh hưởng đến hành vi RLS c
 Trước khi tiến hành viết mã lệnh các tệp migration SQL RLS (`2026091400000X_enable_rls_and_policies.sql`), các hạng mục sau đây bắt buộc phải được hoàn tất:
 
 - [x] **Phê duyệt chính thức tài liệu `docs/SUPABASE_RLS_DESIGN.md`:** Thống nhất ma trận phân quyền 28 bảng public, ranh giới schema private, các hàm helper và 5 danh mục thực thi cấp cột (Categories A-E).
-- [ ] **Chốt quyết định Auth Open Decision 05:** Thống nhất quyền đọc hồ sơ khảo sát lịch sử của kỹ thuật viên.
-- [ ] **Chốt quyết định RLS Open Decision 01:** Thống nhất cơ chế hiển thị danh bạ đồng nghiệp cho SALE và Kỹ thuật viên (qua View Category D hay Trusted Server DTO).
-- [ ] **Chốt quyết định RLS Open Decision 02 & Schema Open Decisions 07, 08:** Đóng băng Active Assignment Predicate và danh mục trạng thái canonical cho kỹ thuật viên.
-- [ ] **Chốt quyết định RLS Open Decision 03:** Thống nhất chính sách làm sạch bóc băng / ghi âm cuộc gọi cho SALE hoặc từ chối mặc định.
-- [ ] **Chốt quyết định RLS Open Decision 04:** Lựa chọn ranh giới bảo vệ cấp cột (Secure Views Category D vs Server DTOs) cho `orders` và dữ liệu nhạy cảm.
-- [ ] **Chốt quyết định RLS Open Decision 05:** Thống nhất chiến lược làm sạch số điện thoại trong nội dung tin nhắn phi cấu trúc (`interactions.content`) phục vụ SALE Inbox.
+- [x] **Chốt Auth Decision 05:** Kỹ thuật viên không đọc lịch sử Survey khi phân công kết thúc; `completed_by` không cấp quyền.
+- [x] **Chốt RLS Decision 01:** Safe Staff Directory cùng Company với explicit field allowlist, qua Restricted View hoặc Server DTO phù hợp.
+- [x] **Chốt RLS Decision 02 và phần authorization của Schema OD07/OD08:** Active assignment là `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; ba trạng thái kết thúc chấm dứt quyền.
+- [x] **Chốt RLS Decision 03:** SALE chỉ nhận sanitized transcript khi `SUCCEEDED`, không đọc raw recording và fail closed.
+- [x] **Chốt RLS Decision 04:** Dữ liệu nhạy cảm qua trusted Server DTO; Database View chỉ cho dataset tự thân an toàn.
+- [x] **Chốt RLS Decision 05:** Raw và Sanitized Interaction là hai security zones; không fallback raw.
 - [ ] **Thiết lập quyền hạn Database Roles & Grants:** Chuẩn hóa các lệnh `REVOKE` và `GRANT` cơ bản cho các role nội bộ của PostgreSQL (`anon`, `authenticated`, `service_role`).
 - [ ] **Kế hoạch Kiểm thử RLS Tự động:** Chuẩn bị kịch bản kiểm thử (Test Suite) cho từng role (`BOSS_ADMIN`, `SALE`, `TECHNICIAN`, `anon`) đối với từng bảng vật lý để bảo đảm không xảy ra rò rỉ dữ liệu, bypass tenant key, hoặc đệ quy vô tận.

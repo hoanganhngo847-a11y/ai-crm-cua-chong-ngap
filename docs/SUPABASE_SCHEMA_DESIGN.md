@@ -617,7 +617,7 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `start_time` | `timestamptz` | NOT NULL | | | Thời điểm bắt đầu hẹn |
 | `assignee_id` | `uuid` | NOT NULL | | FK `user_profiles(id)` | Kỹ thuật viên phụ trách (Kiểm tra active TECHNICIAN qua trigger) |
 | `address` | `text` | NOT NULL | | | Địa chỉ thực hiện đo đạc/lắp đặt |
-| `status` | `text` | NOT NULL | | CHECK (`status IN ('SCHEDULED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'RESCHEDULED')`) [PROPOSED] | Trạng thái lịch hẹn |
+| `status` | `text` | NOT NULL | | CHECK (`status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'REJECTED')`) [FROZEN cho vòng đời phân công kỹ thuật] | Trạng thái phân công của công việc hiện trường |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo |
 | `updated_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm cập nhật |
 
@@ -629,6 +629,8 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Index: `idx_appointments_technician` (`company_id`, `assignee_id`, `start_time` ASC)
 - **Invariants:**
   - `assignee_id` bắt buộc có `CompanyMember.role = 'TECHNICIAN'` và `status = 'ACTIVE'` tại thời điểm gán.
+  - Phân công kỹ thuật viên chỉ được coi là hiện hành khi `status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')`. Khi chuyển sang `COMPLETED`, `CANCELLED` hoặc `REJECTED`, mọi quyền truy cập dẫn xuất từ phân công đó chấm dứt.
+  - Quyền tới Customer, Survey và tài nguyên liên quan của Job phải dẫn xuất từ phân công hiện hành; `Survey.completed_by` chỉ là bằng chứng lịch sử và không duy trì quyền sau khi Job kết thúc.
   - **Bất biến loại lịch hẹn (Appointment Type Immutability):** Khi một lịch hẹn đã được tham chiếu bởi một bản ghi con trong `surveys` hoặc `installations`, trigger chặn không cho phép đổi `type` sang giá trị không tương thích.
 
 ---
@@ -1257,6 +1259,9 @@ Tuyệt đối không đổi tên hoặc thay đổi ý nghĩa của các giá t
   `'NEED_INFO'`
 - **Thứ tự lần gọi thử (`call_attempts.attempt_no`):**
   `1, 2, 3`
+- **Trạng thái phân công kỹ thuật viên (`appointments.status`):**
+  - Còn hiệu lực truy cập: `'ASSIGNED'`, `'ACCEPTED'`, `'IN_PROGRESS'`.
+  - Kết thúc hiệu lực truy cập: `'COMPLETED'`, `'CANCELLED'`, `'REJECTED'`.
 - **Ý nghĩa trạng thái kết thúc chu kỳ gọi thử thất bại:**
   Hợp đồng nghiệp vụ bắt buộc chuyển trạng thái khách thành: **`KHÔNG LIÊN LẠC ĐƯỢC`**. (Mã định danh chuỗi lưu trữ cụ thể như `KHONG_LIEN_LAC_DUOC` hay `UNREACHABLE` là đề xuất chờ phê duyệt tại Open Decision 07).
 
@@ -1324,8 +1329,8 @@ result IN ('PENDING', 'NO_ANSWER', 'BUSY', 'ANSWERED', 'FAILED', 'CANCELLED')
 -- 12. Loại lịch hẹn [PROPOSED]
 type IN ('SURVEY', 'INSTALLATION')
 
--- 13. Trạng thái lịch hẹn [PROPOSED]
-status IN ('SCHEDULED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'RESCHEDULED')
+-- 13. Trạng thái phân công kỹ thuật viên [FROZEN]
+status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'REJECTED')
 
 -- 14. Trạng thái bảng giá [PROPOSED]
 status IN ('DRAFT', 'ACTIVE', 'SUPERSEDED', 'RETIRED')
@@ -1396,7 +1401,7 @@ Chỉ mục cơ sở dữ liệu được thiết kế bám sát các luồng ng
 - Quét lịch hẹn kỹ thuật:
   ```sql
   CREATE INDEX idx_appointments_pending ON appointments (company_id, assignee_id, start_time)
-  WHERE status IN ('SCHEDULED', 'CONFIRMED');
+  WHERE status IN ('ASSIGNED', 'ACCEPTED');
   ```
 - Quét lịch gọi lại:
   ```sql
@@ -1464,6 +1469,11 @@ Dưới đây là các quyết định thiết kế đã được phân tích th
    - *Quyết định:* Khóa cứng các bất biến cốt lõi: mã phải ổn định, có tiền tố dễ đọc (`KH-`, `DH-`), duy nhất trong phạm vi Company, không tái sử dụng, không chứa dữ liệu nhạy cảm, và cơ chế sinh phải an toàn trước race conditions dưới tải đồng thời. (Cơ chế kỹ thuật cụ thể là Open Decision 03).
 9. **Chính sách kiểm soát đột biến dữ liệu lịch sử:**
    - *Quyết định:* Phân định 4 nhóm dữ liệu (Strict Append-Only, Historical Event, Stateful Non-Deletable, Immutable Snapshot) và ghi nhận cơ chế thực thi cho giai đoạn Migration/RLS.
+10. **[SCHEMA DECISION — DECIDED / FROZEN] Vòng đời Phân công Kỹ thuật viên Canonical:**
+   - *Decision:* Phân công hiện hành dùng duy nhất `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; các trạng thái `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền truy cập dẫn xuất từ phân công.
+   - *Authorization/Security Rule:* Quyền của TECHNICIAN tới Job, Customer, Survey và tài nguyên liên quan phải đồng thời kiểm tra user `ACTIVE`, membership `ACTIVE`, cùng Company, role `TECHNICIAN` và phân công hiện hành.
+   - *Rationale:* Quyền tối thiểu chỉ tồn tại trong thời gian tác nghiệp; không biến dữ liệu lịch sử thành quyền truy cập lâu dài.
+   - *Implementation Consequence:* Auth, RLS và application authorization phải dùng cùng một định nghĩa. Nếu sau này cần xem lại Job đã hoàn tất, phải có permission riêng; `completed_by` không phải active assignment.
 
 ---
 
@@ -1472,10 +1482,11 @@ Dưới đây là các quyết định thiết kế đã được phân tích th
 Các quyết định bảo mật sống còn của hệ thống:
 
 1. **Quy trình bấm gọi không lộ số (Zero-Phone-Exposure Outbound Calling):**
-   - SALE bấm nút "GỌI KHÁCH" trên UI → Trình duyệt chỉ gửi payload `{ customer_id: "..." }`.
-   - Máy chủ tin cậy nhận yêu cầu, xác thực caller là SALE active trong company.
+   - SALE bấm nút "GỌI KHÁCH" trên UI → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`.
+   - Máy chủ tin cậy nhận yêu cầu, xác thực caller là SALE active trong Company và phân giải Customer mục tiêu cùng Company.
    - Máy chủ lấy `raw_phone` từ `private.customer_private_contacts` trong phiên bảo mật riêng và chuyển thẳng số tới tổng đài qua API Server-to-Server.
    - Phản hồi trả về SALE chỉ chứa `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ dấu vết số điện thoại nào lọt về trình duyệt hay console log.
+   - Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, sanitized transcript và error message. Nội dung chứa số điện thoại phải fail closed, không được gắn nhãn sanitized rồi phát hành.
 2. **Ẩn danh hóa số điện thoại trong bảng `identities` bằng Keyed HMAC:**
    - Trường `external_id` khi nhận diện kênh điện thoại bắt buộc lưu bằng Keyed HMAC (HMAC-SHA256 với server secret key).
    - Tuyệt đối không lưu raw phone hoặc normalized phone trong `identities.metadata`.
@@ -1483,7 +1494,8 @@ Các quyết định bảo mật sống còn của hệ thống:
    - Bảng `payment_transactions` và `finance_summaries` được thiết kế với yêu cầu RLS ở pha sau chỉ cho phép `BOSS_ADMIN` đọc trực tiếp.
    - SALE chỉ được đọc các trường thương mại cần thiết trên `orders` (`final_amount`, `deposit_status`, `order_status`) qua chính sách RLS sẽ cấu hình ở pha sau.
 4. **Nguyên tắc quyền tối thiểu cho Kỹ thuật viên (Technician Least Privilege):**
-   - TECHNICIAN sẽ chỉ được truy cập các dòng trong `appointments` và `surveys` mà mình được giao hoặc hoàn tất (sẽ triển khai qua chính sách RLS ở pha sau).
+   - TECHNICIAN sẽ chỉ được truy cập các dòng trong `appointments`, `surveys`, Customer và tài nguyên liên quan được dẫn xuất từ phân công hiện hành có trạng thái `ASSIGNED`, `ACCEPTED` hoặc `IN_PROGRESS` (sẽ triển khai qua chính sách RLS ở pha sau).
+   - Quyền dựa trên phân công chấm dứt ở `COMPLETED`, `CANCELLED`, `REJECTED`; việc từng hoàn tất Survey không tự tạo quyền đọc lịch sử.
    - Hoàn toàn không có quyền xem số điện thoại, bảng giá, hợp đồng và tài chính tổng.
 5. **Làm sạch dữ liệu kiểm toán (Sanitized Audit Logs):**
    - Trigger và API ghi `audit_logs` sẽ được thiết kế để tự động lọc bỏ các trường nhạy cảm (`raw_phone`, token, secret, mật khẩu).
@@ -1522,10 +1534,12 @@ Các điểm kiến trúc chưa được khóa cứng trong `PROJECT_MASTER.md` 
 7. **[OPEN DECISION 07] Quy chuẩn mã hóa định danh phân loại lưu trữ (Canonical Persisted Categorical Identifiers):**
    - *Vấn đề:* Mở rộng phạm vi soát xét toàn bộ các giá trị phân loại lưu trữ trong cơ sở dữ liệu (bao gồm `stage`, `status`, `channel`, `type`, `actor_type`, `result`).
    - *Yêu cầu:* Thống nhất bảng ánh xạ chính thức giữa nhãn hiển thị nghiệp vụ (đặc biệt là yêu cầu hợp đồng bắt buộc `KHÔNG LIÊN LẠC ĐƯỢC` và `ĐÃ CỌC`) với mã chuỗi lưu trữ PostgreSQL. Giữ nguyên tính bất biến của các giá trị frozen: `BOSS_ADMIN`, `SALE`, `TECHNICIAN`, `CompanyMember ACTIVE`, `NEED_INFO`, và `attempt_no 1..3`.
+   - **Phần đã quyết định / FROZEN trong phạm vi Technician:** `appointments.status` dùng `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `REJECTED` theo lifecycle phân công canonical. Open Decision 07 chỉ còn mở đối với các danh mục khác chưa được contract hoặc task này chốt.
 8. **[OPEN DECISION 08] Vòng đời khảo sát: Bản nháp vs Bản hoàn tất (Survey Draft / Completion Lifecycle):**
    - *Vấn đề:* Cấu trúc hiện tại có `completed_by NOT NULL` nhưng `completed_at NULL`. Cần thống nhất mô hình lưu trữ khảo sát:
      - Phương án A: Bản ghi `Survey` chỉ được tạo khi kỹ thuật viên thực sự hoàn tất đo đạc và gửi kết quả (`completed_by NOT NULL`, `completed_at NOT NULL`).
      - Phương án B: Cho phép tạo bản ghi `Survey` ở trạng thái nháp (đang đo đạc), khi đó `completed_by` và `completed_at` có thể `NULL` và chỉ được kiểm tra ràng buộc khi hoàn tất.
+   - **Ranh giới đã quyết định / FROZEN:** Lựa chọn A/B không được dùng để mở rộng quyền truy cập. Dù Survey được lưu nháp hay chỉ tạo khi hoàn tất, quyền TECHNICIAN vẫn chỉ dẫn xuất từ phân công hiện hành và kết thúc khi phân công chuyển `COMPLETED`, `CANCELLED` hoặc `REJECTED`.
 9. **[OPEN DECISION 09] Nhận diện cuộc gọi từ nhà cung cấp & Chống trùng Webhook (Call Provider Correlation & Webhook Event Idempotency):**
    - *Vấn đề:* Bảng `calls` hiện tại chưa có trường tham chiếu mã cuộc gọi từ nhà mạng/tổng đài. Trước khi nhà cung cấp tổng đài (Viettel Hotline, Stringee, Twilio...) được lựa chọn chính thức, chưa tự ý thêm cột cứng.
    - *Cần thống nhất:* Định danh kết nối nhà cung cấp, mã cuộc gọi phía nhà mạng (`provider_call_id`), mã sự kiện webhook (`webhook_event_id`), hành vi thử lại và phạm vi ràng buộc duy nhất.
@@ -1597,6 +1611,7 @@ Trước khi tiến hành viết tệp migration SQL đầu tiên (`00001_initia
 - [ ] **Chốt Open Decision 06 (Installation Crew Modeling):** Xác định giữ `installations.crew` dạng snapshot mô tả `jsonb` hay tạo bảng quan hệ riêng `installation_crew_members`.
 - [ ] **Chốt Open Decision 07 (Canonical Persisted Categorical Identifiers):** Phê duyệt toàn bộ danh mục chuỗi mã phân loại lưu trong DB (đặc biệt là ánh xạ của `KHÔNG LIÊN LẠC ĐƯỢC` và `ĐÃ CỌC`).
 - [ ] **Chốt Open Decision 08 (Survey Draft / Completion Lifecycle):** Quyết định vòng đời Survey tạo khi hoàn tất hay cho phép lưu nháp.
+- [x] **Chốt lifecycle phân công kỹ thuật viên thuộc Open Decisions 07/08:** `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS` cấp quyền; `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền; quyền lịch sử không phát sinh từ `completed_by`.
 - [ ] **Chốt Open Decision 09 (Call Provider Correlation & Webhook Idempotency):** Thống nhất hợp đồng dữ liệu với nhà cung cấp tổng đài và trường định danh cuộc gọi.
 - [ ] **Phê duyệt Ranh giới Schema vật lý `private.customer_private_contacts`:** Thống nhất cấu hình không phơi bày schema `private` qua PostgREST và mô hình bảo mật truy cập của máy chủ tin cậy.
 - [ ] **Phê duyệt Thiết kế Hợp đồng có phiên bản (`contracts` revisioning):** Phê duyệt cơ chế versioning và partial index `is_current = true`.
