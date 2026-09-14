@@ -1,10 +1,9 @@
 # Supabase Schema Design
 
-Tài liệu thiết kế lược đồ cơ sở dữ liệu vật lý (Physical Schema Blueprint) trên nền tảng PostgreSQL / Supabase cho dự án **AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng**.
-
-Tài liệu này kế thừa và hiện thực hóa hai bản hợp đồng kiến trúc bất biến:
-- [`PROJECT_MASTER.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/PROJECT_MASTER.md) (Luật nghiệp vụ tổng thể)
-- [`DATA_CONTRACT.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/DATA_CONTRACT.md) (Quy ước dữ liệu dùng chung)
+> **Tài liệu Thiết kế Lược đồ Cơ sở Dữ liệu Vật lý (Physical Schema Blueprint)**
+> **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
+> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ kiến trúc Lược đồ CSDL vật lý (Physical Schema Blueprint) và 9 Quyết định Schema Open Decisions 01–09 đã được chốt và đóng băng; chuẩn bị cho pha Migration 001.
+> **Tham chiếu hợp đồng bất biến:** `docs/PROJECT_MASTER.md`, `docs/DATA_CONTRACT.md`, `docs/AUTH_DESIGN.md`, `docs/SUPABASE_RLS_DESIGN.md`.
 
 ---
 
@@ -139,17 +138,26 @@ graph TD
 2. **Bảng `private.customer_private_contacts` (Protected Contact Store):**
    - Nằm trong schema `private` riêng biệt. PostgREST mặc định chỉ expose schema `public`, do đó bảng này hoàn toàn vô hình trước các truy vấn trực tiếp từ trình duyệt qua Supabase Client SDK.
    - Không cấp bất kỳ quyền (`GRANT`) nào cho các vai trò `anon` hay `authenticated`.
-   - Chỉ có dịch vụ máy chủ tin cậy (Next.js Server Actions / API Routes chạy bằng Service Role Key) hoặc các hàm PostgreSQL chuyên biệt (`SECURITY DEFINER`) mới có quyền truy vấn.
+   - Chỉ có dịch vụ máy chủ tin cậy (Next.js Server Actions / API Routes chạy bằng Service Role Key sau khi authorize actor) hoặc các hàm PostgreSQL chuyên biệt (`SECURITY DEFINER`) mới có quyền truy vấn.
 3. **Quy tắc cho hàm xử lý cuộc gọi và quyền xem của Sếp:**
    - Các hàm `SECURITY DEFINER` truy cập vào `private.customer_private_contacts` bắt buộc phải thiết lập tường minh `SET search_path = private, pg_temp` và định danh đầy đủ schema của đối tượng để chống tấn công search_path injection.
-   - Khi SALE bấm gọi: Hàm chỉ trả về kết quả vận hành (ví dụ: `call_id`, `status = 'INITIATED'`), **tuyệt đối không trả về chuỗi số điện thoại**.
+   - Khi SALE bấm gọi: Hàm chỉ truyền `customer_id` hoặc `interaction_id`, trả về kết quả vận hành (ví dụ: `call_id`, `status = 'INITIATED'`), **tuyệt đối không trả về chuỗi số điện thoại**.
    - Quyền xem số điện thoại thật của `BOSS_ADMIN` phải thông qua API riêng có ghi vết bắt buộc vào `audit_logs`.
 4. **Bảo vệ danh tính liên hệ trong bảng `identities` bằng Keyed HMAC:**
    - Trường hợp `channel = 'phone'`: Cột `external_id` **bắt buộc không được lưu chuỗi số điện thoại thô hay số chuẩn hóa**.
    - Phải lưu dạng **Keyed HMAC (HMAC-SHA256 với secret key được quản lý tập trung ở máy chủ tin cậy)**.
    - Secret key của HMAC tuyệt đối không được chuyển xuống trình duyệt, không commit vào repository, không ghi log, và phải có kế hoạch xoay vòng khóa (key rotation).
-   - Dữ liệu đầu vào của hàm tính HMAC bắt buộc phải là kết quả của thuật toán chuẩn hóa số điện thoại thống nhất (xem Open Decision 01).
+   - Dữ liệu đầu vào của hàm tính HMAC bắt buộc phải là kết quả của thuật toán chuẩn hóa số điện thoại E.164 thống nhất (ví dụ: `+84XXXXXXXXX` — xem Schema Decision 01).
    - Trường `identities.metadata` tuyệt đối cấm chứa `raw_phone` hoặc `normalized_phone`.
+5. **Bảo vệ Nội dung Giao tiếp gốc trong `private.interaction_raw_contents` (Raw Interaction Security Zone):**
+   - Nội dung giao tiếp khách hàng gửi đến (Zalo, Facebook, Website) có thể chứa số điện thoại hoặc PII nhạy cảm chưa được phát hiện.
+   - Toàn bộ nội dung tương tác gốc (`raw_content`) và payload thô từ nhà mạng/webhook đối tác (`raw_payload`) được lưu trữ cách ly hoàn toàn tại bảng `private.interaction_raw_contents` thuộc schema `private`.
+   - Bảng `public.interactions` ở schema công khai chỉ lưu trữ siêu dữ liệu an toàn và nội dung phái sinh đã qua làm sạch (`sanitized_content`) kèm cờ trạng thái `sanitization_status`.
+   - Áp dụng nguyên tắc **FAIL CLOSED** và phân định trạng thái làm sạch:
+     - `PENDING` $\rightarrow$ SALE không nhận nội dung.
+     - `FAILED` $\rightarrow$ SALE không nhận nội dung; lỗi làm sạch tuyệt đối không bao giờ fallback về raw content (`FAILED NEVER FALLS BACK TO RAW`).
+     - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phép phát hành cho SALE. Đối với mọi tương tác chứa nội dung văn bản do khách hàng tạo (customer-generated textual content), SALE CHỈ ĐƯỢC NHẬN nội dung khi và chỉ khi `sanitization_status = 'SUCCEEDED'`.
+     - `NOT_REQUIRED` $\rightarrow$ **chỉ được phép sử dụng cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập** mà việc làm sạch là thực sự không cần thiết (ví dụ: status event, telephony signaling event). Tuyệt đối KHÔNG BAO GIỜ được dùng `NOT_REQUIRED` để qua mặt hoặc bỏ qua quy trình làm sạch (must never be used to bypass the sanitizer).
 
 ---
 
@@ -229,7 +237,7 @@ Mỗi bảng vật lý trong cơ sở dữ liệu được xếp vào một tron
 
 1. **DIRECT COMPANY SCOPE (Phạm vi công ty trực tiếp):**
    - Bảng chứa cột `company_id uuid NOT NULL REFERENCES companies(id)`.
-   - Áp dụng cho: `company_members`, `customers`, `private.customer_private_contacts`, `customer_stage_histories`, `identities`, `interactions`, `conversations`, `calls`, `call_attempts`, `appointments`, `surveys`, `pricing_policies`, `price_calculations`, `payment_transactions`, `orders`, `contracts`, `production_orders`, `installations`, `finance_summaries`, `care_campaigns`, `care_deliveries`, `care_schedules`, `ai_analyses`, `sales_style_profiles`, `warranty_tickets`, `audit_logs`.
+   - Áp dụng cho: `company_members`, `customers`, `private.customer_private_contacts`, `private.interaction_raw_contents`, `customer_stage_histories`, `identities`, `interactions`, `conversations`, `calls`, `call_attempts`, `appointments`, `surveys`, `pricing_policies`, `price_calculations`, `payment_transactions`, `orders`, `contracts`, `production_orders`, `installations`, `finance_summaries`, `care_campaigns`, `care_deliveries`, `care_schedules`, `ai_analyses`, `sales_style_profiles`, `warranty_tickets`, `audit_logs`.
 2. **INFERRED COMPANY SCOPE (Phạm vi công ty suy diễn qua quan hệ cha):**
    - Về mặt lý thuyết ở `DATA_CONTRACT.md`, một số thực thể con như `contracts`, `production_orders`, `installations`, `finance_summaries`, `call_transcripts` có thể suy diễn company qua `order_id` hoặc `call_id`.
    - **Đánh giá thiết kế schema vật lý:** Toàn bộ các bảng này đều được bổ sung cột `company_id NOT NULL` trực tiếp để tối ưu hóa hiệu năng RLS và thiết lập các ràng buộc khóa ngoại phức hợp (`Composite Foreign Keys`) bảo vệ dữ liệu không bị trỏ nhầm công ty.
@@ -258,7 +266,7 @@ Mỗi bảng vật lý trong cơ sở dữ liệu được xếp vào một tron
 
 ## 6. Physical Table Catalog
 
-Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc schema `public` + 1 bảng `customer_private_contacts` thuộc schema `private`). Thực thể logic `AccessPolicy` được hiện thực hóa qua ma trận phân quyền, hàm kiểm tra và RLS, không tạo bảng vật lý dư thừa.
+Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc schema `public` + 2 bảng thuộc schema `private`: `customer_private_contacts` và `interaction_raw_contents`). Thực thể logic `AccessPolicy` được hiện thực hóa qua ma trận phân quyền, hàm kiểm tra và RLS, không tạo bảng vật lý dư thừa.
 
 ---
 
@@ -341,10 +349,10 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 |--------|------|------|---------|------------|-------|
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh nội bộ của khách hàng |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp sở hữu khách hàng |
-| `customer_code` | `text` | NOT NULL | | | Mã khách hàng dễ đọc, ví dụ: `KH-000182` (Cơ chế sinh là Open Decision 03) |
+| `customer_code` | `text` | NOT NULL | | | Mã khách hàng dễ đọc, ví dụ: `KH-000182` (Cơ chế sinh native sequence đã chốt tại Schema Decision 03 — DECIDED / FROZEN) |
 | `name` | `text` | NOT NULL | | | Tên khách hàng |
-| `source` | `text` | NOT NULL | | CHECK (`source IN ('FACEBOOK', 'ZALO', 'WEBSITE', 'HOTLINE', 'ADVERTISING', 'MANUAL')`) [PROPOSED] | Nguồn tiếp nhận ban đầu |
-| `stage` | `text` | NOT NULL | | | Giai đoạn hành trình hiện tại (Danh mục và giá trị khởi tạo là PROPOSED - xem Open Decision 07) |
+| `source` | `text` | NOT NULL | | CHECK (`source IN ('FACEBOOK', 'ZALO_OA', 'WEBSITE', 'HOTLINE', 'ADVERTISING', 'MANUAL')`) | Nguồn tiếp nhận ban đầu (Canonical UPPER_SNAKE_CASE) |
+| `stage` | `text` | NOT NULL | | | Giai đoạn hành trình hiện tại (Danh mục canonical UPPER_SNAKE_CASE đã chốt tại Schema Decision 07 — DECIDED / FROZEN) |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo hồ sơ |
 | `updated_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm cập nhật gần nhất |
 
@@ -358,7 +366,7 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
     - `idx_customers_company_name_trgm` (Chỉ mục tìm kiếm tên nhanh bằng GIN)
 - **Invariants:**
   - Hoàn toàn không chứa trường `phone`, `raw_phone` hay `normalized_phone`.
-  - `customer_code` là bất biến sau khi cấp, duy nhất trong Company, không tái sử dụng, không chứa dữ liệu nhạy cảm, cơ chế sinh an toàn trước race condition (chi tiết tại Open Decision 03).
+  - `customer_code` là bất biến sau khi cấp, duy nhất trong Company, không tái sử dụng, không chứa dữ liệu nhạy cảm, không dùng làm authorization identifier hay security secret; cơ chế sinh an toàn trước race condition bằng PostgreSQL native global sequence `customer_code_seq` định dạng `KH-000001` (chi tiết tại Schema Decision 03 — DECIDED / FROZEN).
 
 ---
 
@@ -373,8 +381,8 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh bản ghi liên hệ |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp quản lý |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)`, UNIQUE | Khách hàng tương ứng (quan hệ 1:1) |
-| `normalized_phone` | `text` | NOT NULL | | | Số điện thoại chuẩn hóa phục vụ chống trùng (Thuật toán là Open Decision 01) |
-| `raw_phone` | `text` | NOT NULL | | | Số điện thoại thô dùng cho tổng đài |
+| `normalized_phone` | `text` | NOT NULL | | CHECK (`normalized_phone ~ '^\+[1-9][0-9]{7,14}$'`) | Số điện thoại chuẩn hóa theo chuẩn quốc tế E.164 (ví dụ: `+84XXXXXXXXX`), phục vụ chống trùng và đầu vào tính HMAC (Schema Decision 01 — DECIDED / FROZEN) |
+| `raw_phone` | `text` | NOT NULL | | | Số điện thoại thô dùng cho tổng đài SIP/PBX |
 | `phone_country_code` | `text` | NOT NULL | `'VN'` | | Mã quốc gia |
 | `is_verified` | `boolean` | NOT NULL | `false` | | Đã gọi xác thực thành công hay chưa |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo |
@@ -388,6 +396,7 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 - **Invariants:**
   - Nằm trong schema `private`, không có quyền cho `anon`/`authenticated`.
   - Cả `raw_phone` và `normalized_phone` đều là dữ liệu bảo mật tối mật. Chỉ máy chủ tin cậy và RPC bảo mật được đọc.
+  - Chuẩn hóa E.164 là bất biến cốt lõi cho mọi tích hợp (PostgreSQL, TypeScript, Webhook, PBX). Không hard-code danh sách prefix nhà mạng vào core database check constraint.
 
 ---
 
@@ -446,9 +455,9 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 ---
 
 ### 6.8. Bảng `interactions`
-- **Purpose:** Dòng sự kiện tương tác Customer 360 (tin nhắn, sự kiện cuộc gọi, ghi chú, cập nhật trạng thái).
+- **Purpose:** Dòng sự kiện tương tác Customer 360 ở schema công khai, chỉ lưu trữ siêu dữ liệu an toàn và nội dung phái sinh đã qua làm sạch PII (Sanitized Interaction Security Zone).
 - **Tenant Scope:** DIRECT COMPANY SCOPE.
-- **Sensitive Classification:** Nội dung giao tiếp khách hàng (chứa hội thoại, phản hồi).
+- **Sensitive Classification:** Dữ liệu tương tác an toàn (Sanitized Derivative).
 - **ON DELETE Behavior:** `ON DELETE RESTRICT`.
 
 | Column | Type | Null | Default | Constraint | Notes |
@@ -457,12 +466,15 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp sở hữu |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng liên quan |
 | `conversation_id` | `uuid` | NULL | | FK phức hợp `conversations` | Hội thoại nguồn nếu là tin nhắn inbox (phải cùng Company & Customer) |
-| `channel` | `text` | NOT NULL | | CHECK (`channel IN ('ZALO', 'FACEBOOK', 'WEBSITE', 'PHONE', 'AI_VOICE')`) [PROPOSED] | Kênh tương tác |
-| `type` | `text` | NOT NULL | | CHECK (`type IN ('MESSAGE', 'CALL_EVENT', 'NOTE', 'STATUS_EVENT', 'APPOINTMENT_EVENT')`) [PROPOSED] | Loại tương tác |
-| `direction` | `text` | NOT NULL | | CHECK (`direction IN ('INBOUND', 'OUTBOUND')`) [PROPOSED] | Chiều tương tác |
-| `content` | `text` | NOT NULL | | | Nội dung chi tiết tương tác |
+| `channel` | `text` | NOT NULL | | CHECK (`channel IN ('ZALO', 'FACEBOOK', 'WEBSITE', 'HOTLINE', 'PHONE', 'AI_VOICE')`) | Kênh tương tác |
+| `type` | `text` | NOT NULL | | CHECK (`type IN ('MESSAGE', 'CALL_EVENT', 'NOTE', 'STATUS_EVENT', 'APPOINTMENT_EVENT')`) | Loại tương tác |
+| `direction` | `text` | NOT NULL | | CHECK (`direction IN ('INBOUND', 'OUTBOUND')`) | Chiều tương tác |
+| `sanitized_content` | `text` | NULL | | | Nội dung đã được làm sạch số điện thoại và PII (chỉ hiển thị khi `sanitization_status = 'SUCCEEDED'`) |
+| `sanitization_status` | `text` | NOT NULL | `'PENDING'` | CHECK (`sanitization_status IN ('PENDING', 'SUCCEEDED', 'FAILED', 'NOT_REQUIRED')`) | Trạng thái làm sạch (FAIL CLOSED: SUCCEEDED mới mở cho SALE; NOT_REQUIRED chỉ cho non-text system events, cấm bypass sanitizer) |
+| `sanitized_at` | `timestamptz` | NULL | | | Thời điểm hoàn tất làm sạch |
+| `sanitizer_version` | `text` | NULL | | | Phiên bản thuật toán/mô hình làm sạch |
 | `external_ref` | `text` | NULL | | | Mã tham chiếu nguồn chống ghi trùng |
-| `actor_type` | `text` | NOT NULL | | CHECK (`actor_type IN ('CUSTOMER', 'SALE', 'TECHNICIAN', 'AI', 'SYSTEM')`) [PROPOSED] | Loại chủ thể thực hiện |
+| `actor_type` | `text` | NOT NULL | | CHECK (`actor_type IN ('CUSTOMER', 'SALE', 'TECHNICIAN', 'AI', 'SYSTEM')`) | Loại chủ thể thực hiện |
 | `actor_user_id` | `uuid` | NULL | | FK `user_profiles(id)` | Người dùng nội bộ nếu là SALE/TECH (Kiểm tra thẩm quyền qua trigger) |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tương tác xảy ra |
 
@@ -476,12 +488,47 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Indexes:
     - `idx_interactions_timeline` (`company_id`, `customer_id`, `created_at` DESC)
     - `idx_interactions_conversation` (`conversation_id`, `created_at` ASC) WHERE `conversation_id IS NOT NULL`
+    - `idx_interactions_sanitization` (`company_id`, `sanitization_status`)
 - **Invariants:**
+  - Phân tách hai vùng an ninh (Two Security Zones): Bảng `public.interactions` tuyệt đối không chứa dữ liệu nguồn thô có thể rò rỉ số điện thoại. Toàn bộ nội dung gốc được cách ly tại bảng `private.interaction_raw_contents`.
+  - Nguyên tắc FAIL CLOSED và Ranh giới Sanitization:
+    - `PENDING` $\rightarrow$ không có nội dung cho SALE.
+    - `FAILED` $\rightarrow$ không có nội dung cho SALE; thất bại làm sạch tuyệt đối KHÔNG fallback về raw content (`FAILED NEVER FALLS BACK TO RAW`).
+    - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phát hành cho SALE. Nếu một tương tác chứa nội dung văn bản do khách hàng tạo ra (customer-generated text), SALE CHỈ ĐƯỢC PHÉP NHẬN nội dung khi `sanitization_status = 'SUCCEEDED'`.
+    - `NOT_REQUIRED` $\rightarrow$ CHỈ ĐƯỢC PHÉP ÁP DỤNG cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập (ví dụ: system status change, telephony signaling event) mà việc làm sạch là thực sự không cần thiết. Tuyệt đối KHÔNG BAO GIỜ được dùng `NOT_REQUIRED` để qua mặt (bypass) quy trình làm sạch.
   - Ràng buộc khai báo: `(company_id, customer_id, conversation_id)` bảo đảm hội thoại bắt buộc thuộc cùng một Company và cùng một Customer.
   - Ràng buộc động qua Trigger:
     - Nếu `type = 'MESSAGE'` và kênh thuộc inbox (`ZALO`, `FACEBOOK`), bắt buộc `conversation_id IS NOT NULL`.
     - Kênh của Interaction bắt buộc phải tương thích với `conversations.channel`.
     - Thẩm quyền `actor_user_id` được kiểm tra theo Section 4.5.
+
+---
+
+### 6.8b. Bảng `private.interaction_raw_contents`
+- **Purpose:** Vùng lưu trữ nội dung tương tác gốc (Raw Interaction Security Zone) nhận từ khách hàng, nhà mạng hoặc webhook đối tác, đặt trong schema `private` cách ly hoàn toàn, không phơi bày qua PostgREST / Supabase Client API.
+- **Tenant Scope:** DIRECT COMPANY SCOPE.
+- **Sensitive Classification:** DỮ LIỆU BẢO MẬT NỘI DUNG GỐC (Chứa Raw Phone, PII và Raw Payload chưa làm sạch).
+- **ON DELETE Behavior:** `ON DELETE RESTRICT`.
+
+| Column | Type | Null | Default | Constraint | Notes |
+|--------|------|------|---------|------------|-------|
+| `interaction_id` | `uuid` | NOT NULL | | PK, FK `public.interactions(id)` | Khóa chính và khóa ngoại 1:1 trỏ tới bản ghi tương tác công khai |
+| `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp sở hữu |
+| `raw_content` | `text` | NOT NULL | | | Toàn văn nội dung tương tác gốc chưa qua xử lý (có thể chứa raw phone/PII) |
+| `raw_payload` | `jsonb` | NOT NULL | `'{}'::jsonb` | | Payload gốc dạng JSON nhận từ Webhook đối tác (Zalo OA, Facebook Graph API, Telephony) |
+| `source_metadata` | `jsonb` | NOT NULL | `'{}'::jsonb` | | Siêu dữ liệu mở rộng từ nguồn phát |
+| `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tiếp nhận bản ghi thô |
+
+- **Constraints & Indexes:**
+  - PK: `pk_interaction_raw_contents` (`interaction_id`)
+  - FK: `fk_irc_interaction` (`interaction_id`) REFERENCES public.interactions(`id`) ON DELETE RESTRICT
+  - FK: `fk_irc_company` (`company_id`) REFERENCES public.companies(`id`) ON DELETE RESTRICT
+  - Index: `idx_irc_company` (`company_id`)
+- **Invariants:**
+  - Đặt trong schema `private`, cấm toàn bộ quyền `SELECT`, `INSERT`, `UPDATE`, `DELETE` đối với các vai trò `anon` và `authenticated`.
+  - Tuyệt đối không phơi bày ra giao diện người dùng của `SALE` hay `TECHNICIAN`, không xuất hiện trong API thông thường, client props, DOM hay browser logs.
+  - Chỉ có dịch vụ máy chủ tin cậy (Next.js Server Actions chạy Service Role sau khi xác thực quyền) và Worker làm sạch dữ liệu (`Sanitization Worker`) mới được phép truy xuất để trích xuất PII, tính toán bản phái sinh và ghi kết quả làm sạch sang `public.interactions.sanitized_content`.
+  - Không bao giờ xóa hoặc làm biến dạng nội dung gốc nhằm bảo toàn bằng chứng kiểm toán kỹ thuật số (Strict Append-Only Evidence).
 
 ---
 
@@ -527,13 +574,15 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh cuộc gọi |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng liên quan |
-| `direction` | `text` | NOT NULL | | CHECK (`direction IN ('INBOUND', 'OUTBOUND')`) [PROPOSED] | Chiều cuộc gọi |
-| `agent_type` | `text` | NOT NULL | | CHECK (`agent_type IN ('AI', 'SALE')`) [PROPOSED] | Loại tổng đài viên thực hiện |
+| `direction` | `text` | NOT NULL | | CHECK (`direction IN ('INBOUND', 'OUTBOUND')`) | Chiều cuộc gọi |
+| `agent_type` | `text` | NOT NULL | | CHECK (`agent_type IN ('AI', 'SALE')`) | Loại tổng đài viên thực hiện |
+| `provider` | `text` | NOT NULL | `'MANUAL'` | CHECK (`provider IN ('MANUAL', 'STRINGEE', 'VIETTEL', 'TWILIO', 'VINFON')`) | Nhà cung cấp dịch vụ viễn thông/tổng đài (Schema Decision 09 — DECIDED / FROZEN) |
+| `provider_call_id` | `text` | NULL | | | Mã định danh cuộc gọi phía nhà mạng/tổng đài phục vụ webhook correlation |
 | `started_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm bắt đầu cuộc gọi |
 | `ended_at` | `timestamptz` | NULL | | | Thời điểm kết thúc cuộc gọi |
-| `status` | `text` | NOT NULL | | CHECK (`status IN ('INITIATED', 'RINGING', 'CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED', 'COMPLETED')`) [PROPOSED] | Trạng thái cuộc gọi |
+| `status` | `text` | NOT NULL | | CHECK (`status IN ('INITIATED', 'RINGING', 'CONNECTED', 'NO_ANSWER', 'BUSY', 'FAILED', 'COMPLETED')`) | Trạng thái cuộc gọi |
 | `recording_ref` | `text` | NULL | | | Đường dẫn tệp ghi âm private storage |
-| `transcript_status` | `text` | NOT NULL | | CHECK (`transcript_status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')`) [PROPOSED] | Tiến độ bóc băng |
+| `transcript_status` | `text` | NOT NULL | | CHECK (`transcript_status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')`) | Tiến độ bóc băng |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo |
 
 - **Constraints & Indexes:**
@@ -541,8 +590,10 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - FK Phức hợp: `fk_calls_customer` (`company_id`, `customer_id`) REFERENCES customers(`company_id`, `id`) ON DELETE RESTRICT
   - Composite Unique: `uq_calls_company_id` (`company_id`, `id`)
   - Composite Unique: `uq_calls_company_customer_id` (`company_id`, `customer_id`, `id`)
+  - Partial Unique Index (Idempotency chống trùng sự kiện cuộc gọi từ nhà mạng):
+    `idx_calls_provider_call` UNIQUE (`company_id`, `provider`, `provider_call_id`) WHERE `provider_call_id IS NOT NULL`
   - Index: `idx_calls_lookup` (`company_id`, `customer_id`, `started_at` DESC)
-- **Invariants:** Cuộc gọi Hotline inbound không thuộc chu kỳ gọi lại và không được làm tăng lần thử `CallAttempt`. Provider correlation & webhook idempotency là Open Decision 09.
+- **Invariants:** Cuộc gọi Hotline inbound không thuộc chu kỳ gọi lại và không được làm tăng lần thử `CallAttempt`. Provider correlation & webhook idempotency được chuẩn hóa theo Schema Decision 09.
 
 ---
 
@@ -573,7 +624,7 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Index: `idx_call_attempts_scheduler` (`company_id`, `result`, `scheduled_at`) WHERE `result = 'PENDING'`
 - **Invariants:**
   - Trong cùng bộ `(company_id, customer_id, contact_cycle_id)`, mỗi số 1, 2, 3 chỉ xuất hiện tối đa 1 lần.
-  - **Trạng thái bắt buộc theo Data Contract:** Sau 3 lần gọi không nghe, khách hàng bắt buộc phải được chuyển trạng thái hành trình thành **`KHÔNG LIÊN LẠC ĐƯỢC`**. (Mã định danh lưu trữ cụ thể là Open Decision 07).
+  - **Trạng thái bắt buộc theo Data Contract:** Sau 3 lần gọi không nghe, khách hàng bắt buộc phải được chuyển trạng thái hành trình thành **`KHÔNG LIÊN LẠC ĐƯỢC`** (mã canonical lưu trữ CSDL là `UNREACHABLE` theo Schema Decision 07 — DECIDED / FROZEN).
 
 ---
 
@@ -646,13 +697,13 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh khảo sát |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng được khảo sát |
-| `appointment_id` | `uuid` | NULL | | FK phức hợp `appointments` | Lịch hẹn nguồn (Phải cùng Company & Customer; Nullability là Open Decision 02) |
-| `completed_by` | `uuid` | NOT NULL | | FK `user_profiles(id)` | Kỹ thuật viên hoàn tất (Lifecycle là Open Decision 08) |
+| `appointment_id` | `uuid` | NOT NULL | | FK phức hợp `appointments` | Lịch hẹn nguồn bắt buộc cùng Company & Customer (Schema Decision 02 — DECIDED / FROZEN) |
+| `completed_by` | `uuid` | NOT NULL | | FK `user_profiles(id)` | Kỹ thuật viên hoàn tất đo đạc (Schema Decision 08; audit evidence, không cấp quyền lịch sử) |
 | `measurements` | `jsonb` | NOT NULL | | | Bộ thông số đo chuẩn (chiều rộng, cao, độ dốc...) |
 | `photos` | `jsonb` | NOT NULL | `'[]'::jsonb` | | Danh sách đường dẫn ảnh chụp hiện trường |
 | `site_condition` | `text` | NOT NULL | | | Mô tả tình trạng hiện trường (nền, tường...) |
 | `notes` | `text` | NULL | | | Ghi chú kỹ thuật bổ sung |
-| `completed_at` | `timestamptz` | NULL | | | Thời điểm hoàn tất khảo sát (Lifecycle là Open Decision 08) |
+| `completed_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm hoàn tất khảo sát (Schema Decision 08; Single-shot completion) |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo |
 | `updated_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm cập nhật |
 
@@ -664,8 +715,10 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Composite Unique: `uq_surveys_company_customer_id` (`company_id`, `customer_id`, `id`)
 - **Invariants:**
   - Khóa ngoại phức hợp `(company_id, customer_id, appointment_id)` bảo đảm bằng ràng buộc vật lý rằng Survey và Appointment bắt buộc phải cùng thuộc một Company VÀ một Customer.
-  - Trigger `chk_survey_appointment_integrity` kiểm tra: nếu có `appointment_id`, Appointment bắt buộc phải có `type = 'SURVEY'`.
-  - `completed_by` bắt buộc là `TECHNICIAN` active trong cùng Company khi gán. Vòng đời bản nháp vs hoàn tất là Open Decision 08.
+  - Mọi khảo sát bắt buộc phải xuất phát từ một lịch hẹn hợp lệ: `appointment_id uuid NOT NULL`. Không cho phép Survey mồ côi (Schema Decision 02 — DECIDED / FROZEN). Dữ liệu legacy import nếu có bắt buộc phải tạo bản ghi `Appointment` lịch sử tương ứng.
+  - Appointment liên kết bắt buộc phải có `type = 'SURVEY'`.
+  - Vòng đời khảo sát áp dụng cơ chế Tạo một lần khi hoàn tất (Single-shot Completion): Bản ghi Survey trên máy chủ chỉ được tạo khi kỹ thuật viên hoàn tất đo đạc và gửi kết quả (`completed_by NOT NULL` và `completed_at NOT NULL DEFAULT now()`). Không tạo bản ghi `DRAFT` trên database server; dữ liệu đo dở dang lưu tại client (LocalStorage/IndexedDB/PWA).
+  - `completed_by` bắt buộc là `TECHNICIAN` active trong cùng Company khi gán. `completed_by` chỉ là bằng chứng kiểm toán (audit evidence), tuyệt đối KHÔNG bao giờ được sử dụng làm căn cứ cấp quyền đọc lịch sử (`completed_by = auth.uid()` không cấp quyền). Quyền kỹ thuật viên chỉ tồn tại trong phân công hiện hành canonical (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`) và kết thúc khi Job chuyển `COMPLETED`, `CANCELLED` hoặc `REJECTED`.
 
 ---
 
@@ -743,15 +796,15 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 |--------|------|------|---------|------------|-------|
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh giao dịch nội bộ |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp thụ hưởng |
-| `provider` | `text` | NOT NULL | | | Nhà cung cấp/Ngân hàng (ví dụ: `VIETQR`, `VPBANK`, `MBBANK`) |
-| `provider_account` | `text` | NOT NULL | | | Định danh tài khoản/kết nối nhà cung cấp (Dữ liệu tài chính cần bảo vệ) |
-| `provider_ref` | `text` | NOT NULL | | | Mã giao dịch phía ngân hàng (FT number) |
+| `provider` | `text` | NOT NULL | | | Nhà cung cấp/Ngân hàng (ví dụ: `VIETQR`, `VPBANK`, `MBBANK`, `SEAPAY`, `CASSO`) |
+| `provider_account` | `text` | NOT NULL | | | Định danh tài khoản dạng masked (ví dụ: `****1234`), bảo vệ thông tin tài chính (Schema Decision 04 — DECIDED / FROZEN) |
+| `provider_ref` | `text` | NOT NULL | | | Mã giao dịch phía ngân hàng/cổng thanh toán (FT number) |
 | `amount` | `numeric(15,2)` | NOT NULL | | CHECK (`amount > 0`) | Số tiền thực nhận |
 | `occurred_at` | `timestamptz` | NOT NULL | | | Thời điểm giao dịch phát sinh ở ngân hàng |
 | `transfer_content` | `text` | NOT NULL | | | Nội dung tin nhắn chuyển khoản |
 | `matched_order_id` | `uuid` | NULL | | FK phức hợp `orders` | Đơn hàng khớp cọc nếu có (Bắt buộc cùng Company) |
 | `match_confidence` | `numeric(3,2)` | NULL | | CHECK (`match_confidence >= 0 AND match_confidence <= 1`) | Độ tin cậy khớp mã (0.00 - 1.00) |
-| `status` | `text` | NOT NULL | | CHECK (`status IN ('PENDING', 'MATCHED', 'MANUAL_REVIEW_REQUIRED', 'REJECTED', 'RECONCILED')`) [PROPOSED] | Trạng thái đối soát |
+| `status` | `text` | NOT NULL | | CHECK (`status IN ('PENDING', 'MATCHED', 'MANUAL_REVIEW_REQUIRED', 'REJECTED', 'RECONCILED')`) | Trạng thái đối soát |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm ghi nhận hệ thống |
 | `updated_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm cập nhật |
 
@@ -759,8 +812,8 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - PK: `pk_payment_transactions` (`id`)
   - FK: `fk_pt_company` (`company_id`) REFERENCES companies(`id`) ON DELETE RESTRICT
   - FK Phức hợp Order: `fk_pt_matched_order` (`company_id`, `matched_order_id`) REFERENCES orders(`company_id`, `id`) ON DELETE RESTRICT
-  - UNIQUE Idempotency (Chưa khóa cứng - xem Open Decision 04):
-    - Đề xuất trừu tượng hóa: liên kết qua `provider_connection_id` thay vì chuỗi số tài khoản thô.
+  - UNIQUE Idempotency (Schema Decision 04 — DECIDED / FROZEN):
+    - UNIQUE: `uq_pt_company_provider_ref` (`company_id`, `provider`, `provider_ref`) — Ngăn chặn ghi nhận trùng lặp giao dịch khi webhook retry. Provider adapters phải chuẩn hóa canonical `provider` và `provider_ref` trước khi insert. Phase 1 không tạo bảng `bank_connections`.
   - Index: `idx_payment_transactions_matched` (`company_id`, `matched_order_id`) WHERE `matched_order_id IS NOT NULL`
   - Index: `idx_payment_transactions_status` (`company_id`, `status`, `occurred_at` DESC)
 - **Invariants:**
@@ -780,11 +833,11 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh đơn hàng |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng đặt mua |
-| `order_code` | `text` | NOT NULL | | | Mã đơn hàng dễ đọc, ví dụ: `DH-000218` (Cơ chế sinh là Open Decision 03) |
-| `payment_reference` | `text` | NOT NULL | | | Mã thanh toán duy nhất (ví dụ: `TT-DH000218`) |
+| `order_code` | `text` | NOT NULL | | | Mã đơn hàng dễ đọc, ví dụ: `DH-000001` (Sinh an toàn qua sequence `order_code_seq` — Schema Decision 03 — DECIDED / FROZEN) |
+| `payment_reference` | `text` | NOT NULL | | | Mã thanh toán duy nhất (ví dụ: `TT-DH000001`) |
 | `price_calculation_id` | `uuid` | NOT NULL | | FK phức hợp `price_calculations` | Phép tính giá được chốt (Phải cùng Company & Customer) |
-| `deposit_status` | `text` | NOT NULL | | CHECK (`deposit_status IN ('PENDING', 'CONFIRMED', 'REFUNDED')`) [PROPOSED] | Trạng thái đặt cọc |
-| `order_status` | `text` | NOT NULL | | CHECK (`order_status IN ('DRAFT', 'DEPOSIT_CONFIRMED', 'CONTRACT_SIGNED', 'IN_PRODUCTION', 'READY_FOR_INSTALL', 'INSTALLING', 'HANDED_OVER', 'COMPLETED', 'CANCELLED')`) [PROPOSED] | Vòng đời đơn hàng |
+| `deposit_status` | `text` | NOT NULL | | CHECK (`deposit_status IN ('PENDING', 'DEPOSIT_CONFIRMED', 'REFUNDED')`) | Trạng thái đặt cọc (`DEPOSIT_CONFIRMED` là canonical của "ĐÃ CỌC") |
+| `order_status` | `text` | NOT NULL | | CHECK (`order_status IN ('DRAFT', 'DEPOSIT_CONFIRMED', 'CONTRACT_SIGNED', 'IN_PRODUCTION', 'READY_FOR_INSTALL', 'INSTALLING', 'HANDOVER_OVER', 'COMPLETED', 'CANCELLED')` - wait: `IN_PRODUCTION`, `READY_FOR_INSTALL`, `INSTALLING`, `HANDOVER_OVER`, `COMPLETED`, `CANCELLED` ...) | Vòng đời đơn hàng |
 | `final_amount` | `numeric(15,2)` | NOT NULL | | CHECK (`final_amount >= 0`) | Tổng giá trị đơn hàng sau thương lượng |
 | `created_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm tạo đơn |
 | `updated_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm cập nhật |
@@ -886,8 +939,8 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng (Đảm bảo cùng chuỗi với Order và Appointment) |
 | `order_id` | `uuid` | NOT NULL | | FK phức hợp `orders`, UNIQUE | Đơn hàng được lắp đặt (Bắt buộc cùng Company & Customer) |
 | `appointment_id` | `uuid` | NOT NULL | | FK phức hợp `appointments` | Lịch hẹn lắp đặt (Bắt buộc cùng Company & Customer) |
-| `crew` | `jsonb` | NOT NULL | `'[]'::jsonb` | | Danh sách đội thi công (Mô tả thông tin snapshot - Open Decision 06) |
-| `status` | `text` | NOT NULL | | CHECK (`status IN ('SCHEDULED', 'IN_TRANSIT', 'INSTALLING', 'TESTING', 'HANDOVER_PENDING', 'COMPLETED', 'FAILED')`) [PROPOSED] | Trạng thái thi công |
+| `crew` | `jsonb` | NOT NULL | `'[]'::jsonb` | | Danh sách đội thi công (Bản chụp mô tả thông tin snapshot — Schema Decision 06 — DECIDED / FROZEN) |
+| `status` | `text` | NOT NULL | | CHECK (`status IN ('SCHEDULED', 'IN_TRANSIT', 'INSTALLING', 'TESTING', 'HANDOVER_PENDING', 'COMPLETED', 'FAILED')`) | Trạng thái thi công |
 | `photos` | `jsonb` | NOT NULL | `'[]'::jsonb` | | Danh sách ảnh lắp đặt hoàn thiện |
 | `handover_ref` | `text` | NULL | | | Đường dẫn biên bản bàn giao nghiệm thu |
 | `completed_at` | `timestamptz` | NULL | | | Thời điểm nghiệm thu xong |
@@ -905,6 +958,7 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 - **Invariants:**
   - Ràng buộc vật lý: `(company_id, customer_id, order_id)` và `(company_id, customer_id, appointment_id)` bảo đảm triệt để rằng Đơn hàng và Lịch lắp đặt bắt buộc phải thuộc cùng một Khách hàng và Công ty.
   - Appointment liên kết bắt buộc có `type = 'INSTALLATION'`.
+  - `crew jsonb` thuần túy là bản chụp mô tả thông tin (descriptive snapshot) tại thời điểm thi công; thợ phụ thời vụ không bắt buộc có tài khoản hệ thống. Tuyệt đối không dùng `crew` để cấp quyền RLS và không derive quyền từ JSON (Schema Decision 06 — DECIDED / FROZEN). Phân quyền hiện trường gắn liền với Trưởng nhóm kỹ thuật (`appointments.assignee_id`). Không tạo bảng `installation_crew_members` trong Phase 1. Không chứa số điện thoại thô của thợ phụ trong JSON (chỉ lưu dạng masked nếu cần).
 
 ---
 
@@ -974,9 +1028,10 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp |
 | `campaign_id` | `uuid` | NOT NULL | | FK `care_campaigns(id)` | Chiến dịch nguồn |
 | `customer_id` | `uuid` | NOT NULL | | FK `customers(id)` | Khách hàng nhận tin |
-| `channel` | `text` | NOT NULL | | CHECK (`channel IN ('ZALO', 'FACEBOOK')`) [PROPOSED] | Kênh gửi |
+| `idempotency_key` | `text` | NOT NULL | | | Khóa chống phát lặp tin nhắn (Schema Decision 05 — DECIDED / FROZEN) |
+| `channel` | `text` | NOT NULL | | CHECK (`channel IN ('ZALO', 'FACEBOOK')`) | Kênh gửi |
 | `external_message_ref` | `text` | NULL | | | Mã tin nhắn phía Zalo/FB đối soát |
-| `status` | `text` | NOT NULL | | CHECK (`status IN ('PENDING', 'SENT', 'DELIVERED', 'FAILED', 'RESPONDED', 'CONVERTED_TO_SALE', 'SKIPPED')`) [PROPOSED] | Trạng thái phát tin |
+| `status` | `text` | NOT NULL | `'PENDING'` | CHECK (`status IN ('PENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'RESPONDED', 'CONVERTED_TO_SALE', 'SKIPPED')`) | Trạng thái phát tin theo state machine |
 | `sent_at` | `timestamptz` | NULL | | | Thời điểm gửi thực tế |
 | `delivered_at` | `timestamptz` | NULL | | | Thời điểm nhận tin thành công |
 | `responded_at` | `timestamptz` | NULL | | | Thời điểm khách phản hồi |
@@ -988,11 +1043,13 @@ Hệ thống bao gồm **29 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - PK: `pk_care_deliveries` (`id`)
   - FK Phức hợp: `fk_cd_campaign` (`company_id`, `campaign_id`) REFERENCES care_campaigns(`company_id`, `id`) ON DELETE RESTRICT
   - FK Phức hợp: `fk_cd_customer` (`company_id`, `customer_id`) REFERENCES customers(`company_id`, `id`) ON DELETE RESTRICT
-  - Candidate Idempotency Designs (Chưa khóa cứng - xem Open Decision 05):
-    - *Send Idempotency:* Ứng viên `(company_id`, `campaign_id`, `customer_id)`.
-    - *Provider Webhook Event Idempotency:* Cần được xác định cùng sự kiện phía đối tác.
+  - UNIQUE Send Idempotency (Schema Decision 05 — DECIDED / FROZEN):
+    `uq_cd_company_idempotency_key` UNIQUE (`company_id`, `idempotency_key`)
   - Index: `idx_cd_status` (`company_id`, `status`)
-- **Invariants:** Phân biệt rõ ràng giữa Send Idempotency và Provider Webhook Event Idempotency.
+  - Index: `idx_cd_message_ref` (`company_id`, `external_message_ref`) WHERE `external_message_ref IS NOT NULL`
+- **Invariants:**
+  - Send Idempotency: `idempotency_key` được sinh tất định theo delivery intent (ví dụ: `hash(company_id, campaign_id, customer_id, schedule_id)`). Worker bắt buộc phải ghi nhận bản ghi trước khi gọi API Zalo/FB.
+  - Webhook Event Idempotency: Xử lý cập nhật trạng thái phân phát dựa trên `external_message_ref` theo máy trạng thái đơn hướng: `PENDING` → `SENT` → `DELIVERED` → `READ` (hoặc `FAILED`). Không tạo bảng con `care_delivery_events` trong Phase 1.
 
 ---
 
@@ -1263,19 +1320,39 @@ Tuyệt đối không đổi tên hoặc thay đổi ý nghĩa của các giá t
   - Còn hiệu lực truy cập: `'ASSIGNED'`, `'ACCEPTED'`, `'IN_PROGRESS'`.
   - Kết thúc hiệu lực truy cập: `'COMPLETED'`, `'CANCELLED'`, `'REJECTED'`.
 - **Ý nghĩa trạng thái kết thúc chu kỳ gọi thử thất bại:**
-  Hợp đồng nghiệp vụ bắt buộc chuyển trạng thái khách thành: **`KHÔNG LIÊN LẠC ĐƯỢC`**. (Mã định danh chuỗi lưu trữ cụ thể như `KHONG_LIEN_LAC_DUOC` hay `UNREACHABLE` là đề xuất chờ phê duyệt tại Open Decision 07).
+- **Ý nghĩa trạng thái kết thúc chu kỳ gọi thử thất bại:**
+  Hợp đồng nghiệp vụ bắt buộc chuyển trạng thái khách thành: **`KHÔNG LIÊN LẠC ĐƯỢC`**, được ánh xạ canonical sang mã lưu trữ cơ sở dữ liệu: `'UNREACHABLE'` (Schema Decision 07 — DECIDED / FROZEN).
 
-#### B. Danh mục định danh phân loại đề xuất (PROPOSED VALUES - Xem Open Decision 07)
-Các danh mục dưới đây là phương án đề xuất kỹ thuật; mã chuỗi lưu trữ chính thức sẽ được phê duyệt trước khi tạo migration:
+#### B. Danh mục định danh phân loại chính thức (CANONICAL PERSISTED VALUES — DECIDED / FROZEN theo Schema Decision 07)
+Toàn bộ mã phân loại lưu trong cơ sở dữ liệu sử dụng tiếng Anh chuẩn `UPPER_SNAKE_CASE`. Các chuỗi tiếng Việt nghiệp vụ trong `DATA_CONTRACT.md` đóng vai trò là nhãn hiển thị tầng giao diện (presentation label), được ánh xạ chính thức như sau:
+
+| Thuật ngữ nghiệp vụ (`DATA_CONTRACT.md`) | Mã lưu trữ CSDL Canonical (`PostgreSQL text`) | Bảng & Cột áp dụng |
+| :--- | :--- | :--- |
+| **KHÔNG LIÊN LẠC ĐƯỢC** | `'UNREACHABLE'` | `customers.stage` |
+| **ĐÃ CỌC** | `'DEPOSIT_CONFIRMED'` | `customers.stage`, `orders.deposit_status`, `orders.order_status` |
+| **Chờ cọc / Chưa cọc** | `'PENDING'` / `'UNPAID'` | `orders.deposit_status`, `finance_summaries.financial_status` |
+| **Hoàn cọc** | `'REFUNDED'` | `orders.deposit_status` |
+| **Bản nháp** | `'DRAFT'` | `orders.order_status`, `care_campaigns.status`, `pricing_policies.status` |
+| **Khảo sát thành công** | `'SURVEY_COMPLETED'` | `customers.stage` |
+| **Đang sản xuất / Xuống xưởng** | `'IN_PRODUCTION'` | `orders.order_status`, `production_orders.status` |
+| **Đang lắp đặt** | `'INSTALLING'` | `orders.order_status`, `installations.status` |
+| **Bàn giao hoàn tất** | `'COMPLETED'` / `'HANDED_OVER'` | `orders.order_status`, `installations.status` |
+| **Đã hủy** | `'CANCELLED'` | `orders.order_status`, `appointments.status` |
+| **Kênh Zalo** | `'ZALO'` / `'ZALO_OA'` | `interactions.channel`, `identities.channel`, `conversations.channel` |
+| **Kênh Facebook** | `'FACEBOOK'` | `interactions.channel`, `identities.channel`, `conversations.channel` |
+| **Kênh Hotline thoại** | `'HOTLINE'` / `'PHONE'` | `interactions.channel`, `identities.channel` |
+| **Kênh Website** | `'WEBSITE'` | `interactions.channel`, `identities.channel` |
+
+Danh mục chi tiết áp dụng cho các câu lệnh `CHECK (column IN (...))` trong Migration 001:
 
 ```sql
--- 1. Trạng thái Công ty [PROPOSED]
+-- 1. Trạng thái Công ty [FROZEN]
 status IN ('ACTIVE', 'SUSPENDED', 'INACTIVE')
 
--- 2. Trạng thái Hồ sơ người dùng [PROPOSED]
+-- 2. Trạng thái Hồ sơ người dùng [FROZEN]
 status IN ('ACTIVE', 'INACTIVE')
 
--- 3. Trạng thái Thành viên Công ty [PROPOSED ngoại trừ ACTIVE là FROZEN]
+-- 3. Trạng thái Thành viên Công ty [FROZEN]
 status IN ('ACTIVE', 'INACTIVE')
 
 -- 4. Nguồn Khách hàng [PROPOSED]
@@ -1434,9 +1511,14 @@ Hệ thống thiết lập **5 Buckets chuyên dụng**, toàn bộ đều cấu
 4. **`installation-handover` (Private):** Chứa ảnh chụp nghiệm thu hoàn thiện và biên bản bàn giao có chữ ký hai bên.
 5. **`warranty-evidence` (Private):** Chứa video/ảnh phản ánh lỗi rò rỉ nước, cong vênh cửa từ khách hàng gửi về.
 
-### 10.2. Cơ chế phân phối an toàn (Signed URL Delivery)
+### 10.2. Cơ chế phân phối an toàn (Signed URL Delivery — Storage Decision 01 FROZEN)
 - Trình duyệt client không bao giờ có link tĩnh vĩnh viễn tới các tệp nhạy cảm.
-- Khi người dùng cần xem ảnh hoặc tài liệu, Backend kiểm tra quyền và sinh Signed URL có thời hạn ngắn (TTL từ 15 đến 60 phút).
+- Khi người dùng cần xem ảnh hoặc tài liệu, Trusted Server kiểm tra quyền hạn và sinh Signed URL ngắn hạn theo chuẩn đã chốt (**STORAGE DECISION 01 — DECIDED / FROZEN**):
+  - `survey-photos`: 3600 giây (60 phút)
+  - `installation-docs`: 3600 giây (60 phút)
+  - `contracts`: 1800 giây (30 phút)
+  - `call-recordings`: 900 giây (15 phút) — *chỉ cấp cho BOSS_ADMIN; SALE và TECHNICIAN tuyệt đối bị cấm*.
+- Không bao giờ lưu trữ Signed URL như một đường dẫn vĩnh viễn trong CSDL; cơ sở dữ liệu chỉ lưu `object_path`.
 
 ---
 
@@ -1466,7 +1548,7 @@ Dưới đây là các quyết định thiết kế đã được phân tích th
    - *Quyết định:* Không tạo bảng `access_policies`.
    - *Lý do:* Phù hợp với chỉ đạo tại `DATA_CONTRACT.md`. Ma trận quyền là bất biến trong giai đoạn này và được triển khai qua các hàm helper PostgreSQL, middleware ủy quyền và chính sách RLS.
 8. **Các bất biến bắt buộc của `customer_code` và `order_code`:**
-   - *Quyết định:* Khóa cứng các bất biến cốt lõi: mã phải ổn định, có tiền tố dễ đọc (`KH-`, `DH-`), duy nhất trong phạm vi Company, không tái sử dụng, không chứa dữ liệu nhạy cảm, và cơ chế sinh phải an toàn trước race conditions dưới tải đồng thời. (Cơ chế kỹ thuật cụ thể là Open Decision 03).
+   - *Quyết định:* Khóa cứng các bất biến cốt lõi: mã phải ổn định, có tiền tố dễ đọc (`KH-`, `DH-`), duy nhất trong phạm vi Company, không tái sử dụng, không chứa dữ liệu nhạy cảm, và cơ chế sinh phải an toàn trước race conditions dưới tải đồng thời. (Cơ chế kỹ thuật PostgreSQL Native Sequences đã chốt tại Schema Decision 03 — DECIDED / FROZEN).
 9. **Chính sách kiểm soát đột biến dữ liệu lịch sử:**
    - *Quyết định:* Phân định 4 nhóm dữ liệu (Strict Append-Only, Historical Event, Stateful Non-Deletable, Immutable Snapshot) và ghi nhận cơ chế thực thi cho giai đoạn Migration/RLS.
 10. **[SCHEMA DECISION — DECIDED / FROZEN] Vòng đời Phân công Kỹ thuật viên Canonical:**
@@ -1503,52 +1585,55 @@ Các quyết định bảo mật sống còn của hệ thống:
 
 ---
 
-## 13. Open Decisions
+## 13. Decision Resolution Register for Schema Decisions 01–09
 
-Các điểm kiến trúc chưa được khóa cứng trong `PROJECT_MASTER.md` hoặc `DATA_CONTRACT.md`, cần được thống nhất chính thức trước khi triển khai Migration 001:
+Toàn bộ 9 Schema Open Decisions đã được phê duyệt và khóa cứng (**DECIDED / FROZEN**) trước khi triển khai Migration 001:
 
-1. **[OPEN DECISION 01] Quy chuẩn thuật toán chuẩn hóa số điện thoại (Phone Normalization Algorithm):**
-   - *Vấn đề:* Hiện tại hợp đồng quy định số điện thoại phải được chuẩn hóa trước khi đối soát, nhưng chưa chốt định dạng chuẩn:
-     - Phương án A (Khuyến nghị): Chuẩn quốc tế E.164 (ví dụ: `+84912345678`).
-     - Phương án B: Chuẩn nội địa 10 chữ số bắt đầu bằng số 0 (ví dụ: `0912345678`).
-   - *Tác động:* Cần một hàm tiện ích chuẩn hóa dùng chung duy nhất trong `shared/utils/phone.ts` và một hàm tương ứng trong PostgreSQL `normalize_phone(text)`.
-2. **[OPEN DECISION 02] Tính bắt buộc của `Survey.appointment_id` (Nullability):**
-   - *Vấn đề:* Trong luồng chuẩn, khảo sát luôn bắt nguồn từ một lịch hẹn (`Appointment.type = 'SURVEY'`). Tuy nhiên, có cho phép ngoại lệ nhập khảo sát thủ công từ dữ liệu cũ (legacy migration) hoặc khảo sát đột xuất không kịp lên lịch hay không?
-   - *Lựa chọn:*
-     - Phương án A: Cho phép `appointment_id uuid NULL` ở cấp DB, nhưng tầng ứng dụng áp dụng quy tắc luồng chuẩn bắt buộc phải có.
-     - Phương án B: Bắt buộc `appointment_id uuid NOT NULL`. Mọi khảo sát bắt buộc phải khởi tạo một bản ghi `Appointment` trước.
-3. **[OPEN DECISION 03] Cơ chế kỹ thuật sinh mã số Khách hàng & Đơn hàng (`customer_code`, `order_code`):**
-   - *Vấn đề:* Các bất biến về tính duy nhất, ổn định và an toàn race condition đã được khóa, nhưng cơ chế phát số cụ thể cần lựa chọn:
-     - Phương án A: Sử dụng PostgreSQL Sequence độc lập cho từng loại mã (ví dụ: `customer_code_seq`, `order_code_seq`) kết hợp hàm format `KH-' || lpad(nextval('customer_code_seq')::text, 6, '0')`.
-     - Phương án B: Bảng đếm số thứ tự theo từng Company (`company_counters`) với cơ chế khóa dòng `SELECT ... FOR UPDATE`.
-4. **[OPEN DECISION 04] Phạm vi định danh và chống trùng tài khoản thanh toán trong `PaymentTransaction`:**
-   - *Vấn đề:* Cần xác định phạm vi định danh chống trùng giao dịch ngân hàng `provider_ref`.
-   - *Lựa chọn:* Thay vì giả định chuỗi số tài khoản ngân hàng thô (`provider_account`), thiết kế khuyến nghị trừu tượng hóa thành một định danh kết nối nhà cung cấp nội bộ (`provider_connection_id`). Nếu lưu chuỗi số tài khoản ngân hàng thật, phải xếp loại vào dữ liệu tài chính bảo mật. Ràng buộc duy nhất chưa khóa cứng cho đến khi chốt thông số kỹ thuật webhook ngân hàng.
-5. **[OPEN DECISION 05] Chiến lược Idempotency cho `CareDelivery`:**
-   - *Vấn đề:* Cần phân định rõ ràng giữa hai tầng chống trùng:
-     - **Tầng 1 - Send Idempotency (Chống phát trùng trước khi gửi):** Cần một khóa ngăn scheduler/cronjob kích hoạt gửi lặp một mẫu tin cho cùng một khách hàng (ví dụ: `(company_id, campaign_id, customer_id)`).
-     - **Tầng 2 - Provider Webhook Event Idempotency (Chống ghi trùng sự kiện từ webhook):** Khi đối tác (Zalo OA / Facebook) gửi webhook cập nhật trạng thái, `external_message_ref` chỉ là mã tin nhắn, một tin nhắn có thể nhận nhiều sự kiện (sent, delivered, read). Cần chốt phạm vi mã sự kiện phía nhà cung cấp (`provider_event_id`), loại sự kiện và xử lý sự kiện đến không đúng thứ tự (out-of-order events).
-6. **[OPEN DECISION 06] Mô hình đội ngũ thi công lắp đặt (`installations.crew`):**
-   - *Vấn đề:* Trường `crew` hiện tại để dạng `jsonb`. Quyết định này chỉ được phép duy trì nếu `crew` thuần túy là một **bản chụp mô tả thông tin (opaque descriptive snapshot)**.
-   - *Điều kiện bắt buộc:* Nếu `crew` cần phục vụ phân quyền cá nhân, tính công thợ, tính trách nhiệm cá nhân hoặc xếp lịch riêng từng người, bắt buộc phải thiết kế bảng quan hệ riêng `installation_crew_members` trước khi tạo migration.
-7. **[OPEN DECISION 07] Quy chuẩn mã hóa định danh phân loại lưu trữ (Canonical Persisted Categorical Identifiers):**
-   - *Vấn đề:* Mở rộng phạm vi soát xét toàn bộ các giá trị phân loại lưu trữ trong cơ sở dữ liệu (bao gồm `stage`, `status`, `channel`, `type`, `actor_type`, `result`).
-   - *Yêu cầu:* Thống nhất bảng ánh xạ chính thức giữa nhãn hiển thị nghiệp vụ (đặc biệt là yêu cầu hợp đồng bắt buộc `KHÔNG LIÊN LẠC ĐƯỢC` và `ĐÃ CỌC`) với mã chuỗi lưu trữ PostgreSQL. Giữ nguyên tính bất biến của các giá trị frozen: `BOSS_ADMIN`, `SALE`, `TECHNICIAN`, `CompanyMember ACTIVE`, `NEED_INFO`, và `attempt_no 1..3`.
-   - **Phần đã quyết định / FROZEN trong phạm vi Technician:** `appointments.status` dùng `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `REJECTED` theo lifecycle phân công canonical. Open Decision 07 chỉ còn mở đối với các danh mục khác chưa được contract hoặc task này chốt.
-8. **[OPEN DECISION 08] Vòng đời khảo sát: Bản nháp vs Bản hoàn tất (Survey Draft / Completion Lifecycle):**
-   - *Vấn đề:* Cấu trúc hiện tại có `completed_by NOT NULL` nhưng `completed_at NULL`. Cần thống nhất mô hình lưu trữ khảo sát:
-     - Phương án A: Bản ghi `Survey` chỉ được tạo khi kỹ thuật viên thực sự hoàn tất đo đạc và gửi kết quả (`completed_by NOT NULL`, `completed_at NOT NULL`).
-     - Phương án B: Cho phép tạo bản ghi `Survey` ở trạng thái nháp (đang đo đạc), khi đó `completed_by` và `completed_at` có thể `NULL` và chỉ được kiểm tra ràng buộc khi hoàn tất.
-   - **Ranh giới đã quyết định / FROZEN:** Lựa chọn A/B không được dùng để mở rộng quyền truy cập. Dù Survey được lưu nháp hay chỉ tạo khi hoàn tất, quyền TECHNICIAN vẫn chỉ dẫn xuất từ phân công hiện hành và kết thúc khi phân công chuyển `COMPLETED`, `CANCELLED` hoặc `REJECTED`.
-9. **[OPEN DECISION 09] Nhận diện cuộc gọi từ nhà cung cấp & Chống trùng Webhook (Call Provider Correlation & Webhook Event Idempotency):**
-   - *Vấn đề:* Bảng `calls` hiện tại chưa có trường tham chiếu mã cuộc gọi từ nhà mạng/tổng đài. Trước khi nhà cung cấp tổng đài (Viettel Hotline, Stringee, Twilio...) được lựa chọn chính thức, chưa tự ý thêm cột cứng.
-   - *Cần thống nhất:* Định danh kết nối nhà cung cấp, mã cuộc gọi phía nhà mạng (`provider_call_id`), mã sự kiện webhook (`webhook_event_id`), hành vi thử lại và phạm vi ràng buộc duy nhất.
+1. **[SCHEMA DECISION 01 — DECIDED / FROZEN] Quy chuẩn thuật toán chuẩn hóa số điện thoại (Phone Normalization Algorithm):**
+   - **Decision:** Chuẩn hóa toàn bộ số điện thoại theo định dạng chuẩn quốc tế **E.164** (đối với Việt Nam là `+84XXXXXXXXX`).
+   - **Thực thi:** Sử dụng hàm tiện ích chuẩn hóa duy nhất `normalize_phone()` trên cả PostgreSQL và TypeScript/server.
+   - **Luồng chuẩn hóa:** Input người dùng/webhook $\rightarrow$ `normalize_phone()` $\rightarrow$ Canonical E.164 $\rightarrow$ Keyed HMAC / `phone_hash`. Không cho phép `09...` và `+849...` sinh ra hai hash khác nhau cho cùng một số.
+   - **Lưu ý:** Không hard-code danh sách prefix nhà mạng vào core database check constraint. Dữ liệu số điện thoại gốc (`raw_phone`) và số chuẩn hóa (`normalized_phone`) tiếp tục lưu trữ bảo mật tại schema `private.customer_private_contacts`.
+
+2. **[SCHEMA DECISION 02 — DECIDED / FROZEN] Tính bắt buộc của `Survey.appointment_id` (Nullability):**
+   - **Decision:** Cột `surveys.appointment_id` bắt buộc mang kiểu `uuid NOT NULL`.
+   - **Quy tắc:** Mọi khảo sát phải xuất phát từ một lịch hẹn `Appointment` hợp lệ (cùng Company, cùng Customer, `type = 'SURVEY'`). Tuyệt đối không tạo Survey mồ côi (orphaned surveys). Dữ liệu import lịch sử (legacy import) bắt buộc phải tạo bản ghi `Appointment` lịch sử tương ứng trước.
+   - **Rationale:** Quyền hạn của Kỹ thuật viên đối với Survey dựa trên phân công lịch hẹn hiện hành (`appointments.assignee_id`). Nếu `appointment_id` cho phép `NULL` sẽ phá vỡ mô hình phân quyền RLS.
+
+3. **[SCHEMA DECISION 03 — DECIDED / FROZEN] Cơ chế kỹ thuật sinh mã số Khách hàng & Đơn hàng (`customer_code`, `order_code`):**
+   - **Decision:** Sử dụng **PostgreSQL Native Global Sequences** (`customer_code_seq`, `order_code_seq`) kết hợp hàm format tạo mã: `'KH-' || lpad(nextval('customer_code_seq')::text, 6, '0')` và `'DH-' || lpad(nextval('order_code_seq')::text, 6, '0')`.
+   - **Đặc tính:** Dễ đọc (human-readable), tăng dần, bất biến sau khi cấp, không chứa dữ liệu nhạy cảm, không dùng làm authorization identifier hay security secret, tuyệt đối an toàn trước race condition (zero-lock contention). Không tạo bảng `company_counters` trong Phase 1. Không dùng mã ngẫu nhiên.
+
+4. **[SCHEMA DECISION 04 — DECIDED / FROZEN] Phạm vi định danh và chống trùng tài khoản thanh toán trong `PaymentTransaction`:**
+   - **Decision:** Ràng buộc duy nhất chống trùng giao dịch ngân hàng là: `UNIQUE (company_id, provider, provider_ref)`.
+   - **Quy tắc:** Provider adapters phải chuẩn hóa/canonicalize `provider` và `provider_ref` trước khi insert. Cột `provider_account` chỉ lưu dạng masked (ví dụ: `****1234`), không lưu chuỗi số tài khoản thô nếu không thực sự cần. Không tạo bảng `bank_connections` trong Phase 1.
+
+5. **[SCHEMA DECISION 05 — DECIDED / FROZEN] Chiến lược Idempotency cho `CareDelivery`:**
+   - **Decision:** Bổ sung cột `idempotency_key text NOT NULL` với ràng buộc duy nhất `UNIQUE (company_id, idempotency_key)`.
+   - **Quy tắc:** `idempotency_key` được sinh tất định theo delivery intent (ví dụ: `hash(company_id, campaign_id, customer_id, schedule_id)`). Webhook cập nhật trạng thái phân phát sử dụng máy trạng thái đơn hướng trên chính bảng `care_deliveries`: `PENDING` $\rightarrow$ `SENT` $\rightarrow$ `DELIVERED` $\rightarrow$ `READ` (hoặc `FAILED`). Không tạo bảng `care_delivery_events` trong Phase 1.
+
+6. **[SCHEMA DECISION 06 — DECIDED / FROZEN] Mô hình đội ngũ thi công lắp đặt (`installations.crew`):**
+   - **Decision:** Giữ trường `installations.crew jsonb NOT NULL DEFAULT '[]'::jsonb` như một **bản chụp mô tả thông tin (opaque descriptive snapshot)**.
+   - **Quy tắc:** Thợ phụ/nhân sự thời vụ không bắt buộc có tài khoản hệ thống, không dùng `crew` để cấp RLS, không derive quyền từ JSON. Phân quyền và trách nhiệm thi công hiện trường tập trung 100% vào Trưởng nhóm kỹ thuật (`appointments.assignee_id`). Không tạo bảng `installation_crew_members` trong Phase 1. Không chứa số điện thoại thô của thợ phụ trong JSON (chỉ lưu dạng masked nếu cần).
+
+7. **[SCHEMA DECISION 07 — DECIDED / FROZEN] Quy chuẩn mã hóa định danh phân loại lưu trữ (Canonical Persisted Categorical Identifiers):**
+   - **Decision:** Toàn bộ mã phân loại lưu trong cơ sở dữ liệu sử dụng tiếng Anh chuẩn `UPPER_SNAKE_CASE` (ví dụ: `UNREACHABLE`, `DEPOSIT_CONFIRMED`, `DRAFT`, `CONFIRMED`, `IN_PRODUCTION`, `COMPLETED`, `CANCELLED`, `FACEBOOK`, `ZALO_OA`, `HOTLINE`, `WEBSITE`).
+   - **Quy tắc:** Nhãn tiếng Việt trong `DATA_CONTRACT.md` (ví dụ `KHÔNG LIÊN LẠC ĐƯỢC`, `ĐÃ CỌC`) được bảo toàn trọn vẹn ở tầng nghiệp vụ và đóng vai trò là presentation label trên giao diện người dùng, ánh xạ 1:1 sang mã lưu trữ canonical (ví dụ: `KHÔNG LIÊN LẠC ĐƯỢC` $\rightarrow$ `'UNREACHABLE'`, `ĐÃ CỌC` $\rightarrow$ `'DEPOSIT_CONFIRMED'`).
+
+8. **[SCHEMA DECISION 08 — DECIDED / FROZEN] Vòng đời khảo sát: Bản nháp vs Bản hoàn tất (Survey Draft / Completion Lifecycle):**
+   - **Decision:** Áp dụng mô hình **Tạo một lần khi hoàn tất (Single-shot Completion)**.
+   - **Quy tắc:** Bản ghi `Survey` trên cơ sở dữ liệu chỉ được tạo khi kỹ thuật viên nhấn "Hoàn tất khảo sát" ngoài hiện trường (`completed_by uuid NOT NULL` và `completed_at timestamptz NOT NULL DEFAULT now()`). Không tạo bản ghi `DRAFT` trên database server trong Phase 1 (bản nháp dở dang lưu tại LocalStorage / IndexedDB / PWA của thiết bị thợ).
+   - **Bất biến Ủy quyền:** `completed_by` thuần túy là bằng chứng kiểm toán lịch sử, tuyệt đối KHÔNG bao giờ được sử dụng làm căn cứ cấp quyền đọc lịch sử (`completed_by = auth.uid()` không cấp quyền). Quyền kỹ thuật viên chỉ tồn tại trong phân công hiện hành canonical (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`).
+
+9. **[SCHEMA DECISION 09 — DECIDED / FROZEN] Nhận diện cuộc gọi từ nhà cung cấp & Chống trùng Webhook (Call Provider Correlation & Webhook Event Idempotency):**
+   - **Decision:** Bổ sung các cột tích hợp viễn thông tổng quát vào bảng `calls`: `provider text NOT NULL DEFAULT 'MANUAL'` và `provider_call_id text NULL`.
+   - **Quy tắc:** Thiết lập Partial Unique Index: `CREATE UNIQUE INDEX idx_calls_provider_call ON calls(company_id, provider, provider_call_id) WHERE provider_call_id IS NOT NULL;` để chống ghi nhận trùng lặp cuộc gọi và đối soát webhook retry từ nhà mạng/tổng đài.
 
 ---
 
 ## 14. Recommended Table Creation Order
 
-Thứ tự thực thi tạo bảng an toàn (Dependency-Safe Creation Order), tránh xung đột khóa ngoại khi chạy Migration:
+Thứ tự thực thi tạo bảng an toàn (Dependency-Safe Creation Order), tránh xung đột khóa ngoại khi chạy Migration (30 bảng vật lý):
 
 ```text
 -- [Nhóm 1: Hệ thống nền tảng & Người dùng]
@@ -1565,6 +1650,7 @@ Thứ tự thực thi tạo bảng an toàn (Dependency-Safe Creation Order), tr
 -- [Nhóm 3: Giao tiếp & Cuộc gọi]
 8.  conversations
 9.  interactions
+9b. private.interaction_raw_contents
 10. calls
 11. call_attempts
 12. call_transcripts
@@ -1601,26 +1687,25 @@ Thứ tự thực thi tạo bảng an toàn (Dependency-Safe Creation Order), tr
 
 ## 15. Items That Must Be Resolved Before Migration 001
 
-Trước khi tiến hành viết tệp migration SQL đầu tiên (`00001_initial_schema.sql`), nhóm phát triển bắt buộc phải thống nhất và phê duyệt các hạng mục sau:
+Toàn bộ các quyết định kiến trúc và lược đồ đã được giải quyết và phê duyệt chính thức trước khi triển khai Migration 001:
 
-- [ ] **Chốt Open Decision 01 (Phone Normalization):** Phê duyệt thuật toán chuẩn hóa số điện thoại (E.164 hay National 10-digit).
-- [ ] **Chốt Open Decision 02 (Survey Appointment Nullability):** Quyết định `Survey.appointment_id` là `NOT NULL` tuyệt đối hay cho phép `NULL` cho dữ liệu legacy.
-- [ ] **Chốt Open Decision 03 (Code Generation Strategy):** Chọn phương án sinh mã số `customer_code` và `order_code` (PostgreSQL Sequence toàn cục hay Counter Table theo Company).
-- [ ] **Chốt Open Decision 04 (Payment Idempotency / Provider Connection):** Quyết định mô hình định danh kết nối nhà cung cấp và phạm vi chống trùng `provider_ref`.
-- [ ] **Chốt Open Decision 05 (CareDelivery Send / Event Idempotency):** Thống nhất khóa Send Idempotency trước khi phát tin và Webhook Event Idempotency sau khi phát tin.
-- [ ] **Chốt Open Decision 06 (Installation Crew Modeling):** Xác định giữ `installations.crew` dạng snapshot mô tả `jsonb` hay tạo bảng quan hệ riêng `installation_crew_members`.
-- [ ] **Chốt Open Decision 07 (Canonical Persisted Categorical Identifiers):** Phê duyệt toàn bộ danh mục chuỗi mã phân loại lưu trong DB (đặc biệt là ánh xạ của `KHÔNG LIÊN LẠC ĐƯỢC` và `ĐÃ CỌC`).
-- [ ] **Chốt Open Decision 08 (Survey Draft / Completion Lifecycle):** Quyết định vòng đời Survey tạo khi hoàn tất hay cho phép lưu nháp.
+- [x] **Chốt Open Decision 01 (Phone Normalization):** Phê duyệt chuẩn quốc tế E.164 (`+84XXXXXXXXX`), chuẩn hóa trước khi tính HMAC.
+- [x] **Chốt Open Decision 02 (Survey Appointment Nullability):** Quyết định `Survey.appointment_id` là `uuid NOT NULL` tuyệt đối.
+- [x] **Chốt Open Decision 03 (Code Generation Strategy):** Chọn PostgreSQL Native Global Sequences (`customer_code_seq`, `order_code_seq`).
+- [x] **Chốt Open Decision 04 (Payment Idempotency / Provider Connection):** Quyết định `UNIQUE (company_id, provider, provider_ref)` và masked `provider_account`.
+- [x] **Chốt Open Decision 05 (CareDelivery Send / Event Idempotency):** Thống nhất khóa `idempotency_key text NOT NULL UNIQUE` và state machine đơn hướng.
+- [x] **Chốt Open Decision 06 (Installation Crew Modeling):** Xác định giữ `installations.crew` dạng descriptive snapshot `jsonb`, không tạo bảng con.
+- [x] **Chốt Open Decision 07 (Canonical Persisted Categorical Identifiers):** Phê duyệt toàn bộ danh mục mã chuỗi lưu trữ CSDL bằng tiếng Anh `UPPER_SNAKE_CASE`, ánh xạ rõ nhãn tiếng Việt.
+- [x] **Chốt Open Decision 08 (Survey Draft / Completion Lifecycle):** Quyết định vòng đời Survey tạo một lần khi hoàn tất (`completed_by` & `completed_at` NOT NULL).
 - [x] **Chốt lifecycle phân công kỹ thuật viên thuộc Open Decisions 07/08:** `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS` cấp quyền; `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền; quyền lịch sử không phát sinh từ `completed_by`.
-- [ ] **Chốt Open Decision 09 (Call Provider Correlation & Webhook Idempotency):** Thống nhất hợp đồng dữ liệu với nhà cung cấp tổng đài và trường định danh cuộc gọi.
-- [ ] **Phê duyệt Ranh giới Schema vật lý `private.customer_private_contacts`:** Thống nhất cấu hình không phơi bày schema `private` qua PostgREST và mô hình bảo mật truy cập của máy chủ tin cậy.
-- [ ] **Phê duyệt Thiết kế Hợp đồng có phiên bản (`contracts` revisioning):** Phê duyệt cơ chế versioning và partial index `is_current = true`.
-- [ ] **Phê duyệt Chính sách đột biến dữ liệu lịch sử (Historical Data Mutation Policy):** Xác nhận phân loại 4 nhóm dữ liệu và giải pháp kỹ thuật chặn xóa/sửa trái phép.
-- [ ] **Rà soát nghiệm thu 100% Khóa ngoại phức hợp Same-Company và Same-Customer:** Bảo đảm không còn bất kỳ mối quan hệ con nào có thể trỏ chéo công ty hoặc trỏ chéo khách hàng.
-- [ ] **Đặc tả Trigger kiểm tra Thẩm quyền Thành viên và Bất biến Loại lịch hẹn:**
-  - Hoàn thiện đặc tả trigger cho `assigned_to`, `assignee_id`, `completed_by`, `actor_user_id` (chỉ kiểm tra khi tạo hoặc đổi trường phân công).
-  - Hoàn thiện trigger chặn đổi `appointments.type` khi đã có khảo sát hoặc lắp đặt tham chiếu.
-- [ ] **Thiết kế Helper Functions nhận diện Tenant cho pha RLS:** Chuẩn bị đặc tả cho các hàm RLS kiểm tra quyền theo dòng ngữ cảnh: `is_active_member(target_company_id)` và `has_company_role(target_company_id, required_role)` (thay vì giả định `auth.current_company_id()` duy nhất).
-- [ ] **Chính sách lưu trữ và thời hạn giữ AuditLog:** Thống nhất thời hạn lưu trữ (retention period) và cơ chế lưu trữ lạnh nếu có.
-- [ ] **Chính sách Supabase Storage:** Phê duyệt cấu hình 5 bucket private và thời hạn TTL của Signed URLs.
-- [ ] **Rà soát chỉ mục cuối cùng:** Loại bỏ hoàn toàn các chỉ mục trùng lặp với các khóa ràng buộc duy nhất.
+- [x] **Chốt Open Decision 09 (Call Provider Correlation & Webhook Idempotency):** Thống nhất cột `provider`, `provider_call_id` và partial unique index trên bảng `calls`.
+- [x] **Phê duyệt Ranh giới Schema vật lý `private`:** Thống nhất bảo mật schema `private` cho cả 2 bảng `customer_private_contacts` và `interaction_raw_contents`.
+- [x] **Phê duyệt Thiết kế Hợp đồng có phiên bản (`contracts` revisioning):** Phê duyệt cơ chế versioning và partial index `is_current = true`.
+- [x] **Phê duyệt Chính sách đột biến dữ liệu lịch sử (Historical Data Mutation Policy):** Xác nhận phân loại 4 nhóm dữ liệu và giải pháp kỹ thuật chặn xóa/sửa trái phép.
+- [x] **Rà soát nghiệm thu 100% Khóa ngoại phức hợp Same-Company và Same-Customer:** Bảo đảm không còn bất kỳ mối quan hệ con nào có thể trỏ chéo công ty hoặc trỏ chéo khách hàng.
+- [x] **Đặc tả Trigger kiểm tra Thẩm quyền Thành viên và Bất biến Loại lịch hẹn:** Đã hoàn thiện nguyên tắc trigger kiểm tra phân công và tính bất biến loại lịch hẹn.
+- [x] **Thiết kế Helper Functions nhận diện Tenant cho pha RLS:** Đã hoàn thiện và đóng băng trong `SUPABASE_RLS_DESIGN.md`.
+- [x] **Chính sách Supabase Storage & Signed URL TTL (Storage OD01):** Phê duyệt cấu hình 5 bucket private và thời hạn TTL phân tầng (15–60 phút).
+- [x] **Rà soát chỉ mục cuối cùng:** Loại bỏ hoàn toàn các chỉ mục trùng lặp với các khóa ràng buộc duy nhất.
+
+> **Trạng thái:** FULL DESIGN FREEZE — Thiết kế kiến trúc và lược đồ CSDL vật lý đã được đóng băng hoàn toàn. Dự án sẵn sàng bước vào pha viết mã lệnh Migration 001 (`00001_initial_schema.sql`).

@@ -2,7 +2,7 @@
 
 > **Tài liệu Kiến trúc Xác thực (Authentication) & Ủy quyền Ứng dụng (Authorization)**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FROZEN BASELINE — Auth Decision 05 đã chốt; Auth Open Decisions 01–04 vẫn giữ nguyên để phê duyệt riêng trước implementation.
+> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ kiến trúc Auth và các Quyết định Auth 01–05 đã được chốt và đóng băng; chuẩn bị cho pha Migration 001.
 > **Tham chiếu hợp đồng bất biến:** `docs/PROJECT_MASTER.md`, `docs/DATA_CONTRACT.md`, `docs/SUPABASE_SCHEMA_DESIGN.md`.
 
 ---
@@ -267,7 +267,7 @@ Hệ thống sử dụng cơ chế lưu trữ phiên làm việc dựa trên Coo
 - **Vòng đời và Thời gian sống của Token (Session & Token Lifetimes):**
   - **Access Token (JWT):** Vòng đời ngắn (mặc định trong Supabase Auth là 3600 giây = 1 giờ, có thể cấu hình). Chứa định danh danh tính `sub: <auth.uid>`.
   - **Refresh Token:** Tham gia vào cơ chế xoay vòng tự động (Refresh Token Rotation) tại máy chủ Supabase Auth. Khi một Refresh Token được sử dụng để lấy Access Token mới, token cũ bị hủy ngay lập tức nhằm ngăn ngừa tấn công phát lại (Replay Attacks).
-  - Vòng đời phiên làm việc tổng thể, thời gian chờ do không hoạt động (inactivity timeout) và thời hạn tối đa được quản lý qua chính sách cấu hình phiên của Supabase (chi tiết tại Auth Open Decision 04).
+  - Vòng đời phiên làm việc tổng thể, thời gian chờ do không hoạt động (inactivity timeout) và thời hạn tối đa được quản lý qua chính sách cấu hình phiên của Supabase (chi tiết tại Auth Decision 04 — DECIDED / FROZEN).
 
 ### 5.2. Vòng đời phiên làm việc (Session Lifecycle Flows)
 
@@ -809,37 +809,48 @@ Dưới đây là các quyết định kiến trúc xác thực và phân quyề
 
 ---
 
-## 19. Open Decisions
+## 19. Decision Resolution Register for Auth Decisions 01–04
 
-Các vấn đề kiến trúc liên quan đến Auth cần thống nhất trước khi triển khai mã nguồn:
+Toàn bộ các Auth Open Decisions 01–04 đã được phê duyệt và khóa cứng (**DECIDED / FROZEN**) trước khi triển khai:
 
-1. **[AUTH OPEN DECISION 01] Cơ chế xác thực hai yếu tố (MFA / 2FA) cho tài khoản Sếp (`BOSS_ADMIN`):**
-   - *Vấn đề:* Do tài khoản Sếp có đặc quyền xem số điện thoại thật và toàn bộ tài chính ngân hàng, có bắt buộc kích hoạt Supabase MFA (TOTP / Google Authenticator) ngay trong Phase 1 hay cho phép trì hoãn sang Phase 2?
-   - *Đề xuất:* Phase 1 cho phép đăng nhập Email + Mật khẩu mạnh, sẵn sàng hook tích hợp MFA khi triển khai hệ thống cho các doanh nghiệp quy mô lớn.
-2. **[AUTH OPEN DECISION 02] Cấu hình thời hạn hiệu lực của Lời mời thành viên qua email (Invitation / Email-Link Expiration):**
-   - *Vấn đề:* Dự án nên cấu hình thời hạn hiệu lực cho liên kết/mã OTP mời thành viên qua email (`auth.admin.inviteUserByEmail`) là bao lâu để đáp ứng cân bằng giữa an ninh và vận hành thực tế (ví dụ: 24 giờ, 48 giờ, 7 ngày hay khoảng thời gian khác)?
-   - *Lưu ý kiến trúc:* Thời hạn này do cấu hình thời hạn email OTP/link của Supabase Auth quản lý, không áp đặt giá trị mặc định cố định. Khi triển khai cấu hình dự án, giá trị này phải được thiết lập nhất quán với chính sách an ninh và quy trình tiếp nhận nhân sự của tổ chức.
-3. **[AUTH OPEN DECISION 03] Chính sách thu hồi phiên khi đổi mật khẩu (Session Revocation Policy on Password Change):**
-   - *Vấn đề & Kết quả an ninh mong muốn:* Khi người dùng tự đổi mật khẩu hoặc Sếp reset mật khẩu của nhân viên, hệ thống áp dụng chính sách thu hồi phiên nào trên các thiết bị đang đăng nhập?
-     - *Lựa chọn 1 (`scope: 'others'`):* Thu hồi năng lực refresh token của toàn bộ các phiên khác, duy trì phiên hiện tại của người vừa thực hiện đổi mật khẩu.
-     - *Lựa chọn 2 (`scope: 'global'`):* Thu hồi năng lực refresh token trên toàn bộ mọi thiết bị (kể cả phiên hiện tại), buộc người dùng phải đăng nhập lại hoàn toàn.
-   - *Lưu ý kiến trúc cốt tử:* Các hàm `signOut({ scope: 'others' | 'global' })` của Supabase Auth thu hồi năng lực làm mới phiên (Refresh Token). Tuy nhiên, các Access Token (JWT) đã phát hành có thể vẫn còn hiệu lực kỹ thuật cho đến khi hết hạn (ví dụ tối đa 1 giờ). Do đó, các thao tác nghiệp vụ nhạy cảm phía máy chủ (Server Actions, RLS) phải luôn kiểm tra trạng thái thành viên trực tiếp trong database (`company_members.status = 'ACTIVE'`) và không được tin cậy mù quáng vào chữ ký JWT còn hạn.
-4. **[AUTH OPEN DECISION 04] Chính sách vòng đời phiên làm việc (Session Lifetime Policy):**
-   - *Vấn đề:* Các tham số quản lý phiên làm việc nào cần được phê duyệt và cấu hình chính thức cho dự án?
-     - *Thời gian sống của Access Token JWT (JWT Expiry):* Supabase mặc định thông thường là 1 giờ (3600 giây); dự án có cần điều chỉnh ngắn hơn (ví dụ 15-30 phút) để tăng tính tức thời khi thu hồi quyền không?
-     - *Thời gian chờ do không hoạt động (Inactivity Timeout):* Có tự động ngắt phiên sau một khoảng thời gian người dùng không thao tác hay không?
-     - *Thời hạn tối đa của phiên làm việc (Maximum Session Lifetime / Time-box):* Phiên làm việc tổng thể kéo dài tối đa bao lâu trước khi người dùng buộc phải đăng nhập lại?
-     - *Hành vi đa phiên (Multi-session Behavior):* Cho phép một tài khoản đăng nhập đồng thời trên nhiều thiết bị/trình duyệt hay giới hạn duy nhất 1 phiên hoạt động?
+1. **[AUTH DECISION 01 — DECIDED / FROZEN] Cơ chế xác thực hai yếu tố (MFA / 2FA) cho tài khoản Sếp (`BOSS_ADMIN`):**
+   - **Decision:** Trong môi trường Production, tài khoản `BOSS_ADMIN` **BẮT BUỘC** phải kích hoạt xác thực hai yếu tố (MFA) và đạt mức bảo đảm **AAL2** (Authenticator Assurance Level 2) để truy cập hệ thống. Ưu tiên phương thức TOTP MFA (Google Authenticator, Apple Passwords, Authy).
+   - **Môi trường Phát triển/Kiểm thử:** Môi trường local development và test có thể cho phép bypass enforcement để phục vụ phát triển, nhưng Production tuyệt đối không được coi MFA là tùy chọn (optional).
+   - **Bảo vệ tài nguyên nhạy cảm:** Mọi tài nguyên và thao tác nhạy cảm của Boss (`raw_phone`, tài chính ngân hàng `finance_summaries`, quản trị nhân sự, hợp đồng, thanh toán) bắt buộc phải yêu cầu session đạt mức assurance AAL2 phù hợp.
+   - **Chiến lược Phục hồi (Recovery Strategy):** Thiết lập phương án dự phòng ở mức: đăng ký yếu tố MFA thứ hai (secondary enrolled MFA factor) hoặc quy trình hỗ trợ khôi phục có sự tham gia của quản trị viên hệ thống (administrator-assisted recovery). Không tự phát minh cơ chế recovery codes nếu ngăn xếp Supabase Auth hiện tại không hỗ trợ trực tiếp.
+   - **Rationale:** `BOSS_ADMIN` có đặc quyền cao nhất đối với liên hệ khách hàng gốc (`raw_phone`), tài chính, quản trị nhân sự, hợp đồng và các vùng dữ liệu tối mật, do đó Production bắt buộc phải enforce MFA.
+
+2. **[AUTH DECISION 02 — DECIDED / FROZEN] Cấu hình thời hạn hiệu lực của Lời mời thành viên qua email (Invitation / Email-Link Expiration):**
+   - **Decision:** Thời hạn hiệu lực của liên kết/mã OTP mời thành viên qua email (`auth.admin.inviteUserByEmail`) được xác lập chính thức là: **24 giờ (86400 giây)**.
+   - **Xử lý Quá hạn:** Nếu liên kết/mã OTP hết hạn, `BOSS_ADMIN` sử dụng chức năng "Gửi lại lời mời" (Resend Invitation) để tạo invitation mới.
+   - **Bất biến Dữ liệu:** Bản ghi `company_members` tuyệt đối **KHÔNG bị xóa cứng (hard delete)** chỉ vì lời mời hết hạn. Khi chưa kích hoạt thành công, bản ghi thành viên tiếp tục duy trì ở trạng thái `INACTIVE` (`membership remains INACTIVE`) cho đến khi kích hoạt thành công. Baseline hiện tại không chọn 48 giờ hay 7 ngày.
+   - **Rationale:** 24 giờ là chuẩn bảo mật công nghiệp nghiêm ngặt, giảm thiểu tối đa cửa sổ phơi nhiễm của token kích hoạt trong hòm thư cá nhân.
+
+3. **[AUTH DECISION 03 — DECIDED / FROZEN] Chính sách thu hồi phiên khi đổi mật khẩu (Session Revocation Policy on Password Change):**
+   - **Decision:** Áp dụng chính sách phân tầng theo ngữ cảnh (Contextual Session Revocation Policy):
+     - **Người dùng tự đổi mật khẩu trong màn hình Cài đặt (Settings):** Áp dụng `scope: 'others'`. Phiên hiện tại trên thiết bị đang thao tác được tiếp tục; toàn bộ các session/thiết bị khác bị thu hồi năng lực refresh token theo khả năng của Auth provider.
+     - **Sếp/Admin chủ động reset mật khẩu nhân sự vì lý do quản trị hoặc bảo mật:** Áp dụng `scope: 'global'`. Toàn bộ phiên trên mọi thiết bị (kể cả phiên hiện tại) đều bị thu hồi lập tức, buộc đăng nhập lại hoàn toàn.
+     - **Sự cố an ninh / Nghi ngờ tài khoản bị xâm phạm (Security Incident / Suspected Compromise):** Áp dụng `scope: 'global'`.
+   - **Lưu ý kiến trúc cốt tử:** Việc thu hồi refresh token của Auth provider không được coi là cơ chế ủy quyền (authorization) duy nhất. Mọi request nghiệp vụ nhạy cảm bắt buộc phải xác minh trực tiếp trạng thái thực tế từ cơ sở dữ liệu: `user_profiles.status = 'ACTIVE'`, `company_members.status = 'ACTIVE'`, đúng `company_id`, đúng `role` và đúng phạm vi tài nguyên từ trusted authorization path.
+
+4. **[AUTH DECISION 04 — DECIDED / FROZEN] Chính sách vòng đời phiên làm việc (Session Lifetime Policy):**
+   - **Decision:**
+     - **Thời gian sống của Access Token (JWT Expiry):** Cố định ở mức **1 giờ (3600 giây)** theo chuẩn Supabase Auth.
+     - **Hành vi đa phiên (Multi-session Behavior):** **Cho phép đa phiên** (Multi-session allowed), hỗ trợ người dùng đăng nhập đồng thời trên máy tính văn phòng và thiết bị di động hiện trường.
+     - **Vòng đời Refresh / Session:** Vòng đời phiên làm việc tổng thể và refresh token phụ thuộc vào mô hình session của Supabase Auth; không ghi cố định `Refresh Token Expiry = 7 days` như một bất biến kiến trúc.
+     - **Inactivity Timeout & Thời hạn tối đa:** Thời gian chờ do không hoạt động (inactivity timeout) và thời hạn tối đa của phiên có thể được cấu hình khi yêu cầu sản phẩm/gói dịch vụ đòi hỏi; Phase 1 ưu tiên tính liên tục (continuity) cho đội ngũ SALE và TECHNICIAN ngoài hiện trường.
+     - **Bất biến Ủy quyền:** Mọi quyết định ủy quyền đối với các thao tác nhạy cảm tuyệt đối không dựa độc quyền vào JWT claim còn hiệu lực. Đối với `BOSS_ADMIN`, có thể áp dụng chính sách phiên nghiêm ngặt hơn ở phase sau, nhưng đây không phải là blocker của Migration 001.
+
 ---
 
 ## 20. Items Required Before Auth Implementation
 
 Trước khi nhóm phát triển tiến hành viết mã nguồn xác thực hoặc cấu hình Supabase Auth thật, các hạng mục sau đây bắt buộc phải được hoàn tất và phê duyệt:
 
-- [ ] **Phê duyệt toàn bộ nội dung tài liệu `docs/AUTH_DESIGN.md`:** Thống nhất các ranh giới tin cậy, ma trận vai trò và luồng phân giải quyền.
+- [x] **Phê duyệt toàn bộ nội dung tài liệu `docs/AUTH_DESIGN.md`:** Thống nhất các ranh giới tin cậy, ma trận vai trò và luồng phân giải quyền.
 - [x] **Hoàn thành thiết kế chính sách RLS (`docs/SUPABASE_RLS_DESIGN.md`):** Baseline RLS và các quyết định RLS 01–05 đã được đóng băng; migration/policy SQL thực tế vẫn thuộc pha implementation.
 - [x] **Chốt Auth Decision 05:** Kỹ thuật viên không có quyền đọc lịch sử Survey sau khi phân công kết thúc; quyền chỉ tồn tại trong phân công hiện hành canonical.
-- [ ] **Chốt Auth Open Decisions 01, 02, 03, 04:** Thống nhất chính sách MFA, thời hạn lời mời, thu hồi phiên khi đổi mật khẩu và chính sách vòng đời phiên.
+- [x] **Chốt Auth Open Decisions 01, 02, 03, 04:** Đã chốt và đóng băng toàn bộ (MFA AAL2 cho Boss trong production, thời hạn lời mời 24 giờ, thu hồi phiên theo ngữ cảnh others/global, và chính sách JWT 1 giờ/multi-session).
 - [ ] **Cấu hình Template Email Supabase Auth:** Chuẩn hóa nội dung email mời thành viên (`Invite User`) và email đặt lại mật khẩu (`Reset Password`) bằng tiếng Việt chuyên nghiệp, đúng nhận diện thương hiệu.
 - [ ] **Chuẩn bị các biến môi trường an toàn:** Thiết lập tệp `.env.example` phân định rõ ràng giữa `NEXT_PUBLIC_SUPABASE_ANON_KEY` và `SUPABASE_SERVICE_ROLE_KEY`.
 - [ ] **Rà soát tính nhất quán giữa Auth Helpers và Server Actions:** Bảo đảm mọi Server Action trong dự án đều tuân thủ nguyên tắc gọi hàm `require_company_role()` ở bước đầu tiên.

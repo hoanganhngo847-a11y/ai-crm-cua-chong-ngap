@@ -2,7 +2,7 @@
 
 > **Tài liệu Thiết kế Kiến trúc Phân quyền Cấp Dòng (Row Level Security - RLS) & Ranh giới Dữ liệu**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FROZEN BASELINE — Các quyết định RLS 01–05 trong Section 25 đã được chốt; implementation chỉ còn phụ thuộc các Open Decisions ngoài phạm vi được liệt kê tại Section 25.
+> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ các quyết định RLS (01–05), Auth (01–05), Schema (01–09) và Storage (01) đã được chốt và đóng băng (DECIDED / FROZEN); thiết kế kiến trúc hoàn thiện, sẵn sàng unblock cho Migration 001.
 > **Tham chiếu hợp đồng bất biến:**
 > - [`docs/PROJECT_MASTER.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/PROJECT_MASTER.md) (Quy tắc Nghiệp vụ Tổng thể)
 > - [`docs/DATA_CONTRACT.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/DATA_CONTRACT.md) (Quy ước Dữ liệu Chung)
@@ -564,7 +564,7 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
 - Là nhân sự vận hành thương mại và tương tác trực tiếp với khách hàng.
 - Được quyền thao tác dữ liệu CRM theo các luồng máy chủ có kiểm soát:
   - Khách hàng (không có phone) và danh sách liên hệ CRM được phê duyệt.
-  - Vận hành Inbox hội thoại: Đọc và phản hồi tin nhắn thông qua **nội dung đã được làm sạch số điện thoại (Phone-Sanitized Message Content)** qua trusted server projection. CẤM truy cập trực tiếp nội dung thô `interactions.content` nếu nội dung đó có thể chứa số điện thoại do khách gõ vào.
+  - Vận hành Inbox hội thoại: Đọc và phản hồi tin nhắn thông qua **nội dung đã được làm sạch số điện thoại (`public.interactions.sanitized_content`)** khi `sanitization_status = 'SUCCEEDED'`. CẤM truy cập trực tiếp nội dung thô trong `private.interaction_raw_contents` nếu nội dung đó có thể chứa số điện thoại do khách gõ vào.
   - Cuộc gọi: Nhận metadata cuộc gọi; gọi ra qua Click-to-Call bảo mật (tổng đài PBX quay số, trình duyệt SALE không nhận chuỗi phone).
   - Tính giá: Gửi yêu cầu tính giá (**REQUEST/TRIGGER Price Calculation**) qua Server Action để Pricing Engine tính toán; CẤM trực tiếp INSERT bản ghi `price_calculations`.
   - Đơn hàng: Khởi xướng tạo đơn hàng qua luồng máy chủ tin cậy dựa trên PriceCalculation đã duyệt; đọc thông tin thương mại qua trusted Server DTO với explicit field allowlist (Category D).
@@ -574,7 +574,7 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
   - Danh bạ nhân sự an toàn cùng Company: chỉ nhận `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần qua Safe Staff Directory; không đọc trực tiếp bảng profile/membership đầy đủ.
 - **CẤM TUYỆT ĐỐI TIẾP CẬN HOẶC THAO TÁC:**
   - Bảng số điện thoại thật `private.customer_private_contacts`.
-  - Bản bóc băng thô `call_transcripts.transcript`, tệp ghi âm cuộc gọi gốc trong bucket `call-recordings`, và **nội dung tin nhắn thô `interactions.content`** (chống rò rỉ số điện thoại qua dữ liệu phi cấu trúc; SALE chỉ được nhận bản trích xuất đã làm sạch số điện thoại).
+  - Bản bóc băng thô `call_transcripts.transcript`, tệp ghi âm cuộc gọi gốc trong bucket `call-recordings`, và **nội dung tin nhắn thô trong `private.interaction_raw_contents`** (chống rò rỉ số điện thoại qua dữ liệu phi cấu trúc; SALE chỉ được nhận bản phái sinh đã làm sạch số điện thoại qua `public.interactions.sanitized_content` khi `sanitization_status = 'SUCCEEDED'`).
   - Bảng chính sách/công thức giá gốc `pricing_policies` (chỉ được xem kết quả thương mại đã tính toán).
   - Trực tiếp tạo mới bản ghi tính giá `price_calculations` từ trình duyệt (chỉ Pricing Engine được quyền tạo).
   - Trực tiếp `INSERT` đơn hàng tùy tiện hoặc tự ý sửa đổi `final_amount`, `deposit_status` trên base table `orders` (SALE tuyệt đối không bao giờ được phép tự set `deposit_status = CONFIRMED`).
@@ -618,7 +618,7 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 | 4 | `customers` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Không có cột phone; TECH chỉ xem qua Appointment; Category E khóa tenant |
 | 5 | `customer_stage_histories`| Direct | BOSS_ADMIN, SALE | Cấm (DB Trigger) | CẤM | CẤM | Strict Append-Only; trigger ghi nhận tự động |
 | 6 | `identities` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Channel phone lưu Keyed HMAC, cấm lưu raw phone |
-| 7 | `interactions` | Direct | BOSS (Raw); SALE: KHÔNG CẤP MẶC ĐỊNH CHO RAW CONTENT | Cấm (Webhook/Server Inbound; SALE gửi tin qua Server Path)| CẤM | CẤM | Khách có thể gõ phone vào tin nhắn; SALE cấm direct raw SELECT; nhận sanitized content qua Cat D; bảo tồn 100% dữ liệu gốc |
+| 7 | `interactions` | Direct | BOSS_ADMIN (Full); SALE: Chỉ đọc `sanitized_content` khi `sanitization_status = 'SUCCEEDED'` | Cấm (Webhook/Server Inbound; SALE gửi tin qua Server Path)| CẤM | CẤM | Nội dung thô tách vào `private.interaction_raw_contents`; `public.interactions` chỉ chứa safe metadata và `sanitized_content`; SALE cấm raw SELECT; fail-closed |
 | 8 | `conversations` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Kỹ thuật viên không có quyền truy cập |
 | 9 | `calls` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Metadata cuộc gọi; Server Action/PBX ghi |
 | 10 | `call_attempts` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Lưu vết số lần gọi ra; Server Action/PBX ghi |
@@ -676,23 +676,40 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 ### 12.4. Mở rộng Bất biến Zero-Phone cho Dữ liệu Tin nhắn Phi Cấu trúc (Unstructured Message Content Boundary)
 - **Cảnh báo từ DATA_CONTRACT:** Bất biến Zero-Phone không chỉ áp dụng cho các cột số điện thoại định danh khách hàng, bóc băng cuộc gọi hay file ghi âm. `DATA_CONTRACT.md` chỉ rõ rằng `Interaction.content` có thể chứa thông tin nhạy cảm. Khách hàng hoàn toàn có thể tự tay gõ số điện thoại trực tiếp vào tin nhắn Facebook, Zalo, hoặc Website Chat.
 - **Ranh giới phân tách dữ liệu bắt buộc & Bảo tồn Dữ liệu Gốc:**
-  1. **Nội dung Tin nhắn Gốc (Raw Source Interaction Content):** Dữ liệu sự kiện thô khách hàng gửi đến từ Webhook đối tác. Chứa nguy cơ hiện diện số điện thoại thật, địa chỉ nhà riêng. Bắt buộc phải được **BẢO TỒN NGUYÊN VẸN VĨNH VIỄN** trong vùng lưu trữ an toàn theo thiết kế cuối cùng để phục vụ kiểm toán, đối soát pháp lý, giải quyết tranh chấp và lưu vết lịch sử theo Data Contract. Được bảo vệ như dữ liệu nhạy cảm cấp cao; chỉ `BOSS_ADMIN` hoặc tiến trình máy chủ tin cậy được tiếp cận theo chính sách kiểm toán. **TUYỆT ĐỐI KHÔNG ĐƯỢC PHƠI BÀY TRỰC TIẾP CHO `SALE`** khi có khả năng chứa số điện thoại.
-  2. **Bản Phái sinh Hiển thị cho SALE (SALE-Facing Sanitized/Redacted Derivative):** Bản phái sinh đã được xử lý làm sạch, che/lọc bỏ chuỗi số điện thoại (ví dụ: thay thế bằng `[SỐ_ĐIỆN_THOẠI_ĐÃ_ẨN]`) trước khi gửi về client phục vụ vận hành Inbox.
+  1. **Nội dung Tin nhắn Gốc (Raw Source Interaction Content):** Dữ liệu sự kiện thô khách hàng gửi đến từ Webhook đối tác. Chứa nguy cơ hiện diện số điện thoại thật, địa chỉ nhà riêng. Bắt buộc phải được **BẢO TỒN NGUYÊN VẸN VĨNH VIỄN** trong bảng riêng tư `private.interaction_raw_contents` để phục vụ kiểm toán, đối soát pháp lý, giải quyết tranh chấp và lưu vết lịch sử theo Data Contract. Được bảo vệ như dữ liệu nhạy cảm cấp cao; chỉ `BOSS_ADMIN` hoặc tiến trình máy chủ tin cậy được tiếp cận theo chính sách kiểm toán. **TUYỆT ĐỐI KHÔNG ĐƯỢC PHƠI BÀY TRỰC TIẾP CHO `SALE`**.
+  2. **Bản Phái sinh Hiển thị cho SALE (SALE-Facing Sanitized/Redacted Derivative):** Bản phái sinh đã được xử lý làm sạch, che/lọc bỏ chuỗi số điện thoại (ví dụ: thay thế bằng `[SỐ_ĐIỆN_THOẠI_ĐÃ_ẨN]`) trước khi lưu vào `public.interactions.sanitized_content` phục vụ vận hành Inbox.
 - **Quy tắc cấp quyền RLS & Phân quyền CSDL:**
-  - Tuyệt đối cấm áp dụng cơ chế "làm sạch trước khi lưu mà vứt bỏ/hủy hoại dữ liệu gốc" (no raw discard).
-  - Cho đến khi có cơ chế làm sạch (Redaction Mechanism) được phê duyệt:
-    - Cột `interactions.content` thô được xử lý như dữ liệu nhạy cảm.
-    - Quyền `SELECT` trực tiếp trên base table `interactions` đối với `SALE` là **KHÔNG CẤP MẶC ĐỊNH (NOT GRANTED BY DEFAULT)** tại những nơi số điện thoại có thể xuất hiện trong nội dung thô.
-    - SALE tiếp cận nội dung tin nhắn phục vụ vận hành Inbox thông qua **Category D (Safe Projection / Trusted Server Path)** đã được làm sạch số điện thoại.
-  - **Bảo toàn Yêu cầu Vận hành:** Quyết định này tuyệt đối **KHÔNG làm suy giảm khả năng vận hành Inbox của SALE**. Màn hình Inbox của SALE trong tương lai sẽ hiển thị nội dung tin nhắn đã được che/làm sạch số điện thoại (Phone-Sanitized Content) thay vì để lộ số điện thoại thô.
-  - Kiến trúc lưu trữ/làm sạch đã được khóa tại **RLS DECISION 05**: Raw Interaction và Sanitized Interaction là hai security zones riêng biệt.
+  - Tuyệt đối cấm áp dụng cơ chế "làm sạch trước khi lưu mà vứt bỏ/hủy hoại dữ liệu gốc" (no raw discard). Toàn bộ nội dung gốc được lưu trữ nguyên vẹn tại bảng riêng tư `private.interaction_raw_contents`.
+  - Cơ chế làm sạch (Redaction / Sanitization Mechanism) đã được phê duyệt và phân tách vật lý:
+    - Bảng `public.interactions` chỉ chứa safe metadata và nội dung đã làm sạch `sanitized_content`.
+    - Cột `sanitized_content` chỉ được hiển thị cho `SALE` khi `sanitization_status = 'SUCCEEDED'`. Nếu tương tác chứa nội dung văn bản do khách hàng tạo ra (customer-generated text), SALE chỉ có thể nhận nội dung khi `sanitization_status = 'SUCCEEDED'`.
+    - Khi `sanitization_status` là `PENDING` hoặc `FAILED`, SALE không nhìn thấy nội dung tin nhắn. Tuyệt đối không fallback về raw content khi sanitization thất bại (**FAIL CLOSED**).
+    - `NOT_REQUIRED` chỉ áp dụng cho sự kiện hệ thống phi văn bản/không nhạy cảm; tuyệt đối cấm dùng `NOT_REQUIRED` để bypass sanitizer.
+    - Dữ liệu thô trong `private.interaction_raw_contents` nằm ở private schema, cấm truy cập từ browser client, không có RLS policy cho SALE/TECHNICIAN.
+  - **Bảo toàn Yêu cầu Vận hành:** Quyết định này tuyệt đối **KHÔNG làm suy giảm khả năng vận hành Inbox của SALE**. Màn hình Inbox của SALE hiển thị nội dung tin nhắn đã được che/làm sạch số điện thoại (`sanitized_content`) thay vì để lộ số điện thoại thô.
+  - Kiến trúc lưu trữ/làm sạch đã được khóa tại **RLS DECISION 05** và phản ánh vào physical schema tại `SUPABASE_SCHEMA_DESIGN.md`: Raw Interaction và Sanitized Interaction là hai security zones riêng biệt.
 
-### 12.5. Raw Interaction và Sanitized Interaction — Hai Security Zones
+### 12.5. Raw Interaction và Sanitized Interaction — Hai Security Zones Vật lý
 
-- **Raw Interaction:** Chứa dữ liệu nguồn nguyên vẹn, có thể gồm raw transcript, số điện thoại, PII, provider payload, recording reference và external metadata. Vùng này private/restricted, không accessible trực tiếp từ SALE frontend, không trả về SALE API JSON, client props, DOM, browser/client logs. Nội dung nguồn phải được bảo toàn theo chính sách historical event/append-only phù hợp.
-- **Sanitized Interaction:** Là dữ liệu phái sinh dành cho SALE, tối thiểu cần metadata tương đương `raw_interaction_id`, `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version`. Đây là yêu cầu kiến trúc; task này không tự thêm cột vào physical schema.
-- Trạng thái làm sạch tối thiểu là `PENDING`, `SUCCEEDED`, `FAILED`; có thể thêm `NOT_REQUIRED` chỉ khi use case được định nghĩa rõ. Với transcript/content dành cho SALE, `NOT_PROCESSED` cũng phải được xử lý như chưa làm sạch.
-- Chỉ `sanitization_status = 'SUCCEEDED'` mới được phép phát hành nội dung sanitized cho SALE. `PENDING`, `FAILED`, `NOT_PROCESSED` phải deny/omit theo nguyên tắc **FAIL CLOSED**; thất bại làm sạch không bao giờ fallback về raw content.
+- **Raw Interaction (`private.interaction_raw_contents`):**
+  - Chứa dữ liệu nguồn nguyên vẹn, bao gồm `raw_content`, `raw_payload`, `source_metadata` (có thể gồm raw transcript, số điện thoại, PII, provider payload, recording reference).
+  - Nằm trong `private` schema, hoàn toàn vô hình trước PostgREST API, không accessible trực tiếp từ browser client, không bao giờ trả về SALE API JSON, client props, DOM, browser/client logs.
+  - Phân quyền cấp thấp:
+    ```sql
+    -- DESIGN PSEUDOCODE / NOT MIGRATION SQL
+    REVOKE ALL ON TABLE private.interaction_raw_contents FROM PUBLIC;
+    REVOKE ALL ON TABLE private.interaction_raw_contents FROM anon;
+    REVOKE ALL ON TABLE private.interaction_raw_contents FROM authenticated;
+    ```
+  - Nội dung nguồn được bảo toàn phục vụ kiểm toán, re-processing và đối soát pháp lý.
+- **Sanitized Interaction (`public.interactions`):**
+  - Chứa dữ liệu an toàn phục vụ vận hành, gồm các trường: `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version` cùng safe metadata (`id`, `company_id`, `customer_id`, `channel`, `direction`, `created_at`, `updated_at`).
+  - Trạng thái làm sạch gồm 4 giá trị canonical chuẩn hóa: `PENDING`, `SUCCEEDED`, `FAILED`, `NOT_REQUIRED`.
+  - Quy tắc phát hành nội dung cho SALE và Ranh giới Sanitizer:
+    - `PENDING` $\rightarrow$ không phát hành nội dung cho SALE.
+    - `FAILED` $\rightarrow$ không phát hành nội dung cho SALE; thất bại làm sạch tuyệt đối không bao giờ fallback về raw content (**FAIL CLOSED**).
+    - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phép phát hành cho SALE. Nếu một tương tác chứa nội dung văn bản do khách hàng tạo ra (customer-generated textual content), SALE CHỈ ĐƯỢC NHẬN nội dung khi và chỉ khi `sanitization_status = 'SUCCEEDED'`.
+    - `NOT_REQUIRED` $\rightarrow$ **chỉ được phép sử dụng cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập** mà việc làm sạch là thực sự không cần thiết (ví dụ: system status change event, telephony signaling event). `NOT_REQUIRED` tuyệt đối KHÔNG BAO GIỜ được sử dụng để qua mặt hoặc bỏ qua bộ làm sạch (must never be used to bypass the sanitizer).
 
 ---
 
@@ -1002,7 +1019,12 @@ Mọi yêu cầu cấp Signed URL hoặc tải lên tệp trong Storage bắt bu
 4. **Thẩm định Phân công Hiện trường (Đối với `TECHNICIAN`):**
    - Nếu người yêu cầu là `TECHNICIAN`, bắt buộc kiểm tra xem kỹ thuật viên đó có đang được phân công hợp lệ và trong trạng thái vòng đời có hiệu lực hành động cho thực thể `entity_id` đó hay không.
 5. **Chỉ khi toàn bộ 4 bước trên thỏa mãn:**
-   - Máy chủ hoặc Storage Policy mới phát hành Signed URL ngắn hạn (**TTL từ 15 đến 60 phút**) hoặc cho phép ghi tệp vào bucket.
+   - Máy chủ hoặc Storage Policy mới phát hành Signed URL ngắn hạn theo chuẩn đã chốt tại **STORAGE DECISION 01 — DECIDED / FROZEN**:
+     - `survey-photos`: 3600 giây (60 phút)
+     - `installation-docs`: 3600 giây (60 phút)
+     - `contracts`: 1800 giây (30 phút)
+     - `call-recordings`: 900 giây (15 phút) — *lưu ý: chỉ cấp cho BOSS_ADMIN; SALE và TECHNICIAN tuyệt đối bị cấm truy cập*.
+   - Hoặc cho phép ghi tệp vào bucket theo đúng quyền hạn vai trò.
 
 ---
 
@@ -1174,33 +1196,59 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
     - **Rationale:** RLS là bảo vệ cấp dòng, còn các dataset nhạy cảm cần kiểm soát phát hành cấp trường và ngữ cảnh nghiệp vụ.
     - **Implementation Consequence:** View chỉ áp dụng cho Safe Staff Directory, lookup không nhạy cảm hoặc summary không nhạy cảm; các nhóm nhạy cảm không được phát hành qua direct base-table/browser access.
 21. **[RLS DECISION 05 — DECIDED / FROZEN] Raw và Sanitized Interaction Storage:**
-    - **Decision:** Raw Interaction và Sanitized Interaction là hai security zones riêng biệt. Raw private/restricted và được bảo toàn; sanitized là derivative dành cho SALE.
-    - **Authorization/Security Rule:** Raw không được tới SALE frontend/API/props/DOM/client logs. Chỉ sanitized content có `sanitization_status = 'SUCCEEDED'` mới được phát hành.
+    - **Decision:** Raw Interaction và Sanitized Interaction là hai security zones riêng biệt. Raw private/restricted (`private.interaction_raw_contents`) và được bảo toàn; sanitized là derivative an toàn (`public.interactions.sanitized_content`) dành cho SALE.
+    - **Authorization/Security Rule:** Raw không được tới SALE frontend/API/props/DOM/client logs. Nếu tương tác chứa văn bản do khách hàng tạo ra (customer-generated text), SALE CHỈ ĐƯỢC NHẬN nội dung khi `sanitization_status = 'SUCCEEDED'`. `NOT_REQUIRED` chỉ được áp dụng cho các sự kiện/tương tác hệ thống phi văn bản/không nhạy cảm mà việc làm sạch là thực sự không cần thiết; tuyệt đối cấm dùng `NOT_REQUIRED` để qua mặt bộ làm sạch (must never bypass sanitizer). `PENDING` và `FAILED` tuyệt đối không có nội dung cho SALE (`FAILED NEVER FALLS BACK TO RAW`).
     - **Rationale:** Tách nguồn gốc phục vụ kiểm toán khỏi dữ liệu SALE-safe vừa bảo toàn bằng chứng vừa ngăn PII lan sang client.
-    - **Implementation Consequence:** Thiết kế derivative cần metadata tương đương `raw_interaction_id`, `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version`; chưa tự thêm column trong task này. Trạng thái tối thiểu là `PENDING`, `SUCCEEDED`, `FAILED`; `NOT_REQUIRED` chỉ dùng khi use case được định nghĩa rõ. `FAILED NEVER FALLS BACK TO RAW`.
+    - **Implementation Consequence:** Physical schema đã hoàn thiện tại `SUPABASE_SCHEMA_DESIGN.md`: `public.interactions` chứa `sanitized_content`, `sanitization_status`, `sanitized_at`, `sanitizer_version`; `private.interaction_raw_contents` chứa `raw_content`, `raw_payload`, `source_metadata`. Trạng thái canonical: `PENDING`, `SUCCEEDED`, `FAILED`, `NOT_REQUIRED`. `FAILED NEVER FALLS BACK TO RAW`.
 
 ---
 
-## 25. Decision Resolution Register and Remaining Open Decisions
+## 25. Decision Resolution Register and Design Freeze Status
 
-### 25.1. Các Quyết định Đã Chốt trong Task này
+### 25.1. Các Quyết định Kiến trúc Toàn diện Đã Chốt (DECIDED / FROZEN)
 
-- **AUTH DECISION 05 — DECIDED / FROZEN:** Không có quyền đọc lịch sử Survey dựa trên `completed_by`; chỉ có quyền từ phân công hiện hành.
-- **RLS DECISIONS 01–05 — DECIDED / FROZEN:** Safe Staff Directory; canonical active assignment; sanitized-only transcript/recording policy; Server DTO cho dữ liệu nhạy cảm; và tách Raw/Sanitized Interaction thành hai security zones.
-- **Schema OD07/OD08 — phần authorization đã DECIDED / FROZEN:** Trạng thái phân công canonical đã khóa; lựa chọn lưu nháp Survey còn mở nhưng không được dùng để mở rộng quyền lịch sử.
+Toàn bộ các Open Decisions liên đới đã được phê duyệt chính thức và đóng băng:
 
-### 25.2. Các Quyết định Schema vẫn OPEN
+1. **AUTH DECISIONS 01–05 — DECIDED / FROZEN:**
+   - **OD01:** MFA AAL2 bắt buộc cho `BOSS_ADMIN` trên môi trường Production (ưu tiên TOTP); backup recovery qua secondary enrolled factor hoặc admin-assisted.
+   - **OD02:** Thời hạn hiệu lực thư mời / activation link là 24 giờ. Hết hạn Boss gửi lại thư mời mới; record `company_members` giữ `INACTIVE`.
+   - **OD03:** Đổi mật khẩu phân tầng: User tự đổi revoke `scope = others`; Admin/Boss reset hoặc Security Incident revoke `scope = global`.
+   - **OD04:** Session lifetime: Access JWT 1 giờ, multi-session được phép; không hard-code refresh token 7 ngày; server-side re-check cho quyền nhạy cảm.
+   - **OD05:** Không có quyền đọc lịch sử Survey dựa trên `completed_by`; chỉ cấp quyền khi có phân công hiện trường đang hiệu lực (`active appointment assignment`).
 
-- `SCHEMA OPEN DECISION 07` vẫn mở đối với các categorical identifiers ngoài tập trạng thái phân công kỹ thuật đã khóa.
-- `SCHEMA OPEN DECISION 08` vẫn mở đối với lựa chọn vật lý Survey chỉ tạo khi hoàn tất hay cho phép lưu nháp. Quyền TECHNICIAN không phụ thuộc lựa chọn này.
-- Các Schema Open Decisions 01–06 và 09 vẫn giữ nguyên trạng thái OPEN trong `SUPABASE_SCHEMA_DESIGN.md`.
+2. **SCHEMA DECISIONS 01–09 — DECIDED / FROZEN:**
+   - **OD01:** Số điện thoại chuẩn hóa canonical E.164 (`+84XXXXXXXXX`), tạo HMAC hash nhất quán. Raw phone lưu riêng tại `private.customer_private_contacts`.
+   - **OD02:** `surveys.appointment_id uuid NOT NULL`, bảo đảm toàn vẹn liên kết với lịch hẹn phân công, chống orphan survey.
+   - **OD03:** Mã hiển thị dùng PostgreSQL Native Sequence (`customer_code_seq`, `order_code_seq`) sinh mã format `KH-000001`, `DH-000001`.
+   - **OD04:** Idempotency thanh toán: `UNIQUE (company_id, provider, provider_ref)`; tài khoản ngân hàng chỉ lưu dạng masked.
+   - **OD05:** Idempotency chăm sóc khách hàng: Thêm `idempotency_key text NOT NULL`, `UNIQUE(company_id, idempotency_key)`, state machine đơn luồng.
+   - **OD06:** `installations.crew jsonb` là descriptive snapshot; thợ phụ không cấp tài khoản DB, không derive RLS từ JSON.
+   - **OD07:** Định danh phân loại lưu trữ CSDL chuẩn hóa tiếng Anh `UPPER_SNAKE_CASE` canonical; nhãn tiếng Việt chỉ dùng hiển thị UI.
+   - **OD08:** Vòng đời Survey single-shot completion: chỉ tạo bản ghi khi nhấn hoàn thành (`completed_by`, `completed_at NOT NULL`), không lưu draft trên server DB.
+   - **OD09:** Định danh nhà cung cấp thoại: `calls.provider` (default 'MANUAL') và `calls.provider_call_id`, partial unique index chống trùng lặp webhook.
 
-### 25.3. Các Quyết định khác KHÔNG Chặn RLS Design
-1. **[AUTH OPEN DECISION 01] Cơ chế xác thực 2 bước (MFA) cho tài khoản Sếp:** Thuộc cấu hình Supabase Auth, không ảnh hưởng đến cú pháp policy RLS.
-2. **[AUTH OPEN DECISION 02] Thời hạn lời mời thành viên:** Thuộc cấu hình Auth và quy trình vận hành.
-3. **[AUTH OPEN DECISION 03] Thu hồi phiên khi đổi mật khẩu:** Thuộc chính sách session/Auth.
-4. **[AUTH OPEN DECISION 04] Chính sách vòng đời phiên làm việc (Session Lifetime Policy):** Quản lý qua cookie và Supabase Auth config.
-5. **[STORAGE OPEN DECISION 01] Thời gian sống chi tiết (TTL) của Signed URLs cho từng loại tệp:** Có thể tinh chỉnh từ 15 đến 60 phút trong cấu hình backend máy chủ.
+3. **STORAGE DECISION 01 — DECIDED / FROZEN:**
+   - Thời gian sống (TTL) của Signed URLs:
+     - `survey-photos`: 3600 giây (60 phút)
+     - `installation-docs`: 3600 giây (60 phút)
+     - `contracts`: 1800 giây (30 phút)
+     - `call-recordings`: 900 giây (15 phút) — SALE/TECHNICIAN cấm truy cập raw recording.
+
+4. **RLS DECISIONS 01–05 — DECIDED / FROZEN:**
+   - **OD01:** Safe Staff Directory cùng Company với explicit field allowlist.
+   - **OD02:** Canonical active assignment (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`); các trạng thái kết thúc chấm dứt quyền.
+   - **OD03:** Sanitized-only transcript/recording policy cho SALE; cấm nghe raw recording.
+   - **OD04:** Server DTO cho dữ liệu nhạy cảm; Database View chỉ cho dataset tự thân an toàn.
+   - **OD05:** Phân tách vật lý hai security zones: `public.interactions` (sanitized derivative) và `private.interaction_raw_contents` (raw source data) với nguyên tắc Fail-Closed.
+
+### 25.2. Trạng thái Open Decisions
+
+```text
+REMAINING OPEN ARCHITECTURE DECISIONS: 0 (NONE)
+STATUS: FULL DESIGN FREEZE
+```
+
+Toàn bộ các quyết định kiến trúc cốt lõi liên quan đến Auth, Database Schema, Row Level Security và Storage đã hoàn toàn thống nhất và đóng băng. Dự án chính thức bước vào trạng thái **FULL DESIGN FREEZE**.
 
 ---
 
@@ -1208,12 +1256,10 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
 
 Trước khi tiến hành viết mã lệnh các tệp migration SQL RLS (`2026091400000X_enable_rls_and_policies.sql`), các hạng mục sau đây bắt buộc phải được hoàn tất:
 
-- [x] **Phê duyệt chính thức tài liệu `docs/SUPABASE_RLS_DESIGN.md`:** Thống nhất ma trận phân quyền 28 bảng public, ranh giới schema private, các hàm helper và 5 danh mục thực thi cấp cột (Categories A-E).
-- [x] **Chốt Auth Decision 05:** Kỹ thuật viên không đọc lịch sử Survey khi phân công kết thúc; `completed_by` không cấp quyền.
-- [x] **Chốt RLS Decision 01:** Safe Staff Directory cùng Company với explicit field allowlist, qua Restricted View hoặc Server DTO phù hợp.
-- [x] **Chốt RLS Decision 02 và phần authorization của Schema OD07/OD08:** Active assignment là `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; ba trạng thái kết thúc chấm dứt quyền.
-- [x] **Chốt RLS Decision 03:** SALE chỉ nhận sanitized transcript khi `SUCCEEDED`, không đọc raw recording và fail closed.
-- [x] **Chốt RLS Decision 04:** Dữ liệu nhạy cảm qua trusted Server DTO; Database View chỉ cho dataset tự thân an toàn.
-- [x] **Chốt RLS Decision 05:** Raw và Sanitized Interaction là hai security zones; không fallback raw.
+- [x] **Phê duyệt chính thức tài liệu `docs/SUPABASE_RLS_DESIGN.md`:** Thống nhất ma trận phân quyền 28 bảng public, 2 bảng private (`customer_private_contacts`, `interaction_raw_contents`), các hàm helper và 5 danh mục thực thi cấp cột (Categories A-E).
+- [x] **Chốt Auth Decisions 01–05:** MFA AAL2 Boss, TTL invitation 24h, session revocation, session lifetime, Survey completed_by invariant.
+- [x] **Chốt Schema Decisions 01–09:** E.164 normalization, survey appointment_id NOT NULL, native sequences, payment idempotency, care idempotency, crew jsonb snapshot, canonical categorical identifiers, single-shot survey, call provider correlation.
+- [x] **Chốt Storage Decision 01:** Signed URL TTLs (3600s/1800s/900s) qua Trusted Server.
+- [x] **Chốt RLS Decisions 01–05:** Safe Staff Directory; active assignment; sanitized transcript; Server DTO boundary; phân tách vật lý Raw vs Sanitized Interactions.
 - [ ] **Thiết lập quyền hạn Database Roles & Grants:** Chuẩn hóa các lệnh `REVOKE` và `GRANT` cơ bản cho các role nội bộ của PostgreSQL (`anon`, `authenticated`, `service_role`).
 - [ ] **Kế hoạch Kiểm thử RLS Tự động:** Chuẩn bị kịch bản kiểm thử (Test Suite) cho từng role (`BOSS_ADMIN`, `SALE`, `TECHNICIAN`, `anon`) đối với từng bảng vật lý để bảo đảm không xảy ra rò rỉ dữ liệu, bypass tenant key, hoặc đệ quy vô tận.

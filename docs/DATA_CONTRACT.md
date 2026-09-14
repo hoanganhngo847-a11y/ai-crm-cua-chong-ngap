@@ -39,13 +39,21 @@ Tài liệu này chưa quyết định bảng Supabase chính thức, migration,
 - Giá trị trạng thái phải dùng hằng số chung. Không tự tạo cách viết khác nhau cho cùng một trạng thái.
 - Trạng thái phát sinh từ AI chỉ là gợi ý nếu contract không nói rõ được tự động quyết định.
 
-### Quy ước trạng thái dùng chung
+### Quy ước trạng thái dùng chung và Định danh chuẩn hóa (Canonical Identifiers — DECIDED / FROZEN)
 
 - Các trạng thái và kết quả nghiệp vụ phải được định nghĩa tập trung trước khi viết code.
 - Không để các module dùng `DA_COC`, `da-coc`, `paid_deposit` và `DEPOSIT_PAID` cho cùng một ý nghĩa.
 - Module chỉ được dùng tên trạng thái đã thống nhất trong constants/enum chung và không tự dịch hoặc đổi kiểu chữ khi lưu dữ liệu.
-- Tài liệu này mô tả ý nghĩa và một số giá trị bắt buộc như `NEED_INFO`, `BOSS_ADMIN`, `SALE`, `TECHNICIAN`; chưa khóa toàn bộ danh sách enum cuối cùng.
-- Các danh sách trạng thái cần chốt gồm tối thiểu: `Customer.stage`, `Conversation.status`, `Call.status`, `CallAttempt.result`, `Appointment.status`, `PricingPolicy.status`, `PriceCalculation.status`, `PaymentTransaction.status`, `Order.deposit_status`, `Order.order_status`, `Contract.status`, `ProductionOrder.status`, `Installation.status`, `CareDelivery.status` và `WarrantyTicket.status`.
+- **Quy tắc giá trị lưu trữ vật lý (Persisted Canonical Values):** Theo `SCHEMA DECISION 07 (FROZEN)`, toàn bộ giá trị phân loại/trạng thái trong cơ sở dữ liệu vật lý bắt buộc lưu bằng **tiếng Anh in hoa chuẩn `UPPER_SNAKE_CASE`** (ví dụ: `UNREACHABLE`, `DEPOSIT_PENDING`, `DEPOSIT_CONFIRMED`, `DRAFT`, `CONFIRMED`, `PROCESSING`, `COMPLETED`, `CANCELLED`, `FACEBOOK`, `ZALO_OA`, `HOTLINE`, `WEBSITE`).
+- **Bảo toàn thuật ngữ nghiệp vụ (Business Label Mapping):** Các nhãn tiếng Việt trong tài liệu này là ngôn ngữ nghiệp vụ và nhãn hiển thị trên giao diện (UI Presentation Labels), tuyệt đối KHÔNG lưu chuỗi tiếng Việt vào cơ sở dữ liệu. Bảng ánh xạ chuẩn:
+  - "KHÔNG LIÊN LẠC ĐƯỢC" $\rightarrow$ canonical database value: `UNREACHABLE`
+  - "ĐÃ CỌC" $\rightarrow$ canonical database value: `DEPOSIT_CONFIRMED`
+  - "CHỜ CỌC" $\rightarrow$ canonical database value: `DEPOSIT_PENDING`
+  - "CHỜ XỬ LÝ" / "ĐANG XỬ LÝ" $\rightarrow$ canonical database value: `PENDING` / `PROCESSING`
+  - "HOÀN THÀNH" / "HOÀN TẤT" $\rightarrow$ canonical database value: `COMPLETED`
+  - "ĐÃ HỦY" $\rightarrow$ canonical database value: `CANCELLED`
+- **Chuẩn hóa số điện thoại (Phone Normalization — DECIDED / FROZEN):** Theo `SCHEMA DECISION 01 (FROZEN)`, số điện thoại đầu vào từ mọi nguồn (người dùng, webhook, nhà mạng) bắt buộc phải qua hàm `normalize_phone()` chuyển về định dạng quốc tế chuẩn **E.164** (`+84XXXXXXXXX` với Việt Nam) trước khi sinh HMAC hash (`phone_hash`) hoặc lưu trữ bảo mật tại `private.customer_private_contacts`. Tuyệt đối không để số `09...` và `+849...` tạo ra hai hash khác nhau.
+- Danh sách enum đã được chuẩn hóa đầy đủ tại `SUPABASE_SCHEMA_DESIGN.md`.
 
 ### Quy ước tham chiếu người dùng
 
@@ -417,7 +425,7 @@ Thuộc một `Company` và một `Customer`, tham chiếu tùy chọn đến `C
 - Lần 1 được lên lịch ngay; lần 2 sau 2–3 giờ nếu không nghe; lần 3 vào ngày hôm sau nếu vẫn không nghe.
 - Chỉ tạo lần tiếp theo sau khi kết quả lần trước đủ điều kiện.
 - Cuộc gọi Hotline inbound không thuộc chu kỳ outbound ba lần.
-- Sau lần 3 không nghe, chu kỳ kết thúc, cập nhật khách thành **KHÔNG LIÊN LẠC ĐƯỢC** nhưng không xóa Customer.
+- Sau lần 3 không nghe, chu kỳ kết thúc, cập nhật khách thành **KHÔNG LIÊN LẠC ĐƯỢC** (canonical persisted value: `UNREACHABLE`) nhưng không xóa Customer.
 
 ## 11. CallTranscript
 
@@ -517,8 +525,7 @@ Thuộc `Customer` và tham chiếu lịch khảo sát nguồn bằng `appointme
 - Không đánh dấu hoàn tất nếu thiếu trường kỹ thuật bắt buộc.
 - Trong luồng khảo sát chuẩn, Survey phải truy được về Appointment nguồn bằng `appointment_id`. Nếu có `appointment_id`, Appointment phải tồn tại, có `type = survey`, có `customer_id` bằng `Survey.customer_id` và thuộc cùng Company; không được liên kết lịch của Customer khác.
 - `completed_by` phải có `CompanyMember.role = TECHNICIAN`, `CompanyMember.status = ACTIVE` trong đúng Company và có quyền trên Appointment/Survey tương ứng.
-- Trong luồng chuẩn, `Appointment.assignee_id` là TECHNICIAN được giao khảo sát, còn `Survey.completed_by` là TECHNICIAN thực sự hoàn tất. Nếu hai người khác nhau, phải có việc phân công lại hoặc ủy quyền hợp lệ kèm dấu vết audit; không được âm thầm cho kỹ thuật viên không được giao hoàn tất Survey.
-- Việc `appointment_id` có bắt buộc `NOT NULL` ở database hay cho phép ngoại lệ nhập khảo sát thủ công/legacy là **CẦN CHỐT KHI THIẾT KẾ SCHEMA**.
+- `Survey.appointment_id` bắt buộc mang kiểu `uuid NOT NULL` (đã chốt tại **SCHEMA DECISION 02 — DECIDED / FROZEN**); mọi khảo sát phải gắn với lịch hẹn hợp lệ cùng Company và Customer; không cho phép orphan survey; dữ liệu legacy import nếu có phải tạo Appointment lịch sử tương ứng.
 - Việc hoàn tất Survey phải có dấu vết phù hợp; TECHNICIAN không được từ Survey sửa giá, thanh toán hoặc tài chính.
 - Số đo phải có đơn vị và cấu trúc thống nhất; không lưu chuỗi mô tả mơ hồ thay cho dữ liệu cần tính toán.
 - Nếu sửa khảo sát đã dùng để báo giá, phải tạo phép tính giá mới và giữ kết quả cũ để truy vết.
@@ -1187,4 +1194,4 @@ Trình tự tiếp theo chỉ bắt đầu sau khi contract được duyệt:
 
 `DATA_CONTRACT → thiết kế schema Supabase → thiết kế Auth → thiết kế RLS → migration → kiểm thử quyền`
 
-Trước khi tạo migration cần chốt tối thiểu: kiểu UUID/key và liên kết Auth, enum cuối cùng, thuật toán chuẩn hóa phone, actor polymorphic cuối cùng, mô hình đội kỹ thuật nếu phát sinh, `Survey.appointment_id` có bắt buộc `NOT NULL` hay cho phép ngoại lệ nhập thủ công/legacy, cách ràng buộc Survey và Appointment cùng Customer/Company bằng foreign key, trigger hay lớp ghi dữ liệu, khóa idempotency CareDelivery và phạm vi nhà cung cấp thanh toán, foreign key ghép hay trigger để ép đồng nhất `company_id`, cách biểu diễn AccessPolicy bằng bảng/code/RLS, storage policy, thời hạn giữ AuditLog, index cuối cùng và RLS policy SQL cụ thể.
+Toàn bộ các yêu cầu thiết kế kiến trúc (chuẩn hóa phone E.164, `Survey.appointment_id NOT NULL`, mã native sequence, idempotency thanh toán và tin nhắn, mô hình đội thợ, danh mục canonical `UPPER_SNAKE_CASE`, storage TTL, ma trận RLS và cơ chế phân tách Raw/Sanitized Interaction) đã được giải quyết triệt để và đóng băng (**FULL DESIGN FREEZE**) tại `docs/SUPABASE_SCHEMA_DESIGN.md`, `docs/AUTH_DESIGN.md` và `docs/SUPABASE_RLS_DESIGN.md`, sẵn sàng bước vào pha triển khai Migration 001.
