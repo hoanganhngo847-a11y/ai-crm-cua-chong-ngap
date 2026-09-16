@@ -44,8 +44,8 @@ export function getCategoryTTL(category: SignedUrlResourceCategory): number {
  *    - INSTALLATION: 3600s
  *    - CONTRACT: 1800s
  *    - RECORDING: 900s
- * 4. INSTALLATION authorizes the actual INSTALLATIONS entity. Unresolved bucket conflict
- *    ('installation-handover' vs 'installation-docs') fails closed as OPEN STORAGE CONTRACT DECISION.
+ * 4. INSTALLATION authorizes the actual INSTALLATIONS entity and resolves a constrained
+ *    photo/handover selector against canonical DB references in `installation-docs`.
  * 5. RECORDING is restricted strictly to BOSS_ADMIN with MFA AAL2.
  * 6. Storage signing failure MUST FAIL CLOSED. Mock/fallback URLs are STRICTLY FORBIDDEN.
  */
@@ -168,19 +168,45 @@ export async function createAuthorizedSignedUrl(
     }
 
     case 'INSTALLATION': {
-      // 1. Authorize installation entity
-      await authorizeInstallationAccess(resourceId, client);
+      // authorizeInstallationAccess performs a minimal pre-auth lookup, derives the
+      // company from DB, verifies the actor and current technician assignment, and
+      // only then reads the canonical `photos` / `handover_ref` fields.
+      const { installation } = await authorizeInstallationAccess(resourceId, client);
 
-      // 2. Storage bucket conflict resolution (Review finding 11):
-      // Frozen documentation has an unresolved naming conflict:
-      // - SUPABASE_RLS_DESIGN:991 & SUPABASE_SCHEMA_DESIGN:1511 specify 'installation-handover'
-      // - SUPABASE_RLS_DESIGN:1024 & SUPABASE_SCHEMA_DESIGN:1518 specify 'installation-docs'
-      // Per instruction: Fail closed and report OPEN STORAGE CONTRACT DECISION.
-      throw new ServerAuthError(
-        'Cấu hình kho lưu trữ lắp đặt chưa được thống nhất giữa các tài liệu đặc tả (OPEN STORAGE CONTRACT DECISION: installation-handover vs installation-docs).',
-        501,
-        'SIGNED_URL_UNAVAILABLE'
-      );
+      if (request.variant === 'handover') {
+        if (!installation.handover_ref?.trim()) {
+          throw new ServerAuthError(
+            'Tài liệu bàn giao lắp đặt chưa sẵn sàng để tải.',
+            502,
+            'SIGNED_URL_UNAVAILABLE'
+          );
+        }
+        canonicalFileRef = installation.handover_ref;
+      } else {
+        if (!Number.isInteger(request.photoIndex) || request.photoIndex < 0) {
+          throw new ServerAuthError(
+            'Vị trí ảnh lắp đặt không hợp lệ.',
+            400,
+            'INVALID_PURPOSE'
+          );
+        }
+
+        const photos = Array.isArray(installation.photos)
+          ? (installation.photos as string[])
+          : [];
+        const ref = photos[request.photoIndex];
+        if (typeof ref !== 'string' || !ref.trim()) {
+          throw new ServerAuthError(
+            'Tệp lắp đặt yêu cầu chưa sẵn sàng để tải.',
+            502,
+            'SIGNED_URL_UNAVAILABLE'
+          );
+        }
+        canonicalFileRef = ref;
+      }
+
+      bucketName = STORAGE_BUCKET_MAP.INSTALLATION;
+      break;
     }
 
     default: {

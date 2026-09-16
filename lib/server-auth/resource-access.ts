@@ -177,9 +177,8 @@ export async function authorizeCustomerAccess(
     allowedRoles = [APPLICATION_ROLES.BOSS_ADMIN];
     requireAal2 = process.env.NODE_ENV === 'production';
   } else if (purpose === CONTACT_ACCESS_PURPOSES.CLICK_TO_CALL) {
-    // Frozen rule: SALE allowed. BOSS_ADMIN is configuration-dependent (fails closed pending config).
-    // TECHNICIAN strictly forbidden.
-    allowedRoles = [APPLICATION_ROLES.SALE];
+    // Frozen rule: BOSS_ADMIN and SALE are allowed; TECHNICIAN is forbidden.
+    allowedRoles = [APPLICATION_ROLES.BOSS_ADMIN, APPLICATION_ROLES.SALE];
   }
 
   const actor = await verifyActorWithTenantMasking(
@@ -664,4 +663,70 @@ export async function authorizeInteractionAccess(
   }
 
   return { actor, interaction: interaction as InteractionResourceRow };
+}
+
+export interface CallResourceRow {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  direction: string;
+  agent_type: string;
+  provider: string;
+  provider_call_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  recording_ref: string | null;
+  transcript_status: string;
+  created_at: string;
+}
+
+/**
+ * Authorizes access to a call starting from callId.
+ *
+ * STRICT SECURITY: BOSS_ADMIN only! SALE and TECHNICIAN are completely forbidden.
+ * Even if a SALE agent made the call, privileged access / verbatim transcript is DENIED.
+ * Cross-tenant calls are masked as 404 RESOURCE_NOT_FOUND.
+ */
+export async function authorizeCallAccess(
+  callId: string,
+  client?: SupabaseClient
+): Promise<{ actor: TrustedActorContext; call: CallResourceRow }> {
+  if (!callId) {
+    throw new ServerAuthError('Mã cuộc gọi không hợp lệ.', 400, 'RESOURCE_NOT_FOUND');
+  }
+
+  const adminClient = createAdminClient();
+
+  // STEP 1: Minimal pre-auth metadata projection (id, company_id only)
+  const { data: minimal, error: minError } = await adminClient
+    .from('calls')
+    .select('id, company_id')
+    .eq('id', callId)
+    .maybeSingle();
+
+  if (minError || !minimal) {
+    throw new ServerAuthError('Không tìm thấy cuộc gọi.', 404, 'RESOURCE_NOT_FOUND');
+  }
+
+  // STEP 2: Actor verification (BOSS_ADMIN only, AAL2 enforced in production)
+  const actor = await verifyActorWithTenantMasking(
+    minimal.company_id,
+    [APPLICATION_ROLES.BOSS_ADMIN],
+    { requireAal2: process.env.NODE_ENV === 'production' },
+    client
+  );
+
+  // STEP 3: Post-auth projection
+  const { data: call, error } = await adminClient
+    .from('calls')
+    .select('id, company_id, customer_id, direction, agent_type, provider, provider_call_id, started_at, ended_at, status, recording_ref, transcript_status, created_at')
+    .eq('id', callId)
+    .single();
+
+  if (error || !call) {
+    throw new ServerAuthError('Không tìm thấy cuộc gọi.', 404, 'RESOURCE_NOT_FOUND');
+  }
+
+  return { actor, call: call as CallResourceRow };
 }

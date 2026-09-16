@@ -24,7 +24,7 @@ Tài liệu này chưa quyết định bảng Supabase chính thức, migration,
 - `Customer.phone` là dữ liệu nhạy cảm. Tài khoản SALE và TECHNICIAN không được nhận số thật từ cơ sở dữ liệu, API, log, export, lỗi hoặc dữ liệu tải trước.
 - Che số ở giao diện không được xem là biện pháp phân quyền.
 - Tham chiếu tệp như `recording_ref`, `generated_file_ref`, `signed_file_ref` và `photos` không được mặc định là URL công khai; việc tải tệp phải được kiểm tra quyền.
-- Transcript, nội dung hội thoại, địa chỉ và bằng chứng AI có thể chứa dữ liệu cá nhân, vì vậy phải áp dụng quyền tối thiểu và lưu nhật ký truy cập phù hợp.
+- Verbatim transcript giữ nguyên cả số điện thoại, địa chỉ, số tiền và dữ liệu nhạy cảm được nói trong cuộc gọi. Chỉ `BOSS_ADMIN` được xem qua Trusted Server với MFA/AAL2 và audit bắt buộc; `SALE` và `TECHNICIAN` bị cấm xem trực tiếp.
 
 ### Chống ghi trùng và truy vết
 
@@ -431,7 +431,7 @@ Thuộc một `Company` và một `Customer`, tham chiếu tùy chọn đến `C
 
 ### Mô tả và mục đích
 
-`CallTranscript` là nội dung cuộc gọi được chuyển thành chữ để xem lại, phân tích và học phong cách sale trong phạm vi cho phép.
+`CallTranscript` là bản chép lại **nguyên văn (verbatim)** nội dung đã được nói trong cuộc gọi để kiểm toán, phân tích và học phong cách trong phạm vi cho phép. Đây không phải bản tóm tắt, CRM note hay nội dung đã làm sạch dành cho SALE.
 
 - **Chủ sở hữu:** Thành viên 5 sở hữu transcript; Thành viên 9 sử dụng cho AI.
 - **Ai tạo:** Dịch vụ speech-to-text sau khi có bản ghi âm/cuộc gọi hợp lệ.
@@ -454,9 +454,22 @@ Quan hệ một-một với `Call`; Company được suy ra an toàn qua `Call.c
 ### Quy tắc cập nhật
 
 - Chỉ xử lý khi có căn cứ sử dụng bản ghi âm phù hợp chính sách của doanh nghiệp.
+- Speech-to-Text được phép thêm dấu câu, xuống dòng, timestamp và speaker labels; không được tóm tắt, paraphrase, bỏ câu, sửa ý, tự che dữ liệu nhạy cảm hoặc tạo thêm nội dung người nói không nói.
+- Nếu người nói đọc số điện thoại, địa chỉ, số tiền hoặc PII, verbatim transcript vẫn giữ nguyên và vì vậy phải nằm trong vùng dữ liệu private/restricted.
+- `BOSS_ADMIN` được xem qua Trusted Server với active profile, active same-company membership, MFA/AAL2 theo privileged policy và audit bắt buộc. `SALE` và `TECHNICIAN` bị cấm, kể cả SALE đã thực hiện cuộc gọi.
+- Không lưu verbatim transcript vào `public.interactions.sanitized_content`. CRM extracted data (nhu cầu, kích thước, lịch hẹn, yêu cầu báo giá...) là một sản phẩm phái sinh khác và chưa được triển khai trong bước Foundation Finalization.
 - Bản sửa transcript phải có phiên bản hoặc dấu vết, không ghi đè không kiểm soát.
 - Không mặc định transcript là sự thật tuyệt đối; AI phải giữ bằng chứng và độ tin cậy.
 - Áp dụng quyền hạn chế vì transcript có thể chứa số điện thoại, địa chỉ và thông tin nhạy cảm.
+
+### Ranh giới AI Transcription Worker
+
+- AI Transcription Worker là **machine identity** chạy server-side, không đăng nhập từ browser, không dùng hoặc giả làm tài khoản `BOSS_ADMIN`, `SALE`, `TECHNICIAN`.
+- Service Role chỉ là năng lực hạ tầng và không tự động tạo authorization. Mỗi job phải ràng buộc rõ `company_id`, `call_id` và recording được giao; worker chỉ được đọc recording đó, chạy Speech-to-Text/diarization, ghi verbatim transcript và cập nhật trạng thái xử lý.
+- Worker không mặc định được đọc raw phone, payment, contract, user/role, arbitrary tenant/customer hoặc mọi recording trong hệ thống.
+- `VOICE_TRANSCRIPTION` và `SANITIZATION_PIPELINE` không phải đặc quyền mà human session có thể tự nhận bằng cách truyền enum. Khi machine credential/job identity chưa được triển khai, các đường worker phải fail closed.
+- **Worker Identity Implementation = DEFERRED TO AI/BACKGROUND PROCESSING MODULE.**
+- Ranh giới lưu trữ transcript: Migration 004 (`20260916000001_private_call_transcripts.sql`) đã chuyển `public.call_transcripts` sang `private.call_transcripts`. Verbatim transcript được cách ly khỏi PostgREST; chỉ `BOSS_ADMIN` được đọc qua Trusted Server có MFA/AAL2 và audit bắt buộc; `SALE` và `TECHNICIAN` bị cấm hoàn toàn; không tái sử dụng `sanitized_content` hoặc nhét transcript vào raw interaction. AI Worker write path tiếp tục deferred cho module AI.
 
 ## 12. Appointment
 
@@ -777,6 +790,7 @@ Thuộc `Order`, tham chiếu `Appointment`; Company được suy ra an toàn qu
 - Không đánh dấu hoàn tất nếu thiếu bằng chứng bàn giao bắt buộc theo quy trình.
 - Khi hoàn tất, cập nhật đơn và tài chính bằng giao dịch/luồng nhất quán; không coi việc có tiền cọc là đã hoàn thành.
 - Tệp và ảnh phải được kiểm soát quyền.
+- Bucket canonical cho ảnh/tài liệu lắp đặt là `installation-docs`; tham chiếu canonical nằm ở `Installation.photos` và `Installation.handover_ref`. Client chỉ gửi `installation_id` cùng selector ảnh/biên bản hợp lệ, không gửi bucket, object path, file reference, storage URL hoặc TTL.
 
 ## 21. FinanceSummary
 
@@ -1059,6 +1073,7 @@ Thuộc một `Company`, một `Customer` và một `Order`; có thể tham chi�
 | `can_view_finance` | Được xem dữ liệu tài chính tổng hay không. |
 | `can_manage_pricing` | Được quản lý bảng giá hay không. |
 | `can_call_customer` | Được yêu cầu hệ thống gọi khách hay không. |
+| `can_view_verbatim_transcript` | Được xem verbatim call transcript qua privileged Trusted Server hay không. |
 | `audit_required` | Thao tác theo quyền này có bắt buộc audit hay không. |
 
 ### Ma trận tối thiểu
@@ -1069,7 +1084,8 @@ Thuộc một `Company`, một `Customer` và một `Order`; có thể tham chi�
 | `can_export_contacts` | Theo cấu hình quản trị có kiểm soát | `false` | `false` |
 | `can_view_finance` | `true` | `false` với tài chính quản trị/tổng | `false` |
 | `can_manage_pricing` | `true` hoặc theo ủy quyền quản trị | `false` | `false` |
-| `can_call_customer` | Theo cấu hình | `true`, nhưng chỉ qua lệnh máy chủ bằng `customer_id` | `false` |
+| `can_call_customer` | `true`, chỉ qua lệnh máy chủ bằng resource ID | `true`, chỉ qua lệnh máy chủ bằng `customer_id` | `false` |
+| `can_view_verbatim_transcript` | `true`, yêu cầu privileged access + audit | `false` | `false` |
 | `audit_required` | `true` cho thao tác nhạy cảm | `true` cho gọi, chat và thao tác nhạy cảm | `true` cho thay đổi khảo sát/công việc quan trọng |
 
 ### Liên kết
@@ -1081,6 +1097,8 @@ Thuộc một `Company`, một `Customer` và một `Order`; có thể tham chi�
 - Bắt buộc: SẾP có `can_view_raw_phone = true`; SALE và TECHNICIAN có `can_view_raw_phone = false`.
 - Quyền có thể được triển khai bằng sự kết hợp của `CompanyMember.role`, RLS, server-side authorization, database view/RPC hạn chế dữ liệu và policy code; không chỉ ở giao diện.
 - SALE không được nhận raw phone nhưng có thể gọi bằng `customer_id` hoặc tìm bằng `customer_code`: máy chủ kiểm tra CompanyMember/AccessPolicy, lấy số và chuyển thẳng sang tổng đài.
+- Click-to-Call cho phép `BOSS_ADMIN` và `SALE`; `TECHNICIAN` luôn bị từ chối. Client không được gửi phone, `company_id` đáng tin cậy, provider credential hoặc provider correlation ID.
+- Verbatim transcript chỉ dành cho `BOSS_ADMIN` qua privileged Trusted Server. Không được biến transcript thành `sanitized_content` để SALE đọc.
 - Raw phone không được trả về trình duyệt của SALE hoặc TECHNICIAN trong response, lỗi, log phía client hoặc dữ liệu tải trước.
 - `can_view_finance = false` của SALE nghĩa là không được xem tài chính quản trị/tổng Company. SALE vẫn được xem giá đã tính/đã báo, `Order.final_amount`, `deposit_status`, số tiền khách cần thanh toán và thông tin thương mại cần cho việc chốt trong phạm vi khách/đơn hợp lệ.
 - SALE không được xem toàn bộ PaymentTransaction, giao dịch ngân hàng tổng, FinanceSummary toàn Company, báo cáo quản trị hoặc tổng doanh thu.
@@ -1194,4 +1212,4 @@ Trình tự tiếp theo chỉ bắt đầu sau khi contract được duyệt:
 
 `DATA_CONTRACT → thiết kế schema Supabase → thiết kế Auth → thiết kế RLS → migration → kiểm thử quyền`
 
-Toàn bộ các yêu cầu thiết kế kiến trúc (chuẩn hóa phone E.164, `Survey.appointment_id NOT NULL`, mã native sequence, idempotency thanh toán và tin nhắn, mô hình đội thợ, danh mục canonical `UPPER_SNAKE_CASE`, storage TTL, ma trận RLS và cơ chế phân tách Raw/Sanitized Interaction) đã được giải quyết triệt để và đóng băng (**FULL DESIGN FREEZE**) tại `docs/SUPABASE_SCHEMA_DESIGN.md`, `docs/AUTH_DESIGN.md` và `docs/SUPABASE_RLS_DESIGN.md`, sẵn sàng bước vào pha triển khai Migration 001.
+Các quyết định Foundation về chuẩn hóa phone E.164, `Survey.appointment_id NOT NULL`, mã native sequence, idempotency, đội thợ, categorical identifiers, Storage, Auth/RLS và Raw/Sanitized Interaction đã được triển khai qua Migration 001–003 và đóng băng. Ranh giới verbatim transcript đã được hoàn thiện qua Migration 004 (`private.call_transcripts`), đảm bảo chỉ BOSS_ADMIN truy cập qua Trusted Server + audit, cấm tuyệt đối SALE/TECHNICIAN; worker write path tiếp tục deferred.

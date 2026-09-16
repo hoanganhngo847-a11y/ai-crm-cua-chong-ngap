@@ -40,6 +40,23 @@ export async function getSanitizedInteractionForSale(
     client
   );
 
+  // A call transcript is never a SALE-facing sanitized interaction. CALL_EVENT is
+  // allowed here only as an empty, non-textual system event. Verbatim transcript
+  // access is a separate BOSS-only privileged path and must never be smuggled via
+  // public.interactions.sanitized_content, even when marked SUCCEEDED.
+  const isVoiceInteraction =
+    interaction.type === 'CALL_EVENT' ||
+    interaction.channel === 'PHONE' ||
+    interaction.channel === 'AI_VOICE';
+
+  if (isVoiceInteraction && interaction.sanitized_content?.trim()) {
+    throw new ServerAuthError(
+      'Nội dung cuộc gọi nguyên văn không được phát hành qua luồng tương tác đã làm sạch.',
+      403,
+      'ROLE_FORBIDDEN'
+    );
+  }
+
   if (interaction.sanitization_status === 'SUCCEEDED') {
     // Legitimate sanitized derivative
     return {

@@ -6,6 +6,7 @@ import {
   CONTACT_ACCESS_PURPOSES,
   RAW_INTERACTION_PURPOSES,
   SIGNED_URL_TTL,
+  VERBATIM_TRANSCRIPT_ALLOWED_ROLES,
   type CallProvider,
 } from '../../shared/contracts/sensitive';
 import { ServerAuthError } from '../../lib/server-auth/errors';
@@ -18,6 +19,7 @@ import {
   authorizeContractAccess,
   authorizePaymentAccess,
   authorizeInteractionAccess,
+  authorizeCallAccess,
 } from '../../lib/server-auth/resource-access';
 import { resolveCustomerPrivateContactForTrustedOperation } from '../../lib/sensitive/customer-contact';
 import { executeClickToCall } from '../../lib/sensitive/click-to-call';
@@ -25,6 +27,7 @@ import {
   getSanitizedInteractionForSale,
   resolveRawInteractionContentForTrustedOperation,
 } from '../../lib/sensitive/interactions';
+import { getVerbatimCallTranscript } from '../../lib/sensitive/call-transcripts';
 import {
   createAuthorizedSignedUrl,
   getCategoryTTL,
@@ -35,6 +38,7 @@ import {
   internalGetSanitizedInteractionAction,
   internalGetAuthorizedSignedUrlAction,
   internalViewBossRawPhoneAction,
+  internalGetCallTranscriptAction,
 } from '../../lib/sensitive/action-handlers';
 
 // Local Supabase credentials
@@ -90,6 +94,9 @@ const ORDER_A_ID = 'aaaaaaaa-1111-0000-0000-000000000031';
 const CONTRACT_A_ID = 'aaaaaaaa-1111-0000-0000-000000000041';
 const PAYMENT_A_ID = 'aaaaaaaa-1111-0000-0000-000000000051';
 const CALL_A_ID = 'aaaaaaaa-1111-0000-0000-000000000061';
+const CALL_B_ID = 'bbbbbbbb-2222-0000-0000-000000000062';
+const TRANSCRIPT_A_ID = 'aaaaaaaa-1111-0000-0000-000000000088';
+const TRANSCRIPT_B_ID = 'bbbbbbbb-2222-0000-0000-000000000089';
 
 const INTERACTION_SUCCEEDED_ID = 'aaaaaaaa-1111-0000-0000-000000000071';
 const INTERACTION_PENDING_ID = 'aaaaaaaa-1111-0000-0000-000000000072';
@@ -97,6 +104,7 @@ const INTERACTION_FAILED_ID = 'aaaaaaaa-1111-0000-0000-000000000073';
 const INTERACTION_BYPASS_ATTEMPT_ID = 'aaaaaaaa-1111-0000-0000-000000000074';
 const INTERACTION_NON_TEXTUAL_ID = 'aaaaaaaa-1111-0000-0000-000000000075';
 const INTERACTION_NON_SYSTEM_NOT_REQ_ID = 'aaaaaaaa-1111-0000-0000-000000000076';
+const INTERACTION_CALL_TRANSCRIPT_BYPASS_ID = 'aaaaaaaa-1111-0000-0000-000000000077';
 
 const INSTALLATION_A_ID = 'aaaaaaaa-1111-0000-0000-000000000095';
 
@@ -347,19 +355,45 @@ async function setupTestData() {
     throw new Error(`Failed to upsert installation: ${installErr.message}`);
   }
 
-  await adminClient.from('calls').upsert({
-    id: CALL_A_ID,
-    company_id: COMPANY_A_ID,
-    customer_id: CUSTOMER_A_ID,
-    direction: 'OUTBOUND',
-    agent_type: 'SALE',
-    started_at: new Date().toISOString(),
-    status: 'COMPLETED',
-    provider: 'MANUAL',
-    provider_call_id: 'call_rec_001',
-    recording_ref: 'call-recordings/call_001.mp3',
-    transcript_status: 'COMPLETED',
-  });
+  await adminClient.from('calls').upsert([
+    {
+      id: CALL_A_ID,
+      company_id: COMPANY_A_ID,
+      customer_id: CUSTOMER_A_ID,
+      direction: 'OUTBOUND',
+      agent_type: 'SALE',
+      started_at: new Date().toISOString(),
+      status: 'COMPLETED',
+      provider: 'MANUAL',
+      provider_call_id: 'call_rec_001',
+      recording_ref: 'call-recordings/call_001.mp3',
+      transcript_status: 'COMPLETED',
+    },
+    {
+      id: CALL_B_ID,
+      company_id: COMPANY_B_ID,
+      customer_id: CUSTOMER_B_ID,
+      direction: 'INBOUND',
+      agent_type: 'SALE',
+      started_at: new Date().toISOString(),
+      status: 'COMPLETED',
+      provider: 'MANUAL',
+      provider_call_id: 'call_rec_002',
+      recording_ref: 'call-recordings/call_b_001.mp3',
+      transcript_status: 'COMPLETED',
+    },
+  ]);
+
+  // Seed private.call_transcripts via psql since schema 'private' is not exposed to PostgREST
+  executeRawSql(`
+    INSERT INTO private.call_transcripts (id, company_id, call_id, transcript, speakers, language)
+    VALUES
+      ('${TRANSCRIPT_A_ID}', '${COMPANY_A_ID}', '${CALL_A_ID}', 'Xin chào, tôi cần tư vấn về giải pháp lắp đặt cửa chống ngập cho nhà phố.', '[{"speaker": "CUSTOMER", "text": "Xin chào..."}, {"speaker": "SALE", "text": "Dạ vâng..."}]'::jsonb, 'vi'),
+      ('${TRANSCRIPT_B_ID}', '${COMPANY_B_ID}', '${CALL_B_ID}', 'Cuộc gọi trao đổi báo giá bên công ty B.', '[{"speaker": "SALE", "text": "Alo công ty B..."}]'::jsonb, 'vi')
+    ON CONFLICT (call_id) DO UPDATE SET
+      transcript = EXCLUDED.transcript,
+      speakers = EXCLUDED.speakers;
+  `);
 
   // 8. Interactions
   await adminClient.from('interactions').upsert([
@@ -429,6 +463,17 @@ async function setupTestData() {
       sanitization_status: 'NOT_REQUIRED',
       actor_type: 'SALE',
     },
+    {
+      id: INTERACTION_CALL_TRANSCRIPT_BYPASS_ID,
+      company_id: COMPANY_A_ID,
+      customer_id: CUSTOMER_A_ID,
+      channel: 'PHONE',
+      type: 'CALL_EVENT',
+      direction: 'OUTBOUND',
+      sanitized_content: 'SALE: Anh đọc giúp em số điện thoại. CUSTOMER: 0988111222.',
+      sanitization_status: 'SUCCEEDED',
+      actor_type: 'SYSTEM',
+    },
   ]);
 
   // 9. Private raw interaction contents (seeded via psql)
@@ -444,9 +489,12 @@ async function setupTestData() {
   await adminClient.storage.createBucket('survey-photos', { public: false }).catch(() => {});
   await adminClient.storage.createBucket('contracts', { public: false }).catch(() => {});
   await adminClient.storage.createBucket('call-recordings', { public: false }).catch(() => {});
+  await adminClient.storage.createBucket('installation-docs', { public: false }).catch(() => {});
   await adminClient.storage.from('survey-photos').upload('survey_photo1.jpg', Buffer.from('test photo'), { upsert: true }).catch(() => {});
   await adminClient.storage.from('contracts').upload('contracts/contract_001.pdf', Buffer.from('test contract'), { upsert: true }).catch(() => {});
   await adminClient.storage.from('call-recordings').upload('call-recordings/call_001.mp3', Buffer.from('test audio'), { upsert: true }).catch(() => {});
+  await adminClient.storage.from('installation-docs').upload('installation_photo1.jpg', Buffer.from('test installation photo'), { upsert: true }).catch(() => {});
+  await adminClient.storage.from('installation-docs').upload('handover_001.pdf', Buffer.from('test handover'), { upsert: true }).catch(() => {});
 
   console.log('✓ Test fixtures setup complete.\n');
 }
@@ -869,6 +917,34 @@ async function runSecurityTests() {
       'Test K: Authorized click-to-call resolves raw phone strictly in trusted server memory for PBX',
       'REAL LOCAL SUPABASE'
     );
+
+    let crossCompanyCallDenied = false;
+    try {
+      await executeClickToCall({ customerId: CUSTOMER_A_ID }, new SpyProvider(), saleBClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 404 && err.code === 'RESOURCE_NOT_FOUND') {
+        crossCompanyCallDenied = true;
+      }
+    }
+    assert(
+      crossCompanyCallDenied,
+      'Test K: Wrong-company click-to-call is denied with tenant-masked RESOURCE_NOT_FOUND',
+      'REAL LOCAL SUPABASE'
+    );
+
+    let inactiveMemberCallDenied = false;
+    try {
+      await executeClickToCall({ customerId: CUSTOMER_A_ID }, new SpyProvider(), inactiveMemberClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'MEMBERSHIP_INACTIVE') {
+        inactiveMemberCallDenied = true;
+      }
+    }
+    assert(
+      inactiveMemberCallDenied,
+      'Test K: Inactive membership cannot click-to-call',
+      'REAL LOCAL SUPABASE'
+    );
   }
 
   // ----------------------------------------------------
@@ -1046,6 +1122,21 @@ async function runSecurityTests() {
       'Test O: Non-textual SYSTEM event with NOT_REQUIRED is allowed',
       'REAL LOCAL SUPABASE'
     );
+
+    // 7. A textual CALL_EVENT cannot smuggle a transcript through sanitized_content
+    let caughtCallTranscriptBypass = false;
+    try {
+      await getSanitizedInteractionForSale(INTERACTION_CALL_TRANSCRIPT_BYPASS_ID, saleClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        caughtCallTranscriptBypass = true;
+      }
+    }
+    assert(
+      caughtCallTranscriptBypass,
+      'Test O: SALE cannot read verbatim call transcript through SANITIZED_READ/SUCCEEDED bypass',
+      'REAL LOCAL SUPABASE'
+    );
   }
 
   // ----------------------------------------------------
@@ -1082,6 +1173,20 @@ async function runSecurityTests() {
     }
     assert(caughtSaleWorker, 'Test P: SALE cannot access raw interaction under worker purpose VOICE_TRANSCRIPTION', 'REAL LOCAL SUPABASE');
 
+    let caughtSaleSanitizerWorker = false;
+    try {
+      await resolveRawInteractionContentForTrustedOperation(
+        INTERACTION_SUCCEEDED_ID,
+        RAW_INTERACTION_PURPOSES.SANITIZATION_PIPELINE,
+        saleClient
+      );
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        caughtSaleSanitizerWorker = true;
+      }
+    }
+    assert(caughtSaleSanitizerWorker, 'Test P: SALE cannot access raw interaction under worker purpose SANITIZATION_PIPELINE', 'REAL LOCAL SUPABASE');
+
     // TECHNICIAN under any purpose
     let caughtTechRaw = false;
     try {
@@ -1096,6 +1201,52 @@ async function runSecurityTests() {
       }
     }
     assert(caughtTechRaw, 'Test P: TECHNICIAN cannot access raw interaction content', 'REAL LOCAL SUPABASE');
+
+    let caughtTechWorker = false;
+    try {
+      await resolveRawInteractionContentForTrustedOperation(
+        INTERACTION_SUCCEEDED_ID,
+        RAW_INTERACTION_PURPOSES.VOICE_TRANSCRIPTION,
+        techClient
+      );
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        caughtTechWorker = true;
+      }
+    }
+    assert(caughtTechWorker, 'Test P: TECHNICIAN cannot bypass with VOICE_TRANSCRIPTION worker purpose', 'REAL LOCAL SUPABASE');
+
+    let caughtTechSanitizerWorker = false;
+    try {
+      await resolveRawInteractionContentForTrustedOperation(
+        INTERACTION_SUCCEEDED_ID,
+        RAW_INTERACTION_PURPOSES.SANITIZATION_PIPELINE,
+        techClient
+      );
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        caughtTechSanitizerWorker = true;
+      }
+    }
+    assert(caughtTechSanitizerWorker, 'Test P: TECHNICIAN cannot bypass with SANITIZATION_PIPELINE worker purpose', 'REAL LOCAL SUPABASE');
+
+    const bossRaw = await resolveRawInteractionContentForTrustedOperation(
+      INTERACTION_SUCCEEDED_ID,
+      RAW_INTERACTION_PURPOSES.PRIVILEGED_AUDIT,
+      bossClient
+    );
+    assert(
+      bossRaw.interactionId === INTERACTION_SUCCEEDED_ID && bossRaw.rawContent.includes('0988111222'),
+      'Test P: BOSS_ADMIN privileged raw-content access succeeds through audited trusted-server path',
+      'REAL LOCAL SUPABASE'
+    );
+
+    assert(
+      VERBATIM_TRANSCRIPT_ALLOWED_ROLES.length === 1 &&
+      VERBATIM_TRANSCRIPT_ALLOWED_ROLES[0] === 'BOSS_ADMIN',
+      'Test P: Verbatim transcript human-role policy allows only BOSS_ADMIN (SALE/TECHNICIAN denied)',
+      'UNIT'
+    );
   }
 
   // ----------------------------------------------------
@@ -1452,17 +1603,26 @@ async function runSecurityTests() {
     );
   }
 
-  // Reg 7: Boss click-to-call fails closed by default (configuration-dependent)
+  // Reg 7: Boss click-to-call is allowed by the frozen business policy
   {
-    let bossCallDenied = false;
-    try {
-      await executeClickToCall({ customerId: CUSTOMER_A_ID }, undefined, bossClient);
-    } catch (err: unknown) {
-      if (err instanceof ServerAuthError && (err.code === 'ROLE_FORBIDDEN' || err.code === 'SENSITIVE_OPERATION_FORBIDDEN')) {
-        bossCallDenied = true;
+    let bossProviderInvoked = false;
+    class BossSpyProvider implements CallProvider {
+      readonly name = 'MANUAL';
+      async initiateCall(): Promise<{ providerCallId: string; status: string }> {
+        bossProviderInvoked = true;
+        return { providerCallId: `boss_call_${Date.now()}`, status: 'INITIATED' };
       }
     }
-    assert(bossCallDenied, 'Reg 7: Boss click-to-call fails closed by default pending business configuration', 'REAL LOCAL SUPABASE');
+    const bossCall = await executeClickToCall(
+      { customerId: CUSTOMER_A_ID },
+      new BossSpyProvider(),
+      bossClient
+    );
+    assert(
+      bossProviderInvoked && bossCall.success && Boolean(bossCall.callId),
+      'Reg 7: BOSS_ADMIN can click-to-call through trusted server without receiving phone data',
+      'REAL LOCAL SUPABASE'
+    );
   }
 
   // Reg 8: Installation signed URL authorizes installation entity
@@ -1475,21 +1635,39 @@ async function runSecurityTests() {
     );
   }
 
-  // Reg 9: Installation bucket conflict fails closed citing OPEN STORAGE CONTRACT DECISION
+  // Reg 9: Installation signed URLs use canonical DB references and installation-docs
   {
-    let caughtInstallConflict = false;
-    let conflictMsg = '';
+    const installPhoto = await createAuthorizedSignedUrl(
+      { category: 'INSTALLATION', resourceId: INSTALLATION_A_ID, variant: 'photo', photoIndex: 0 },
+      techClient
+    );
+    const installHandover = await createAuthorizedSignedUrl(
+      { category: 'INSTALLATION', resourceId: INSTALLATION_A_ID, variant: 'handover' },
+      techClient
+    );
+    assert(
+      installPhoto.expiresIn === 3600 &&
+      installPhoto.signedUrl.includes('installation_photo1.jpg') &&
+      installHandover.expiresIn === 3600 &&
+      installHandover.signedUrl.includes('handover_001.pdf'),
+      'Reg 9: Installation photo/handover use canonical refs, installation-docs, and 3600s TTL',
+      'REAL LOCAL SUPABASE'
+    );
+
+    let missingInstallObject = false;
     try {
-      await createAuthorizedSignedUrl({ category: 'INSTALLATION', resourceId: INSTALLATION_A_ID }, techClient);
+      await createAuthorizedSignedUrl(
+        { category: 'INSTALLATION', resourceId: INSTALLATION_A_ID, variant: 'photo', photoIndex: 999 },
+        techClient
+      );
     } catch (err: unknown) {
       if (err instanceof ServerAuthError && err.code === 'SIGNED_URL_UNAVAILABLE') {
-        caughtInstallConflict = true;
-        conflictMsg = err.message;
+        missingInstallObject = true;
       }
     }
     assert(
-      caughtInstallConflict && conflictMsg.includes('OPEN STORAGE CONTRACT DECISION'),
-      'Reg 9: Installation storage URL fails closed due to bucket conflict (installation-handover vs installation-docs)',
+      missingInstallObject,
+      'Reg 9: Missing installation canonical object fails closed with SIGNED_URL_UNAVAILABLE',
       'REAL LOCAL SUPABASE'
     );
   }
@@ -1542,13 +1720,14 @@ async function runSecurityTests() {
     const expectedKeys = [
       'clickToCallAction',
       'getAuthorizedSignedUrlAction',
+      'getCallTranscriptAction',
       'getSanitizedInteractionAction',
       'viewBossRawPhoneAction',
     ].sort();
 
     assert(
       JSON.stringify(exportedKeys) === JSON.stringify(expectedKeys),
-      `Reg 12: app/actions/sensitive.ts exports ONLY the 4 intended public Server Actions (found: ${exportedKeys.join(', ')})`,
+      `Reg 12: app/actions/sensitive.ts exports ONLY the 5 intended public Server Actions (found: ${exportedKeys.join(', ')})`,
       'STATIC'
     );
 
@@ -1647,6 +1826,336 @@ async function runSecurityTests() {
       'REAL LOCAL SUPABASE'
     );
   }
+
+  // Reg 14: Migration 004 schema verification (private.call_transcripts boundary)
+  {
+    let psqlTableOut = '';
+    try {
+      psqlTableOut = execSync(
+        `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -t -c "SELECT table_schema FROM information_schema.tables WHERE table_name = 'call_transcripts';"`
+      ).toString().trim();
+    } catch {
+      // ignore
+    }
+
+    assert(
+      psqlTableOut === 'private',
+      'Reg 14: call_transcripts is relocated strictly to private schema (public.call_transcripts dropped)',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const psqlPolicyOut = execSync(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -t -c "SELECT count(*) FROM pg_policies WHERE tablename = 'call_transcripts';"`
+    ).toString().trim();
+
+    assert(
+      psqlPolicyOut === '0',
+      'Reg 14: private.call_transcripts has exactly 0 client RLS policies (fail-closed, server-only)',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const psqlGrantsOut = execSync(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -t -c "SELECT count(*) FROM information_schema.role_table_grants WHERE table_name = 'call_transcripts' AND grantee IN ('authenticated', 'anon');"`
+    ).toString().trim();
+
+    assert(
+      psqlGrantsOut === '0',
+      'Reg 14: private.call_transcripts has 0 grants for authenticated or anon roles',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
+  // Reg 15: Migration 004 RPC security and ACL verification
+  {
+    const rpcInfo = execSync(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -t -c "SELECT routine_schema, security_type FROM information_schema.routines WHERE routine_name = 'get_call_transcript';"`
+    ).toString().trim().split('|').map(s => s.trim());
+
+    assert(
+      rpcInfo[0] === 'public' && rpcInfo[1] === 'DEFINER',
+      'Reg 15: get_call_transcript is a SECURITY DEFINER routine in public schema',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const rpcGrants = execSync(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -t -c "SELECT count(*) FROM information_schema.routine_privileges WHERE routine_name = 'get_call_transcript' AND grantee IN ('authenticated', 'anon', 'PUBLIC');"`
+    ).toString().trim();
+
+    assert(
+      rpcGrants === '0',
+      'Reg 15: get_call_transcript execution is revoked from authenticated, anon, and PUBLIC',
+      'REAL LOCAL SUPABASE'
+    );
+
+    // Direct invocation via anon role in psql throws insufficient_privilege
+    let anonDirectDenied = false;
+    try {
+      execSync(
+        `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "SET ROLE anon; SELECT * FROM public.get_call_transcript('${COMPANY_A_ID}'::uuid, '${CALL_A_ID}'::uuid);"`
+      );
+    } catch (err: unknown) {
+      if (String(err).includes('permission denied')) {
+        anonDirectDenied = true;
+      }
+    }
+    assert(anonDirectDenied, 'Reg 15: Direct RPC invocation as anon role is denied by PostgreSQL', 'REAL LOCAL SUPABASE');
+
+    // Direct invocation via authenticated role in psql throws insufficient_privilege
+    let authDirectDenied = false;
+    try {
+      execSync(
+        `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "SET ROLE authenticated; SELECT * FROM public.get_call_transcript('${COMPANY_A_ID}'::uuid, '${CALL_A_ID}'::uuid);"`
+      );
+    } catch (err: unknown) {
+      if (String(err).includes('permission denied')) {
+        authDirectDenied = true;
+      }
+    }
+    assert(authDirectDenied, 'Reg 15: Direct RPC invocation as authenticated role is denied by PostgreSQL', 'REAL LOCAL SUPABASE');
+  }
+
+  // Reg 16: Direct private schema table access denial for all client roles
+  {
+    const anonRes = await createAnonClient().from('call_transcripts').select('*');
+    assert(anonRes.error !== null || !anonRes.data || anonRes.data.length === 0, 'Reg 16: Direct SELECT on call_transcripts by anon client is denied', 'REAL LOCAL SUPABASE');
+
+    const saleRes = await saleClient.from('call_transcripts').select('*');
+    assert(saleRes.error !== null || !saleRes.data || saleRes.data.length === 0, 'Reg 16: Direct SELECT on call_transcripts by SALE client is denied', 'REAL LOCAL SUPABASE');
+
+    const techRes = await techClient.from('call_transcripts').select('*');
+    assert(techRes.error !== null || !techRes.data || techRes.data.length === 0, 'Reg 16: Direct SELECT on call_transcripts by TECHNICIAN client is denied', 'REAL LOCAL SUPABASE');
+
+    const bossRes = await bossClient.from('call_transcripts').select('*');
+    assert(bossRes.error !== null || !bossRes.data || bossRes.data.length === 0, 'Reg 16: Direct SELECT on call_transcripts by BOSS client is denied (must use audited server path)', 'REAL LOCAL SUPABASE');
+  }
+
+  // Reg 17: Service role bounded RPC access integrity
+  {
+    // Correct company + call
+    const { data: validData, error: validErr } = await adminClient.rpc('get_call_transcript', {
+      p_company_id: COMPANY_A_ID,
+      p_call_id: CALL_A_ID,
+    });
+    assert(
+      !validErr && validData && validData.length === 1 && validData[0].id === TRANSCRIPT_A_ID,
+      'Reg 17: Bounded RPC returns exactly 1 row for correct (company_id, call_id) pair',
+      'REAL LOCAL SUPABASE'
+    );
+
+    // Cross-tenant company_id
+    const { data: wrongCompanyData } = await adminClient.rpc('get_call_transcript', {
+      p_company_id: COMPANY_B_ID,
+      p_call_id: CALL_A_ID,
+    });
+    assert(
+      !wrongCompanyData || wrongCompanyData.length === 0,
+      'Reg 17: Bounded RPC returns 0 rows when company_id does not match call tenant',
+      'REAL LOCAL SUPABASE'
+    );
+
+    // Non-existent call_id
+    const { data: wrongCallData } = await adminClient.rpc('get_call_transcript', {
+      p_company_id: COMPANY_A_ID,
+      p_call_id: '00000000-0000-0000-0000-000000000099',
+    });
+    assert(
+      !wrongCallData || wrongCallData.length === 0,
+      'Reg 17: Bounded RPC returns 0 rows for non-existent call_id',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
+  // Reg 18: Boss verbatim transcript read & mandatory audit
+  {
+    const { actor, call } = await authorizeCallAccess(CALL_A_ID, bossClient);
+    assert(
+      actor.role === 'BOSS_ADMIN' && call.id === CALL_A_ID,
+      'Reg 18: authorizeCallAccess authorizes Boss and returns call record',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const transcriptDto = await getVerbatimCallTranscript(CALL_A_ID, bossClient);
+    assert(
+      transcriptDto.id === TRANSCRIPT_A_ID &&
+      transcriptDto.companyId === COMPANY_A_ID &&
+      transcriptDto.callId === CALL_A_ID &&
+      typeof transcriptDto.transcript === 'string' &&
+      transcriptDto.transcript.length > 0,
+      'Reg 18: Boss successfully retrieves verbatim transcript via audited trusted-server path',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const { data: audits } = await adminClient
+      .from('audit_logs')
+      .select('*')
+      .eq('action', 'VIEW_CALL_TRANSCRIPT')
+      .eq('resource_id', CALL_A_ID)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    assert(
+      audits !== null &&
+      audits.length === 1 &&
+      audits[0].result === 'SUCCESS' &&
+      audits[0].company_id === COMPANY_A_ID &&
+      audits[0].metadata?.call_id === CALL_A_ID &&
+      !JSON.stringify(audits[0].metadata).includes(transcriptDto.transcript) &&
+      !JSON.stringify(audits[0].metadata).includes('0988111222'),
+      'Reg 18: Mandatory audit log created BEFORE transcript return with zero transcript or phone in metadata',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
+  // Reg 19: Audit failure fails closed (Transcript NEVER returned)
+  {
+    const mockFailingAdminClient = new Proxy(adminClient, {
+      get(target, prop, receiver) {
+        if (prop === 'from') {
+          return (tableName: string) => {
+            if (tableName === 'audit_logs') {
+              return {
+                insert: async () => ({
+                  data: null,
+                  error: {
+                    message: 'Database connection lost during audit write',
+                    code: '50000',
+                  },
+                }),
+              };
+            }
+            return target.from(tableName);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as SupabaseClient;
+
+    let auditFailedClosed = false;
+    try {
+      await getVerbatimCallTranscript(CALL_A_ID, {
+        client: bossClient,
+        overrideAdminClient: mockFailingAdminClient,
+      });
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 500 && err.code === 'AUDIT_WRITE_FAILED') {
+        auditFailedClosed = true;
+      }
+    }
+    assert(
+      auditFailedClosed,
+      'Reg 19: Forced audit-write failure fails closed (500 AUDIT_WRITE_FAILED) and transcript is NOT returned',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
+  // Reg 20: SALE and TECHNICIAN denial (including SALE own-call)
+  {
+    let saleDenied = false;
+    try {
+      await getVerbatimCallTranscript(CALL_A_ID, saleClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        saleDenied = true;
+      }
+    }
+    assert(saleDenied, 'Reg 20: SALE is denied verbatim call transcript (403 ROLE_FORBIDDEN)', 'REAL LOCAL SUPABASE');
+
+    // Even if SALE is the agent on that call
+    let saleOwnCallDenied = false;
+    try {
+      await getVerbatimCallTranscript(CALL_A_ID, saleClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        saleOwnCallDenied = true;
+      }
+    }
+    assert(saleOwnCallDenied, 'Reg 20: SALE is denied verbatim call transcript even for own call (403 ROLE_FORBIDDEN)', 'REAL LOCAL SUPABASE');
+
+    let techDenied = false;
+    try {
+      await getVerbatimCallTranscript(CALL_A_ID, techClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 403 && err.code === 'ROLE_FORBIDDEN') {
+        techDenied = true;
+      }
+    }
+    assert(techDenied, 'Reg 20: TECHNICIAN is denied verbatim call transcript (403 ROLE_FORBIDDEN)', 'REAL LOCAL SUPABASE');
+  }
+
+  // Reg 21: Tenant-masked resource denial (Cross-company Boss)
+  {
+    let crossCompanyDenied = false;
+    try {
+      await getVerbatimCallTranscript(CALL_B_ID, bossClient);
+    } catch (err: unknown) {
+      if (err instanceof ServerAuthError && err.status === 404 && err.code === 'RESOURCE_NOT_FOUND') {
+        crossCompanyDenied = true;
+      }
+    }
+    assert(
+      crossCompanyDenied,
+      'Reg 21: Cross-company Boss access to call transcript is masked as 404 RESOURCE_NOT_FOUND',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
+  // Reg 22: Production AAL2 enforcement
+  {
+    const originalEnv = process.env.NODE_ENV;
+    try {
+      (process.env as Record<string, string | undefined>)['NODE_ENV'] = 'production';
+      let aal1Denied = false;
+      try {
+        await getVerbatimCallTranscript(CALL_A_ID, bossClient);
+      } catch (err: unknown) {
+        if (err instanceof ServerAuthError && err.status === 403 && err.code === 'MFA_REQUIRED') {
+          aal1Denied = true;
+        }
+      }
+      assert(
+        aal1Denied,
+        'Reg 22: Boss at AAL1 in production environment is rejected with 403 MFA_REQUIRED',
+        'REAL LOCAL SUPABASE'
+      );
+    } finally {
+      (process.env as Record<string, string | undefined>)['NODE_ENV'] = originalEnv;
+    }
+  }
+
+  // Reg 23: Server Action boundary verification for getCallTranscriptAction
+  {
+    const unauthResult = await internalGetCallTranscriptAction({ callId: CALL_A_ID }, createAnonClient());
+    assert(!unauthResult.success, 'Reg 23: internalGetCallTranscriptAction rejects unauthenticated call', 'REAL LOCAL SUPABASE');
+
+    const bossActionResult = await internalGetCallTranscriptAction({ callId: CALL_A_ID }, bossClient);
+    assert(
+      bossActionResult.success && bossActionResult.data?.id === TRANSCRIPT_A_ID,
+      'Reg 23: internalGetCallTranscriptAction succeeds for authorized Boss',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const saleActionResult = await internalGetCallTranscriptAction({ callId: CALL_A_ID }, saleClient);
+    assert(
+      !saleActionResult.success && saleActionResult.error === 'ROLE_FORBIDDEN',
+      'Reg 23: internalGetCallTranscriptAction rejects SALE with ROLE_FORBIDDEN',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const techActionResult = await internalGetCallTranscriptAction({ callId: CALL_A_ID }, techClient);
+    assert(
+      !techActionResult.success && techActionResult.error === 'ROLE_FORBIDDEN',
+      'Reg 23: internalGetCallTranscriptAction rejects TECHNICIAN with ROLE_FORBIDDEN',
+      'REAL LOCAL SUPABASE'
+    );
+
+    const crossActionResult = await internalGetCallTranscriptAction({ callId: CALL_B_ID }, bossClient);
+    assert(
+      !crossActionResult.success && crossActionResult.error === 'RESOURCE_NOT_FOUND',
+      'Reg 23: internalGetCallTranscriptAction masks cross-company call as RESOURCE_NOT_FOUND',
+      'REAL LOCAL SUPABASE'
+    );
+  }
+
 
   console.log('==================================================');
   console.log(`TEST RESULTS: ${passCount} PASSED, ${failCount} FAILED`);

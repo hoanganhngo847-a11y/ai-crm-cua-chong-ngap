@@ -52,8 +52,7 @@ function resolveCallProvider(injectedProvider?: CallProvider): CallProvider {
  *
  * Flow:
  * 1. Authorize actor & customer resource:
- *    - SALE: allowed.
- *    - BOSS_ADMIN: Configuration-dependent per frozen DATA_CONTRACT:1072. Fails closed until business config exists.
+ *    - BOSS_ADMIN and SALE: allowed by the frozen Foundation policy.
  *    - TECHNICIAN: Strictly prohibited.
  * 2. Privately resolve customer raw phone inside trusted server memory.
  * 3. Durable Call Record: Create 'INITIATED' call record in database BEFORE dialing external provider.
@@ -75,7 +74,7 @@ export async function executeClickToCall(
   const provider = resolveCallProvider(callProvider);
 
   // 1. Authorize customer access with CLICK_TO_CALL purpose
-  // Fixed policy: SALE only. (Boss fails closed as configuration-dependent; Tech forbidden)
+  // Fixed policy: BOSS_ADMIN and SALE allowed; TECHNICIAN forbidden.
   const { actor, customer } = await authorizeCustomerAccess(
     params.customerId,
     CONTACT_ACCESS_PURPOSES.CLICK_TO_CALL,
@@ -102,6 +101,8 @@ export async function executeClickToCall(
       company_id: customer.company_id,
       customer_id: customer.id,
       direction: 'OUTBOUND',
+      // `agent_type = SALE` is the existing schema's human outbound-agent category.
+      // The actual RBAC actor (SALE or BOSS_ADMIN) is preserved in audit_logs.user_id.
       agent_type: 'SALE',
       started_at: new Date().toISOString(),
       status: 'INITIATED',

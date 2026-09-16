@@ -2,7 +2,7 @@
 
 > **Tài liệu Thiết kế Lược đồ Cơ sở Dữ liệu Vật lý (Physical Schema Blueprint)**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ kiến trúc Lược đồ CSDL vật lý (Physical Schema Blueprint) và 9 Quyết định Schema Open Decisions 01–09 đã được chốt và đóng băng; chuẩn bị cho pha Migration 001.
+> **Trạng thái:** FOUNDATION FINALIZATION — Migration 001–004 đã hoàn thành. Migration 001–003 đóng băng; Migration 004 đã chuyển `call_transcripts` sang ranh giới `private` an toàn.
 > **Tham chiếu hợp đồng bất biến:** `docs/PROJECT_MASTER.md`, `docs/DATA_CONTRACT.md`, `docs/AUTH_DESIGN.md`, `docs/SUPABASE_RLS_DESIGN.md`.
 
 ---
@@ -74,13 +74,13 @@
   - `finance_summaries`: Bảng tổng hợp tài chính phục vụ Sếp/Admin quản trị và báo cáo, được đồng bộ từ `contracts`, `payment_transactions` và tiến độ lắp đặt.
 
 ### 2.5. Chính sách đột biến dữ liệu lịch sử (Historical Data Mutation Policy)
-Khóa ngoại với hành vi `ON DELETE RESTRICT` chỉ bảo đảm tính toàn vẹn khi có bảng con tham chiếu, **hoàn toàn không ngăn cản được lệnh `DELETE` trực tiếp trên chính bảng đó nếu không có quan hệ con**. Do đó, toàn bộ 29 bảng vật lý được phân loại vào 4 nhóm chính sách quản lý đột biến dữ liệu:
+Khóa ngoại với hành vi `ON DELETE RESTRICT` chỉ bảo đảm tính toàn vẹn khi có bảng con tham chiếu, **hoàn toàn không ngăn cản được lệnh `DELETE` trực tiếp trên chính bảng đó nếu không có quan hệ con**. Do đó, toàn bộ 30 bảng vật lý được phân loại vào 4 nhóm chính sách quản lý đột biến dữ liệu:
 
 1. **Nhóm A — Strict Append-Only (Chỉ thêm mới tuyệt đối):**
    - *Bảng áp dụng:* `audit_logs`, `customer_stage_histories`.
    - *Quy tắc:* Tuyệt đối cấm thao tác `UPDATE` và `DELETE` từ ứng dụng. Mọi sự kiện mới chỉ được `INSERT`. Sẽ được bảo vệ bằng việc không cấp quyền `UPDATE`/`DELETE` cho các DB roles của ứng dụng và kích hoạt trigger phòng thủ chặn xóa/sửa.
 2. **Nhóm B — Source/Historical Event Records (Bản ghi sự kiện nguồn và lịch sử):**
-   - *Bảng áp dụng:* `interactions`, `ai_analyses`, `call_transcripts`.
+   - *Bảng áp dụng:* `interactions`, `ai_analyses`, `private.call_transcripts`.
    - *Quy tắc:* Nội dung gốc không được phép ghi đè ngầm làm mất dấu vết. Mọi sự điều chỉnh (nếu có từ nhà mạng hoặc sửa tin) phải giữ nguyên bản ghi gốc hoặc ghi nhận qua cơ chế version/audit. Cấm `DELETE` cứng từ client.
 3. **Nhóm C — Stateful Non-Deletable Records (Bản ghi tiến trình có trạng thái, cấm xóa cứng):**
    - *Bảng áp dụng:* `customers`, `orders`, `payment_transactions`, `care_deliveries`, `calls`, `call_attempts`, `appointments`, `surveys`, `installations`, `warranty_tickets`, `company_members`.
@@ -122,13 +122,13 @@ graph TD
         Note2[Chỉ Trusted Server & Security Definer RPC truy cập]
     end
 
-    SALE_UI[SALE Trình duyệt] -->|1. Bấm Gọi KH-000182: Chỉ gửi customer_id| Server[Trusted Server / Edge Function]
-    Server -->|2. Kiểm tra Role SALE & CompanyMember| AuthZ{Hợp lệ?}
+    CALLER_UI[BOSS_ADMIN hoặc SALE Trình duyệt] -->|1. Bấm Gọi KH-000182: Chỉ gửi customer_id| Server[Trusted Server / Edge Function]
+    Server -->|2. Kiểm tra allowed role & CompanyMember| AuthZ{Hợp lệ?}
     AuthZ -->|Yes: Gọi hàm nội bộ an toàn| CPC
     CPC -->|3. Trả raw_phone trong bộ nhớ server| Server
     Server -->|4. Gửi lệnh quay số tới SIP/Tổng đài| PBX[Hệ thống Tổng đài / Hotline]
     PBX -->|5. Đổ chuông điện thoại| CustomerPhone[Điện thoại Khách]
-    Server -->|6. Chỉ trả về call_id / status| SALE_UI
+    Server -->|6. Chỉ trả về call_id / status| CALLER_UI
 ```
 
 1. **Bảng `public.customers` (CRM-Visible Profile):**
@@ -141,7 +141,7 @@ graph TD
    - Chỉ có dịch vụ máy chủ tin cậy (Next.js Server Actions / API Routes chạy bằng Service Role Key sau khi authorize actor) hoặc các hàm PostgreSQL chuyên biệt (`SECURITY DEFINER`) mới có quyền truy vấn.
 3. **Quy tắc cho hàm xử lý cuộc gọi và quyền xem của Sếp:**
    - Các hàm `SECURITY DEFINER` truy cập vào `private.customer_private_contacts` bắt buộc phải thiết lập tường minh `SET search_path = private, pg_temp` và định danh đầy đủ schema của đối tượng để chống tấn công search_path injection.
-   - Khi SALE bấm gọi: Hàm chỉ truyền `customer_id` hoặc `interaction_id`, trả về kết quả vận hành (ví dụ: `call_id`, `status = 'INITIATED'`), **tuyệt đối không trả về chuỗi số điện thoại**.
+   - Khi `BOSS_ADMIN` hoặc `SALE` bấm gọi: Hàm chỉ truyền `customer_id` hoặc `interaction_id`, trả về kết quả vận hành (ví dụ: `call_id`, `status = 'INITIATED'`), **tuyệt đối không trả về chuỗi số điện thoại**. `TECHNICIAN` bị từ chối.
    - Quyền xem số điện thoại thật của `BOSS_ADMIN` phải thông qua API riêng có ghi vết bắt buộc vào `audit_logs`.
 4. **Bảo vệ danh tính liên hệ trong bảng `identities` bằng Keyed HMAC:**
    - Trường hợp `channel = 'phone'`: Cột `external_id` **bắt buộc không được lưu chuỗi số điện thoại thô hay số chuẩn hóa**.
@@ -156,7 +156,7 @@ graph TD
    - Áp dụng nguyên tắc **FAIL CLOSED** và phân định trạng thái làm sạch:
      - `PENDING` $\rightarrow$ SALE không nhận nội dung.
      - `FAILED` $\rightarrow$ SALE không nhận nội dung; lỗi làm sạch tuyệt đối không bao giờ fallback về raw content (`FAILED NEVER FALLS BACK TO RAW`).
-     - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phép phát hành cho SALE. Đối với mọi tương tác chứa nội dung văn bản do khách hàng tạo (customer-generated textual content), SALE CHỈ ĐƯỢC NHẬN nội dung khi và chỉ khi `sanitization_status = 'SUCCEEDED'`.
+     - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phép phát hành cho SALE đối với interaction thông thường. Riêng interaction thoại (`CALL_EVENT`, `PHONE`, `AI_VOICE`) có textual payload luôn bị từ chối trên SALE-facing path; verbatim transcript không thuộc zone này. Đối với nội dung văn bản do khách hàng tạo ở các kênh được phép, SALE CHỈ ĐƯỢC NHẬN khi và chỉ khi `sanitization_status = 'SUCCEEDED'`.
      - `NOT_REQUIRED` $\rightarrow$ **chỉ được phép sử dụng cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập** mà việc làm sạch là thực sự không cần thiết (ví dụ: status event, telephony signaling event). Tuyệt đối KHÔNG BAO GIỜ được dùng `NOT_REQUIRED` để qua mặt hoặc bỏ qua quy trình làm sạch (must never be used to bypass the sanitizer).
 
 ---
@@ -237,7 +237,7 @@ Mỗi bảng vật lý trong cơ sở dữ liệu được xếp vào một tron
 
 1. **DIRECT COMPANY SCOPE (Phạm vi công ty trực tiếp):**
    - Bảng chứa cột `company_id uuid NOT NULL REFERENCES companies(id)`.
-   - Áp dụng cho: `company_members`, `customers`, `private.customer_private_contacts`, `private.interaction_raw_contents`, `customer_stage_histories`, `identities`, `interactions`, `conversations`, `calls`, `call_attempts`, `appointments`, `surveys`, `pricing_policies`, `price_calculations`, `payment_transactions`, `orders`, `contracts`, `production_orders`, `installations`, `finance_summaries`, `care_campaigns`, `care_deliveries`, `care_schedules`, `ai_analyses`, `sales_style_profiles`, `warranty_tickets`, `audit_logs`.
+   - Áp dụng cho: `company_members`, `customers`, `private.customer_private_contacts`, `private.interaction_raw_contents`, `private.call_transcripts`, `customer_stage_histories`, `identities`, `interactions`, `conversations`, `calls`, `call_attempts`, `appointments`, `surveys`, `pricing_policies`, `price_calculations`, `payment_transactions`, `orders`, `contracts`, `production_orders`, `installations`, `finance_summaries`, `care_campaigns`, `care_deliveries`, `care_schedules`, `ai_analyses`, `sales_style_profiles`, `warranty_tickets`, `audit_logs`.
 2. **INFERRED COMPANY SCOPE (Phạm vi công ty suy diễn qua quan hệ cha):**
    - Về mặt lý thuyết ở `DATA_CONTRACT.md`, một số thực thể con như `contracts`, `production_orders`, `installations`, `finance_summaries`, `call_transcripts` có thể suy diễn company qua `order_id` hoặc `call_id`.
    - **Đánh giá thiết kế schema vật lý:** Toàn bộ các bảng này đều được bổ sung cột `company_id NOT NULL` trực tiếp để tối ưu hóa hiệu năng RLS và thiết lập các ràng buộc khóa ngoại phức hợp (`Composite Foreign Keys`) bảo vệ dữ liệu không bị trỏ nhầm công ty.
@@ -266,7 +266,7 @@ Mỗi bảng vật lý trong cơ sở dữ liệu được xếp vào một tron
 
 ## 6. Physical Table Catalog
 
-Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc schema `public` + 2 bảng thuộc schema `private`: `customer_private_contacts` và `interaction_raw_contents`). Thực thể logic `AccessPolicy` được hiện thực hóa qua ma trận phân quyền, hàm kiểm tra và RLS, không tạo bảng vật lý dư thừa.
+Hệ thống gồm **30 bảng vật lý** (27 bảng thuộc schema `public` + 3 bảng thuộc schema `private`: `customer_private_contacts`, `interaction_raw_contents`, `call_transcripts`). Migration 004 đã chuyển `call_transcripts` sang private boundary. Thực thể logic `AccessPolicy` không tạo bảng vật lý.
 
 ---
 
@@ -494,7 +494,7 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Nguyên tắc FAIL CLOSED và Ranh giới Sanitization:
     - `PENDING` $\rightarrow$ không có nội dung cho SALE.
     - `FAILED` $\rightarrow$ không có nội dung cho SALE; thất bại làm sạch tuyệt đối KHÔNG fallback về raw content (`FAILED NEVER FALLS BACK TO RAW`).
-    - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phát hành cho SALE. Nếu một tương tác chứa nội dung văn bản do khách hàng tạo ra (customer-generated text), SALE CHỈ ĐƯỢC PHÉP NHẬN nội dung khi `sanitization_status = 'SUCCEEDED'`.
+    - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phát hành cho SALE đối với interaction thông thường. Riêng interaction thoại (`CALL_EVENT`, `PHONE`, `AI_VOICE`) có textual payload luôn bị từ chối trên SALE-facing path; verbatim transcript không thuộc zone này. Nếu một interaction textual ở kênh được phép chứa nội dung do khách hàng tạo, SALE CHỈ ĐƯỢC PHÉP NHẬN khi `sanitization_status = 'SUCCEEDED'`.
     - `NOT_REQUIRED` $\rightarrow$ CHỈ ĐƯỢC PHÉP ÁP DỤNG cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập (ví dụ: system status change, telephony signaling event) mà việc làm sạch là thực sự không cần thiết. Tuyệt đối KHÔNG BAO GIỜ được dùng `NOT_REQUIRED` để qua mặt (bypass) quy trình làm sạch.
   - Ràng buộc khai báo: `(company_id, customer_id, conversation_id)` bảo đảm hội thoại bắt buộc thuộc cùng một Company và cùng một Customer.
   - Ràng buộc động qua Trigger:
@@ -528,6 +528,7 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - Đặt trong schema `private`, cấm toàn bộ quyền `SELECT`, `INSERT`, `UPDATE`, `DELETE` đối với các vai trò `anon` và `authenticated`.
   - Tuyệt đối không phơi bày ra giao diện người dùng của `SALE` hay `TECHNICIAN`, không xuất hiện trong API thông thường, client props, DOM hay browser logs.
   - Chỉ có dịch vụ máy chủ tin cậy (Next.js Server Actions chạy Service Role sau khi xác thực quyền) và Worker làm sạch dữ liệu (`Sanitization Worker`) mới được phép truy xuất để trích xuất PII, tính toán bản phái sinh và ghi kết quả làm sạch sang `public.interactions.sanitized_content`.
+  - Bảng này lưu raw source của một `Interaction` theo quan hệ 1:1 `interaction_id`; không dùng để lưu verbatim call transcript dẫn xuất từ recording. Nó không có quan hệ canonical `call_id` và không mang semantics/versioning của transcript.
   - Không bao giờ xóa hoặc làm biến dạng nội dung gốc nhằm bảo toàn bằng chứng kiểm toán kỹ thuật số (Strict Append-Only Evidence).
 
 ---
@@ -594,6 +595,7 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
     `idx_calls_provider_call` UNIQUE (`company_id`, `provider`, `provider_call_id`) WHERE `provider_call_id IS NOT NULL`
   - Index: `idx_calls_lookup` (`company_id`, `customer_id`, `started_at` DESC)
 - **Invariants:** Cuộc gọi Hotline inbound không thuộc chu kỳ gọi lại và không được làm tăng lần thử `CallAttempt`. Provider correlation & webhook idempotency được chuẩn hóa theo Schema Decision 09.
+- `agent_type = 'SALE'` là category vận hành cho human outbound call trong schema hiện tại, không phải bản sao RBAC role. Khi `BOSS_ADMIN` khởi tạo Click-to-Call, danh tính actor thật được bảo toàn tại `audit_logs.user_id`; không cần mở rộng enum chỉ để cấp quyền gọi.
 
 ---
 
@@ -628,10 +630,10 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 
 ---
 
-### 6.12. Bảng `call_transcripts`
-- **Purpose:** Nội dung cuộc gọi được chuyển thành văn bản để phục vụ đánh giá, phân tích AI và học phong cách.
+### 6.12. Bảng `private.call_transcripts` (Migration 004 completed)
+- **Purpose:** Verbatim transcript chép nguyên văn nội dung đã được nói trong cuộc gọi, phục vụ kiểm toán và AI trong phạm vi được phép; không phải summary, paraphrase, CRM note hay sanitized derivative cho SALE.
 - **Tenant Scope:** INFERRED (kèm direct `company_id` để tăng tốc RLS).
-- **Sensitive Classification:** DỮ LIỆU NHẠY CẢM (Có thể chứa thông tin cá nhân/địa chỉ phát ngôn).
+- **Sensitive Classification:** DỮ LIỆU TỐI MẬT (giữ nguyên số điện thoại, địa chỉ, số tiền và PII được nói).
 - **ON DELETE Behavior:** `ON DELETE RESTRICT`.
 
 | Column | Type | Null | Default | Constraint | Notes |
@@ -639,7 +641,7 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
 | `id` | `uuid` | NOT NULL | `gen_random_uuid()` | PK | Định danh bản transcript |
 | `company_id` | `uuid` | NOT NULL | | FK `companies(id)` | Doanh nghiệp |
 | `call_id` | `uuid` | NOT NULL | | FK `calls(id)`, UNIQUE | Cuộc gọi tương ứng (quan hệ 1:1) |
-| `transcript` | `text` | NOT NULL | | | Nội dung hội thoại dạng văn bản |
+| `transcript` | `text` | NOT NULL | | | Nội dung nguyên văn; chỉ thêm punctuation/line breaks/timestamps, không đổi ý hoặc che PII |
 | `speakers` | `jsonb` | NOT NULL | `'[]'::jsonb` | | Danh sách câu thoại theo vai nói |
 | `processed_at` | `timestamptz` | NOT NULL | `now()` | | Thời điểm hoàn tất xử lý |
 | `language` | `text` | NOT NULL | `'vi'` | | Ngôn ngữ nhận dạng |
@@ -649,7 +651,8 @@ Hệ thống bao gồm **30 bảng vật lý** hoàn chỉnh (28 bảng thuộc 
   - PK: `pk_call_transcripts` (`id`)
   - FK Phức hợp: `fk_call_transcripts_call` (`company_id`, `call_id`) REFERENCES calls(`company_id`, `id`) ON DELETE RESTRICT
   - UNIQUE: `uq_call_transcripts_call_id` (`call_id`)
-- **Invariants:** Gắn chặt 1:1 với `Call`. Phải được bảo vệ quyền truy cập chặt chẽ.
+- **Invariants:** Gắn chặt 1:1 với `Call`. Chỉ `BOSS_ADMIN` được đọc qua Trusted Server có MFA/AAL2 và audit; `SALE`/`TECHNICIAN` bị cấm. AI Worker là machine identity bounded theo job. `public.interactions.sanitized_content` tuyệt đối không chứa verbatim transcript.
+- **Migration gate:** Migration 004 (`20260916000001_private_call_transcripts.sql`) đã chuyển `public.call_transcripts` sang `private.call_transcripts`, thu hồi toàn bộ direct client grants, thiết lập RPC bounded `public.get_call_transcript` theo `(company_id, call_id)` cho `service_role`, bảo toàn dữ liệu và cập nhật trusted-server access. Không sửa Migration 001–003.
 
 ---
 
@@ -1289,7 +1292,7 @@ Toàn bộ các mối quan hệ giữa các thực thể mang phạm vi tenant �
    - `interactions`: `FK (company_id, customer_id, conversation_id) REFERENCES conversations(company_id, customer_id, id) ON DELETE RESTRICT`
 7. **Nhóm quan hệ từ `calls` (`UNIQUE (company_id, customer_id, id)` và `UNIQUE (company_id, id)`):**
    - `call_attempts`: `FK (company_id, customer_id, call_id) REFERENCES calls(company_id, customer_id, id) ON DELETE RESTRICT`
-   - `call_transcripts`: `FK (company_id, call_id) REFERENCES calls(company_id, id) ON DELETE RESTRICT`
+   - `private.call_transcripts`: `FK (company_id, call_id) REFERENCES calls(company_id, id) ON DELETE RESTRICT`
 8. **Nhóm quan hệ từ `pricing_policies` (`UNIQUE (company_id, id, version)`):**
    - `price_calculations`: `FK (company_id, pricing_policy_id, policy_version) REFERENCES pricing_policies(company_id, id, version) ON DELETE RESTRICT`
 9. **Nhóm quan hệ từ `care_campaigns` (`UNIQUE (company_id, id)`):**
@@ -1504,12 +1507,11 @@ Chỉ mục cơ sở dữ liệu được thiết kế bám sát các luồng ng
 ### 10.1. Phân vùng Bucket trong Supabase Storage
 Cơ sở dữ liệu chỉ lưu trữ đường dẫn tham chiếu siêu dữ liệu (`bucket_id/object_path`), tuyệt đối không lưu tệp nhị phân (`binary/blob`) trực tiếp trong PostgreSQL.
 
-Hệ thống thiết lập **5 Buckets chuyên dụng**, toàn bộ đều cấu hình **`public = false` (Private Buckets)**:
+Foundation thiết lập **4 buckets canonical**, toàn bộ đều cấu hình **`public = false` (Private Buckets)**:
 1. **`survey-photos` (Private):** Chứa ảnh chụp hiện trường đo đạc, cửa ra vào, mặt tiền nhà khách hàng.
 2. **`call-recordings` (Private):** Chứa tệp âm thanh ghi âm cuộc gọi của khách hàng với tổng đài AI hoặc nhân viên SALE.
 3. **`contracts` (Private):** Chứa bản PDF hợp đồng do hệ thống sinh và bản scan hợp đồng đã có chữ ký/con dấu của khách.
-4. **`installation-handover` (Private):** Chứa ảnh chụp nghiệm thu hoàn thiện và biên bản bàn giao có chữ ký hai bên.
-5. **`warranty-evidence` (Private):** Chứa video/ảnh phản ánh lỗi rò rỉ nước, cong vênh cửa từ khách hàng gửi về.
+4. **`installation-docs` (Private):** Chứa ảnh chụp nghiệm thu hoàn thiện và biên bản bàn giao có chữ ký hai bên.
 
 ### 10.2. Cơ chế phân phối an toàn (Signed URL Delivery — Storage Decision 01 FROZEN)
 - Trình duyệt client không bao giờ có link tĩnh vĩnh viễn tới các tệp nhạy cảm.
@@ -1564,11 +1566,11 @@ Dưới đây là các quyết định thiết kế đã được phân tích th
 Các quyết định bảo mật sống còn của hệ thống:
 
 1. **Quy trình bấm gọi không lộ số (Zero-Phone-Exposure Outbound Calling):**
-   - SALE bấm nút "GỌI KHÁCH" trên UI → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`.
-   - Máy chủ tin cậy nhận yêu cầu, xác thực caller là SALE active trong Company và phân giải Customer mục tiêu cùng Company.
+   - `BOSS_ADMIN` hoặc `SALE` bấm nút "GỌI KHÁCH" trên UI → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`; `TECHNICIAN` bị từ chối.
+   - Máy chủ tin cậy nhận yêu cầu, xác thực caller là `BOSS_ADMIN` hoặc `SALE` active trong Company và phân giải Customer mục tiêu cùng Company; `TECHNICIAN` bị từ chối.
    - Máy chủ lấy `raw_phone` từ `private.customer_private_contacts` trong phiên bảo mật riêng và chuyển thẳng số tới tổng đài qua API Server-to-Server.
-   - Phản hồi trả về SALE chỉ chứa `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ dấu vết số điện thoại nào lọt về trình duyệt hay console log.
-   - Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, sanitized transcript và error message. Nội dung chứa số điện thoại phải fail closed, không được gắn nhãn sanitized rồi phát hành.
+   - Phản hồi chỉ chứa `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ dấu vết số điện thoại nào lọt về trình duyệt hay console log.
+   - Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, sanitized interaction và error message. Verbatim transcript không có bản phát hành trực tiếp cho SALE/TECH.
 2. **Ẩn danh hóa số điện thoại trong bảng `identities` bằng Keyed HMAC:**
    - Trường `external_id` khi nhận diện kênh điện thoại bắt buộc lưu bằng Keyed HMAC (HMAC-SHA256 với server secret key).
    - Tuyệt đối không lưu raw phone hoặc normalized phone trong `identities.metadata`.
@@ -1582,6 +1584,11 @@ Các quyết định bảo mật sống còn của hệ thống:
 5. **Làm sạch dữ liệu kiểm toán (Sanitized Audit Logs):**
    - Trigger và API ghi `audit_logs` sẽ được thiết kế để tự động lọc bỏ các trường nhạy cảm (`raw_phone`, token, secret, mật khẩu).
    - Dữ liệu `metadata` trong audit log chỉ lưu ID tham chiếu và các cờ trạng thái tóm tắt.
+6. **Verbatim Transcript và AI Worker:**
+   - Transcript giữ nguyên lời nói và PII; chỉ `BOSS_ADMIN` được xem qua privileged Trusted Server có MFA/AAL2 và audit. `SALE`/`TECHNICIAN` bị cấm.
+   - `public.interactions.sanitized_content` không được dùng cho verbatim call transcript. CRM extracted data là derivative riêng, chưa triển khai trong lượt này.
+   - AI Transcription Worker là machine identity server-side, least privilege, chỉ được xử lý recording/job được giao; Service Role không phải authorization.
+   - Machine credential/job identity implementation được hoãn sang AI/background processing module; user-session worker purposes tiếp tục fail closed.
 
 ---
 
@@ -1653,7 +1660,7 @@ Thứ tự thực thi tạo bảng an toàn (Dependency-Safe Creation Order), tr
 9b. private.interaction_raw_contents
 10. calls
 11. call_attempts
-12. call_transcripts
+12. private.call_transcripts (sau Migration 004)
 
 -- [Nhóm 4: Hiện trường, Bảng giá & Tính giá]
 13. appointments
@@ -1699,13 +1706,13 @@ Toàn bộ các quyết định kiến trúc và lược đồ đã được gi�
 - [x] **Chốt Open Decision 08 (Survey Draft / Completion Lifecycle):** Quyết định vòng đời Survey tạo một lần khi hoàn tất (`completed_by` & `completed_at` NOT NULL).
 - [x] **Chốt lifecycle phân công kỹ thuật viên thuộc Open Decisions 07/08:** `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS` cấp quyền; `COMPLETED`, `CANCELLED`, `REJECTED` kết thúc quyền; quyền lịch sử không phát sinh từ `completed_by`.
 - [x] **Chốt Open Decision 09 (Call Provider Correlation & Webhook Idempotency):** Thống nhất cột `provider`, `provider_call_id` và partial unique index trên bảng `calls`.
-- [x] **Phê duyệt Ranh giới Schema vật lý `private`:** Thống nhất bảo mật schema `private` cho cả 2 bảng `customer_private_contacts` và `interaction_raw_contents`.
+- [x] **Phê duyệt Ranh giới Schema vật lý `private`:** Thống nhất bảo mật schema `private` cho cả 3 bảng `customer_private_contacts`, `interaction_raw_contents` và `call_transcripts` (sau Migration 004).
 - [x] **Phê duyệt Thiết kế Hợp đồng có phiên bản (`contracts` revisioning):** Phê duyệt cơ chế versioning và partial index `is_current = true`.
 - [x] **Phê duyệt Chính sách đột biến dữ liệu lịch sử (Historical Data Mutation Policy):** Xác nhận phân loại 4 nhóm dữ liệu và giải pháp kỹ thuật chặn xóa/sửa trái phép.
 - [x] **Rà soát nghiệm thu 100% Khóa ngoại phức hợp Same-Company và Same-Customer:** Bảo đảm không còn bất kỳ mối quan hệ con nào có thể trỏ chéo công ty hoặc trỏ chéo khách hàng.
 - [x] **Đặc tả Trigger kiểm tra Thẩm quyền Thành viên và Bất biến Loại lịch hẹn:** Đã hoàn thiện nguyên tắc trigger kiểm tra phân công và tính bất biến loại lịch hẹn.
 - [x] **Thiết kế Helper Functions nhận diện Tenant cho pha RLS:** Đã hoàn thiện và đóng băng trong `SUPABASE_RLS_DESIGN.md`.
-- [x] **Chính sách Supabase Storage & Signed URL TTL (Storage OD01):** Phê duyệt cấu hình 5 bucket private và thời hạn TTL phân tầng (15–60 phút).
+- [x] **Chính sách Supabase Storage & Signed URL TTL (Storage OD01):** Phê duyệt 4 bucket Foundation private (`survey-photos`, `contracts`, `call-recordings`, `installation-docs`) và TTL phân tầng (15–60 phút).
 - [x] **Rà soát chỉ mục cuối cùng:** Loại bỏ hoàn toàn các chỉ mục trùng lặp với các khóa ràng buộc duy nhất.
 
-> **Trạng thái:** FULL DESIGN FREEZE — Thiết kế kiến trúc và lược đồ CSDL vật lý đã được đóng băng hoàn toàn. Dự án sẵn sàng bước vào pha viết mã lệnh Migration 001 (`00001_initial_schema.sql`).
+> **Trạng thái:** FOUNDATION FINALIZATION — Migration 001–003 giữ nguyên; Migration 004 đã hoàn thành ranh giới private transcript và bounded RPC. Foundation Finalization hoàn tất sẵn sàng bàn giao.

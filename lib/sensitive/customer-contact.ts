@@ -21,8 +21,7 @@ export interface CustomerContactAccessOptions {
  * CRITICAL SECURITY INVARIANTS:
  * 1. Strictly server-internal. NEVER return raw contact JSON to browser clients.
  * 2. Authorization is purpose-specific: arbitrary string purposes are forbidden.
- * 3. CLICK_TO_CALL: permitted for SALE only (Boss is configuration-dependent, fails closed).
- *    Strictly denied for TECHNICIAN.
+ * 3. CLICK_TO_CALL: permitted for BOSS_ADMIN and SALE. Strictly denied for TECHNICIAN.
  * 4. PRIVILEGED_ADMIN_OPERATION: permitted for BOSS_ADMIN only, requires MFA AAL2 in production,
  *    sanitizes client reason, and writes a mandatory audit record to public.audit_logs BEFORE
  *    returning raw contact. If audit insert fails, it FAILS CLOSED and never returns raw phone.

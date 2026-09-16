@@ -2,7 +2,7 @@
 
 > **Tài liệu Thiết kế Kiến trúc Phân quyền Cấp Dòng (Row Level Security - RLS) & Ranh giới Dữ liệu**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ các quyết định RLS (01–05), Auth (01–05), Schema (01–09) và Storage (01) đã được chốt và đóng băng (DECIDED / FROZEN); thiết kế kiến trúc hoàn thiện, sẵn sàng unblock cho Migration 001.
+> **Trạng thái:** FOUNDATION FINALIZATION — Migration 001–004 đã hoàn thành. Migration 001–003 đóng băng; Migration 004 đã hoàn tất ranh giới `private.call_transcripts` an toàn và bounded RPC.
 > **Tham chiếu hợp đồng bất biến:**
 > - [`docs/PROJECT_MASTER.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/PROJECT_MASTER.md) (Quy tắc Nghiệp vụ Tổng thể)
 > - [`docs/DATA_CONTRACT.md`](file:///Users/hoangthuy/ai-crm-cua-chong-ngap/docs/DATA_CONTRACT.md) (Quy ước Dữ liệu Chung)
@@ -166,7 +166,7 @@ Mọi chính sách RLS phải thẩm định quyền dựa trên chính `company
 
 ### 4.2. Phân loại Phạm vi Công ty (Company Scope Classification)
 
-Hệ thống phân chia 29 bảng vật lý thành 3 nhóm phạm vi:
+Target sau Migration 004 phân chia 30 bảng vật lý thành 3 nhóm phạm vi; Migration 001–003 vẫn giữ nguyên trong giai đoạn chuyển tiếp:
 
 ```mermaid
 classDiagram
@@ -193,7 +193,7 @@ classDiagram
     }
 
     class InferredCompanyScope {
-        +call_transcripts (qua calls)
+        +private.call_transcripts (qua calls; sau Migration 004)
         +surveys (qua appointments/customers)
         +price_calculations (qua customers)
         +contracts (qua orders)
@@ -432,7 +432,7 @@ Service Role bypass RLS 100% và vì vậy không bao giờ được coi là aut
 
 #### Ngữ cảnh C: Tiến trình Nền / Hệ thống Tự động (Background / System Worker)
 - **Ví dụ nghiệp vụ:**
-  - Worker AI phân tích hội thoại và bóc băng cuộc gọi (`ai_analyses`, `call_transcripts`).
+  - Worker AI phân tích hội thoại và bóc băng cuộc gọi (`ai_analyses`, target `private.call_transcripts`).
   - Bộ lập lịch và gửi tin nhắn chăm sóc tự động (Care Scheduler & Delivery Engine).
   - Tiến trình đồng bộ tổng hợp số liệu tài chính định kỳ (`finance_summaries`).
 - **Đặc thù danh tính:** Chạy tự động theo lịch hoặc hàng đợi (Queue/Cron), **KHÔNG CÓ danh tính người dùng cuối trực tiếp**. Tuyệt đối không phát minh danh tính người dùng giả mạo.
@@ -441,6 +441,8 @@ Service Role bypass RLS 100% và vì vậy không bao giờ được coi là aut
   2. Giới hạn phạm vi tài nguyên công ty rõ ràng (Explicit Bounded Company/Resource Scope) cho từng công việc xử lý.
   3. Tuân thủ phân loại dữ liệu và ủy quyền dữ liệu nguồn (Source-Data Authorization): chỉ đọc và tổng hợp dữ liệu thuộc phạm vi công việc được giao, không trích xuất trái phép dữ liệu nhạy cảm.
   4. Thực hiện các thao tác ghi giới hạn phạm vi theo đúng hợp đồng thiết kế.
+  5. AI Transcription Worker là machine identity server-side, không giả làm role người dùng và không được coi Service Role là authorization. Mỗi job phải ràng buộc `company_id`, `call_id` và recording cụ thể; không được đọc arbitrary tenant/recording, raw phone, payment, contract, user hoặc role.
+  6. Cơ chế machine credential/job identity cụ thể được hoãn sang AI/background processing module. Human session truyền `VOICE_TRANSCRIPTION` hoặc `SANITIZATION_PIPELINE` phải tiếp tục fail closed.
 
 ---
 
@@ -574,7 +576,7 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
   - Danh bạ nhân sự an toàn cùng Company: chỉ nhận `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần qua Safe Staff Directory; không đọc trực tiếp bảng profile/membership đầy đủ.
 - **CẤM TUYỆT ĐỐI TIẾP CẬN HOẶC THAO TÁC:**
   - Bảng số điện thoại thật `private.customer_private_contacts`.
-  - Bản bóc băng thô `call_transcripts.transcript`, tệp ghi âm cuộc gọi gốc trong bucket `call-recordings`, và **nội dung tin nhắn thô trong `private.interaction_raw_contents`** (chống rò rỉ số điện thoại qua dữ liệu phi cấu trúc; SALE chỉ được nhận bản phái sinh đã làm sạch số điện thoại qua `public.interactions.sanitized_content` khi `sanitization_status = 'SUCCEEDED'`).
+  - Verbatim transcript `private.call_transcripts.transcript`, tệp ghi âm cuộc gọi gốc trong bucket `call-recordings`, và **nội dung tin nhắn thô trong `private.interaction_raw_contents`**. SALE không được xem transcript nguyên văn, kể cả cuộc gọi do chính SALE thực hiện. `sanitized_content` chỉ áp dụng cho interaction message phù hợp, không phải transcript.
   - Bảng chính sách/công thức giá gốc `pricing_policies` (chỉ được xem kết quả thương mại đã tính toán).
   - Trực tiếp tạo mới bản ghi tính giá `price_calculations` từ trình duyệt (chỉ Pricing Engine được quyền tạo).
   - Trực tiếp `INSERT` đơn hàng tùy tiện hoặc tự ý sửa đổi `final_amount`, `deposit_status` trên base table `orders` (SALE tuyệt đối không bao giờ được phép tự set `deposit_status = CONFIRMED`).
@@ -602,13 +604,13 @@ Do RLS là cơ chế kiểm soát theo cấp dòng (Row-Level Security), RLS **h
   - Tự ý gọi điện trực tiếp cho khách hàng qua hệ thống.
 
 ### 10.4. Khách vãng lai và Người dùng chưa đăng nhập (`anon` / `unauthenticated`)
-- **TUYỆT ĐỐI CẤM:** Không được phép đọc hoặc ghi bất kỳ dòng dữ liệu nào trên toàn bộ 28 bảng public và bảng private. Mọi chính sách RLS đều áp dụng cho `TO authenticated` hoặc từ chối mặc định.
+- **TUYỆT ĐỐI CẤM:** Không được phép đọc hoặc ghi bất kỳ dòng dữ liệu ứng dụng nào khi chưa có chính sách rõ ràng. Migration 001 hiện có 28 public + 2 private; target sau Migration 004 là 27 public + 3 private. Mọi chính sách RLS đều áp dụng cho `TO authenticated` hoặc từ chối mặc định.
 
 ---
 
 ## 11. Table-by-Table RLS Matrix
 
-Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ **28 bảng vật lý thuộc schema `public`** (Bảng số điện thoại thuộc schema `private` được đặc tả riêng tại Mục 12):
+Dưới đây là ma trận kiểm soát truy cập cho toàn bộ bảng vật lý, bao gồm target `private.call_transcripts` sau Migration 004. Migration 001–003 giữ nguyên trong thời gian chuyển tiếp.
 
 | STT | Tên Bảng Vật lý | Phạm vi Company | Quyền `SELECT` | Quyền `INSERT` | Quyền `UPDATE` | Quyền `DELETE` | Ghi chú Ranh giới Dữ liệu / Cơ chế Thực thi |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -618,11 +620,11 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 | 4 | `customers` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Không có cột phone; TECH chỉ xem qua Appointment; Category E khóa tenant |
 | 5 | `customer_stage_histories`| Direct | BOSS_ADMIN, SALE | Cấm (DB Trigger) | CẤM | CẤM | Strict Append-Only; trigger ghi nhận tự động |
 | 6 | `identities` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Channel phone lưu Keyed HMAC, cấm lưu raw phone |
-| 7 | `interactions` | Direct | BOSS_ADMIN (Full); SALE: Chỉ đọc `sanitized_content` khi `sanitization_status = 'SUCCEEDED'` | Cấm (Webhook/Server Inbound; SALE gửi tin qua Server Path)| CẤM | CẤM | Nội dung thô tách vào `private.interaction_raw_contents`; `public.interactions` chỉ chứa safe metadata và `sanitized_content`; SALE cấm raw SELECT; fail-closed |
+| 7 | `interactions` | Direct | BOSS_ADMIN (Full); SALE: chỉ interaction derivative hợp lệ; CALL_EVENT có textual payload luôn bị từ chối | Cấm (Webhook/Server Inbound; SALE gửi tin qua Server Path)| CẤM | CẤM | `sanitized_content` không chứa verbatim transcript; SALE cấm raw SELECT; fail-closed |
 | 8 | `conversations` | Direct | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | BOSS_ADMIN, SALE | CẤM | Kỹ thuật viên không có quyền truy cập |
 | 9 | `calls` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Metadata cuộc gọi; Server Action/PBX ghi |
 | 10 | `call_attempts` | Direct | BOSS_ADMIN, SALE | Cấm (Server-Only)| Cấm (Server-Only)| CẤM | Lưu vết số lần gọi ra; Server Action/PBX ghi |
-| 11 | `call_transcripts` | Inferred | BOSS_ADMIN (Audit); SALE cấm direct SELECT, chỉ nhận sanitized derivative `SUCCEEDED` qua Server DTO | Cấm (AI Worker)  | CẤM | CẤM | `sanitization_status` thuộc contract derivative đề xuất, không ngụ ý thêm cột vào base table; mọi trạng thái khác fail closed |
+| 11 | `private.call_transcripts` | Direct | Chỉ BOSS_ADMIN qua Trusted Server + MFA/AAL2 + audit; SALE/TECH cấm | Cấm human client (AI Worker bounded write) | CẤM | CẤM | Migration 004 completed; verbatim, không sanitized derivative; worker machine identity |
 | 12 | `appointments` | Direct | BOSS, SALE, Tech có phân công hiện hành | BOSS_ADMIN, SALE | BOSS, SALE, Tech có phân công hiện hành | CẤM | Phân công hiện hành chỉ gồm `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`; Category B/C/E |
 | 13 | `surveys` | Inferred | BOSS, SALE, Tech có phân công hiện hành | BOSS, Tech có phân công hiện hành | BOSS, Tech có phân công hiện hành | CẤM | Tech chỉ truy cập qua Job hiện hành; `completed_by` không cấp quyền lịch sử; Category B/C/E |
 | 14 | `pricing_policies` | Direct | BOSS_ADMIN ONLY | BOSS_ADMIN ONLY | BOSS_ADMIN (Chỉ sửa khi DRAFT; cấm sửa khi ACTIVE — Cat E) | CẤM | **SALE & TECH TUYỆT ĐỐI BỊ CẤM TRUY VẤN**; Khi status = 'ACTIVE' các trường cốt lõi (company_id, version, conditions, price_rules, effective_at) là bất biến cấp CSDL (Cat E trigger); đổi logic giá phải tạo version mới |
@@ -666,12 +668,12 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
   3. Ghi bản ghi vào `public.audit_logs` với `action = 'VIEW_RAW_PHONE'`.
   4. Truy xuất `raw_phone` qua Service Role Client hoặc hàm `SECURITY DEFINER` nội bộ và trả về Modal an toàn của Sếp.
 
-### 12.3. Luồng SALE gọi khách không lộ số (Zero-Phone Click-to-Call)
-- SALE bấm "GỌI KHÁCH" → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`.
-- Máy chủ tin cậy thẩm định đầy đủ quyền SALE active và phân giải Customer mục tiêu cùng Company.
+### 12.3. Luồng BOSS_ADMIN / SALE gọi khách không lộ số (Zero-Phone Click-to-Call)
+- `BOSS_ADMIN` hoặc `SALE` bấm "GỌI KHÁCH" → Trình duyệt chỉ gửi định danh không nhạy cảm `{ customer_id: "..." }` hoặc `{ interaction_id: "..." }`; `TECHNICIAN` bị từ chối.
+- Máy chủ tin cậy thẩm định đầy đủ active profile, active membership, allowed role, resource scope và phân giải Customer mục tiêu cùng Company.
 - Máy chủ đọc `raw_phone` trong bộ nhớ đệm an toàn, bắn lệnh quay số sang tổng đài SIP/Viettel PBX qua API Server-to-Server.
-- Trình duyệt SALE chỉ nhận kết quả: `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ chuỗi số điện thoại nào lọt về máy khách.
-- Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, transcript đã làm sạch và thông báo lỗi.
+- Trình duyệt chỉ nhận kết quả: `{ call_id: "...", status: "CALLING" }`. Không có bất kỳ chuỗi số điện thoại nào lọt về máy khách.
+- Với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` bị cấm trong direct database query, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload và thông báo lỗi.
 
 ### 12.4. Mở rộng Bất biến Zero-Phone cho Dữ liệu Tin nhắn Phi Cấu trúc (Unstructured Message Content Boundary)
 - **Cảnh báo từ DATA_CONTRACT:** Bất biến Zero-Phone không chỉ áp dụng cho các cột số điện thoại định danh khách hàng, bóc băng cuộc gọi hay file ghi âm. `DATA_CONTRACT.md` chỉ rõ rằng `Interaction.content` có thể chứa thông tin nhạy cảm. Khách hàng hoàn toàn có thể tự tay gõ số điện thoại trực tiếp vào tin nhắn Facebook, Zalo, hoặc Website Chat.
@@ -692,7 +694,8 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
 ### 12.5. Raw Interaction và Sanitized Interaction — Hai Security Zones Vật lý
 
 - **Raw Interaction (`private.interaction_raw_contents`):**
-  - Chứa dữ liệu nguồn nguyên vẹn, bao gồm `raw_content`, `raw_payload`, `source_metadata` (có thể gồm raw transcript, số điện thoại, PII, provider payload, recording reference).
+  - Chứa dữ liệu nguồn nguyên vẹn của Interaction, gồm `raw_content`, `raw_payload`, `source_metadata` (có thể chứa số điện thoại, PII và provider payload).
+  - Không dùng cho verbatim call transcript: bảng khóa theo `interaction_id`, trong khi transcript là derivative từ recording và phải gắn canonical theo `call_id`.
   - Nằm trong `private` schema, hoàn toàn vô hình trước PostgREST API, không accessible trực tiếp từ browser client, không bao giờ trả về SALE API JSON, client props, DOM, browser/client logs.
   - Phân quyền cấp thấp:
     ```sql
@@ -709,7 +712,15 @@ Dưới đây là ma trận kiểm soát truy cập cấp dòng cho toàn bộ *
     - `PENDING` $\rightarrow$ không phát hành nội dung cho SALE.
     - `FAILED` $\rightarrow$ không phát hành nội dung cho SALE; thất bại làm sạch tuyệt đối không bao giờ fallback về raw content (**FAIL CLOSED**).
     - `SUCCEEDED` $\rightarrow$ `sanitized_content` được phép phát hành cho SALE. Nếu một tương tác chứa nội dung văn bản do khách hàng tạo ra (customer-generated textual content), SALE CHỈ ĐƯỢC NHẬN nội dung khi và chỉ khi `sanitization_status = 'SUCCEEDED'`.
+    - Riêng `CALL_EVENT`, mọi textual payload đều bị từ chối trên SALE-facing path, kể cả gắn `SUCCEEDED`; verbatim transcript không thuộc zone này.
     - `NOT_REQUIRED` $\rightarrow$ **chỉ được phép sử dụng cho các sự kiện/tương tác hệ thống không nhạy cảm, phi văn bản hoặc không chứa nội dung văn bản thô do người dùng nhập** mà việc làm sạch là thực sự không cần thiết (ví dụ: system status change event, telephony signaling event). `NOT_REQUIRED` tuyệt đối KHÔNG BAO GIỜ được sử dụng để qua mặt hoặc bỏ qua bộ làm sạch (must never be used to bypass the sanitizer).
+
+### 12.6. Verbatim Transcript Private Boundary (Migration 004 Completed)
+
+- Bảng vật lý là `private.call_transcripts`, liên kết 1:1 canonical với `public.calls` bằng `(company_id, call_id)`.
+- `BOSS_ADMIN` chỉ đọc qua Trusted Server với MFA/AAL2 và mandatory audit; audit failure fail closed. `SALE`/`TECHNICIAN` không có direct grant/RLS/browser path.
+- AI Transcription Worker ghi theo machine identity và bounded job scope; human session worker purposes fail closed; worker write path tiếp tục DEFERRED.
+- Migration 004 (`20260916000001_private_call_transcripts.sql`) đã chuyển `public.call_transcripts` sang `private.call_transcripts`, thu hồi toàn bộ client grants, hủy bỏ public policy và thiết lập RPC bounded `public.get_call_transcript` cho `service_role`. Migration 001–003 giữ nguyên.
 
 ---
 
@@ -978,7 +989,7 @@ Trigger và Server Action tuyệt đối không được ghi các dữ liệu sa
 
 ## 20. Supabase Storage Authorization Handoff
 
-Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Toàn bộ tệp nhị phân được lưu trữ trong **5 Buckets riêng tư (`public = false`)** của Supabase Storage. Tài liệu này bàn giao các nguyên tắc phân quyền cấp Storage:
+Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Foundation sử dụng **4 buckets riêng tư (`public = false`)** của Supabase Storage. Tài liệu này bàn giao các nguyên tắc phân quyền cấp Storage:
 
 ```text
 ┌─────────────────────────┬─────────────────────────┬───────────────────────────────┐
@@ -988,8 +999,7 @@ Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Toàn b�
 │ 2. call-recordings      │ BOSS_ADMIN;             │ Tổng đài / PBX Webhook (Server│
 │                         │ SALE: KHÔNG CẤP MẶC ĐỊNH│ Service Role Bounded Write)   │
 │ 3. contracts            │ BOSS_ADMIN, SALE        │ Server (PDF) / SALE (Bản ký)  │
-│ 4. installation-handover│ BOSS, SALE, Tech Giao   │ Kỹ thuật viên được giao việc  │
-│ 5. warranty-evidence    │ BOSS, SALE, Tech Giao   │ Kỹ thuật viên / Khách hàng    │
+│ 4. installation-docs    │ BOSS, SALE, Tech Giao   │ Kỹ thuật viên được giao việc  │
 └─────────────────────────┴─────────────────────────┴───────────────────────────────┘
 ```
 
@@ -997,8 +1007,10 @@ Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Toàn b�
 - **Nguy cơ rò rỉ:** DATA_CONTRACT cảnh báo rõ ràng rằng nội dung đàm thoại và tệp ghi âm cuộc gọi có thể chứa số điện thoại đọc bằng miệng, địa chỉ nhà riêng và thông tin cá nhân tối mật.
 - **Quy tắc cấp quyền:**
   - `BOSS_ADMIN`: Được phép nghe/tải tệp ghi âm thô theo chính sách bảo mật và kiểm toán được duyệt.
-  - `SALE`: **KHÔNG ĐƯỢC ĐỌC TỆP GHI ÂM GỐC**. SALE chỉ được đọc sanitized transcript qua trusted Server DTO khi `sanitization_status = 'SUCCEEDED'`.
-  - `PENDING`, `FAILED`, `NOT_PROCESSED` bắt buộc deny/omit; tuyệt đối không fallback sang raw transcript hoặc raw recording nếu sanitization thất bại.
+  - `SALE`: **KHÔNG ĐƯỢC ĐỌC TỆP GHI ÂM GỐC HOẶC VERBATIM TRANSCRIPT**, kể cả cuộc gọi do chính SALE thực hiện.
+  - `TECHNICIAN`: **KHÔNG ĐƯỢC ĐỌC TỆP GHI ÂM GỐC HOẶC VERBATIM TRANSCRIPT**.
+  - `BOSS_ADMIN`: được xem verbatim transcript qua Trusted Server, active same-company membership, MFA/AAL2 và audit bắt buộc.
+  - CRM extracted data là sản phẩm phái sinh khác, không phải transcript và chưa được triển khai trong Foundation Finalization.
   - Metadata cuộc gọi (thời lượng, thời điểm, trạng thái gọi) vẫn hiển thị cho SALE trên giao diện CRM.
 
 ### 20.2. Quy tắc Thẩm quyền Storage Đa Doanh nghiệp (Multi-Company Storage Scoping)
@@ -1008,18 +1020,17 @@ Cơ sở dữ liệu chỉ lưu đường dẫn tệp (`object_path`). Toàn b�
 > - Tuyệt đối **không được mô tả việc kiểm tra Storage là so sánh tiền tố đường dẫn với "company_id của người dùng"**, bởi vì một người dùng có thể là thành viên hợp lệ của nhiều Company khác nhau!
 > - Việc client gửi header hoặc chọn company trong phiên (session-selected company) **hoàn toàn không phải là chứng cứ an ninh**.
 
-Mọi yêu cầu cấp Signed URL hoặc tải lên tệp trong Storage bắt buộc phải thẩm định theo chuỗi 5 bước tuần tự:
-1. **Trích xuất `target_company_id` từ đường dẫn:**
-   - Cấu trúc đường dẫn chuẩn mực: `<target_company_id>/<entity_id>/<filename>`.
-   - Phân tích và lấy giá trị `target_company_id` từ segment đầu tiên (`path_tokens[1]`).
-2. **Thẩm định Tư cách Thành viên & Vai trò đối với ĐÚNG `target_company_id` đó:**
+Mọi yêu cầu cấp Signed URL từ browser bắt buộc chỉ nhận resource ID và selector allowlist; client không được truyền bucket, object path, file reference, storage URL hoặc TTL. Trusted Server thẩm định theo chuỗi 5 bước:
+1. **Đọc metadata tối thiểu của resource và derive `target_company_id` từ DB:**
+   - Ví dụ installation chỉ đọc `id`, `company_id`, `appointment_id`, `status` trước authorization.
+2. **Thẩm định Tư cách Thành viên & Vai trò đối với ĐÚNG `target_company_id`:**
    - Kiểm tra `auth.uid()` có bản ghi `company_members.status = 'ACTIVE'` và vai trò hợp lệ trong chính `target_company_id` được trích xuất.
-3. **Thẩm định Thực thể Sở hữu (`entity_id` Validation):**
-   - Xác thực `entity_id` (ví dụ `appointment_id`, `contract_id`, `ticket_id`) thực sự thuộc về `target_company_id` trong cơ sở dữ liệu.
+3. **Thẩm định resource scope:**
+   - Xác thực resource thực sự thuộc Company đã derive; không tin Company hoặc ownership từ client.
 4. **Thẩm định Phân công Hiện trường (Đối với `TECHNICIAN`):**
    - Nếu người yêu cầu là `TECHNICIAN`, bắt buộc kiểm tra xem kỹ thuật viên đó có đang được phân công hợp lệ và trong trạng thái vòng đời có hiệu lực hành động cho thực thể `entity_id` đó hay không.
 5. **Chỉ khi toàn bộ 4 bước trên thỏa mãn:**
-   - Máy chủ hoặc Storage Policy mới phát hành Signed URL ngắn hạn theo chuẩn đã chốt tại **STORAGE DECISION 01 — DECIDED / FROZEN**:
+   - Máy chủ mới đọc canonical file reference từ DB, chọn bucket cố định và phát hành Signed URL ngắn hạn theo **STORAGE DECISION 01**:
      - `survey-photos`: 3600 giây (60 phút)
      - `installation-docs`: 3600 giây (60 phút)
      - `contracts`: 1800 giây (30 phút)
@@ -1100,7 +1111,7 @@ Bảng đánh giá rủi ro an ninh toàn diện và giải pháp thiết kế R
 | **9** | **Rò rỉ Service Role Key ra Client** | **THẢM HỌA** | Không bao giờ gắn tiền tố `NEXT_PUBLIC_`, chỉ lưu trong runtime Node.js của Server. |
 | **10**| **Service Role thao tác thiếu kiểm tra quyền (Bypass RLS không kiểm soát)** | **NGHIÊM TRỌNG** | Phân định rạch ròi 3 ngữ cảnh: (A) User-initiated: buộc xác thực `verified_user_id` và quyền tài nguyên; (B) Provider Webhook: xác thực chữ ký HMAC, deduplication và ánh xạ Company tin cậy (không đòi hỏi `verified_user_id` giả mạo); (C) Background Worker: xác thực job identity và giới hạn phạm vi tài nguyên. |
 | **11**| **Rò rỉ số điện thoại thật cho SALE/TECH qua bảng khách hàng** | **NGHIÊM TRỌNG** | Tách số điện thoại sang schema `private`. Bảng `customers` ở schema `public` không có cột phone. |
-| **12**| **Rò rỉ số điện thoại qua nội dung bóc băng ghi âm hoặc tệp âm thanh (Phone leakage through transcript/recording content)** | **NGHIÊM TRỌNG** | Áp dụng bất biến Zero-Phone; cấm `SALE` truy cập raw transcript và raw recording; chỉ phát hành sanitized transcript qua Server DTO khi trạng thái `SUCCEEDED`, mọi trạng thái khác fail closed (RLS Decision 03). |
+| **12**| **Rò rỉ số điện thoại qua nội dung bóc băng ghi âm hoặc tệp âm thanh (Phone leakage through transcript/recording content)** | **NGHIÊM TRỌNG** | Verbatim transcript giữ nguyên PII và chỉ BOSS_ADMIN được xem qua privileged audited path; SALE/TECH bị cấm; không phát hành transcript qua `sanitized_content`. |
 | **13**| **Rò rỉ số điện thoại qua nội dung tin nhắn hội thoại (`interactions.content`) hoặc dữ liệu phi cấu trúc** | **NGHIÊM TRỌNG** | Tách Raw Interaction và Sanitized Interaction thành hai security zones; cấm SALE direct raw SELECT; chỉ phát hành derivative `SUCCEEDED`, không fallback raw (RLS Decision 05). |
 | **14**| **Rò rỉ tài chính nhạy cảm cho SALE** | **CAO** | Bảng `payment_transactions` và `finance_summaries` cấm hoàn toàn quyền `SELECT` của SALE. |
 | **15**| **Ghi đè hoặc làm sai lệch dữ liệu nguồn của đối tác ngân hàng khi đối soát** | **NGHIÊM TRỌNG** | Dữ liệu đối tác (`provider_ref`, `amount`, `sender_account`) là bất biến cấp CSDL bằng Trigger Category E; Sếp chỉ cập nhật đối soát qua luồng máy chủ tin cậy (Category B). |
@@ -1156,7 +1167,7 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
 11. **Quyết định 11 — Bảo vệ Số Điện Thoại trong Toàn bộ Dữ liệu Phi Cấu trúc và Bảo toàn Vĩnh viễn Dữ liệu Nguồn Gốc:**
     - Mở rộng bất biến Zero-Phone cho mọi nội dung phi cấu trúc (bóc băng, ghi âm, tin nhắn hội thoại).
     - **Bảo toàn dữ liệu nguồn gốc:** Nội dung sự kiện thô ban đầu (`raw source interaction`) luôn được bảo tồn nguyên vẹn 100% trong vùng lưu trữ an toàn phục vụ kiểm toán, bằng chứng pháp lý và truy vết lịch sử; tuyệt đối không chấp nhận giải pháp làm sạch phá hủy dữ liệu gốc.
-    - Cấm `SALE` truy cập trực tiếp bản thô `call_transcripts.transcript`, bucket `call-recordings`, và nội dung tin nhắn thô `interactions.content` nơi có thể chứa số điện thoại.
+    - Cấm `SALE` và `TECHNICIAN` truy cập verbatim `private.call_transcripts.transcript` và bucket `call-recordings`; BOSS_ADMIN dùng privileged audited path.
     - SALE vận hành Inbox bằng bản phái sinh tin nhắn đã được làm sạch số điện thoại qua Trusted Projection / Category D.
 12. **Quyết định 12 — Thẩm quyền Supabase Storage An toàn Đa Doanh nghiệp:**
     - Trích xuất `target_company_id` từ segment đầu của đường dẫn tệp và kiểm tra quyền của người dùng đối với chính Company mục tiêu đó. Tuyệt đối không so sánh với company trong session.
@@ -1185,11 +1196,11 @@ Dưới đây là các quyết định kiến trúc phân quyền cấp dòng đ
     - **Authorization/Security Rule:** Quyền tới Job, Customer, Survey và tài nguyên liên quan bắt buộc qua chuỗi canonical: authenticated + user `ACTIVE` + membership `ACTIVE` + same Company + role `TECHNICIAN` + active assignment. Historical completion không phải active assignment.
     - **Rationale:** Một định nghĩa duy nhất ngăn từng table hoặc API tự diễn giải khác nhau và giữ quyền ở mức tối thiểu cần thiết cho công việc hiện tại.
     - **Implementation Consequence:** Auth helpers, RLS policies và application authorization phải dùng đúng cùng tập trạng thái; quyền kết thúc ngay khi assignment chuyển sang trạng thái không hiện hành.
-19. **[RLS DECISION 03 — DECIDED / FROZEN] SALE Transcript và Recording:**
-    - **Decision:** SALE chỉ được nhận sanitized transcript; raw transcript và raw recording không thuộc phạm vi truy cập của SALE.
-    - **Authorization/Security Rule:** Chỉ phát hành qua trusted Server DTO khi `sanitization_status = 'SUCCEEDED'`. Cấm raw transcript, raw conversation text, raw recording, unsanitized interaction content, raw provider payload hoặc content chứa raw customer phone.
-    - **Rationale:** Transcript, recording và provider payload có thể mang PII hoặc raw phone ngoài các cột dữ liệu có cấu trúc.
-    - **Implementation Consequence:** `PENDING`, `FAILED`, `NOT_PROCESSED` phải deny/omit theo nguyên tắc fail closed; tuyệt đối không fallback raw.
+19. **[RLS DECISION 03 — FOUNDATION FINALIZED] Verbatim Transcript và Recording:**
+    - **Decision:** Verbatim transcript chép nguyên văn, giữ PII; chỉ `BOSS_ADMIN` được xem. `SALE` và `TECHNICIAN` bị cấm trực tiếp, kể cả SALE thực hiện cuộc gọi.
+    - **Authorization/Security Rule:** BOSS access bắt buộc qua Trusted Server, active profile, active same-company membership, role `BOSS_ADMIN`, MFA/AAL2 theo privileged policy và mandatory audit. Audit failure phải fail closed.
+    - **Rationale:** Transcript và recording có thể mang raw phone, địa chỉ, số tiền và PII. Tự che hoặc paraphrase sẽ phá nghĩa verbatim/evidence.
+    - **Implementation Consequence:** Không dùng `public.interactions.sanitized_content` cho transcript. Target là `private.call_transcripts`; Migration 004+ bắt buộc vì Migration 001 hiện đặt bảng ở public. CRM extracted data là derivative riêng, chưa triển khai.
 20. **[RLS DECISION 04 — DECIDED / FROZEN] Database View và Server DTO:**
     - **Decision:** Dữ liệu nhạy cảm bắt buộc qua trusted Server DTO/server endpoint; Database View chỉ dùng cho dataset tự thân an toàn.
     - **Authorization/Security Rule:** Server DTO phải dùng explicit field allowlist và đầy đủ chuỗi authorization canonical cho customer contact/raw phone, sensitive order fields, pricing operations, contracts, payments/webhooks, raw interaction data, privileged mutations và click-to-call.
@@ -1237,7 +1248,7 @@ Toàn bộ các Open Decisions liên đới đã được phê duyệt chính th
 4. **RLS DECISIONS 01–05 — DECIDED / FROZEN:**
    - **OD01:** Safe Staff Directory cùng Company với explicit field allowlist.
    - **OD02:** Canonical active assignment (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`); các trạng thái kết thúc chấm dứt quyền.
-   - **OD03:** Sanitized-only transcript/recording policy cho SALE; cấm nghe raw recording.
+   - **OD03:** Verbatim transcript/recording chỉ BOSS_ADMIN qua privileged audited path; SALE/TECHNICIAN bị cấm.
    - **OD04:** Server DTO cho dữ liệu nhạy cảm; Database View chỉ cho dataset tự thân an toàn.
    - **OD05:** Phân tách vật lý hai security zones: `public.interactions` (sanitized derivative) và `private.interaction_raw_contents` (raw source data) với nguyên tắc Fail-Closed.
 
@@ -1245,10 +1256,10 @@ Toàn bộ các Open Decisions liên đới đã được phê duyệt chính th
 
 ```text
 REMAINING OPEN ARCHITECTURE DECISIONS: 0 (NONE)
-STATUS: FULL DESIGN FREEZE
+STATUS: FOUNDATION FINALIZATION
 ```
 
-Toàn bộ các quyết định kiến trúc cốt lõi liên quan đến Auth, Database Schema, Row Level Security và Storage đã hoàn toàn thống nhất và đóng băng. Dự án chính thức bước vào trạng thái **FULL DESIGN FREEZE**.
+Các quyết định Foundation cốt lõi về Auth, RLS, Storage, Click-to-Call và Verbatim Transcript đã hoàn tất qua Migration 001–004. Bảng `private.call_transcripts` có đầy đủ private boundary, grants/RPC và đường truy cập Trusted Server có audit.
 
 ---
 
@@ -1256,10 +1267,10 @@ Toàn bộ các quyết định kiến trúc cốt lõi liên quan đến Auth, 
 
 Trước khi tiến hành viết mã lệnh các tệp migration SQL RLS (`2026091400000X_enable_rls_and_policies.sql`), các hạng mục sau đây bắt buộc phải được hoàn tất:
 
-- [x] **Phê duyệt chính thức tài liệu `docs/SUPABASE_RLS_DESIGN.md`:** Thống nhất ma trận phân quyền 28 bảng public, 2 bảng private (`customer_private_contacts`, `interaction_raw_contents`), các hàm helper và 5 danh mục thực thi cấp cột (Categories A-E).
+- [x] **Phê duyệt chính thức tài liệu `docs/SUPABASE_RLS_DESIGN.md`:** Thống nhất ma trận target 27 bảng public, 3 bảng private (`customer_private_contacts`, `interaction_raw_contents`, `call_transcripts`) sau Migration 004; Migration 001–003 giữ nguyên.
 - [x] **Chốt Auth Decisions 01–05:** MFA AAL2 Boss, TTL invitation 24h, session revocation, session lifetime, Survey completed_by invariant.
 - [x] **Chốt Schema Decisions 01–09:** E.164 normalization, survey appointment_id NOT NULL, native sequences, payment idempotency, care idempotency, crew jsonb snapshot, canonical categorical identifiers, single-shot survey, call provider correlation.
 - [x] **Chốt Storage Decision 01:** Signed URL TTLs (3600s/1800s/900s) qua Trusted Server.
-- [x] **Chốt RLS Decisions 01–05:** Safe Staff Directory; active assignment; sanitized transcript; Server DTO boundary; phân tách vật lý Raw vs Sanitized Interactions.
+- [x] **Chốt RLS Decisions 01–05:** Safe Staff Directory; active assignment; verbatim transcript BOSS-only; Server DTO boundary; phân tách vật lý Raw vs Sanitized Interactions.
 - [ ] **Thiết lập quyền hạn Database Roles & Grants:** Chuẩn hóa các lệnh `REVOKE` và `GRANT` cơ bản cho các role nội bộ của PostgreSQL (`anon`, `authenticated`, `service_role`).
 - [ ] **Kế hoạch Kiểm thử RLS Tự động:** Chuẩn bị kịch bản kiểm thử (Test Suite) cho từng role (`BOSS_ADMIN`, `SALE`, `TECHNICIAN`, `anon`) đối với từng bảng vật lý để bảo đảm không xảy ra rò rỉ dữ liệu, bypass tenant key, hoặc đệ quy vô tận.

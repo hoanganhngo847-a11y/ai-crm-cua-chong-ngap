@@ -218,6 +218,8 @@ Có tối thiểu ba vai trò: **SẾP / QUẢN TRỊ (`BOSS_ADMIN`)**, **SALE**
 - Xem thanh toán.
 - Xem doanh thu và báo cáo.
 - Quản lý cấu hình quan trọng.
+- Gọi khách qua Click-to-Call bảo mật.
+- Xem verbatim transcript qua Trusted Server, với MFA/AAL2 theo chính sách privileged access và audit bắt buộc.
 
 ### SALE
 
@@ -229,6 +231,7 @@ Có tối thiểu ba vai trò: **SẾP / QUẢN TRỊ (`BOSS_ADMIN`)**, **SALE**
 - Được xem lịch sử khách cần thiết cho việc chốt.
 - Được chat với khách.
 - Được gọi khách qua hệ thống.
+- Không được xem trực tiếp verbatim transcript hoặc bản ghi âm gốc, kể cả cuộc gọi do chính SALE thực hiện.
 
 `can_view_finance = false` của SALE có nghĩa là không được xem tài chính quản trị/tổng toàn Company, không phải cấm mọi thông tin tiền. Trong phạm vi khách/đơn cần xử lý, SALE được xem:
 
@@ -261,16 +264,24 @@ Mặc định TECHNICIAN có `can_view_raw_phone = false`, `can_export_contacts 
 
 Không được chỉ che số bằng giao diện. Máy chủ, API và cơ sở dữ liệu phải bảo đảm tài khoản SALE và TECHNICIAN không nhận `raw phone`, kể cả trong JSON, log, lỗi, dữ liệu tải trước, export hoặc kết quả truy vấn. Khi triển khai Supabase, quyền này phải được bảo vệ bằng thiết kế bảng/view/function phù hợp và RLS, không dựa riêng vào frontend.
 
-## 15. Sale gọi khách
+## 15. Click-to-Call bảo mật
 
-Sale tìm khách bằng tên hoặc `customer_code`, ví dụ:
+`BOSS_ADMIN` và `SALE` được gọi khách; `TECHNICIAN` bị từ chối. Người gọi tìm khách bằng tên hoặc `customer_code`, ví dụ:
 
 - `Nguyễn Văn A`
 - `KH-000123`
 
-Khi sale bấm **GỌI KHÁCH**, trình duyệt chỉ gửi `customer_id`. Máy chủ tìm số điện thoại thật trong vùng được bảo vệ rồi chuyển trực tiếp cho hệ thống Hotline/tổng đài để thực hiện cuộc gọi.
+Khi người có quyền bấm **GỌI KHÁCH**, trình duyệt chỉ gửi `customer_id` (hoặc `interaction_id` khi luồng nghiệp vụ cần). Máy chủ tự derive Company từ tài nguyên trong DB, xác thực user/profile/membership/role/scope, tìm số điện thoại thật trong vùng được bảo vệ, ghi Call và audit bắt buộc, rồi chuyển trực tiếp cho hệ thống Hotline/tổng đài.
 
-Số điện thoại thật không được trả về trình duyệt của sale. API phải kiểm tra quyền, ghi nhật ký cuộc gọi và không đưa số thật vào URL, response hoặc thông báo lỗi.
+Số điện thoại thật không được trả về trình duyệt. API không được tin `company_id`, phone, storage path hoặc provider credential do client gửi và không đưa số thật vào URL, response, log hoặc thông báo lỗi.
+
+### 15.1. Verbatim transcript và AI Worker
+
+- AI chép lại nguyên văn nội dung đã nói; được thêm dấu câu, xuống dòng, timestamp và speaker labels nhưng không tóm tắt, paraphrase, tự che PII, bỏ câu, sửa ý hoặc tạo thêm lời nói.
+- Verbatim transcript là dữ liệu nhạy cảm: `BOSS_ADMIN` được xem qua Trusted Server có MFA/AAL2 và audit bắt buộc; `SALE` và `TECHNICIAN` bị cấm.
+- `public.interactions.sanitized_content` không phải nơi lưu hoặc phát hành verbatim call transcript. CRM extracted data là sản phẩm nghiệp vụ khác và chưa được triển khai trong Foundation Finalization.
+- AI Worker là machine identity server-side, không giả làm `BOSS_ADMIN`, `SALE` hay `TECHNICIAN`; Service Role không tự tạo authorization. Worker chỉ được đọc recording/job được giao và ghi kết quả trong phạm vi tài nguyên đã được ràng buộc.
+- Cơ chế machine credential/job identity cụ thể được hoãn sang module AI/background processing; user session không được biến thành worker chỉ bằng cách truyền một `purpose` enum.
 
 ## 16. Kiến trúc thư mục dự kiến
 

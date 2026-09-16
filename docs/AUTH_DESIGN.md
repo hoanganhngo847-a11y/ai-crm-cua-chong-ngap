@@ -2,7 +2,7 @@
 
 > **Tài liệu Kiến trúc Xác thực (Authentication) & Ủy quyền Ứng dụng (Authorization)**
 > **Dự án:** AI CRM đa kênh cho doanh nghiệp sản xuất cửa chống ngập theo đơn đặt hàng.
-> **Trạng thái:** FULL DESIGN FREEZE — Toàn bộ kiến trúc Auth và các Quyết định Auth 01–05 đã được chốt và đóng băng; chuẩn bị cho pha Migration 001.
+> **Trạng thái:** FOUNDATION FINALIZATION — Migration 001–004 đã hoàn thành. Migration 001–003 đóng băng; Migration 004 đã chuyển `call_transcripts` sang private boundary an toàn.
 > **Tham chiếu hợp đồng bất biến:** `docs/PROJECT_MASTER.md`, `docs/DATA_CONTRACT.md`, `docs/SUPABASE_SCHEMA_DESIGN.md`.
 
 ---
@@ -381,7 +381,8 @@ Hệ thống triển khai chính xác ma trận quyền hạn tối thiểu (Lea
 | :--- | :---: | :---: | :---: | :--- |
 | **Xem số điện thoại thật (`raw_phone`)** | **CÓ** (Phải qua API riêng có ghi vết bắt buộc vào `audit_logs`) | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Bảng nằm ở schema `private`; SALE/TECH không có quyền và không có view nào trả về phone. |
 | **Xem số điện thoại chuẩn hóa (`normalized_phone`)** | **CÓ** | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Phân loại dữ liệu nhạy cảm PII; cấm trả về client của SALE/TECH. |
-| **Bấm gọi khách hàng (Click-to-Call)** | **CÓ** (Tùy cấu hình) | **CÓ** (Chỉ truyền `customer_id` hoặc `interaction_id`, máy chủ tự quay số qua tổng đài) | **TUYỆT ĐỐI CẤM** (Chưa duyệt quy trình gọi) | Server Action phân giải tài nguyên cùng Company, kiểm tra quyền, lấy phone từ `private` schema và chuyển tới SIP PBX. |
+| **Bấm gọi khách hàng (Click-to-Call)** | **CÓ** | **CÓ** (Chỉ truyền `customer_id` hoặc `interaction_id`, máy chủ tự quay số qua tổng đài) | **TUYỆT ĐỐI CẤM** | Server Action derive Company từ DB, kiểm tra quyền/scope, lấy phone từ `private` schema, ghi Call + audit rồi chuyển tới SIP PBX. |
+| **Xem verbatim call transcript** | **CÓ** (Trusted Server, MFA/AAL2, audit bắt buộc) | **TUYỆT ĐỐI CẤM**, kể cả cuộc gọi do chính SALE thực hiện | **TUYỆT ĐỐI CẤM** | Transcript nguyên văn là dữ liệu private/restricted; không phát hành qua `sanitized_content`. |
 | **Xuất danh bạ / Export Contacts** | **CÓ** (Theo cấu hình quản trị có kiểm soát) | **TUYỆT ĐỐI CẤM** | **TUYỆT ĐỐI CẤM** | Server Action từ chối mọi yêu cầu export từ non-BOSS. |
 | **Xem dữ liệu khách hàng CRM cơ bản** | **CÓ** | **CÓ** (Tên, mã `customer_code`, lịch sử tương tác, báo giá) | **CHỈ PHẠM VI JOB HIỆN HÀNH** (Customer, Survey, địa chỉ và tài nguyên liên quan) | Bắt buộc có active assignment canonical; không mở lịch sử Customer. |
 | **Xem danh bạ nhân sự an toàn cùng Company** | **CÓ** | **CÓ** | **CÓ** | Chỉ qua Safe Staff Directory gồm `id`, `display_name`, `role`, `avatar_url` và trạng thái UI không nhạy cảm nếu thật sự cần; không đọc trực tiếp hồ sơ đầy đủ. |
@@ -573,20 +574,20 @@ sequenceDiagram
     Server-->>Boss: 6. Trả về raw_phone chỉ hiển thị tại Modal của Boss
 ```
 
-### 11.2. Luồng SALE gọi khách không lộ số (Zero-Phone Outbound Calling)
-Nhân viên SALE được quyền liên hệ khách hàng để tư vấn và chốt đơn, nhưng trình duyệt của SALE hoàn toàn vô can với số điện thoại thật:
+### 11.2. Luồng BOSS_ADMIN / SALE gọi khách không lộ số (Zero-Phone Outbound Calling)
+`BOSS_ADMIN` và `SALE` được quyền liên hệ khách hàng qua Click-to-Call; `TECHNICIAN` bị từ chối. Trình duyệt hoàn toàn vô can với số điện thoại thật:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Sale as SALE (Trình duyệt CRM)
+    actor Caller as BOSS_ADMIN hoặc SALE (Trình duyệt CRM)
     participant Server as Next.js Server Action (Trusted Server)
     participant PrivateDB as DB: private.customer_private_contacts
     participant PBX as Hệ thống Tổng đài Viettel / SIP
     participant CallsDB as DB: public.calls & interactions
     actor Customer as Khách hàng
 
-    Sale->>Server: Bấm "GỌI KHÁCH" (Chỉ gửi customer_id hoặc interaction_id)
+    Caller->>Server: Bấm "GỌI KHÁCH" (Chỉ gửi customer_id hoặc interaction_id)
     Server->>Server: 1. Xác thực session, Company, membership, role, scope tài nguyên
     Server->>PrivateDB: 2. Lấy raw_phone trong bộ nhớ an toàn của server
     PrivateDB-->>Server: Trả về raw_phone
@@ -594,11 +595,19 @@ sequenceDiagram
     PBX->>Customer: 4. Tổng đài thực hiện quay số đổ chuông
     PBX-->>Server: Trả về { provider_call_id: "...", status: "INITIATED" }
     Server->>CallsDB: 5. Tạo bản ghi Call và Interaction (direction = 'OUTBOUND')
-    Server-->>Sale: 6. Trả về phản hồi cho SALE: { call_id: "...", status: "CALLING" }
-    Note over Sale: TRÌNH DUYỆT SALE HOÀN TOÀN KHÔNG CÓ SỐ ĐIỆN THOẠI
+    Server-->>Caller: 6. Chỉ trả { call_id: "...", status: "CALLING" }
+    Note over Caller: TRÌNH DUYỆT HOÀN TOÀN KHÔNG CÓ SỐ ĐIỆN THOẠI
 ```
 
-Đối với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` không được xuất hiện qua truy vấn trực tiếp, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, transcript đã làm sạch hoặc thông báo lỗi. Nội dung được gọi là “sanitized” nhưng vẫn chứa số điện thoại phải bị xem là chưa làm sạch và bị từ chối theo nguyên tắc fail closed.
+Đối với `SALE` và `TECHNICIAN`, cả `raw_phone` lẫn `normalized_phone` không được xuất hiện qua truy vấn trực tiếp, Supabase browser response, API JSON, Client Component props, DOM, browser log, analytics payload, sanitized interaction hoặc thông báo lỗi. Nội dung được gọi là “sanitized” nhưng vẫn chứa số điện thoại phải bị xem là chưa làm sạch và bị từ chối theo nguyên tắc fail closed; verbatim transcript không có SALE/TECH-facing sanitized variant.
+
+### 11.3. Verbatim Transcript và Machine Worker
+
+- Verbatim transcript giữ nguyên nội dung được nói, kể cả PII; AI chỉ được thêm punctuation, line breaks, timestamps và speaker labels.
+- Chỉ `BOSS_ADMIN` được xem qua privileged Trusted Server với active profile, active same-company membership, MFA/AAL2 và audit bắt buộc. `SALE` và `TECHNICIAN` bị từ chối.
+- Human session không được mở khóa `VOICE_TRANSCRIPTION` hoặc `SANITIZATION_PIPELINE` bằng cách truyền purpose enum.
+- AI Transcription Worker là machine identity server-side, không giả làm human role và chỉ xử lý job/resource được giao. Service Role không phải authorization.
+- Cơ chế machine credential/job identity được hoãn sang AI/background processing module. Cho tới khi triển khai, worker path phải fail closed.
 
 ---
 

@@ -7,12 +7,14 @@ import {
   type SanitizedInteractionDTO,
   type SignedUrlRequest,
   type SignedUrlResult,
+  type CallTranscriptDTO,
 } from '../../shared/contracts/sensitive';
 import {
   internalClickToCallAction,
   internalGetSanitizedInteractionAction,
   internalGetAuthorizedSignedUrlAction,
   internalViewBossRawPhoneAction,
+  internalGetCallTranscriptAction,
 } from '../../lib/sensitive/action-handlers';
 
 // ==============================================================================
@@ -61,4 +63,16 @@ export async function viewBossRawPhoneAction(
 ): Promise<{ success: boolean; rawPhone?: string; error?: string; message?: string }> {
   const client = await createClient();
   return internalViewBossRawPhoneAction(params, client);
+}
+
+/**
+ * Server Action: Lấy nội dung bóc băng cuộc gọi nguyên văn dành cho BOSS_ADMIN (Audit-first)
+ * Requires BOSS_ADMIN, active membership, same company, and MFA/AAL2 in production.
+ * SALE and TECHNICIAN are strictly denied.
+ */
+export async function getCallTranscriptAction(
+  params: { callId: string }
+): Promise<{ success: boolean; data?: CallTranscriptDTO; error?: string; message?: string }> {
+  const client = await createClient();
+  return internalGetCallTranscriptAction(params, client);
 }

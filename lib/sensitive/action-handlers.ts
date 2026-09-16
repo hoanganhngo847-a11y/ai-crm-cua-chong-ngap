@@ -7,6 +7,7 @@ import {
   type SanitizedInteractionDTO,
   type SignedUrlRequest,
   type SignedUrlResult,
+  type CallTranscriptDTO,
   CONTACT_ACCESS_PURPOSES,
 } from '../../shared/contracts/sensitive';
 import { isServerAuthError } from '../server-auth/errors';
@@ -14,6 +15,7 @@ import { executeClickToCall } from './click-to-call';
 import { getSanitizedInteractionForSale } from './interactions';
 import { createAuthorizedSignedUrl } from './signed-urls';
 import { resolveCustomerPrivateContactForTrustedOperation } from './customer-contact';
+import { getVerbatimCallTranscript } from './call-transcripts';
 
 // ==============================================================================
 // INTERNAL SERVER-ONLY ACTION HANDLERS
@@ -125,6 +127,32 @@ export async function internalViewBossRawPhoneAction(
       success: false,
       error: 'INTERNAL_ERROR',
       message: 'Không có quyền truy cập số điện thoại bảo mật.',
+    };
+  }
+}
+
+export async function internalGetCallTranscriptAction(
+  params: { callId: string },
+  client?: SupabaseClient
+): Promise<{ success: boolean; data?: CallTranscriptDTO; error?: string; message?: string }> {
+  try {
+    const result = await getVerbatimCallTranscript(params.callId, { client });
+    return {
+      success: true,
+      data: result,
+    };
+  } catch (err: unknown) {
+    if (isServerAuthError(err)) {
+      return {
+        success: false,
+        error: err.code,
+        message: err.message,
+      };
+    }
+    return {
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'Không thể tải nội dung bóc băng cuộc gọi.',
     };
   }
 }

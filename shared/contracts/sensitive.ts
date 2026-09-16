@@ -1,4 +1,4 @@
-import type { ApplicationRole } from '../constants/roles';
+import { APPLICATION_ROLES, type ApplicationRole } from '../constants/roles';
 
 /**
  * Allowed purposes for accessing raw customer contact information.
@@ -24,6 +24,29 @@ export const RAW_INTERACTION_PURPOSES = {
 
 export type RawInteractionPurpose =
   (typeof RAW_INTERACTION_PURPOSES)[keyof typeof RAW_INTERACTION_PURPOSES];
+
+/**
+ * Frozen human-role policy for VERBATIM call transcripts.
+ * Authorized strictly for BOSS_ADMIN via audited trusted-server path.
+ * Direct client SELECT, SALE, and TECHNICIAN access are strictly denied.
+ */
+export const VERBATIM_TRANSCRIPT_ALLOWED_ROLES = [APPLICATION_ROLES.BOSS_ADMIN] as const;
+
+/**
+ * Verbatim call transcript DTO returned to authorized BOSS_ADMIN.
+ * Contains original speech text and speaker timestamps.
+ * Never exposed to SALE or TECHNICIAN.
+ */
+export interface CallTranscriptDTO {
+  id: string;
+  companyId: string;
+  callId: string;
+  transcript: string;
+  speakers: unknown;
+  processedAt: string;
+  language: string;
+  createdAt: string;
+}
 
 /**
  * Click-to-call browser request parameters.
@@ -79,13 +102,8 @@ export type SignedUrlResourceCategory = keyof typeof SIGNED_URL_TTL;
 
 /**
  * Storage bucket names mapping per STORAGE DECISION 01.
- * Note: Frozen documentation contains an unresolved conflict between
- * 'installation-handover' (RLS_DESIGN:991, SCHEMA_DESIGN:1511) and
- * 'installation-docs' (RLS_DESIGN:1024, SCHEMA_DESIGN:1518).
- * Per review requirements, this conflict must fail closed until human clarification.
+ * The canonical installation bucket is `installation-docs`.
  */
-export const OPEN_STORAGE_CONTRACT_DECISION = 'installation-handover vs installation-docs';
-
 export const STORAGE_BUCKET_MAP: Record<SignedUrlResourceCategory, string> = {
   SURVEY: 'survey-photos',
   INSTALLATION: 'installation-docs',
@@ -103,7 +121,8 @@ export type SignedUrlRequest =
   | { category: 'SURVEY'; resourceId: string; photoIndex?: number }
   | { category: 'CONTRACT'; resourceId: string; variant?: 'generated' | 'signed' }
   | { category: 'RECORDING'; resourceId: string }
-  | { category: 'INSTALLATION'; resourceId: string; photoIndex?: number; handover?: boolean };
+  | { category: 'INSTALLATION'; resourceId: string; variant: 'photo'; photoIndex: number }
+  | { category: 'INSTALLATION'; resourceId: string; variant: 'handover' };
 
 export interface SignedUrlResult {
   signedUrl: string;
