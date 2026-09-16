@@ -1,6 +1,6 @@
 # Foundation Handoff
 
-> Tài liệu bắt buộc đọc trước khi bắt đầu code module. Foundation hiện cung cấp Auth runtime, tenant authorization, RLS baseline, trusted-server helpers, private RPC, sensitive Server Actions, storage contract và security tests. Migration 001–003 đã đóng băng.
+> Tài liệu bắt buộc đọc trước khi bắt đầu code module. Foundation hiện cung cấp Auth runtime, tenant authorization, RLS baseline, trusted-server helpers, private RPC, sensitive Server Actions, storage contract và security tests. Migration 001–004 đã đóng băng.
 
 ## 1. Mô hình quyền
 
@@ -110,10 +110,85 @@ Audit bắt buộc cho raw phone, Click-to-Call, privileged transcript/raw acces
 - Migration 001: frozen — `20260914000001_initial_schema.sql`
 - Migration 002: frozen — `20260915000001_rls_foundation.sql`
 - Migration 003: frozen — `20260915000002_trusted_server_private_rpc.sql`
-- Migration 004: private transcript boundary — `20260916000001_private_call_transcripts.sql`
+- Migration 004: frozen (private transcript boundary) — `20260916000001_private_call_transcripts.sql`
 - Database change mới (nếu có): Migration 005+; phải nêu schema/constraint/index/RLS/backward compatibility và được review trước.
 
-## 9. Những điều cấm
+## 9. Các file Foundation không được tự ý sửa
+
+### Migration đã đóng băng — tuyệt đối không sửa
+
+- `supabase/migrations/20260914000001_initial_schema.sql`
+- `supabase/migrations/20260915000001_rls_foundation.sql`
+- `supabase/migrations/20260915000002_trusted_server_private_rpc.sql`
+- `supabase/migrations/20260916000001_private_call_transcripts.sql`
+
+- Migration 001–004 đã đóng băng.
+- Không được quay lại sửa Migration 001–004.
+- Mọi thay đổi database mới phải tạo Migration 005+.
+- Không được sửa migration cũ chỉ để làm module mới chạy được.
+
+### Core Auth / Security / Trusted Server — chỉ sửa khi có Foundation review
+
+- `lib/auth/`
+- `lib/server-auth/`
+- `lib/sensitive/`
+- `lib/supabase/admin.ts`
+- `lib/supabase/server.ts`
+- `lib/supabase/client.ts`
+- `app/actions/sensitive.ts`
+- `shared/constants/roles.ts`
+- `shared/contracts/auth.ts`
+- `shared/contracts/sensitive.ts`
+- `proxy.ts`
+- `supabase/config.toml`
+- `tests/auth/`
+- `tests/security/`
+
+Các thành viên được phép import/sử dụng Foundation, nhưng KHÔNG được tự ý sửa các file trên chỉ để bypass hoặc làm cho module của mình chạy được.
+
+Đặc biệt không được tự sửa để bypass:
+
+- `ROLE_FORBIDDEN`
+- RLS
+- tenant isolation
+- MFA/AAL2
+- technician assignment
+- raw phone restriction
+- verbatim transcript restriction
+- signed URL restriction
+- audit requirement
+- Service Role boundary
+
+Nếu module thật sự cần thay đổi Foundation thì phải:
+
+1. Ghi rõ nhu cầu nghiệp vụ.
+2. Không tự mở rộng quyền.
+3. Tạo thay đổi Foundation riêng.
+4. Bổ sung security test.
+5. Review trước khi merge.
+
+### Phạm vi thành viên nên ưu tiên code
+
+Các thành viên nên ưu tiên làm việc trong module của mình, ví dụ:
+
+- `features/crm/`
+- `features/order/`
+- `features/payment/`
+- `features/survey/`
+- `features/installation/`
+- `features/inbox/`
+- `features/voice/`
+- `features/ai-analysis/`
+- `features/analytics/`
+- `features/automation/`
+
+và route/component tương ứng của module đó.
+
+Không được hiểu section này là: "tuyệt đối không bao giờ được sửa Foundation".
+
+Foundation chỉ được thay đổi khi có nhu cầu hợp lệ và phải qua review riêng.
+
+## 10. Những điều cấm
 
 - Service Role trong frontend hoặc secret mang tiền tố `NEXT_PUBLIC_`.
 - Raw phone ở frontend/log/error/export; direct private-table query từ browser.
@@ -125,9 +200,9 @@ Audit bắt buộc cho raw phone, Click-to-Call, privileged transcript/raw acces
 - SALE hoặc TECH đọc verbatim transcript/recording.
 - Dùng `sanitized_content` cho verbatim transcript.
 - Biến human session thành Worker bằng purpose enum.
-- Sửa Migration 001–003.
+- Sửa Migration 001–004.
 
-## 10. Checklist trước Pull Request
+## 11. Checklist trước Pull Request
 
 - [ ] Đã đọc `PROJECT_MASTER`, `DATA_CONTRACT`, `AUTH_DESIGN`, `SUPABASE_SCHEMA_DESIGN`, `SUPABASE_RLS_DESIGN` và tài liệu này.
 - [ ] Input client chỉ gồm business identifiers/selectors tối thiểu; không có trusted Company/role/path/secret.
@@ -140,4 +215,4 @@ Audit bắt buộc cho raw phone, Click-to-Call, privileged transcript/raw acces
 - [ ] Không mở đường transcript/recording cho SALE/TECH; không bypass bằng purpose enum.
 - [ ] Có test happy path, wrong company, inactive user/member, wrong role, missing resource và provider/storage/audit failure.
 - [ ] Chạy `npm run lint`, `npm run typecheck`, `npm run test:auth`, `npm run test:security`, `npm run build`, `git diff --check`.
-- [ ] Xác nhận Migration 001–003 không đổi và không commit credentials/artifact tạm.
+- [ ] Xác nhận Migration 001–004 không đổi và không commit credentials/artifact tạm.
