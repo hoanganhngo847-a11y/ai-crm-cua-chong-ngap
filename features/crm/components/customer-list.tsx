@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import type { CustomerResponse, CustomerSource, CustomerStage } from '../types/customer.types';
 import { CUSTOMER_SOURCES, CUSTOMER_STAGES } from '../types/customer.types';
 
@@ -369,6 +370,7 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                   <th className="py-3.5 px-4">Nguồn tiếp nhận</th>
                   <th className="py-3.5 px-4">Giai đoạn</th>
                   <th className="py-3.5 px-4">Ngày tạo</th>
+                  <th className="py-3.5 px-4 text-right">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-sm">
@@ -388,16 +390,22 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                     >
                       {/* Customer Code */}
                       <td className="py-3.5 px-4">
-                        <span className="font-mono text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-blue-400">
+                        <Link
+                          href={`/customers/${c.id}`}
+                          className="font-mono text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-blue-400 hover:border-blue-500 transition inline-block"
+                        >
                           {c.customer_code}
-                        </span>
+                        </Link>
                       </td>
 
                       {/* Name */}
                       <td className="py-3.5 px-4">
-                        <div className="font-medium text-white group-hover:text-blue-300 transition">
+                        <Link
+                          href={`/customers/${c.id}`}
+                          className="font-medium text-white hover:text-blue-300 transition"
+                        >
                           {c.name}
-                        </div>
+                        </Link>
                       </td>
 
                       {/* Phone (Masked or Unmasked) */}
@@ -451,6 +459,27 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Link
+                            href={`/inbox?customer_id=${c.id}`}
+                            className="p-1.5 rounded-lg bg-blue-600/10 hover:bg-blue-600 border border-blue-500/20 text-blue-400 hover:text-white text-xs transition"
+                            title="Mở Hộp thư Chat"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                            </svg>
+                          </Link>
+                          <Link
+                            href={`/customers/${c.id}`}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium transition"
+                          >
+                            Hồ sơ 360
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   );
