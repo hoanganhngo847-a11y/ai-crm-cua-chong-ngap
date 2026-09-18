@@ -104,6 +104,7 @@ export interface Customer {
   stage: CustomerStage;
   created_at: string;
   updated_at: string;
+  metadata?: Record<string, any>;
 }
 
 /**
@@ -149,6 +150,7 @@ export interface CustomerStageHistory {
   to_stage: CustomerStage;
   actor_type: StageActorType;
   changed_by_user_id: string | null;
+  actor_id?: string | null;
   reason: string;
   note?: string;
   source_ref: string | null;
@@ -201,11 +203,12 @@ export interface CustomerResponse {
  */
 export interface UpdateCustomerStageParams {
   customerId: string;
+  companyId: string;
   newStage: CustomerStage | string;
   actorType?: StageActorType;
   note?: string;
   userId?: string | null;
-  companyId?: string;
+  actorId?: string | null;
   sourceRef?: string;
 }
 

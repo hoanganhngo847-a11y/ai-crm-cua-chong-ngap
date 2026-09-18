@@ -101,13 +101,13 @@ export function maskPhone(phone: string | null | undefined): string {
  * Đảm bảo thỏa mãn CHECK chk_identities_phone_external_id (channel <> 'PHONE' OR external_id ~ '^[0-9a-f]{64}$')
  */
 export function computePhoneHmac(normalizedPhone: string): string {
-  const secret =
-    process.env.PHONE_HASH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    'ai-crm-phone-hmac-secret-v1';
+  const secret = process.env.PHONE_HASH_SECRET;
+  if (!secret || !secret.trim()) {
+    throw new Error('CONFIGURATION_ERROR: Thiếu biến môi trường PHONE_HASH_SECRET bắt buộc');
+  }
 
   return crypto
-    .createHmac('sha256', secret)
+    .createHmac('sha256', secret.trim())
     .update(normalizedPhone)
     .digest('hex');
 }
@@ -161,43 +161,24 @@ export async function findOrCreateByPhone(
   const phoneHmac = computePhoneHmac(normalizedPhone);
 
   // Bước 2: Tìm kiếm xem số điện thoại này đã thuộc khách hàng nào trong Company chưa
+  // Sử dụng Identity kênh PHONE với external_id là Keyed HMAC-SHA256 (Zero-Direct-Private-Access)
   let existingCustomerId: string | null = null;
   let existingContactData: { raw_phone: string; normalized_phone: string; is_verified: boolean } | null = null;
 
-  // Ưu tiên kiểm tra trong bảng private.customer_private_contacts
-  try {
-    const { data: contactRow } = await adminClient
-      .schema('private')
-      .from('customer_private_contacts')
-      .select('customer_id, raw_phone, normalized_phone, is_verified')
-      .eq('company_id', params.companyId)
-      .eq('normalized_phone', normalizedPhone)
-      .maybeSingle();
+  const { data: phoneIdentity, error: findPhoneErr } = await adminClient
+    .from('identities')
+    .select('customer_id')
+    .eq('company_id', params.companyId)
+    .eq('channel', 'PHONE')
+    .eq('external_id', phoneHmac)
+    .maybeSingle();
 
-    if (contactRow) {
-      existingCustomerId = contactRow.customer_id;
-      existingContactData = {
-        raw_phone: contactRow.raw_phone,
-        normalized_phone: contactRow.normalized_phone,
-        is_verified: contactRow.is_verified,
-      };
-    }
-  } catch {
-    // Nếu schema private không thể truy vấn qua PostgREST, tìm qua identity kênh PHONE
+  if (findPhoneErr) {
+    throw new Error(`Lỗi truy vấn danh tính điện thoại: ${findPhoneErr.message}`);
   }
 
-  if (!existingCustomerId) {
-    const { data: phoneIdentity } = await adminClient
-      .from('identities')
-      .select('customer_id')
-      .eq('company_id', params.companyId)
-      .eq('channel', 'PHONE')
-      .eq('external_id', phoneHmac)
-      .maybeSingle();
-
-    if (phoneIdentity) {
-      existingCustomerId = phoneIdentity.customer_id;
-    }
+  if (phoneIdentity) {
+    existingCustomerId = phoneIdentity.customer_id;
   }
 
   // ==========================================================================
@@ -216,26 +197,17 @@ export async function findOrCreateByPhone(
       throw new Error(`Không tìm thấy hồ sơ khách hàng cho ID: ${existingCustomerId}`);
     }
 
-    // Nếu chưa có contactData, nạp từ RPC hoặc fallback
+    // Khởi tạo contactData từ thông tin người dùng cung cấp
     if (!existingContactData) {
-      const { data: rpcData } = await adminClient.rpc('get_customer_private_contact', {
-        p_company_id: params.companyId,
-        p_customer_id: existingCustomerId,
-      });
-
-      if (rpcData && rpcData.length > 0) {
-        existingContactData = rpcData[0];
-      } else {
-        existingContactData = {
-          raw_phone: params.phone.trim(),
-          normalized_phone: normalizedPhone,
-          is_verified: params.verified ?? false,
-        };
-      }
+      existingContactData = {
+        raw_phone: params.phone.trim(),
+        normalized_phone: normalizedPhone,
+        is_verified: params.verified ?? false,
+      };
     }
 
     // Đảm bảo Identity kênh PHONE tồn tại
-    const { data: existingPhoneId } = await adminClient
+    const { data: existingPhoneId, error: checkPhoneIdErr } = await adminClient
       .from('identities')
       .select('id')
       .eq('company_id', params.companyId)
@@ -243,8 +215,12 @@ export async function findOrCreateByPhone(
       .eq('external_id', phoneHmac)
       .maybeSingle();
 
+    if (checkPhoneIdErr) {
+      throw new Error(`Lỗi kiểm tra danh tính điện thoại: ${checkPhoneIdErr.message}`);
+    }
+
     if (!existingPhoneId) {
-      await adminClient.from('identities').insert({
+      const { error: insertPhoneErr } = await adminClient.from('identities').insert({
         company_id: params.companyId,
         customer_id: existingCustomerId,
         channel: 'PHONE',
@@ -252,11 +228,15 @@ export async function findOrCreateByPhone(
         verified: params.verified ?? false,
         metadata: {},
       });
+
+      if (insertPhoneErr) {
+        throw new Error(`Lỗi liên kết danh tính điện thoại: ${insertPhoneErr.message}`);
+      }
     }
 
     // Nếu có truyền kênh đa kênh bổ sung (Zalo, Facebook, Website) -> Liên kết danh tính
     if (params.channel && params.externalId && params.channel !== 'PHONE') {
-      const { data: existingChannelId } = await adminClient
+      const { data: existingChannelId, error: checkChannelErr } = await adminClient
         .from('identities')
         .select('id')
         .eq('company_id', params.companyId)
@@ -264,8 +244,12 @@ export async function findOrCreateByPhone(
         .eq('external_id', params.externalId)
         .maybeSingle();
 
+      if (checkChannelErr) {
+        throw new Error(`Lỗi kiểm tra danh tính kênh ${params.channel}: ${checkChannelErr.message}`);
+      }
+
       if (!existingChannelId) {
-        await adminClient.from('identities').insert({
+        const { error: insertChannelErr } = await adminClient.from('identities').insert({
           company_id: params.companyId,
           customer_id: existingCustomerId,
           channel: params.channel,
@@ -273,15 +257,23 @@ export async function findOrCreateByPhone(
           verified: params.verified ?? false,
           metadata: params.metadata || {},
         });
+
+        if (insertChannelErr) {
+          throw new Error(`Lỗi liên kết danh tính kênh ${params.channel}: ${insertChannelErr.message}`);
+        }
       }
     }
 
     // Lấy toàn bộ danh sách identities hiện tại
-    const { data: allIdentities } = await adminClient
+    const { data: allIdentities, error: listIdentitiesErr } = await adminClient
       .from('identities')
       .select('*')
       .eq('company_id', params.companyId)
       .eq('customer_id', existingCustomerId);
+
+    if (listIdentitiesErr) {
+      throw new Error(`Lỗi nạp danh sách danh tính: ${listIdentitiesErr.message}`);
+    }
 
     return {
       customer: customer as Customer,
@@ -310,7 +302,7 @@ export async function findOrCreateByPhone(
       ? CUSTOMER_STAGES.LEAD_NEW
       : params.stage;
 
-  // 1. Tạo Customer trong public.customers
+  // 1. Tạo Customer trong public.customers (lưu masked_phone trong metadata cho vai trò SALE)
   const { data: newCustomer, error: insertCustErr } = await adminClient
     .from('customers')
     .insert({
@@ -318,6 +310,10 @@ export async function findOrCreateByPhone(
       name: params.name.trim(),
       source: initialSource,
       stage: initialStage,
+      metadata: {
+        masked_phone: maskPhone(params.phone),
+        ...(params.metadata || {}),
+      },
     })
     .select('*')
     .single();
@@ -328,24 +324,8 @@ export async function findOrCreateByPhone(
 
   const createdCustomerId = newCustomer.id;
 
-  // 2. Lưu số điện thoại vào private.customer_private_contacts (Bảo mật tuyệt đối)
-  const contactPayload = {
-    company_id: params.companyId,
-    customer_id: createdCustomerId,
-    normalized_phone: normalizedPhone,
-    raw_phone: params.phone.trim(),
-    phone_country_code: 'VN',
-    is_verified: params.verified ?? false,
-  };
-
-  try {
-    await adminClient.schema('private').from('customer_private_contacts').insert(contactPayload);
-  } catch (err) {
-    console.error('Lỗi khi ghi private.customer_private_contacts:', err);
-  }
-
   // 3. Tạo identity kênh PHONE (với external_id là Keyed HMAC-SHA256)
-  await adminClient.from('identities').insert({
+  const { error: insertPhoneErr } = await adminClient.from('identities').insert({
     company_id: params.companyId,
     customer_id: createdCustomerId,
     channel: 'PHONE',
@@ -354,9 +334,13 @@ export async function findOrCreateByPhone(
     metadata: {},
   });
 
+  if (insertPhoneErr) {
+    throw new Error(`Lỗi tạo danh tính số điện thoại khách hàng: ${insertPhoneErr.message}`);
+  }
+
   // 4. Tạo identity kênh mạng xã hội nếu có
   if (params.channel && params.externalId && params.channel !== 'PHONE') {
-    await adminClient.from('identities').insert({
+    const { error: insertSocialErr } = await adminClient.from('identities').insert({
       company_id: params.companyId,
       customer_id: createdCustomerId,
       channel: params.channel,
@@ -364,11 +348,15 @@ export async function findOrCreateByPhone(
       verified: params.verified ?? false,
       metadata: params.metadata || {},
     });
+
+    if (insertSocialErr) {
+      throw new Error(`Lỗi tạo danh tính kênh ${params.channel}: ${insertSocialErr.message}`);
+    }
   }
 
   // 5. Ghi nhận lịch sử chuyển trạng thái đầu tiên (customer_stage_histories) với actor_type='SYSTEM'
   const historyNote = `Khách hàng mới tạo từ nguồn [${initialSource}]`;
-  await adminClient.from('customer_stage_histories').insert({
+  const { error: insertHistErr } = await adminClient.from('customer_stage_histories').insert({
     company_id: params.companyId,
     customer_id: createdCustomerId,
     from_stage: null,
@@ -379,12 +367,20 @@ export async function findOrCreateByPhone(
     source_ref: initialSource,
   });
 
+  if (insertHistErr) {
+    throw new Error(`Lỗi ghi nhận lịch sử trạng thái ban đầu: ${insertHistErr.message}`);
+  }
+
   // 6. Nạp lại danh sách identities đã tạo
-  const { data: createdIdentities } = await adminClient
+  const { data: createdIdentities, error: fetchIdentitiesErr } = await adminClient
     .from('identities')
     .select('*')
     .eq('company_id', params.companyId)
     .eq('customer_id', createdCustomerId);
+
+  if (fetchIdentitiesErr) {
+    throw new Error(`Lỗi truy vấn danh tính sau khi tạo: ${fetchIdentitiesErr.message}`);
+  }
 
   return {
     customer: newCustomer as Customer,
@@ -433,178 +429,156 @@ export function toCanonicalStage(stage: CustomerStage | string): CustomerStage {
 /**
  * 5. updateStage: Cập nhật giai đoạn khách hàng và lưu vết lịch sử (Strict Append-Only).
  * Tuân thủ docs/SUPABASE_SCHEMA_DESIGN.md (Mục 6.6: customer_stage_histories)
- * Hỗ trợ cả 2 cách gọi:
- * - updateStage(customerId, newStage, actorType, note, client)
- * - updateStage(params, client)
+ *
+ * Khóa lỗ hổng Cross-Tenant (P0):
+ * - Bắt buộc tham số companyId (lấy từ server membership context).
+ * - Resource Authorization: Query khách hàng với điều kiện (id = customerId AND company_id = companyId).
+ * - Nếu không tìm thấy hoặc thuộc tenant khác: Ném lỗi 404 Not Found (fail-closed, không để lộ dữ liệu).
+ * - Cập nhật stage & updated_at với điều kiện (id = customerId AND company_id = companyId).
+ * - Ghi bản ghi vào customer_stage_histories (Strict Append-Only).
+ * - Loại bỏ hoàn toàn cơ chế mock fallback: lỗi DB phải fail-closed và ném lỗi.
  */
 export async function updateStage(
   customerIdOrParams: string | UpdateCustomerStageParams,
+  companyIdOrNewStage?: string | CustomerStage | SupabaseClient,
   newStageOrClient?: CustomerStage | string | SupabaseClient,
   actorType?: StageActorType | string,
   note?: string,
   client?: SupabaseClient
 ): Promise<{ customer: Customer; history: CustomerStageHistory }> {
-  let params: UpdateCustomerStageParams;
-  let adminClient: SupabaseClient | null = null;
+  let customerId: string;
+  let companyId: string;
+  let newStage: string;
+  let actorTypeVal: StageActorType = STAGE_ACTOR_TYPES.USER;
+  let actorId: string | null = null;
+  let noteVal: string | undefined = undefined;
+  let sourceRefVal: string | null = null;
+  let adminClient: SupabaseClient;
 
   if (typeof customerIdOrParams === 'object' && customerIdOrParams !== null) {
-    params = customerIdOrParams;
-    try {
-      adminClient = (newStageOrClient as SupabaseClient) || client || createAdminClient();
-    } catch {
-      adminClient = null;
-    }
+    const p = customerIdOrParams;
+    customerId = p.customerId;
+    companyId = p.companyId;
+    newStage = p.newStage;
+    actorTypeVal = (p.actorType as StageActorType) || STAGE_ACTOR_TYPES.USER;
+    actorId = p.actorId || p.userId || null;
+    noteVal = p.note;
+    sourceRefVal = p.sourceRef || null;
+    adminClient = (companyIdOrNewStage as SupabaseClient) || client || createAdminClient();
   } else {
-    params = {
-      customerId: customerIdOrParams,
-      newStage: (newStageOrClient as CustomerStage | string) || '',
-      actorType: (actorType as StageActorType) || STAGE_ACTOR_TYPES.USER,
-      note: note,
-    };
-    try {
-      adminClient = client || createAdminClient();
-    } catch {
-      adminClient = null;
+    customerId = customerIdOrParams;
+    const secondArg = String(companyIdOrNewStage || '');
+    const isSecondArgStage =
+      Object.values(CUSTOMER_STAGES).includes(secondArg as any) ||
+      ['DA_CO_GIA', 'DANG_THUONG_LUONG', 'KHACH_MOI'].includes(secondArg.toUpperCase());
+
+    if (isSecondArgStage) {
+      throw new Error('companyId là tham số bắt buộc để xác thực quyền truy cập và ngăn chặn lỗ hổng Cross-Tenant.');
     }
+
+    companyId = secondArg;
+    newStage = String(newStageOrClient || '');
+    actorTypeVal = (actorType as StageActorType) || STAGE_ACTOR_TYPES.USER;
+    noteVal = note;
+    adminClient = client || createAdminClient();
   }
 
-  if (!params.customerId) {
+  if (!customerId || !customerId.trim()) {
     throw new Error('Mã khách hàng (customerId) là bắt buộc.');
   }
-  if (!params.newStage) {
+  if (!companyId || !companyId.trim()) {
+    throw new Error('companyId là tham số bắt buộc để xác thực quyền truy cập và ngăn chặn lỗ hổng Cross-Tenant.');
+  }
+  if (!newStage || !newStage.trim()) {
     throw new Error('Giai đoạn mới (newStage) là bắt buộc.');
   }
 
-  const canonicalNewStage = toCanonicalStage(params.newStage);
+  const canonicalNewStage = toCanonicalStage(newStage);
   const now = new Date().toISOString();
 
-  let oldStage: CustomerStage = CUSTOMER_STAGES.LEAD_NEW;
-  let companyId = params.companyId || '00000000-0000-0000-0000-000000000001';
-  let updatedCustomer: Customer | null = null;
-  let historyRecord: CustomerStageHistory | null = null;
+  // 1. Resource Authorization trước khi update:
+  // Truy vấn customer từ database với điều kiện cả id = customerId VÀ company_id = companyId
+  const { data: dbCustomer, error: fetchErr } = await adminClient
+    .from('customers')
+    .select('*')
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .maybeSingle();
 
-  // 1. Thử truy vấn và cập nhật trên database Supabase nếu có adminClient
-  if (adminClient) {
-    try {
-      const { data: dbCustomer } = await adminClient
-      .from('customers')
-      .select('*')
-      .eq('id', params.customerId)
-      .maybeSingle();
-
-    if (dbCustomer) {
-      oldStage = dbCustomer.stage;
-      companyId = dbCustomer.company_id;
-
-      // Cập nhật stage trong bảng customers
-      const { data: updCustomer, error: updErr } = await adminClient
-        .from('customers')
-        .update({
-          stage: canonicalNewStage,
-          updated_at: now,
-        })
-        .eq('id', params.customerId)
-        .select()
-        .single();
-
-      if (updErr) {
-        throw new Error(`Lỗi cập nhật bảng customers: ${updErr.message}`);
-      }
-      updatedCustomer = updCustomer as Customer;
-
-      // Chèn bản ghi mới vào customer_stage_histories (Strict Append-Only)
-      const stageReason = params.note || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
-      const { data: histRow, error: histErr } = await adminClient
-        .from('customer_stage_histories')
-        .insert({
-          company_id: companyId,
-          customer_id: params.customerId,
-          from_stage: oldStage,
-          to_stage: canonicalNewStage,
-          actor_type: params.actorType || STAGE_ACTOR_TYPES.USER,
-          changed_by_user_id: params.userId || null,
-          reason: stageReason,
-          source_ref: params.sourceRef || null,
-          changed_at: now,
-        })
-        .select()
-        .single();
-
-      if (histErr) {
-        throw new Error(`Lỗi ghi lịch sử customer_stage_histories: ${histErr.message}`);
-      }
-      const rawHist = histRow as Record<string, any>;
-      historyRecord = {
-        id: rawHist.id,
-        company_id: rawHist.company_id,
-        customer_id: rawHist.customer_id,
-        from_stage: rawHist.from_stage,
-        to_stage: rawHist.to_stage,
-        actor_type: rawHist.actor_type,
-        changed_by_user_id: rawHist.changed_by_user_id,
-        reason: rawHist.reason,
-        note: rawHist.reason,
-        source_ref: rawHist.source_ref,
-        changed_at: rawHist.changed_at,
-        created_at: rawHist.changed_at,
-      };
-    }
-  } catch (err) {
-    // Database query fallback cho mock store
-  }
+  if (fetchErr) {
+    throw new Error(`Lỗi truy vấn cơ sở dữ liệu: ${fetchErr.message}`);
   }
 
-  // 2. Fallback hoặc xử lý mock store cho giai đoạn 2
-  if (!updatedCustomer) {
-    oldStage = mockCustomerStages[params.customerId] || CUSTOMER_STAGES.LEAD_NEW;
-    mockCustomerStages[params.customerId] = canonicalNewStage;
+  // Nếu không tìm thấy hoặc customer thuộc công ty khác: Ném lỗi 404 Not Found (chặn đứng cross-tenant)
+  if (!dbCustomer) {
+    const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
+    (notFoundError as any).status = 404;
+    (notFoundError as any).code = 'NOT_FOUND';
+    throw notFoundError;
+  }
 
-    updatedCustomer = {
-      id: params.customerId,
-      company_id: companyId,
-      customer_code: params.customerId === 'cust-1' ? 'KH-000001' : `KH-${params.customerId}`,
-      name:
-        params.customerId === 'cust-1'
-          ? 'Anh Hoàng Nam'
-          : params.customerId === 'cust-2'
-            ? 'Chị Mai Phương'
-            : params.customerId === 'cust-3'
-              ? 'Bác Quốc Tuấn'
-              : params.customerId === 'cust-4'
-                ? 'Anh Trọng Hiếu'
-                : 'Khách hàng',
-      source: CUSTOMER_SOURCES.MANUAL,
+  const oldStage = dbCustomer.stage as CustomerStage;
+
+  // 2. Cập nhật stage và updated_at cho customer với điều kiện id = customerId VÀ company_id = companyId
+  const { data: updCustomer, error: updErr } = await adminClient
+    .from('customers')
+    .update({
       stage: canonicalNewStage,
-      created_at: now,
       updated_at: now,
-    };
+    })
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .select()
+    .single();
 
-    const stageReason = params.note || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
-    historyRecord = {
-      id: `csh-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+  if (updErr || !updCustomer) {
+    throw new Error(`Lỗi cập nhật bảng customers: ${updErr?.message || 'Không thể cập nhật khách hàng'}`);
+  }
+
+  // 3. Ghi bản ghi mới vào bảng customer_stage_histories (Strict Append-Only)
+  // chứa customer_id, company_id, from_stage, to_stage, actor_type, actor_id, note, created_at
+  const stageReason = noteVal || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
+  const { data: histRow, error: histErr } = await adminClient
+    .from('customer_stage_histories')
+    .insert({
       company_id: companyId,
-      customer_id: params.customerId,
+      customer_id: customerId,
       from_stage: oldStage,
       to_stage: canonicalNewStage,
-      actor_type: (params.actorType as StageActorType) || STAGE_ACTOR_TYPES.USER,
-      changed_by_user_id: params.userId || null,
+      actor_type: actorTypeVal,
+      changed_by_user_id: actorId,
       reason: stageReason,
-      note: stageReason,
-      source_ref: params.sourceRef || null,
+      source_ref: sourceRefVal,
       changed_at: now,
-      created_at: now,
-    };
+    })
+    .select()
+    .single();
 
-    mockStageHistories.unshift(historyRecord);
+  if (histErr || !histRow) {
+    throw new Error(`Lỗi ghi lịch sử customer_stage_histories: ${histErr?.message || 'Không thể ghi lịch sử'}`);
   }
 
-  const result = {
-    customer: updatedCustomer,
-    history: historyRecord!,
-    ...updatedCustomer,
+  const rawHist = histRow as Record<string, any>;
+  const historyRecord: CustomerStageHistory = {
+    id: rawHist.id,
+    company_id: rawHist.company_id,
+    customer_id: rawHist.customer_id,
+    from_stage: rawHist.from_stage,
+    to_stage: rawHist.to_stage,
+    actor_type: rawHist.actor_type,
+    changed_by_user_id: rawHist.changed_by_user_id,
+    actor_id: rawHist.changed_by_user_id,
+    reason: rawHist.reason,
+    note: rawHist.reason,
+    source_ref: rawHist.source_ref,
+    changed_at: rawHist.changed_at,
+    created_at: rawHist.changed_at,
   };
 
-  return result as { customer: Customer; history: CustomerStageHistory } & Customer;
+  return {
+    customer: updCustomer as Customer,
+    history: historyRecord,
+  };
 }
 
 /**
@@ -614,21 +588,41 @@ export async function getStageHistories(
   customerId: string,
   client?: SupabaseClient
 ): Promise<CustomerStageHistory[]> {
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+  let adminClient: SupabaseClient | null = null;
   try {
-    const adminClient = client || createAdminClient();
-    const { data } = await adminClient
+    adminClient = client || createAdminClient();
+  } catch (err) {
+    if (!isDemoMode) {
+      throw new Error(`DATABASE_ERROR: Không thể kết nối Supabase Client: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (adminClient) {
+    const { data, error } = await adminClient
       .from('customer_stage_histories')
       .select('*')
       .eq('customer_id', customerId)
       .order('changed_at', { ascending: false });
-    if (data && data.length > 0) {
+
+    if (error) {
+      if (!isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi truy vấn customer_stage_histories: ${error.message}`);
+      }
+    } else if (data) {
       return data as CustomerStageHistory[];
     }
-  } catch {}
+  }
 
-  return mockStageHistories
-    .filter((h) => h.customer_id === customerId)
-    .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+  // Fallback mock store chỉ kích hoạt khi có cờ explicit NEXT_PUBLIC_DEMO_MODE === 'true'
+  if (isDemoMode) {
+    return mockStageHistories
+      .filter((h) => h.customer_id === customerId)
+      .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+  }
+
+  return [];
 }
 
 /**
@@ -695,6 +689,11 @@ export function sanitizeForRole(
     } else {
       displayPhone = maskPhone(rawOrNormalized);
     }
+  } else if (!isBossAdmin) {
+    const meta = (customerData.customer as any)?.metadata as Record<string, any> | undefined;
+    if (meta?.masked_phone && typeof meta.masked_phone === 'string') {
+      displayPhone = maskPhone(meta.masked_phone);
+    }
   }
 
   return {
@@ -734,29 +733,36 @@ export async function getUrgentClosingCustomers(
   pendingSaleCustomerIds?: Set<string>,
   client?: SupabaseClient
 ): Promise<CustomerResponse[]> {
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
   let adminClient: SupabaseClient | null = null;
   try {
     adminClient = client || createAdminClient();
-  } catch {
-    adminClient = null;
+  } catch (clientErr) {
+    if (!isDemoMode) {
+      throw new Error(`DATABASE_ERROR: Không thể kết nối database: ${clientErr instanceof Error ? clientErr.message : String(clientErr)}`);
+    }
   }
 
   let customers: Customer[] = [];
 
   if (adminClient) {
-    try {
-      const { data } = await adminClient
-        .from('customers')
-        .select('*')
-        .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING]);
-      if (data && data.length > 0) {
-        customers = data as Customer[];
+    const { data, error } = await adminClient
+      .from('customers')
+      .select('*')
+      .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING]);
+
+    if (error) {
+      if (!isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi truy vấn danh sách khách hàng cần chốt: ${error.message}`);
       }
-    } catch {}
+    } else if (data) {
+      customers = data as Customer[];
+    }
   }
 
-  // Fallback mock store
-  if (customers.length === 0) {
+  // Fallback mock store chỉ kích hoạt khi có cờ explicit NEXT_PUBLIC_DEMO_MODE === 'true'
+  if (customers.length === 0 && isDemoMode) {
     customers = [
       {
         id: 'cust-1',
@@ -803,11 +809,12 @@ export async function getUrgentClosingCustomers(
   for (const c of customers) {
     const urgency = evaluateUrgency(c, pendingSaleCustomerIds);
     if (urgency.isUrgent) {
-      const rawPhone = mockPhoneMap[c.id] || '0912345612';
+      const meta = c.metadata as Record<string, any> | undefined;
+      const rawPhone = (isDemoMode && mockPhoneMap[c.id]) ? mockPhoneMap[c.id] : (meta?.raw_phone || '');
       const sanitized = sanitizeForRole(
         {
           customer: c,
-          contact: { raw_phone: rawPhone, normalized_phone: `+84${rawPhone.slice(1)}` },
+          contact: rawPhone ? { raw_phone: rawPhone, normalized_phone: normalizePhone(rawPhone) } : null,
         },
         role,
         urgency

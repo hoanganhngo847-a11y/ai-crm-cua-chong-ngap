@@ -6,15 +6,21 @@ import type {
   InboxMessage,
   SendMessageInput,
 } from '../types/inbox.types';
+import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
+import { maskPhone } from '../../crm/services/customer.service';
+import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 
 // ============================================================================
 // In-Memory Normalized Mock Store for Phase 2
 // (Ready for Phase 3 integration with Member 3 Zalo OA & Member 4 Facebook Messenger)
 // ============================================================================
 
+export const DEFAULT_INBOX_COMPANY_ID = '00000000-0000-0000-0000-000000000001';
+
 const INITIAL_CONVERSATIONS: Conversation[] = [
   {
     id: 'conv-1',
+    company_id: DEFAULT_INBOX_COMPANY_ID,
     customer_id: 'cust-1',
     customer_name: 'Anh Hoàng Nam',
     customer_code: 'KH-000001',
@@ -31,6 +37,7 @@ const INITIAL_CONVERSATIONS: Conversation[] = [
   },
   {
     id: 'conv-2',
+    company_id: DEFAULT_INBOX_COMPANY_ID,
     customer_id: 'cust-2',
     customer_name: 'Chị Mai Phương',
     customer_code: 'KH-000002',
@@ -47,6 +54,7 @@ const INITIAL_CONVERSATIONS: Conversation[] = [
   },
   {
     id: 'conv-3',
+    company_id: DEFAULT_INBOX_COMPANY_ID,
     customer_id: 'cust-3',
     customer_name: 'Bác Quốc Tuấn',
     customer_code: 'KH-000003',
@@ -63,6 +71,7 @@ const INITIAL_CONVERSATIONS: Conversation[] = [
   },
   {
     id: 'conv-4',
+    company_id: DEFAULT_INBOX_COMPANY_ID,
     customer_id: 'cust-4',
     customer_name: 'Anh Trọng Hiếu',
     customer_code: 'KH-000004',
@@ -83,6 +92,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
   'conv-1': [
     {
       id: 'msg-1-1',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-1',
       customer_id: 'cust-1',
       channel: 'facebook',
@@ -95,6 +105,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-1-2',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-1',
       customer_id: 'cust-1',
       channel: 'facebook',
@@ -107,6 +118,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-1-3',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-1',
       customer_id: 'cust-1',
       channel: 'facebook',
@@ -119,6 +131,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-1-4',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-1',
       customer_id: 'cust-1',
       channel: 'facebook',
@@ -130,6 +143,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-1-5',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-1',
       customer_id: 'cust-1',
       channel: 'facebook',
@@ -145,6 +159,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
   'conv-2': [
     {
       id: 'msg-2-1',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-2',
       customer_id: 'cust-2',
       channel: 'zalo',
@@ -157,6 +172,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-2-2',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-2',
       customer_id: 'cust-2',
       channel: 'zalo',
@@ -169,6 +185,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-2-3',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-2',
       customer_id: 'cust-2',
       channel: 'zalo',
@@ -180,6 +197,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-2-4',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-2',
       customer_id: 'cust-2',
       channel: 'zalo',
@@ -194,6 +212,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
   'conv-3': [
     {
       id: 'msg-3-1',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-3',
       customer_id: 'cust-3',
       channel: 'facebook',
@@ -206,6 +225,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-3-2',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-3',
       customer_id: 'cust-3',
       channel: 'facebook',
@@ -221,6 +241,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
   'conv-4': [
     {
       id: 'msg-4-1',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-4',
       customer_id: 'cust-4',
       channel: 'zalo',
@@ -232,6 +253,7 @@ const INITIAL_MESSAGES: Record<string, InboxMessage[]> = {
     },
     {
       id: 'msg-4-2',
+      company_id: DEFAULT_INBOX_COMPANY_ID,
       conversation_id: 'conv-4',
       customer_id: 'cust-4',
       channel: 'zalo',
@@ -250,10 +272,19 @@ let conversationsStore: Conversation[] = [...INITIAL_CONVERSATIONS];
 const messagesStore: Record<string, InboxMessage[]> = { ...INITIAL_MESSAGES };
 
 /**
- * 1. Lấy danh sách hội thoại có bộ lọc (Kênh, tìm kiếm, chưa đọc)
+ * 1. Lấy danh sách hội thoại có bộ lọc (Bắt buộc tham số companyId - Strict Tenant Isolation)
  */
-export async function getConversations(filter?: ConversationFilter): Promise<Conversation[]> {
-  let list = [...conversationsStore];
+export async function getConversations(
+  companyId: string,
+  filter?: ConversationFilter,
+  callerRole?: string | null
+): Promise<Conversation[]> {
+  if (!companyId) {
+    throw new Error('companyId là bắt buộc khi truy vấn danh sách hội thoại.');
+  }
+
+  // Tenant Isolation: Lọc nghiêm ngặt chỉ lấy các cuộc hội thoại thuộc companyId của caller
+  let list = conversationsStore.filter((c) => c.company_id === companyId);
 
   if (filter?.channel && filter.channel !== 'all') {
     list = list.filter((c) => c.channel === filter.channel);
@@ -273,60 +304,154 @@ export async function getConversations(filter?: ConversationFilter): Promise<Con
     list = list.filter((c) => c.unread_count > 0);
   }
 
+  if (filter?.status && filter.status !== 'all') {
+    list = list.filter((c) => c.status === filter.status);
+  }
+
   // Sắp xếp thời gian tin nhắn mới nhất lên đầu
   list.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại và che số trong last_message
+  if (callerRole === APPLICATION_ROLES.SALE) {
+    list = list.map((c) => ({
+      ...c,
+      customer_phone: maskPhone(c.customer_phone),
+      last_message: sanitizePhoneInText(c.last_message),
+    }));
+  }
 
   return list;
 }
 
 /**
- * 2. Lấy chi tiết một cuộc hội thoại theo ID
+ * 2. Lấy chi tiết một cuộc hội thoại theo ID (Bắt buộc companyId - Resource Authorization)
  */
-export async function getConversationById(id: string): Promise<Conversation | null> {
-  const found = conversationsStore.find((c) => c.id === id);
-  return found || null;
+export async function getConversationById(
+  companyId: string,
+  id: string,
+  callerRole?: string | null
+): Promise<Conversation | null> {
+  if (!companyId || !id) {
+    return null;
+  }
+  // Resource Authorization: Chỉ trả về nếu cuộc hội thoại khớp companyId
+  const found = conversationsStore.find((c) => c.id === id && c.company_id === companyId);
+  if (!found) {
+    return null;
+  }
+
+  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại và che số trong last_message
+  if (callerRole === APPLICATION_ROLES.SALE) {
+    return {
+      ...found,
+      customer_phone: maskPhone(found.customer_phone),
+      last_message: sanitizePhoneInText(found.last_message),
+    };
+  }
+
+  return { ...found };
 }
 
 /**
- * 3. Lấy toàn bộ tin nhắn thuộc một cuộc hội thoại
+ * 3. Lấy toàn bộ tin nhắn thuộc một cuộc hội thoại (Resource Authorization & 404 Fail-Closed)
  */
-export async function getMessagesByConversationId(conversationId: string): Promise<InboxMessage[]> {
+export async function getMessagesByConversationId(
+  companyId: string,
+  conversationId: string,
+  callerRole?: string | null
+): Promise<InboxMessage[]> {
+  if (!companyId) {
+    const err = new Error('companyId là bắt buộc khi lấy tin nhắn.');
+    (err as any).status = 400;
+    (err as any).code = 'BAD_REQUEST';
+    throw err;
+  }
+  if (!conversationId) {
+    const err = new Error('conversationId là bắt buộc khi lấy tin nhắn.');
+    (err as any).status = 400;
+    (err as any).code = 'BAD_REQUEST';
+    throw err;
+  }
+
+  // Resource Authorization: Kiểm tra cuộc hội thoại có đúng thuộc companyId của caller hay không
+  const conv = conversationsStore.find(
+    (c) => c.id === conversationId && c.company_id === companyId
+  );
+  if (!conv) {
+    const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
+    (notFoundErr as any).status = 404;
+    (notFoundErr as any).code = 'NOT_FOUND';
+    throw notFoundErr;
+  }
+
   const messages = messagesStore[conversationId] || [];
 
   // Đánh dấu đã đọc khi xem tin nhắn
-  const conv = conversationsStore.find((c) => c.id === conversationId);
-  if (conv && conv.unread_count > 0) {
+  if (conv.unread_count > 0) {
     conv.unread_count = 0;
   }
 
   // Sắp xếp tăng dần theo thời gian để hiển thị từ cũ đến mới
-  return [...messages].sort(
+  const sorted = [...messages].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
+
+  // Zero-Phone Sanitization: Nếu là SALE, làm sạch số điện thoại xuất hiện trong message.content
+  // Chỉ có BOSS_ADMIN mới được nhận nguyên văn nội dung tin nhắn gốc.
+  if (callerRole === APPLICATION_ROLES.SALE) {
+    return sorted.map((m) => ({
+      ...m,
+      content: sanitizePhoneInText(m.content),
+    }));
+  }
+
+  return sorted;
 }
 
 /**
- * 4. Gửi tin nhắn phản hồi từ Sale
+ * 4. Gửi tin nhắn phản hồi từ Sale (Resource Authorization & 404 Fail-Closed)
  */
-export async function sendMessage(input: SendMessageInput): Promise<InboxMessage> {
-  const { conversation_id, content, sender_type = 'sale' } = input;
+export async function sendMessage(
+  input: SendMessageInput,
+  callerCompanyId?: string
+): Promise<InboxMessage> {
+  const companyId = callerCompanyId || input.company_id;
 
-  if (!conversation_id || !content.trim()) {
-    throw new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.');
+  if (!companyId) {
+    const err = new Error('company_id là bắt buộc khi gửi tin nhắn.');
+    (err as any).status = 400;
+    (err as any).code = 'BAD_REQUEST';
+    throw err;
   }
 
-  const conv = conversationsStore.find((c) => c.id === conversation_id);
+  const { conversation_id, content, sender_type = 'sale', sender_name } = input;
+
+  if (!conversation_id || !content.trim()) {
+    const err = new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.');
+    (err as any).status = 400;
+    (err as any).code = 'BAD_REQUEST';
+    throw err;
+  }
+
+  // Resource Authorization: Cuộc hội thoại phải thuộc quyền sở hữu của companyId
+  const conv = conversationsStore.find(
+    (c) => c.id === conversation_id && c.company_id === companyId
+  );
   if (!conv) {
-    throw new Error(`Không tìm thấy cuộc hội thoại ID: ${conversation_id}`);
+    const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.');
+    (notFoundErr as any).status = 404;
+    (notFoundErr as any).code = 'NOT_FOUND';
+    throw notFoundErr;
   }
 
   const newMessage: InboxMessage = {
     id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    company_id: companyId,
     conversation_id,
     customer_id: conv.customer_id,
     channel: conv.channel,
     sender_type,
-    sender_name: sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng',
+    sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
     content: content.trim(),
     created_at: new Date().toISOString(),
     direction: sender_type === 'customer' ? 'inbound' : 'outbound',
@@ -347,92 +472,123 @@ export async function sendMessage(input: SendMessageInput): Promise<InboxMessage
 }
 
 /**
- * 5. Lấy dòng thời gian tương tác tổng hợp (Customer 360 Timeline)
+ * 5. Lấy dòng thời gian tương tác tổng hợp (Customer 360 Timeline - Bắt buộc companyId)
  */
-export async function getCustomerTimeline(customerId: string): Promise<CustomerTimelineEvent[]> {
+export async function getCustomerTimeline(
+  customerId: string,
+  companyId: string,
+  callerRole?: string | null
+): Promise<CustomerTimelineEvent[]> {
+  if (!companyId) {
+    throw new Error('companyId là bắt buộc khi lấy dòng thời gian khách hàng.');
+  }
+
   const events: CustomerTimelineEvent[] = [];
 
-  // Lấy các tin nhắn thuộc khách hàng này
-  for (const msgs of Object.values(messagesStore)) {
+  // Lấy các cuộc hội thoại thuộc khách hàng này VÀ thuộc đúng companyId
+  const allowedConvIds = new Set(
+    conversationsStore
+      .filter((c) => c.company_id === companyId && c.customer_id === customerId)
+      .map((c) => c.id)
+  );
+
+  // Chỉ lấy tin nhắn từ các cuộc hội thoại thuộc companyId này
+  for (const convId of allowedConvIds) {
+    const msgs = messagesStore[convId] || [];
     for (const m of msgs) {
-      if (m.customer_id === customerId) {
-        events.push({
-          id: m.id,
-          customer_id: customerId,
-          type: 'MESSAGE',
-          channel: m.channel,
-          title:
-            m.sender_type === 'customer'
-              ? 'Tin nhắn từ khách hàng'
-              : m.sender_type === 'ai'
-                ? 'AI phản hồi tự động'
-                : 'Sale gửi tin nhắn tư vấn',
-          description: m.content,
-          timestamp: m.created_at,
-          actor_type: m.sender_type,
-          actor_name: m.sender_name,
-        });
-      }
+      events.push({
+        id: m.id,
+        company_id: companyId,
+        customer_id: customerId,
+        type: 'MESSAGE',
+        channel: m.channel,
+        title:
+          m.sender_type === 'customer'
+            ? 'Tin nhắn từ khách hàng'
+            : m.sender_type === 'ai'
+              ? 'AI phản hồi tự động'
+              : 'Sale gửi tin nhắn tư vấn',
+        description: m.content,
+        timestamp: m.created_at,
+        actor_type: m.sender_type,
+        actor_name: m.sender_name,
+      });
     }
   }
 
-  // Bổ sung các sự kiện nghiệp vụ mẫu trong hành trình khách hàng (cuộc gọi, khảo sát, đặt cọc)
-  if (customerId === 'cust-1') {
+  // Bổ sung các sự kiện nghiệp vụ mẫu trong hành trình khách hàng (chỉ khi cùng companyId mặc định)
+  if (companyId === DEFAULT_INBOX_COMPANY_ID) {
+    if (customerId === 'cust-1') {
+      events.push({
+        id: 'evt-call-1',
+        company_id: companyId,
+        customer_id: customerId,
+        type: 'CALL',
+        channel: 'hotline',
+        title: 'Cuộc gọi tư vấn Click-to-Call',
+        description: 'Sale thực hiện cuộc gọi bảo mật qua tổng đài Hotline. Khách đồng ý nhận báo giá qua Zalo/Facebook.',
+        timestamp: '2026-09-17T09:15:00Z',
+        actor_type: 'sale',
+        actor_name: 'Chuyên viên Sale',
+      });
+      events.push({
+        id: 'evt-stage-1',
+        company_id: companyId,
+        customer_id: customerId,
+        type: 'STAGE_CHANGE',
+        title: 'Chuyển giai đoạn: Đã báo giá',
+        description: 'Hệ thống tính giá hoàn tất, chuyển trạng thái từ LEAD_NEW sang PRICE_OFFERED.',
+        timestamp: '2026-09-17T09:20:00Z',
+        actor_type: 'system',
+      });
+    } else if (customerId === 'cust-2') {
+      events.push({
+        id: 'evt-survey-2',
+        company_id: companyId,
+        customer_id: customerId,
+        type: 'SURVEY',
+        title: 'Lên lịch hẹn khảo sát hiện trường',
+        description: 'Đặt lịch khảo sát dốc hầm KĐT Nam An Khánh cho Kỹ thuật viên (assignee_id: TECH-01).',
+        timestamp: '2026-09-17T10:20:00Z',
+        actor_type: 'sale',
+      });
+    } else if (customerId === 'cust-4') {
+      events.push({
+        id: 'evt-order-4',
+        company_id: companyId,
+        customer_id: customerId,
+        type: 'STAGE_CHANGE',
+        title: 'Xác nhận đặt cọc thành công',
+        description: 'Khách hàng chuyển khoản 5.000.000đ qua VietQR. Khớp đơn DH-000004 thành công.',
+        timestamp: '2026-09-16T16:40:00Z',
+        actor_type: 'system',
+      });
+    }
+
+    // Thêm sự kiện khởi tạo khách hàng ban đầu
     events.push({
-      id: 'evt-call-1',
-      customer_id: customerId,
-      type: 'CALL',
-      channel: 'hotline',
-      title: 'Cuộc gọi tư vấn Click-to-Call',
-      description: 'Sale thực hiện cuộc gọi bảo mật qua tổng đài Hotline. Khách đồng ý nhận báo giá qua Zalo/Facebook.',
-      timestamp: '2026-09-17T09:15:00Z',
-      actor_type: 'sale',
-      actor_name: 'Chuyên viên Sale',
-    });
-    events.push({
-      id: 'evt-stage-1',
+      id: `evt-init-${customerId}`,
+      company_id: companyId,
       customer_id: customerId,
       type: 'STAGE_CHANGE',
-      title: 'Chuyển giai đoạn: Đã báo giá',
-      description: 'Hệ thống tính giá hoàn tất, chuyển trạng thái từ LEAD_NEW sang PRICE_OFFERED.',
-      timestamp: '2026-09-17T09:20:00Z',
-      actor_type: 'system',
-    });
-  } else if (customerId === 'cust-2') {
-    events.push({
-      id: 'evt-survey-2',
-      customer_id: customerId,
-      type: 'SURVEY',
-      title: 'Lên lịch hẹn khảo sát hiện trường',
-      description: 'Đặt lịch khảo sát dốc hầm KĐT Nam An Khánh cho Kỹ thuật viên (assignee_id: TECH-01).',
-      timestamp: '2026-09-17T10:20:00Z',
-      actor_type: 'sale',
-    });
-  } else if (customerId === 'cust-4') {
-    events.push({
-      id: 'evt-order-4',
-      customer_id: customerId,
-      type: 'STAGE_CHANGE',
-      title: 'Xác nhận đặt cọc thành công',
-      description: 'Khách hàng chuyển khoản 5.000.000đ qua VietQR. Khớp đơn DH-000004 thành công.',
-      timestamp: '2026-09-16T16:40:00Z',
+      title: 'Tiếp nhận khách hàng mới',
+      description: 'Hồ sơ được tạo và lưu trữ trên hệ thống AI CRM với số điện thoại chuẩn hóa E.164.',
+      timestamp: '2026-09-16T08:00:00Z',
       actor_type: 'system',
     });
   }
 
-  // Thêm sự kiện khởi tạo khách hàng ban đầu
-  events.push({
-    id: `evt-init-${customerId}`,
-    customer_id: customerId,
-    type: 'STAGE_CHANGE',
-    title: 'Tiếp nhận khách hàng mới',
-    description: 'Hồ sơ được tạo và lưu trữ trên hệ thống AI CRM với số điện thoại chuẩn hóa E.164.',
-    timestamp: '2026-09-16T08:00:00Z',
-    actor_type: 'system',
-  });
-
   // Sắp xếp thời gian giảm dần (mới nhất lên đầu)
   events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại trong description và title
+  if (callerRole === APPLICATION_ROLES.SALE) {
+    return events.map((e) => ({
+      ...e,
+      title: sanitizePhoneInText(e.title),
+      description: sanitizePhoneInText(e.description),
+    }));
+  }
 
   return events;
 }
@@ -443,6 +599,7 @@ export async function getCustomerTimeline(customerId: string): Promise<CustomerT
 export async function addInboundMessage(params: {
   channel: InboxChannel;
   senderId: string;
+  company_id?: string;
   senderName?: string;
   senderPhone?: string;
   content: string;
@@ -450,12 +607,14 @@ export async function addInboundMessage(params: {
   externalMessageId?: string;
   customerId?: string;
 }): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
+  const companyId = params.company_id || DEFAULT_INBOX_COMPANY_ID;
   const timestamp = params.timestamp || new Date().toISOString();
   let isNewConversation = false;
 
-  // Tìm cuộc hội thoại tương ứng
+  // Tìm cuộc hội thoại tương ứng trong đúng companyId
   let conversation = conversationsStore.find(
     (c) =>
+      c.company_id === companyId &&
       c.channel === params.channel &&
       (c.customer_id === params.customerId ||
         c.customer_id === params.senderId ||
@@ -466,11 +625,12 @@ export async function addInboundMessage(params: {
     // Tạo mới cuộc hội thoại
     isNewConversation = true;
     const newCustId = params.customerId || `cust-${Date.now()}`;
-    const codeNum = conversationsStore.length + 1;
+    const codeNum = conversationsStore.filter((c) => c.company_id === companyId).length + 1;
     const customerCode = `KH-${String(codeNum).padStart(6, '0')}`;
 
     conversation = {
       id: `conv-${Date.now()}`,
+      company_id: companyId,
       customer_id: newCustId,
       customer_name: params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook'),
       customer_code: customerCode,
@@ -500,6 +660,7 @@ export async function addInboundMessage(params: {
   // Tạo tin nhắn mới
   const newMessage: InboxMessage = {
     id: params.externalMessageId || `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    company_id: companyId,
     conversation_id: conversation.id,
     customer_id: conversation.customer_id,
     channel: params.channel,
@@ -522,6 +683,43 @@ export async function addInboundMessage(params: {
   };
 }
 
+/**
+ * 7. Cập nhật trạng thái khách hàng đồng bộ trong các hội thoại Inbox
+ */
+export function updateConversationCustomerStage(
+  customerId: string,
+  newStage: string,
+  companyId?: string
+): void {
+  for (const c of conversationsStore) {
+    if (c.customer_id === customerId && (!companyId || c.company_id === companyId)) {
+      c.customer_stage = newStage;
+      c.updated_at = new Date().toISOString();
+    }
+  }
+}
+
+/**
+ * Helper đặt lại kho lưu trữ phục vụ kiểm thử tự động
+ */
+export function resetInboxStore(
+  initialConvs?: Conversation[],
+  initialMsgs?: Record<string, InboxMessage[]>
+): void {
+  conversationsStore = initialConvs ? [...initialConvs] : [...INITIAL_CONVERSATIONS];
+  if (initialMsgs) {
+    for (const key of Object.keys(messagesStore)) {
+      delete messagesStore[key];
+    }
+    Object.assign(messagesStore, initialMsgs);
+  } else {
+    for (const key of Object.keys(messagesStore)) {
+      delete messagesStore[key];
+    }
+    Object.assign(messagesStore, INITIAL_MESSAGES);
+  }
+}
+
 export const InboxService = {
   getConversations,
   getConversationById,
@@ -529,4 +727,8 @@ export const InboxService = {
   sendMessage,
   getCustomerTimeline,
   addInboundMessage,
+  updateConversationCustomerStage,
+  resetInboxStore,
+  sanitizePhoneInText,
+  DEFAULT_INBOX_COMPANY_ID,
 };

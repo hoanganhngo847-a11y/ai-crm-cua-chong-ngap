@@ -36,7 +36,7 @@ export type ConversationStatus = (typeof CONVERSATION_STATUSES)[keyof typeof CON
  */
 export interface Conversation {
   id: string;
-  company_id?: string;
+  company_id: string; // MANDATORY - Strict Tenant Isolation
   customer_id: string;
   customer_name: string;
   customer_code: string;
@@ -57,6 +57,7 @@ export interface Conversation {
  */
 export interface InboxMessage {
   id: string;
+  company_id?: string;
   conversation_id: string;
   customer_id: string;
   channel: InboxChannel;
@@ -72,14 +73,17 @@ export interface InboxMessage {
  */
 export interface SendMessageInput {
   conversation_id: string;
+  company_id: string; // MANDATORY - Strict Tenant Isolation
   content: string;
   sender_type?: SenderType;
+  sender_name?: string;
 }
 
 /**
  * Filter query parameters for conversation list
  */
 export interface ConversationFilter {
+  company_id?: string;
   channel?: InboxChannel | 'all';
   search?: string;
   status?: ConversationStatus | 'all';
@@ -91,6 +95,7 @@ export interface ConversationFilter {
  */
 export interface CustomerTimelineEvent {
   id: string;
+  company_id?: string;
   customer_id: string;
   type: 'MESSAGE' | 'CALL' | 'STAGE_CHANGE' | 'SURVEY' | 'NOTE';
   channel?: string;

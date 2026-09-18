@@ -9,6 +9,14 @@
 
 import type { InboxChannel } from './inbox.types';
 
+export const INGRESS_PROVIDERS = {
+  FACEBOOK: 'FACEBOOK',
+  ZALO: 'ZALO',
+  SYSTEM: 'SYSTEM',
+} as const;
+
+export type IngressProvider = (typeof INGRESS_PROVIDERS)[keyof typeof INGRESS_PROVIDERS];
+
 export const WEBHOOK_EVENT_TYPES = {
   MESSAGE_CREATED: 'message.created',
   MESSAGE_DELIVERED: 'message.delivered',
@@ -54,6 +62,22 @@ export interface OmnichannelWebhookPayload {
   };
   message: InboundMessageData;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Normalized Ingress Event Contract owned by Member 2.
+ * Clean, decoupled interface for Member 3 (Zalo OA) & Member 4 (Facebook Messenger).
+ */
+export interface NormalizedIngressEvent {
+  provider: 'FACEBOOK' | 'ZALO' | 'SYSTEM';
+  company_id: string; // MANDATORY - Strict Tenant Isolation
+  external_user_id: string;
+  sender_name?: string;
+  sender_phone?: string;
+  message_id: string;
+  content: string;
+  timestamp: string;
+  metadata?: Record<string, any>;
 }
 
 /**

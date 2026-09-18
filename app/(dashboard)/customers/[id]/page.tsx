@@ -7,7 +7,11 @@ import { APPLICATION_ROLES } from '../../../../shared/constants/roles';
 import { CustomerService, maskPhone } from '../../../../features/crm/services/customer.service';
 import { InboxService } from '../../../../features/inbox/services/inbox.service';
 import CustomerTimeline from '../../../../features/crm/components/customer-timeline';
+import { sanitizePhoneInText } from '../../../../features/crm/utils/phone-sanitizer';
 import type { CustomerTimelineEvent } from '../../../../features/inbox/types/inbox.types';
+import { resolveCustomerPrivateContactForTrustedOperation } from '../../../../lib/sensitive/customer-contact';
+import { CONTACT_ACCESS_PURPOSES } from '../../../../shared/contracts/sensitive';
+import { ServerAuthError } from '../../../../lib/server-auth/errors';
 
 export const metadata = {
   title: 'Hồ sơ khách hàng 360 | AI CRM Cửa Chống Ngập',
@@ -130,7 +134,7 @@ const MOCK_PROFILES_360: Record<
 export default async function CustomerDetailPage({ params }: CustomerDetailPageProps) {
   const actor = await getActorContext();
 
-  if (!actor || actor.profileStatus !== 'ACTIVE') {
+  if (!actor || actor.profileStatus !== 'ACTIVE' || !actor.companyId) {
     redirect('/login');
   }
 
@@ -162,8 +166,11 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
 
   const { id } = await params;
   const adminClient = createAdminClient();
+  const isBossAdmin = actor.role === APPLICATION_ROLES.BOSS_ADMIN;
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  let displayPhone = '';
 
-  // 1. Tìm thông tin khách hàng từ mock store hoặc database
+  // 1. Tìm thông tin khách hàng từ database (hoặc mock store nếu DEMO_MODE)
   let customerData: {
     id: string;
     customer_code: string;
@@ -183,108 +190,154 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     identities?: Array<{ channel: string; external_id: string; verified: boolean }>;
   } | null = null;
 
-  if (MOCK_PROFILES_360[id]) {
-    customerData = { ...MOCK_PROFILES_360[id] };
-  } else {
-    // Truy vấn Supabase nếu là ID thật
-    try {
-      const { data: dbCustomer } = await adminClient
-        .from('customers')
-        .select('*')
-        .eq('company_id', actor.companyId)
-        .eq('id', id)
-        .maybeSingle();
+  // Luôn ưu tiên truy vấn Database trước (fail-closed khi lỗi DB)
+  try {
+    const { data: dbCustomer, error: dbQueryErr } = await adminClient
+      .from('customers')
+      .select('*')
+      .eq('company_id', actor.companyId)
+      .eq('id', id)
+      .maybeSingle();
 
-      if (dbCustomer) {
-        let rawPhone = '';
-        try {
-          const { data: contactRow } = await adminClient
-            .schema('private')
-            .from('customer_private_contacts')
-            .select('raw_phone, normalized_phone')
-            .eq('customer_id', id)
-            .maybeSingle();
-
-          if (contactRow) {
-            rawPhone = contactRow.raw_phone || contactRow.normalized_phone || '';
-          }
-        } catch {
-          // Schema private query fallback
-        }
-
-        const { data: identities } = await adminClient
-          .from('identities')
-          .select('channel, external_id, verified')
-          .eq('customer_id', id);
-
-        customerData = {
-          id: dbCustomer.id,
-          customer_code: dbCustomer.customer_code,
-          name: dbCustomer.name,
-          phone: rawPhone,
-          source: dbCustomer.source,
-          stage: dbCustomer.stage,
-          created_at: dbCustomer.created_at,
-          identities: identities || [],
-        };
+    if (dbQueryErr) {
+      if (!isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi truy vấn hồ sơ khách hàng: ${dbQueryErr.message}`);
       }
-    } catch {
-      // Database query error handled below
+    }
+
+    if (dbCustomer) {
+      let rawPhone = '';
+
+      if (isBossAdmin) {
+        // BOSS_ADMIN: Sử dụng Foundation primitive để giải mã thông tin nhạy cảm và ghi nhận kiểm toán FAIL-CLOSED
+        try {
+          const contact = await resolveCustomerPrivateContactForTrustedOperation(
+            id,
+            CONTACT_ACCESS_PURPOSES.PRIVILEGED_ADMIN_OPERATION,
+            {
+              reason: 'Xem chi tiết hồ sơ khách hàng tại Customer 360 (BOSS_ADMIN)',
+              overrideAdminClient: adminClient,
+            }
+          );
+          rawPhone = contact.rawPhone;
+        } catch (err: unknown) {
+          if (err instanceof ServerAuthError && err.code === 'RESOURCE_NOT_FOUND') {
+            rawPhone = '';
+          } else {
+            // FAIL CLOSED: Nếu lỗi audit (AUDIT_WRITE_FAILED) hoặc lỗi bảo mật, ném lỗi ngay lập tức
+            throw err;
+          }
+        }
+        displayPhone = rawPhone;
+      } else {
+        // SALE: Tuân thủ Zero-Phone, chỉ hiển thị masked_phone từ metadata (nếu có), không bao giờ resolve contact
+        const meta = dbCustomer.metadata as Record<string, any> | undefined;
+        displayPhone = meta?.masked_phone ? maskPhone(meta.masked_phone) : '';
+      }
+
+      const { data: identities, error: identitiesErr } = await adminClient
+        .from('identities')
+        .select('channel, external_id, verified')
+        .eq('customer_id', id);
+
+      if (identitiesErr && !isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi truy vấn identities khách hàng: ${identitiesErr.message}`);
+      }
+
+      customerData = {
+        id: dbCustomer.id,
+        customer_code: dbCustomer.customer_code,
+        name: dbCustomer.name,
+        phone: displayPhone,
+        source: dbCustomer.source,
+        stage: dbCustomer.stage,
+        created_at: dbCustomer.created_at,
+        identities: identities || [],
+      };
+    }
+  } catch (err: unknown) {
+    if (
+      err instanceof ServerAuthError ||
+      (err instanceof Error &&
+        (err.message.includes('AUDIT_WRITE_FAILED') || err.message.includes('DATABASE_ERROR')))
+    ) {
+      throw err;
+    }
+    if (!isDemoMode) {
+      throw err;
     }
   }
 
+  // 2. Chỉ fallback sang mock store nếu bật cờ explicit NEXT_PUBLIC_DEMO_MODE === 'true'
+  if (!customerData && isDemoMode && MOCK_PROFILES_360[id]) {
+    customerData = { ...MOCK_PROFILES_360[id] };
+
+    // Zero-Phone cho SALE: Che số bắt buộc, không ghi audit log
+    if (!isBossAdmin) {
+      displayPhone = maskPhone(customerData.phone);
+    } else {
+      // BOSS_ADMIN: Bắt buộc ghi audit log (FAIL-CLOSED) TRƯỚC KHI hiển thị raw phone
+      const { error: auditErr } = await adminClient.from('audit_logs').insert({
+        company_id: actor.companyId,
+        user_id: actor.userId,
+        action: 'VIEW_RAW_PHONE',
+        resource_type: 'CUSTOMER',
+        resource_id: customerData.id,
+        customer_id: customerData.id,
+        result: 'SUCCESS',
+        metadata: {
+          source: 'CUSTOMER_360_PAGE',
+          customer_code: customerData.customer_code,
+          user_email: actor.email,
+          purpose: 'PRIVILEGED_ADMIN_OPERATION',
+          reason: 'Xem chi tiết hồ sơ khách hàng tại Customer 360 (BOSS_ADMIN)',
+        },
+      });
+
+      if (auditErr) {
+        console.error('Lỗi khi ghi audit log Customer 360:', auditErr);
+        // FAIL CLOSED: Hủy render và ném lỗi ngay lập tức, TUYỆT ĐỐI KHÔNG render raw phone
+        throw new Error(`Lỗi ghi nhận kiểm toán bắt buộc (AUDIT_WRITE_FAILED): ${auditErr.message}`);
+      }
+
+      displayPhone = customerData.phone;
+    }
+  }
+
+  // Không tìm thấy bản ghi trong DB (và không ở demo mode với mock ID): Trả về HTTP 404 Not Found
   if (!customerData) {
     notFound();
   }
 
-  // 2. Quy tắc bảo mật Zero-Phone Exposure:
-  // - Nếu SALE: che số bắt buộc qua maskPhone (09******12)
-  // - Nếu BOSS_ADMIN: xem số thật & ghi Audit Log VIEW_RAW_PHONE
-  const isBossAdmin = actor.role === APPLICATION_ROLES.BOSS_ADMIN;
-  const displayPhone = isBossAdmin ? customerData.phone : maskPhone(customerData.phone);
-
-  if (isBossAdmin && customerData.phone) {
-    try {
-      await adminClient.from('audit_logs').insert({
-        company_id: actor.companyId,
-        actor_id: actor.userId,
-        action: 'VIEW_RAW_PHONE',
-        resource_type: 'CUSTOMER',
-        resource_id: customerData.id,
-        metadata: {
-          source: 'CUSTOMER_360_PAGE',
-          accessed_at: new Date().toISOString(),
-          customer_code: customerData.customer_code,
-          user_email: actor.email,
-        },
-      });
-    } catch {
-      // Audit log non-blocking on failure
-    }
-  }
-
   // 3. Lấy dòng thời gian sự kiện khách hàng
   const timelineEvents: CustomerTimelineEvent[] = await InboxService.getCustomerTimeline(
-    customerData.id
+    customerData.id,
+    actor.companyId,
+    actor.role
   );
 
   // Nếu trong database có lịch sử stage changes, bổ sung vào timeline
   try {
-    const { data: stageHistories } = await adminClient
+    const { data: stageHistories, error: stageHistErr } = await adminClient
       .from('customer_stage_histories')
       .select('*')
       .eq('customer_id', customerData.id)
       .order('created_at', { ascending: false });
 
+    if (stageHistErr && !isDemoMode) {
+      throw new Error(`DATABASE_ERROR: Lỗi truy vấn lịch sử trạng thái: ${stageHistErr.message}`);
+    }
+
     if (stageHistories && stageHistories.length > 0) {
       for (const sh of stageHistories) {
         if (!timelineEvents.some((e) => e.id === sh.id)) {
+          const rawDesc = sh.reason || 'Cập nhật tiến trình khách hàng từ hệ thống CRM.';
           timelineEvents.push({
             id: sh.id,
             customer_id: customerData.id,
             type: 'STAGE_CHANGE',
             title: `Chuyển trạng thái sang: ${sh.to_stage}`,
-            description: sh.reason || 'Cập nhật tiến trình khách hàng từ hệ thống CRM.',
+            description: actor.role === APPLICATION_ROLES.SALE ? sanitizePhoneInText(rawDesc) : rawDesc,
             timestamp: sh.created_at,
             actor_type: (sh.actor_type?.toLowerCase() as CustomerTimelineEvent['actor_type']) || 'system',
           });
@@ -292,8 +345,10 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       }
       timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
-  } catch {
-    // Database query fallback
+  } catch (shErr: unknown) {
+    if (!isDemoMode && shErr instanceof Error && shErr.message.includes('DATABASE_ERROR')) {
+      throw shErr;
+    }
   }
 
   return (

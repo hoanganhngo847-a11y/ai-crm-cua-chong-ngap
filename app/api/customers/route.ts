@@ -75,7 +75,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
     // Lấy danh sách ID khách hàng có tin nhắn phản hồi mới (PENDING_SALE) từ Hộp thư
     const pendingSaleCustomerIds = new Set<string>();
     try {
-      const convs = await InboxService.getConversations();
+      const convs = await InboxService.getConversations(actor.companyId);
       for (const c of convs) {
         if (c.status === 'PENDING_SALE' || (c.unread_count && c.unread_count > 0)) {
           pendingSaleCustomerIds.add(c.customer_id);
@@ -115,8 +115,10 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
 
     let customerList = (customers as Customer[]) || [];
 
-    // Fallback nạp danh sách khách hàng mẫu giai đoạn 2 nếu database chưa có dữ liệu
-    if (customerList.length === 0 && !search && !stage && !source) {
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+    // Fallback nạp danh sách khách hàng mẫu giai đoạn 2: Chỉ kích hoạt khi có cờ explicit NEXT_PUBLIC_DEMO_MODE === 'true'
+    if (isDemoMode && customerList.length === 0 && !search && !stage && !source) {
       customerList = [
         {
           id: 'cust-1',
@@ -163,46 +165,75 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
 
     const customerIds = customerList.map((c) => c.id);
 
-    // 2. Nạp thông tin liên hệ từ schema private (Chỉ thực hiện ở Trusted Server)
+    // 2. Nạp thông tin liên hệ: Tách biệt chặt chẽ theo vai trò (Zero-Phone cho SALE, Trusted RPC cho BOSS_ADMIN)
     const contactMap = new Map<
       string,
       { raw_phone: string; normalized_phone: string; is_verified: boolean }
     >();
 
-    // Mock contact mapping cho giai đoạn 2
-    contactMap.set('cust-1', { raw_phone: '0912345612', normalized_phone: '+84912345612', is_verified: true });
-    contactMap.set('cust-2', { raw_phone: '0934567890', normalized_phone: '+84934567890', is_verified: true });
-    contactMap.set('cust-3', { raw_phone: '0987654321', normalized_phone: '+84987654321', is_verified: true });
-    contactMap.set('cust-4', { raw_phone: '0977889900', normalized_phone: '+84977889900', is_verified: true });
+    const mockMaskedMap: Record<string, string> = {
+      'cust-1': '09******12',
+      'cust-2': '09******90',
+      'cust-3': '09******21',
+      'cust-4': '09******00',
+    };
 
-    try {
-      const { data: contacts } = await adminClient
-        .schema('private')
-        .from('customer_private_contacts')
-        .select('customer_id, raw_phone, normalized_phone, is_verified')
-        .eq('company_id', actor.companyId)
-        .in('customer_id', customerIds);
+    if (actor.role === APPLICATION_ROLES.BOSS_ADMIN) {
+      // Mock contact mapping cho BOSS_ADMIN (chỉ kích hoạt trong demo mode)
+      if (isDemoMode) {
+        contactMap.set('cust-1', { raw_phone: '0912345612', normalized_phone: '+84912345612', is_verified: true });
+        contactMap.set('cust-2', { raw_phone: '0934567890', normalized_phone: '+84934567890', is_verified: true });
+        contactMap.set('cust-3', { raw_phone: '0987654321', normalized_phone: '+84987654321', is_verified: true });
+        contactMap.set('cust-4', { raw_phone: '0977889900', normalized_phone: '+84977889900', is_verified: true });
+      }
 
-      if (contacts) {
-        for (const c of contacts) {
-          contactMap.set(c.customer_id, {
-            raw_phone: c.raw_phone,
-            normalized_phone: c.normalized_phone,
-            is_verified: c.is_verified,
+      // Đối với ID thật trong database: Sử dụng Trusted RPC của Foundation thay vì chọc trực tiếp vào schema private
+      const realDbCustomerIds = customerIds.filter((cid) => !cid.startsWith('cust-'));
+      for (const realCid of realDbCustomerIds) {
+        try {
+          const { data: rpcData, error: rpcErr } = await adminClient.rpc('get_customer_private_contact', {
+            p_company_id: actor.companyId,
+            p_customer_id: realCid,
           });
+          if (rpcErr && !isDemoMode) {
+            return NextResponse.json(
+              { success: false, error: 'DATABASE_ERROR', message: rpcErr.message },
+              { status: 500 }
+            );
+          }
+          if (rpcData && rpcData.length > 0) {
+            contactMap.set(realCid, {
+              raw_phone: rpcData[0].raw_phone,
+              normalized_phone: rpcData[0].normalized_phone,
+              is_verified: rpcData[0].is_verified,
+            });
+          }
+        } catch (rpcEx: unknown) {
+          if (!isDemoMode) {
+            return NextResponse.json(
+              { success: false, error: 'DATABASE_ERROR', message: rpcEx instanceof Error ? rpcEx.message : 'RPC_ERROR' },
+              { status: 500 }
+            );
+          }
         }
       }
-    } catch {
-      // Trường hợp schema private không thể truy cập qua direct PostgREST, fallback query qua identity hoặc RPC
     }
+    // Chú ý: Với vai trò SALE, TUYỆT ĐỐI KHÔNG nạp contactMap với số thật và không gọi sensitive primitive!
 
     // 3. Nạp danh sách identities đa kênh
     const identityMap = new Map<string, Identity[]>();
-    const { data: identities } = await adminClient
+    const { data: identities, error: identitiesErr } = await adminClient
       .from('identities')
       .select('*')
       .eq('company_id', actor.companyId)
       .in('customer_id', customerIds);
+
+    if (identitiesErr && !isDemoMode) {
+      return NextResponse.json(
+        { success: false, error: 'DATABASE_ERROR', message: identitiesErr.message },
+        { status: 500 }
+      );
+    }
 
     if (identities) {
       for (const id of identities as Identity[]) {
@@ -221,11 +252,18 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
         identities: identityMap.get(customer.id) || [],
       };
 
-      return CustomerService.sanitizeForRole(
+      const sanitized = CustomerService.sanitizeForRole(
         customerBundle,
         actor.role,
         urgency.isUrgent ? urgency : undefined
       );
+
+      // Nếu là SALE mà chưa có phone hiển thị và là khách mock trong demo mode, gán số đã mask
+      if (isDemoMode && actor.role === APPLICATION_ROLES.SALE && !sanitized.phone && mockMaskedMap[customer.id]) {
+        sanitized.phone = mockMaskedMap[customer.id];
+      }
+
+      return sanitized;
     });
 
     // Lọc theo Hàng chờ "CẦN SALE CHỐT" nếu được yêu cầu
@@ -233,26 +271,35 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       sanitizedCustomers = sanitizedCustomers.filter((c) => Boolean(c.urgency_reason));
     }
 
-    // 5. GHI NHẬN KIỂM TOÁN (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật
+    // 5. GHI NHẬN KIỂM TOÁN (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật (FAIL-CLOSED)
     if (actor.role === APPLICATION_ROLES.BOSS_ADMIN && customerIds.length > 0) {
-      try {
-        await adminClient.from('audit_logs').insert({
-          company_id: actor.companyId,
-          user_id: actor.userId,
-          action: 'VIEW_RAW_PHONE',
-          resource_type: 'CUSTOMER',
-          resource_id: customerIds[0],
-          customer_id: customerIds.length === 1 ? customerIds[0] : null,
-          result: 'SUCCESS',
-          metadata: {
-            viewed_count: customerIds.length,
-            customer_ids: customerIds,
-            purpose: 'CUSTOMER_LIST_VIEW',
-            reason: 'Xem danh sách khách hàng kèm số điện thoại thật (BOSS_ADMIN)',
-          },
-        });
-      } catch (auditErr) {
+      const { error: auditErr } = await adminClient.from('audit_logs').insert({
+        company_id: actor.companyId,
+        user_id: actor.userId,
+        action: 'VIEW_RAW_PHONE',
+        resource_type: 'CUSTOMER',
+        resource_id: customerIds[0],
+        customer_id: customerIds.length === 1 ? customerIds[0] : null,
+        result: 'SUCCESS',
+        metadata: {
+          viewed_count: customerIds.length,
+          customer_ids: customerIds,
+          purpose: 'CUSTOMER_LIST_VIEW',
+          reason: 'Xem danh sách khách hàng kèm số điện thoại thật (BOSS_ADMIN)',
+        },
+      });
+
+      if (auditErr) {
         console.error('Lỗi khi ghi audit log truy cập số điện thoại:', auditErr);
+        // FAIL CLOSED: Dừng ngay lập tức, TUYỆT ĐỐI KHÔNG trả về raw phone nếu audit log thất bại
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'AUDIT_WRITE_FAILED',
+            message: 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem thông tin bảo mật bị từ chối.',
+          },
+          { status: 500 }
+        );
       }
     }
 
@@ -355,6 +402,28 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
     } catch (serviceErr: unknown) {
       const errMsg =
         serviceErr instanceof Error ? serviceErr.message : 'Lỗi xử lý khách hàng theo số điện thoại.';
+
+      if (errMsg.includes('CONFIGURATION_ERROR')) {
+        return NextResponse.json(
+          { success: false, error: 'CONFIGURATION_ERROR', message: errMsg },
+          { status: 500 }
+        );
+      }
+
+      if (
+        errMsg.includes('Lỗi tạo') ||
+        errMsg.includes('Lỗi ghi nhận') ||
+        errMsg.includes('Lỗi truy vấn') ||
+        errMsg.includes('Lỗi kiểm tra') ||
+        errMsg.includes('Lỗi liên kết') ||
+        errMsg.includes('DATABASE_ERROR')
+      ) {
+        return NextResponse.json(
+          { success: false, error: 'DATABASE_ERROR', message: errMsg },
+          { status: 500 }
+        );
+      }
+
       return NextResponse.json(
         { success: false, error: 'VALIDATION_FAILED', message: errMsg },
         { status: 400 }
@@ -370,27 +439,36 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
 
     const sanitizedCustomer = CustomerService.sanitizeForRole(customerBundle, actor.role);
 
-    // GHI NHẬN KIỂM TOÁN (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật
+    // GHI NHẬN KIỂM TOÁN (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật (FAIL-CLOSED)
     if (actor.role === APPLICATION_ROLES.BOSS_ADMIN) {
-      try {
-        await adminClient.from('audit_logs').insert({
-          company_id: actor.companyId,
-          user_id: actor.userId,
-          action: 'VIEW_RAW_PHONE',
-          resource_type: 'CUSTOMER',
-          resource_id: result.customer.id,
-          customer_id: result.customer.id,
-          result: 'SUCCESS',
-          metadata: {
-            customer_code: result.customer.customer_code,
-            viewed_count: 1,
-            customer_ids: [result.customer.id],
-            purpose: result.isNew ? 'CUSTOMER_CREATE' : 'CUSTOMER_FIND',
-            reason: 'Tạo hoặc tìm khách hàng với số điện thoại thật (BOSS_ADMIN)',
-          },
-        });
-      } catch (auditErr) {
+      const { error: auditErr } = await adminClient.from('audit_logs').insert({
+        company_id: actor.companyId,
+        user_id: actor.userId,
+        action: 'VIEW_RAW_PHONE',
+        resource_type: 'CUSTOMER',
+        resource_id: result.customer.id,
+        customer_id: result.customer.id,
+        result: 'SUCCESS',
+        metadata: {
+          customer_code: result.customer.customer_code,
+          viewed_count: 1,
+          customer_ids: [result.customer.id],
+          purpose: result.isNew ? 'CUSTOMER_CREATE' : 'CUSTOMER_FIND',
+          reason: 'Tạo hoặc tìm khách hàng với số điện thoại thật (BOSS_ADMIN)',
+        },
+      });
+
+      if (auditErr) {
         console.error('Lỗi khi ghi audit log trong POST /api/customers:', auditErr);
+        // FAIL CLOSED: Hủy thao tác ngay lập tức nếu ghi audit log thất bại
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'AUDIT_WRITE_FAILED',
+            message: 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác bị từ chối.',
+          },
+          { status: 500 }
+        );
       }
     }
 
