@@ -42,12 +42,13 @@ export async function createProductionOrderAction(
  */
 export async function updateProductionProgressAction(
     productionOrderId: string,
-    status: ProductionOrderStatus
+    status: ProductionOrderStatus,
+    note?: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const actor = await getActorContext();
-        if (!actor?.companyId) {
-            return { success: false, error: 'Chưa xác định tổ chức làm việc.' };
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức hoặc người thực hiện.' };
         }
 
         await requireCompanyRole(actor.companyId, [
@@ -55,7 +56,12 @@ export async function updateProductionProgressAction(
             APPLICATION_ROLES.TECHNICIAN,
         ]);
 
-        await updateProductionProgress(actor.companyId, productionOrderId, status);
+        await updateProductionProgress(actor.companyId, {
+            productionOrderId,
+            status,
+            note,
+            actorId: actor.userId,
+        });
         return { success: true };
     } catch (err: unknown) {
         const error = err as Error;
@@ -68,12 +74,13 @@ export async function updateProductionProgressAction(
  */
 export async function recordQualityCheckAction(
     productionOrderId: string,
-    qcStatus: QCStatus
+    qcStatus: QCStatus,
+    notes?: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const actor = await getActorContext();
-        if (!actor?.companyId) {
-            return { success: false, error: 'Chưa xác định tổ chức làm việc.' };
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức hoặc người thực hiện.' };
         }
 
         await requireCompanyRole(actor.companyId, [
@@ -81,7 +88,12 @@ export async function recordQualityCheckAction(
             APPLICATION_ROLES.TECHNICIAN,
         ]);
 
-        await recordQualityCheck(actor.companyId, productionOrderId, qcStatus);
+        await recordQualityCheck(actor.companyId, {
+            productionOrderId,
+            qcStatus,
+            inspectorId: actor.userId,
+            notes,
+        });
         return { success: true };
     } catch (err: unknown) {
         const error = err as Error;
