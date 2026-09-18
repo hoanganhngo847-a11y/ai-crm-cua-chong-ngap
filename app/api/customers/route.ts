@@ -3,6 +3,7 @@ import { getActorContext } from '../../../lib/auth/context';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { CustomerService } from '../../../features/crm/services/customer.service';
+import { InboxService } from '../../../features/inbox/services/inbox.service';
 import type {
   Customer,
   CustomerSource,
@@ -64,10 +65,23 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
     const search = searchParams.get('search')?.trim() || '';
     const stage = searchParams.get('stage') as CustomerStage | null;
     const source = searchParams.get('source') as CustomerSource | null;
+    const urgentClosing =
+      searchParams.get('urgent_closing') === 'true' || searchParams.get('queue') === 'urgent_closing';
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10), 1), 100);
     const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
 
     const adminClient = context?.adminClient || createAdminClient();
+
+    // Lấy danh sách ID khách hàng có tin nhắn phản hồi mới (PENDING_SALE) từ Hộp thư
+    const pendingSaleCustomerIds = new Set<string>();
+    try {
+      const convs = await InboxService.getConversations();
+      for (const c of convs) {
+        if (c.status === 'PENDING_SALE' || (c.unread_count && c.unread_count > 0)) {
+          pendingSaleCustomerIds.add(c.customer_id);
+        }
+      }
+    } catch {}
 
     // 1. Truy vấn danh sách khách hàng từ public.customers
     let query = adminClient
@@ -80,7 +94,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       query = query.or(`name.ilike.%${search}%,customer_code.ilike.%${search}%`);
     }
     if (stage) {
-      query = query.eq('stage', stage);
+      query = query.eq('stage', CustomerService.toCanonicalStage(stage));
     }
     if (source) {
       query = query.eq('source', source);
@@ -99,17 +113,52 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       );
     }
 
-    const customerList = (customers as Customer[]) || [];
-    if (customerList.length === 0) {
-      return NextResponse.json({
-        success: true,
-        data: [],
-        pagination: {
-          total: count || 0,
-          limit,
-          offset,
+    let customerList = (customers as Customer[]) || [];
+
+    // Fallback nạp danh sách khách hàng mẫu giai đoạn 2 nếu database chưa có dữ liệu
+    if (customerList.length === 0 && !search && !stage && !source) {
+      customerList = [
+        {
+          id: 'cust-1',
+          company_id: actor.companyId,
+          customer_code: 'KH-000001',
+          name: 'Anh Hoàng Nam',
+          source: 'FACEBOOK',
+          stage: CustomerService.mockCustomerStages['cust-1'] || 'PRICE_OFFERED',
+          created_at: '2026-09-16T08:00:00Z',
+          updated_at: '2026-09-17T09:30:00Z',
         },
-      });
+        {
+          id: 'cust-2',
+          company_id: actor.companyId,
+          customer_code: 'KH-000002',
+          name: 'Chị Mai Phương',
+          source: 'ZALO',
+          stage: CustomerService.mockCustomerStages['cust-2'] || 'SURVEY_SCHEDULED',
+          created_at: '2026-09-16T14:20:00Z',
+          updated_at: '2026-09-17T10:15:00Z',
+        },
+        {
+          id: 'cust-3',
+          company_id: actor.companyId,
+          customer_code: 'KH-000003',
+          name: 'Bác Quốc Tuấn',
+          source: 'FACEBOOK',
+          stage: CustomerService.mockCustomerStages['cust-3'] || 'WARRANTY_ACTIVE',
+          created_at: '2026-09-15T11:00:00Z',
+          updated_at: '2026-09-17T08:05:00Z',
+        },
+        {
+          id: 'cust-4',
+          company_id: actor.companyId,
+          customer_code: 'KH-000004',
+          name: 'Anh Trọng Hiếu',
+          source: 'ZALO',
+          stage: CustomerService.mockCustomerStages['cust-4'] || 'DEPOSIT_CONFIRMED',
+          created_at: '2026-09-14T09:10:00Z',
+          updated_at: '2026-09-16T16:45:00Z',
+        },
+      ];
     }
 
     const customerIds = customerList.map((c) => c.id);
@@ -119,6 +168,12 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       string,
       { raw_phone: string; normalized_phone: string; is_verified: boolean }
     >();
+
+    // Mock contact mapping cho giai đoạn 2
+    contactMap.set('cust-1', { raw_phone: '0912345612', normalized_phone: '+84912345612', is_verified: true });
+    contactMap.set('cust-2', { raw_phone: '0934567890', normalized_phone: '+84934567890', is_verified: true });
+    contactMap.set('cust-3', { raw_phone: '0987654321', normalized_phone: '+84987654321', is_verified: true });
+    contactMap.set('cust-4', { raw_phone: '0977889900', normalized_phone: '+84977889900', is_verified: true });
 
     try {
       const { data: contacts } = await adminClient
@@ -157,16 +212,26 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       }
     }
 
-    // 4. Áp dụng sanitizeForRole: Tự động che số nếu là SALE, mở số nếu là BOSS_ADMIN
-    const sanitizedCustomers = customerList.map((customer) => {
+    // 4. Áp dụng sanitizeForRole và đánh giá Hàng chờ "CẦN SALE CHỐT"
+    let sanitizedCustomers = customerList.map((customer) => {
+      const urgency = CustomerService.evaluateUrgency(customer, pendingSaleCustomerIds);
       const customerBundle: CustomerWithContact = {
         customer,
         contact: contactMap.get(customer.id) || null,
         identities: identityMap.get(customer.id) || [],
       };
 
-      return CustomerService.sanitizeForRole(customerBundle, actor.role);
+      return CustomerService.sanitizeForRole(
+        customerBundle,
+        actor.role,
+        urgency.isUrgent ? urgency : undefined
+      );
     });
+
+    // Lọc theo Hàng chờ "CẦN SALE CHỐT" nếu được yêu cầu
+    if (urgentClosing) {
+      sanitizedCustomers = sanitizedCustomers.filter((c) => Boolean(c.urgency_reason));
+    }
 
     // 5. GHI NHẬN KIỂM TOÁN (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật
     if (actor.role === APPLICATION_ROLES.BOSS_ADMIN && customerIds.length > 0) {

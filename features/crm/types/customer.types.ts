@@ -32,6 +32,8 @@ export type CustomerSource = (typeof CUSTOMER_SOURCES)[keyof typeof CUSTOMER_SOU
 export const CUSTOMER_STAGES = {
   LEAD_NEW: 'LEAD_NEW',
   KHACH_MOI: 'LEAD_NEW', // Business alias for LEAD_NEW
+  DA_CO_GIA: 'PRICE_OFFERED', // Business alias for PRICE_OFFERED (Cần Sale chốt)
+  DANG_THUONG_LUONG: 'NEGOTIATING', // Business alias for NEGOTIATING (Cần Sale chốt)
   CONTACT_CYCLE_1: 'CONTACT_CYCLE_1',
   CONTACT_CYCLE_2: 'CONTACT_CYCLE_2',
   CONTACT_CYCLE_3: 'CONTACT_CYCLE_3',
@@ -57,7 +59,9 @@ export const CUSTOMER_STAGES = {
 
 export type CustomerStage =
   | (typeof CUSTOMER_STAGES)[keyof typeof CUSTOMER_STAGES]
-  | 'KHACH_MOI';
+  | 'KHACH_MOI'
+  | 'DA_CO_GIA'
+  | 'DANG_THUONG_LUONG';
 
 /**
  * Identity Channels (public.identities.channel)
@@ -146,8 +150,10 @@ export interface CustomerStageHistory {
   actor_type: StageActorType;
   changed_by_user_id: string | null;
   reason: string;
+  note?: string;
   source_ref: string | null;
   changed_at: string;
+  created_at?: string;
 }
 
 // ============================================================================
@@ -184,8 +190,23 @@ export interface CustomerResponse {
   phone?: string;
   is_phone_masked: boolean;
   identities?: Identity[];
+  urgency_reason?: 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY' | string;
+  urgency_label?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Parameters for updating customer stage and recording immutable history.
+ */
+export interface UpdateCustomerStageParams {
+  customerId: string;
+  newStage: CustomerStage | string;
+  actorType?: StageActorType;
+  note?: string;
+  userId?: string | null;
+  companyId?: string;
+  sourceRef?: string;
 }
 
 /**

@@ -50,6 +50,10 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Tab: 'ALL' vs 'URGENT_CLOSING' (Hàng chờ CẦN SALE CHỐT)
+  const [activeTab, setActiveTab] = useState<'ALL' | 'URGENT_CLOSING'>('ALL');
+  const [urgentCount, setUrgentCount] = useState<number>(0);
+
   // Filters & Pagination
   const [search, setSearch] = useState<string>('');
   const [selectedSource, setSelectedSource] = useState<string>('');
@@ -70,6 +74,13 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [formNotification, setFormNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // Quick Stage Update Modal
+  const [selectedCustomerForStage, setSelectedCustomerForStage] = useState<CustomerResponse | null>(null);
+  const [targetStage, setTargetStage] = useState<string>('');
+  const [stageNote, setStageNote] = useState<string>('');
+  const [updatingStage, setUpdatingStage] = useState<boolean>(false);
+  const [stageNotification, setStageNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -78,6 +89,7 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
       if (search.trim()) params.set('search', search.trim());
       if (selectedSource) params.set('source', selectedSource);
       if (selectedStage) params.set('stage', selectedStage);
+      if (activeTab === 'URGENT_CLOSING') params.set('urgent_closing', 'true');
       params.set('limit', limit.toString());
       params.set('offset', ((page - 1) * limit).toString());
 
@@ -90,12 +102,20 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
 
       setCustomers(json.data || []);
       setTotal(json.pagination?.total || 0);
+
+      // Cập nhật số lượng khách cần chốt gấp nếu đang ở danh sách tổng
+      if (Array.isArray(json.data)) {
+        const uCount = json.data.filter((c: CustomerResponse) => Boolean(c.urgency_reason)).length;
+        if (activeTab === 'ALL') {
+          setUrgentCount(uCount);
+        }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Đã có lỗi xảy ra.');
     } finally {
       setLoading(false);
     }
-  }, [search, selectedSource, selectedStage, page]);
+  }, [search, selectedSource, selectedStage, page, activeTab]);
 
   useEffect(() => {
     fetchCustomers();
@@ -111,7 +131,59 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
     setSearch('');
     setSelectedSource('');
     setSelectedStage('');
+    setActiveTab('ALL');
     setPage(1);
+  };
+
+  const handleUpdateStageSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCustomerForStage || !targetStage) return;
+
+    setUpdatingStage(true);
+    setStageNotification(null);
+
+    try {
+      const res = await fetch(`/api/customers/${selectedCustomerForStage.id}/stage`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stage: targetStage,
+          note: stageNote.trim() || undefined,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Lỗi khi cập nhật trạng thái.');
+      }
+
+      // Cập nhật trạng thái khách hàng trong danh sách local
+      setCustomers((prev) =>
+        prev.map((c) =>
+          c.id === selectedCustomerForStage.id
+            ? { ...c, stage: targetStage as any }
+            : c
+        )
+      );
+
+      setStageNotification({
+        type: 'success',
+        message: `Đã cập nhật giai đoạn khách hàng sang [${targetStage}] thành công!`,
+      });
+
+      setTimeout(() => {
+        setSelectedCustomerForStage(null);
+        setStageNotification(null);
+        fetchCustomers();
+      }, 900);
+    } catch (err: unknown) {
+      setStageNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Lỗi khi cập nhật.',
+      });
+    } finally {
+      setUpdatingStage(false);
+    }
   };
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
@@ -219,6 +291,51 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
             <span>Thêm khách hàng</span>
           </button>
         </div>
+      </div>
+
+      {/* Navigation Tabs: Tất cả vs Hàng chờ CẦN SALE CHỐT */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('ALL');
+            setPage(1);
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition ${
+            activeTab === 'ALL'
+              ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+          </svg>
+          <span>Tất cả khách hàng</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('URGENT_CLOSING');
+            setPage(1);
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition relative ${
+            activeTab === 'URGENT_CLOSING'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+              : 'text-slate-400 hover:text-amber-300 hover:bg-amber-500/10'
+          }`}
+        >
+          <span className="flex h-2 w-2 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+          </span>
+          <span className="font-semibold">⚡ CẦN SALE CHỐT</span>
+          {urgentCount > 0 && (
+            <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500 text-slate-950 font-bold ml-1">
+              {urgentCount}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Filter and Search Bar */}
@@ -441,13 +558,36 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                         </span>
                       </td>
 
-                      {/* Stage */}
+                      {/* Stage & Urgency Badge */}
                       <td className="py-3.5 px-4">
-                        <span
-                          className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-medium border ${stageConfig.bg} ${stageConfig.border} ${stageConfig.color}`}
-                        >
-                          {stageConfig.label}
-                        </span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-medium border ${stageConfig.bg} ${stageConfig.border} ${stageConfig.color}`}
+                          >
+                            {stageConfig.label}
+                          </span>
+                          {c.urgency_reason && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                                c.urgency_reason === 'PRICE_OFFERED'
+                                  ? 'bg-teal-500/20 text-teal-300 border-teal-500/40'
+                                  : c.urgency_reason === 'NEGOTIATING'
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
+                              }`}
+                            >
+                              <span>⚡</span>
+                              <span>
+                                {c.urgency_label ||
+                                  (c.urgency_reason === 'PRICE_OFFERED'
+                                    ? 'Đã có giá'
+                                    : c.urgency_reason === 'NEGOTIATING'
+                                    ? 'Đang thương lượng'
+                                    : 'Khách phản hồi')}
+                              </span>
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Created At */}
@@ -464,6 +604,20 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedCustomerForStage(c);
+                              setTargetStage(c.stage);
+                              setStageNote('');
+                              setStageNotification(null);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs font-medium transition"
+                            title="Cập nhật giai đoạn vòng đời khách hàng"
+                          >
+                            Đổi trạng thái
+                          </button>
                           <Link
                             href={`/inbox?customer_id=${c.id}`}
                             className="p-1.5 rounded-lg bg-blue-600/10 hover:bg-blue-600 border border-blue-500/20 text-blue-400 hover:text-white text-xs transition"
@@ -650,6 +804,108 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
                   className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-semibold transition flex items-center gap-2"
                 >
                   {submitting ? 'Đang lưu...' : 'Lưu khách hàng'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cập Nhật Trạng Thái Vòng Đời Khách Hàng */}
+      {selectedCustomerForStage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700/80 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-5 text-white">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span>Chuyển Giai Đoạn Khách Hàng</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                  {selectedCustomerForStage.customer_code} • {selectedCustomerForStage.name}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedCustomerForStage(null)}
+                className="text-slate-400 hover:text-white transition p-1 rounded-lg hover:bg-slate-800"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {stageNotification && (
+              <div
+                className={`p-3 rounded-xl text-sm border flex items-center gap-2 ${
+                  stageNotification.type === 'success'
+                    ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300'
+                    : 'bg-rose-950/40 border-rose-700/50 text-rose-300'
+                }`}
+              >
+                <span>{stageNotification.message}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateStageSubmit} className="space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Giai đoạn hiện tại
+                </label>
+                <div className="text-xs font-mono px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-400">
+                  {STAGE_LABELS[selectedCustomerForStage.stage]?.label || selectedCustomerForStage.stage}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Chuyển sang giai đoạn mới <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={targetStage}
+                  onChange={(e) => setTargetStage(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  required
+                >
+                  <option value="" disabled>-- Chọn giai đoạn --</option>
+                  {Object.entries(STAGE_LABELS).map(([val, info]) => (
+                    <option key={val} value={val}>
+                      {info.label} ({val})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Mỗi lần đổi trạng thái sẽ được ghi nhận vào bảng customer_stage_histories (Strict Append-Only).
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Lý do / Ghi chú chuyển đổi
+                </label>
+                <textarea
+                  rows={3}
+                  value={stageNote}
+                  onChange={(e) => setStageNote(e.target.value)}
+                  placeholder="Ví dụ: Đã gửi báo giá sơ bộ qua Zalo cho khách; khách hẹn chiều mai phản hồi chốt lịch..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-sm"
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCustomerForStage(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium transition"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingStage || !targetStage || targetStage === selectedCustomerForStage.stage}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white text-sm font-semibold transition flex items-center gap-2"
+                >
+                  {updatingStage ? 'Đang lưu...' : 'Xác nhận đổi giai đoạn'}
                 </button>
               </div>
             </form>

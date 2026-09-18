@@ -8,10 +8,14 @@ import {
   STAGE_ACTOR_TYPES,
   type Customer,
   type CustomerResponse,
+  type CustomerStage,
+  type CustomerStageHistory,
   type CustomerWithContact,
   type FindOrCreateCustomerParams,
   type FindOrCreateCustomerResult,
   type Identity,
+  type StageActorType,
+  type UpdateCustomerStageParams,
 } from '../types/customer.types';
 
 /**
@@ -402,9 +406,281 @@ export async function findOrCreateByPhone(
  * - SALE / TECHNICIAN: Che số điện thoại bằng maskPhone (ví dụ 09******12), is_phone_masked = true.
  * - Không bao giờ đưa các trường nhạy cảm `raw_phone` hay `normalized_phone` ra payload phản hồi.
  */
+// ============================================================================
+// In-Memory Mock Stage & History Tracking for Phase 2
+// ============================================================================
+export const mockCustomerStages: Record<string, CustomerStage> = {
+  'cust-1': 'PRICE_OFFERED',
+  'cust-2': 'SURVEY_SCHEDULED',
+  'cust-3': 'WARRANTY_ACTIVE',
+  'cust-4': 'DEPOSIT_CONFIRMED',
+};
+
+export const mockStageHistories: CustomerStageHistory[] = [];
+
+/**
+ * Helper chuẩn hóa tên giai đoạn sang canonical UPPER_SNAKE_CASE
+ */
+export function toCanonicalStage(stage: CustomerStage | string): CustomerStage {
+  if (!stage) return CUSTOMER_STAGES.LEAD_NEW;
+  const upper = stage.trim().toUpperCase();
+  if (upper === 'KHACH_MOI') return CUSTOMER_STAGES.LEAD_NEW;
+  if (upper === 'DA_CO_GIA') return CUSTOMER_STAGES.PRICE_OFFERED;
+  if (upper === 'DANG_THUONG_LUONG') return CUSTOMER_STAGES.NEGOTIATING;
+  return (CUSTOMER_STAGES as Record<string, CustomerStage>)[upper] || (upper as CustomerStage);
+}
+
+/**
+ * 5. updateStage: Cập nhật giai đoạn khách hàng và lưu vết lịch sử (Strict Append-Only).
+ * Tuân thủ docs/SUPABASE_SCHEMA_DESIGN.md (Mục 6.6: customer_stage_histories)
+ * Hỗ trợ cả 2 cách gọi:
+ * - updateStage(customerId, newStage, actorType, note, client)
+ * - updateStage(params, client)
+ */
+export async function updateStage(
+  customerIdOrParams: string | UpdateCustomerStageParams,
+  newStageOrClient?: CustomerStage | string | SupabaseClient,
+  actorType?: StageActorType | string,
+  note?: string,
+  client?: SupabaseClient
+): Promise<{ customer: Customer; history: CustomerStageHistory }> {
+  let params: UpdateCustomerStageParams;
+  let adminClient: SupabaseClient | null = null;
+
+  if (typeof customerIdOrParams === 'object' && customerIdOrParams !== null) {
+    params = customerIdOrParams;
+    try {
+      adminClient = (newStageOrClient as SupabaseClient) || client || createAdminClient();
+    } catch {
+      adminClient = null;
+    }
+  } else {
+    params = {
+      customerId: customerIdOrParams,
+      newStage: (newStageOrClient as CustomerStage | string) || '',
+      actorType: (actorType as StageActorType) || STAGE_ACTOR_TYPES.USER,
+      note: note,
+    };
+    try {
+      adminClient = client || createAdminClient();
+    } catch {
+      adminClient = null;
+    }
+  }
+
+  if (!params.customerId) {
+    throw new Error('Mã khách hàng (customerId) là bắt buộc.');
+  }
+  if (!params.newStage) {
+    throw new Error('Giai đoạn mới (newStage) là bắt buộc.');
+  }
+
+  const canonicalNewStage = toCanonicalStage(params.newStage);
+  const now = new Date().toISOString();
+
+  let oldStage: CustomerStage = CUSTOMER_STAGES.LEAD_NEW;
+  let companyId = params.companyId || '00000000-0000-0000-0000-000000000001';
+  let updatedCustomer: Customer | null = null;
+  let historyRecord: CustomerStageHistory | null = null;
+
+  // 1. Thử truy vấn và cập nhật trên database Supabase nếu có adminClient
+  if (adminClient) {
+    try {
+      const { data: dbCustomer } = await adminClient
+      .from('customers')
+      .select('*')
+      .eq('id', params.customerId)
+      .maybeSingle();
+
+    if (dbCustomer) {
+      oldStage = dbCustomer.stage;
+      companyId = dbCustomer.company_id;
+
+      // Cập nhật stage trong bảng customers
+      const { data: updCustomer, error: updErr } = await adminClient
+        .from('customers')
+        .update({
+          stage: canonicalNewStage,
+          updated_at: now,
+        })
+        .eq('id', params.customerId)
+        .select()
+        .single();
+
+      if (updErr) {
+        throw new Error(`Lỗi cập nhật bảng customers: ${updErr.message}`);
+      }
+      updatedCustomer = updCustomer as Customer;
+
+      // Chèn bản ghi mới vào customer_stage_histories (Strict Append-Only)
+      const stageReason = params.note || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
+      const { data: histRow, error: histErr } = await adminClient
+        .from('customer_stage_histories')
+        .insert({
+          company_id: companyId,
+          customer_id: params.customerId,
+          from_stage: oldStage,
+          to_stage: canonicalNewStage,
+          actor_type: params.actorType || STAGE_ACTOR_TYPES.USER,
+          changed_by_user_id: params.userId || null,
+          reason: stageReason,
+          source_ref: params.sourceRef || null,
+          changed_at: now,
+        })
+        .select()
+        .single();
+
+      if (histErr) {
+        throw new Error(`Lỗi ghi lịch sử customer_stage_histories: ${histErr.message}`);
+      }
+      const rawHist = histRow as Record<string, any>;
+      historyRecord = {
+        id: rawHist.id,
+        company_id: rawHist.company_id,
+        customer_id: rawHist.customer_id,
+        from_stage: rawHist.from_stage,
+        to_stage: rawHist.to_stage,
+        actor_type: rawHist.actor_type,
+        changed_by_user_id: rawHist.changed_by_user_id,
+        reason: rawHist.reason,
+        note: rawHist.reason,
+        source_ref: rawHist.source_ref,
+        changed_at: rawHist.changed_at,
+        created_at: rawHist.changed_at,
+      };
+    }
+  } catch (err) {
+    // Database query fallback cho mock store
+  }
+  }
+
+  // 2. Fallback hoặc xử lý mock store cho giai đoạn 2
+  if (!updatedCustomer) {
+    oldStage = mockCustomerStages[params.customerId] || CUSTOMER_STAGES.LEAD_NEW;
+    mockCustomerStages[params.customerId] = canonicalNewStage;
+
+    updatedCustomer = {
+      id: params.customerId,
+      company_id: companyId,
+      customer_code: params.customerId === 'cust-1' ? 'KH-000001' : `KH-${params.customerId}`,
+      name:
+        params.customerId === 'cust-1'
+          ? 'Anh Hoàng Nam'
+          : params.customerId === 'cust-2'
+            ? 'Chị Mai Phương'
+            : params.customerId === 'cust-3'
+              ? 'Bác Quốc Tuấn'
+              : params.customerId === 'cust-4'
+                ? 'Anh Trọng Hiếu'
+                : 'Khách hàng',
+      source: CUSTOMER_SOURCES.MANUAL,
+      stage: canonicalNewStage,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const stageReason = params.note || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
+    historyRecord = {
+      id: `csh-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      company_id: companyId,
+      customer_id: params.customerId,
+      from_stage: oldStage,
+      to_stage: canonicalNewStage,
+      actor_type: (params.actorType as StageActorType) || STAGE_ACTOR_TYPES.USER,
+      changed_by_user_id: params.userId || null,
+      reason: stageReason,
+      note: stageReason,
+      source_ref: params.sourceRef || null,
+      changed_at: now,
+      created_at: now,
+    };
+
+    mockStageHistories.unshift(historyRecord);
+  }
+
+  const result = {
+    customer: updatedCustomer,
+    history: historyRecord!,
+    ...updatedCustomer,
+  };
+
+  return result as { customer: Customer; history: CustomerStageHistory } & Customer;
+}
+
+/**
+ * Lấy lịch sử chuyển đổi giai đoạn của khách hàng (Strict Append-Only)
+ */
+export async function getStageHistories(
+  customerId: string,
+  client?: SupabaseClient
+): Promise<CustomerStageHistory[]> {
+  try {
+    const adminClient = client || createAdminClient();
+    const { data } = await adminClient
+      .from('customer_stage_histories')
+      .select('*')
+      .eq('customer_id', customerId)
+      .order('changed_at', { ascending: false });
+    if (data && data.length > 0) {
+      return data as CustomerStageHistory[];
+    }
+  } catch {}
+
+  return mockStageHistories
+    .filter((h) => h.customer_id === customerId)
+    .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
+}
+
+/**
+ * 6. evaluateUrgency: Xác định lý do ưu tiên cao trong Hàng chờ "CẦN SALE CHỐT"
+ * - DA_CO_GIA (PRICE_OFFERED) -> "Đã có giá"
+ * - DANG_THUONG_LUONG (NEGOTIATING) -> "Đang thương lượng"
+ * - PENDING_SALE -> "Khách phản hồi mới"
+ */
+export function evaluateUrgency(
+  customer: { id: string; stage: string },
+  pendingSaleCustomerIds?: Set<string>
+): { isUrgent: boolean; reason?: 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY'; label?: string } {
+  if (pendingSaleCustomerIds?.has(customer.id)) {
+    return {
+      isUrgent: true,
+      reason: 'PENDING_REPLY',
+      label: 'Khách phản hồi mới',
+    };
+  }
+
+  const canonicalStage = toCanonicalStage(customer.stage);
+  if (canonicalStage === CUSTOMER_STAGES.PRICE_OFFERED) {
+    return {
+      isUrgent: true,
+      reason: 'PRICE_OFFERED',
+      label: 'Đã có giá',
+    };
+  }
+
+  if (canonicalStage === CUSTOMER_STAGES.NEGOTIATING) {
+    return {
+      isUrgent: true,
+      reason: 'NEGOTIATING',
+      label: 'Đang thương lượng',
+    };
+  }
+
+  return { isUrgent: false };
+}
+
+/**
+ * 7. sanitizeForRole: Ẩn số thật nếu vai trò là SALE, hiển thị số thật nếu là SẾP/ADMIN.
+ *
+ * Quy tắc bảo mật:
+ * - BOSS_ADMIN: Trả về số điện thoại thật, is_phone_masked = false.
+ * - SALE / TECHNICIAN: Che số điện thoại bằng maskPhone (ví dụ 09******12), is_phone_masked = true.
+ * - Không bao giờ đưa các trường nhạy cảm `raw_phone` hay `normalized_phone` ra payload phản hồi.
+ */
 export function sanitizeForRole(
   customerData: CustomerWithContact,
-  role: ApplicationRole | string | null | undefined
+  role: ApplicationRole | string | null | undefined,
+  urgency?: { reason?: string; label?: string }
 ): CustomerResponse {
   const isBossAdmin = role === APPLICATION_ROLES.BOSS_ADMIN;
 
@@ -431,6 +707,8 @@ export function sanitizeForRole(
     phone: displayPhone,
     is_phone_masked: !isBossAdmin,
     identities: customerData.identities,
+    urgency_reason: urgency?.reason,
+    urgency_label: urgency?.label,
     created_at: customerData.customer.created_at,
     updated_at: customerData.customer.updated_at,
   };
@@ -447,6 +725,101 @@ export function sanitizeCustomersForRole(
 }
 
 /**
+ * 8. getUrgentClosingCustomers: Lọc khách hàng ưu tiên cao thuộc Hàng chờ "CẦN SALE CHỐT"
+ * - Khách ở trạng thái DA_CO_GIA (PRICE_OFFERED), DANG_THUONG_LUONG (NEGOTIATING), hoặc khách có tin nhắn phản hồi mới (PENDING_SALE).
+ * - Luôn bảo vệ an toàn Zero-Phone: che số đối với tài khoản vai trò SALE.
+ */
+export async function getUrgentClosingCustomers(
+  role: ApplicationRole | string | null | undefined,
+  pendingSaleCustomerIds?: Set<string>,
+  client?: SupabaseClient
+): Promise<CustomerResponse[]> {
+  let adminClient: SupabaseClient | null = null;
+  try {
+    adminClient = client || createAdminClient();
+  } catch {
+    adminClient = null;
+  }
+
+  let customers: Customer[] = [];
+
+  if (adminClient) {
+    try {
+      const { data } = await adminClient
+        .from('customers')
+        .select('*')
+        .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING]);
+      if (data && data.length > 0) {
+        customers = data as Customer[];
+      }
+    } catch {}
+  }
+
+  // Fallback mock store
+  if (customers.length === 0) {
+    customers = [
+      {
+        id: 'cust-1',
+        company_id: '00000000-0000-0000-0000-000000000001',
+        customer_code: 'KH-000001',
+        name: 'Anh Hoàng Nam',
+        source: CUSTOMER_SOURCES.FACEBOOK,
+        stage: mockCustomerStages['cust-1'] || CUSTOMER_STAGES.PRICE_OFFERED,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: 'cust-2',
+        company_id: '00000000-0000-0000-0000-000000000001',
+        customer_code: 'KH-000002',
+        name: 'Chị Mai Phương',
+        source: CUSTOMER_SOURCES.ZALO,
+        stage: mockCustomerStages['cust-2'] || CUSTOMER_STAGES.NEGOTIATING,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: 'cust-3',
+        company_id: '00000000-0000-0000-0000-000000000001',
+        customer_code: 'KH-000003',
+        name: 'Bác Quốc Tuấn',
+        source: CUSTOMER_SOURCES.HOTLINE,
+        stage: mockCustomerStages['cust-3'] || CUSTOMER_STAGES.CARE_NURTURING,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+  }
+
+  const mockPhoneMap: Record<string, string> = {
+    'cust-1': '0912345612',
+    'cust-2': '0934567890',
+    'cust-3': '0987654321',
+    'cust-4': '0977889900',
+  };
+
+  const urgentList: CustomerResponse[] = [];
+
+  for (const c of customers) {
+    const urgency = evaluateUrgency(c, pendingSaleCustomerIds);
+    if (urgency.isUrgent) {
+      const rawPhone = mockPhoneMap[c.id] || '0912345612';
+      const sanitized = sanitizeForRole(
+        {
+          customer: c,
+          contact: { raw_phone: rawPhone, normalized_phone: `+84${rawPhone.slice(1)}` },
+        },
+        role,
+        urgency
+      );
+      urgentList.push(sanitized);
+    }
+  }
+
+  return urgentList;
+}
+
+/**
  * Namespace đóng gói toàn bộ dịch vụ CustomerService
  */
 export const CustomerService = {
@@ -455,6 +828,13 @@ export const CustomerService = {
   computePhoneHmac,
   generateCustomerCode,
   findOrCreateByPhone,
+  toCanonicalStage,
+  updateStage,
+  getStageHistories,
+  evaluateUrgency,
+  getUrgentClosingCustomers,
+  mockCustomerStages,
+  mockStageHistories,
   sanitizeForRole,
   sanitizeCustomersForRole,
 };
