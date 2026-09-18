@@ -33,10 +33,12 @@ export interface UpdateProductionProgressInput {
     productionOrderId: string;
     status: ProductionOrderStatus;
     note?: string;
+    actorId?: string;
 }
 
 export interface RecordQualityCheckInput {
     productionOrderId: string;
     qcStatus: QCStatus;
     notes?: string;
+    inspectorId: string;
 }

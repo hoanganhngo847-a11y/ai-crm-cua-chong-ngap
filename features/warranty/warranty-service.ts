@@ -12,13 +12,15 @@ import type {
 /**
  * 1. Tiếp nhận và mở phiếu bảo hành (Việc 32)
  * Ràng buộc: Phiếu gắn chính xác với khách hàng, đơn hàng và lần lắp đặt (nếu có).
+ * Bắt buộc đơn hàng phải hoàn tất nghiệm thu và bàn giao (order_status === 'COMPLETED').
  * Tuyệt đối không can thiệp vào giá trị đơn hàng, giao dịch cọc hay doanh thu.
  */
 export async function createWarrantyTicket(
     companyId: string,
-    input: CreateWarrantyTicketInput
+    input: CreateWarrantyTicketInput,
+    overrideAdminClient?: any
 ): Promise<WarrantyTicketDTO> {
-    const admin = createAdminClient();
+    const admin = overrideAdminClient || createAdminClient();
 
     // Xác minh đơn hàng hợp lệ thuộc công ty
     const { data: order, error: orderErr } = await admin
@@ -31,6 +33,12 @@ export async function createWarrantyTicket(
 
     if (orderErr || !order) {
         throw new Error('Không tìm thấy đơn hàng tương ứng với khách hàng để tạo bảo hành.');
+    }
+
+    if (order.order_status !== 'COMPLETED') {
+        throw new Error(
+            'Chỉ đơn hàng đã hoàn tất nghiệm thu và bàn giao (COMPLETED) mới đủ điều kiện mở phiếu bảo hành.'
+        );
     }
 
     // Tự động tìm installation_id nếu chưa truyền vào
@@ -90,9 +98,10 @@ export async function createWarrantyTicket(
  */
 export async function assignWarrantyTicket(
     companyId: string,
-    input: AssignWarrantyTicketInput
+    input: AssignWarrantyTicketInput,
+    overrideAdminClient?: any
 ): Promise<void> {
-    const admin = createAdminClient();
+    const admin = overrideAdminClient || createAdminClient();
 
     const { error } = await admin
         .from('warranty_tickets')
@@ -114,9 +123,10 @@ export async function assignWarrantyTicket(
  */
 export async function updateWarrantyStatus(
     companyId: string,
-    input: UpdateWarrantyStatusInput
+    input: UpdateWarrantyStatusInput,
+    overrideAdminClient?: any
 ): Promise<void> {
-    const admin = createAdminClient();
+    const admin = overrideAdminClient || createAdminClient();
 
     const updatePayload: Record<string, unknown> = {
         status: input.status,
@@ -147,9 +157,10 @@ export async function updateWarrantyStatus(
  */
 export async function reopenWarrantyTicket(
     companyId: string,
-    input: ReopenWarrantyTicketInput
+    input: ReopenWarrantyTicketInput,
+    overrideAdminClient?: any
 ): Promise<void> {
-    const admin = createAdminClient();
+    const admin = overrideAdminClient || createAdminClient();
 
     const { data: currentTicket, error: fetchErr } = await admin
         .from('warranty_tickets')
