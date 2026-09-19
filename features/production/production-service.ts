@@ -10,8 +10,24 @@ import type {
 } from './types';
 
 /**
+ * Chuyển đổi trạng thái hợp lệ của lệnh sản xuất (State Machine)
+ */
+export const VALID_PRODUCTION_TRANSITIONS: Record<ProductionOrderStatus, ProductionOrderStatus[]> = {
+    PENDING_SPECS: ['RELEASED_TO_FACTORY'],
+    RELEASED_TO_FACTORY: ['IN_PRODUCTION'],
+    IN_PRODUCTION: ['QC_IN_PROGRESS'],
+    QC_IN_PROGRESS: ['QC_PASSED', 'QC_FAILED', 'READY_FOR_DISPATCH', 'IN_PRODUCTION'],
+    QC_FAILED: ['IN_PRODUCTION'],
+    QC_PASSED: ['READY_FOR_DISPATCH'],
+    READY_FOR_DISPATCH: ['IN_PRODUCTION'],
+};
+
+/**
  * 1. Tạo lệnh sản xuất cho xưởng (Việc 29)
- * Ràng buộc: Bắt buộc hợp đồng phải ở trạng thái SIGNED và có signed_file_ref hợp lệ.
+ * Ràng buộc:
+ * - Bắt buộc hợp đồng phải ở trạng thái SIGNED và có signed_file_ref hợp lệ.
+ * - Bắt buộc kiểm tra orders.order_status: chỉ cho phép 'CONTRACT_SIGNED' hoặc 'DEPOSIT_CONFIRMED'.
+ * - TUYỆT ĐỐI CHẶN nếu order_status === 'CANCELLED' hoặc đã 'IN_PRODUCTION'.
  */
 export async function createProductionOrder(
     companyId: string,
@@ -19,6 +35,37 @@ export async function createProductionOrder(
     overrideAdminClient?: any
 ): Promise<ProductionOrderDTO> {
     const admin = overrideAdminClient || createAdminClient();
+
+    // Kiểm tra trạng thái đơn hàng (P0)
+    const { data: order, error: orderErr } = await admin
+        .from('orders')
+        .select('id, order_status')
+        .eq('company_id', companyId)
+        .eq('id', input.orderId)
+        .maybeSingle();
+
+    if (orderErr) {
+        throw new Error(`Lỗi truy vấn đơn hàng: ${orderErr.message}`);
+    }
+
+    if (!order) {
+        throw new Error('Không tìm thấy đơn hàng để tạo lệnh sản xuất.');
+    }
+
+    if (order.order_status === 'CANCELLED') {
+        throw new Error('Không thể tạo lệnh sản xuất cho đơn hàng đã bị hủy (CANCELLED).');
+    }
+
+    if (order.order_status === 'IN_PRODUCTION') {
+        throw new Error('Đơn hàng này đã có lệnh sản xuất đang chạy (IN_PRODUCTION).');
+    }
+
+    const validProductionTriggerStatuses = ['CONTRACT_SIGNED', 'DEPOSIT_CONFIRMED'];
+    if (!validProductionTriggerStatuses.includes(order.order_status)) {
+        throw new Error(
+            `Không thể tạo lệnh sản xuất: Trạng thái đơn hàng (${order.order_status}) không hợp lệ. Chỉ cho phép khi đơn hàng ở trạng thái: ${validProductionTriggerStatuses.join(', ')}.`
+        );
+    }
 
     // Kiểm tra điều kiện hợp đồng đã ký của đơn hàng
     const { data: contract, error: contractErr } = await admin
@@ -129,20 +176,35 @@ export async function updateProductionProgress(
 
     const oldStatus = currentOrder.status;
 
-    const { error } = await admin
+    // Kiểm tra chuyển đổi trạng thái hợp lệ (State Machine - P1)
+    if (oldStatus !== input.status) {
+        const allowedTransitions = VALID_PRODUCTION_TRANSITIONS[oldStatus as ProductionOrderStatus] || [];
+        if (!allowedTransitions.includes(input.status)) {
+            throw new Error(
+                `Chuyển đổi trạng thái lệnh sản xuất không hợp lệ từ '${oldStatus}' sang '${input.status}'.`
+            );
+        }
+    }
+
+    // Cập nhật với kiểm tra affected rows (P1: .select('id').single())
+    const { data: updatedRecord, error } = await admin
         .from('production_orders')
         .update({
             status: input.status,
             updated_at: new Date().toISOString(),
         })
         .eq('company_id', companyId)
-        .eq('id', input.productionOrderId);
+        .eq('id', input.productionOrderId)
+        .select('id')
+        .single();
 
-    if (error) {
-        throw new Error(`Cập nhật tiến độ sản xuất thất bại: ${error.message}`);
+    if (error || !updatedRecord) {
+        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất cần cập nhật (404).');
+        (notFoundErr as any).status = 404;
+        throw notFoundErr;
     }
 
-    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs
+    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs (Sanitized: chỉ lưu from_status, to_status, qc_status, actor_id - P1)
     const { error: auditError } = await admin
         .from('audit_logs')
         .insert({
@@ -153,10 +215,10 @@ export async function updateProductionProgress(
             resource_id: input.productionOrderId,
             result: 'SUCCESS',
             metadata: {
-                old_status: oldStatus,
-                new_status: input.status,
-                note: input.note || null,
+                from_status: oldStatus,
+                to_status: input.status,
                 qc_status: currentOrder.qc_status,
+                actor_id: input.actorId || null,
             },
         });
 
@@ -202,11 +264,12 @@ export async function recordQualityCheck(
         .maybeSingle();
 
     if (findErr || !currentOrder) {
-        throw new Error('Không tìm thấy lệnh sản xuất để kiểm tra QC.');
+        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
+        (notFoundErr as any).status = 404;
+        throw notFoundErr;
     }
 
     const oldStatus = currentOrder.status;
-    const oldQcStatus = currentOrder.qc_status;
 
     // Xác định trạng thái lệnh sản xuất dựa trên kết quả QC
     let nextStatus: ProductionOrderStatus = 'QC_IN_PROGRESS';
@@ -216,6 +279,7 @@ export async function recordQualityCheck(
         nextStatus = 'QC_FAILED';
     }
 
+    // Cập nhật với kiểm tra affected rows (P1: .select('id, order_id').single())
     const { data: updated, error } = await admin
         .from('production_orders')
         .update({
@@ -225,11 +289,13 @@ export async function recordQualityCheck(
         })
         .eq('company_id', companyId)
         .eq('id', input.productionOrderId)
-        .select('order_id')
+        .select('id, order_id')
         .single();
 
     if (error || !updated) {
-        throw new Error(`Ghi nhận kiểm tra QC thất bại: ${error?.message}`);
+        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
+        (notFoundErr as any).status = 404;
+        throw notFoundErr;
     }
 
     // Nếu QC Đạt, chuẩn bị sẵn sàng cho lịch lắp đặt
@@ -241,7 +307,7 @@ export async function recordQualityCheck(
             .eq('id', updated.order_id);
     }
 
-    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs
+    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs (Sanitized: chỉ lưu from_status, to_status, qc_status, actor_id - P1)
     const { error: auditError } = await admin
         .from('audit_logs')
         .insert({
@@ -252,11 +318,10 @@ export async function recordQualityCheck(
             resource_id: input.productionOrderId,
             result: 'SUCCESS',
             metadata: {
-                old_status: oldStatus,
-                new_status: nextStatus,
-                old_qc_status: oldQcStatus,
+                from_status: oldStatus,
+                to_status: nextStatus,
                 qc_status: input.qcStatus,
-                notes: input.notes || null,
+                actor_id: input.inspectorId,
             },
         });
 
