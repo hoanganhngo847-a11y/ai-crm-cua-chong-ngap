@@ -51,10 +51,7 @@ export async function updateProductionProgressAction(
             return { success: false, error: 'Chưa xác định tổ chức hoặc người thực hiện.' };
         }
 
-        await requireCompanyRole(actor.companyId, [
-            APPLICATION_ROLES.BOSS_ADMIN,
-            APPLICATION_ROLES.TECHNICIAN,
-        ]);
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
 
         await updateProductionProgress(actor.companyId, {
             productionOrderId,
@@ -83,10 +80,7 @@ export async function recordQualityCheckAction(
             return { success: false, error: 'Chưa xác định tổ chức hoặc người thực hiện.' };
         }
 
-        await requireCompanyRole(actor.companyId, [
-            APPLICATION_ROLES.BOSS_ADMIN,
-            APPLICATION_ROLES.TECHNICIAN,
-        ]);
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
 
         await recordQualityCheck(actor.companyId, {
             productionOrderId,

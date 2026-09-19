@@ -7,6 +7,14 @@ export type InstallationStatus =
     | 'COMPLETED'
     | 'FAILED';
 
+export type SettableInstallationStatus =
+    | 'SCHEDULED'
+    | 'IN_TRANSIT'
+    | 'INSTALLING'
+    | 'TESTING'
+    | 'HANDOVER_PENDING'
+    | 'FAILED';
+
 export interface InstallationDTO {
     id: string;
     companyId: string;
