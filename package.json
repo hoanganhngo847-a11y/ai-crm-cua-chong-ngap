@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
-    "test:operations": "tsx --conditions=react-server tests/operations/operations.test.ts"
+    "test:operations": "tsx --conditions=react-server tests/operations/operations.test.ts",
+    "test": "npm run test:operations"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

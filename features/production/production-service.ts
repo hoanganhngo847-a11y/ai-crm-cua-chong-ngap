@@ -6,6 +6,7 @@ import type {
     ProductionOrderStatus,
     QCStatus,
     RecordQualityCheckInput,
+    SettableProductionStatus,
     UpdateProductionProgressInput,
 } from './types';
 
@@ -19,6 +20,20 @@ export const VALID_PRODUCTION_TRANSITIONS: Record<ProductionOrderStatus, Product
     QC_IN_PROGRESS: ['QC_PASSED', 'QC_FAILED', 'READY_FOR_DISPATCH', 'IN_PRODUCTION'],
     QC_FAILED: ['IN_PRODUCTION'],
     QC_PASSED: ['READY_FOR_DISPATCH'],
+    READY_FOR_DISPATCH: ['IN_PRODUCTION'],
+};
+
+/**
+ * Trạng thái cho phép thiết lập qua generic updateProductionProgress (P0)
+ * Loại bỏ hoàn toàn 'QC_PASSED', 'QC_FAILED', 'READY_FOR_DISPATCH' khỏi hàm này.
+ */
+export const VALID_SETTABLE_PRODUCTION_TRANSITIONS: Record<ProductionOrderStatus, SettableProductionStatus[]> = {
+    PENDING_SPECS: ['RELEASED_TO_FACTORY'],
+    RELEASED_TO_FACTORY: ['IN_PRODUCTION'],
+    IN_PRODUCTION: ['QC_IN_PROGRESS'],
+    QC_IN_PROGRESS: ['IN_PRODUCTION'],
+    QC_FAILED: ['IN_PRODUCTION'],
+    QC_PASSED: [],
     READY_FOR_DISPATCH: ['IN_PRODUCTION'],
 };
 
@@ -117,12 +132,25 @@ export async function createProductionOrder(
         throw new Error(`Tạo lệnh sản xuất thất bại: ${insertErr?.message}`);
     }
 
-    // Cập nhật trạng thái đơn hàng chung sang IN_PRODUCTION
-    await admin
+    // Cập nhật trạng thái đơn hàng chung sang IN_PRODUCTION (với rollback Fail-closed)
+    const { error: orderUpdateErr } = await admin
         .from('orders')
         .update({ order_status: 'IN_PRODUCTION', updated_at: new Date().toISOString() })
         .eq('company_id', companyId)
         .eq('id', input.orderId);
+
+    if (orderUpdateErr) {
+        // Rollback lệnh sản xuất vừa tạo để đảm bảo tính nguyên tử (Fail-closed)
+        await admin
+            .from('production_orders')
+            .delete()
+            .eq('company_id', companyId)
+            .eq('id', newProdOrder.id);
+
+        throw new Error(
+            `Cập nhật trạng thái đơn hàng sang IN_PRODUCTION thất bại, đã rollback lệnh sản xuất: ${orderUpdateErr.message}`
+        );
+    }
 
     return {
         id: newProdOrder.id,
@@ -140,12 +168,17 @@ export async function createProductionOrder(
 
 /**
  * 2. Cập nhật tiến độ xưởng sản xuất (Việc 30)
- * BẮT BUỘC ghi bản ghi kiểm toán vào public.audit_logs
+ * Ràng buộc P0:
+ * - CHẶN MÂU THUẪN TRẠNG THÁI QC & SẢN XUẤT:
+ *   Loại bỏ hoàn toàn 'QC_PASSED', 'QC_FAILED', 'READY_FOR_DISPATCH' khỏi hàm generic này.
+ *   Ba trạng thái trên CHỈ ĐƯỢC PHÉP thiết lập duy nhất qua hàm recordQualityCheck.
+ * - BẢO ĐẢM TÍNH NGUYÊN TỬ (ATOMICITY) & AUDIT TRAIL:
+ *   Nếu ghi audit thất bại, rollback trạng thái về oldStatus (Fail-closed).
  */
 export async function updateProductionProgress(
     companyId: string,
     inputOrOrderId: UpdateProductionProgressInput | string,
-    statusArg?: ProductionOrderStatus,
+    statusArg?: SettableProductionStatus,
     noteArg?: string,
     actorIdArg?: string,
     overrideAdminClient?: any
@@ -160,6 +193,14 @@ export async function updateProductionProgress(
                   actorId: actorIdArg,
               };
 
+    // Chặn triệt để các trạng thái QC trong generic update (P0)
+    const FORBIDDEN_GENERIC_STATUSES = ['QC_PASSED', 'QC_FAILED', 'READY_FOR_DISPATCH'];
+    if (FORBIDDEN_GENERIC_STATUSES.includes(input.status as string)) {
+        throw new Error(
+            `INVALID_STATE_TRANSITION: Trạng thái '${input.status}' chỉ được phép thiết lập duy nhất qua quy trình kiểm tra chất lượng (recordQualityCheck).`
+        );
+    }
+
     const admin = overrideAdminClient || createAdminClient();
 
     // Truy vấn trạng thái hiện tại để lưu vết kiểm toán
@@ -171,17 +212,17 @@ export async function updateProductionProgress(
         .maybeSingle();
 
     if (findErr || !currentOrder) {
-        throw new Error('Không tìm thấy lệnh sản xuất.');
+        throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy lệnh sản xuất.');
     }
 
     const oldStatus = currentOrder.status;
 
-    // Kiểm tra chuyển đổi trạng thái hợp lệ (State Machine - P1)
+    // Kiểm tra chuyển đổi trạng thái hợp lệ (State Machine - P0 & P1)
     if (oldStatus !== input.status) {
-        const allowedTransitions = VALID_PRODUCTION_TRANSITIONS[oldStatus as ProductionOrderStatus] || [];
+        const allowedTransitions = VALID_SETTABLE_PRODUCTION_TRANSITIONS[oldStatus as ProductionOrderStatus] || [];
         if (!allowedTransitions.includes(input.status)) {
             throw new Error(
-                `Chuyển đổi trạng thái lệnh sản xuất không hợp lệ từ '${oldStatus}' sang '${input.status}'.`
+                `INVALID_STATE_TRANSITION: Chuyển đổi trạng thái lệnh sản xuất không hợp lệ từ '${oldStatus}' sang '${input.status}'.`
             );
         }
     }
@@ -199,7 +240,7 @@ export async function updateProductionProgress(
         .single();
 
     if (error || !updatedRecord) {
-        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất cần cập nhật (404).');
+        const notFoundErr = new Error('RESOURCE_NOT_FOUND: Không tìm thấy lệnh sản xuất cần cập nhật (404).');
         (notFoundErr as any).status = 404;
         throw notFoundErr;
     }
@@ -223,13 +264,26 @@ export async function updateProductionProgress(
         });
 
     if (auditError) {
-        throw new Error(`Ghi nhận kiểm toán cập nhật tiến độ thất bại: ${auditError.message}`);
+        // Rollback trạng thái nếu ghi audit thất bại (Fail-closed - P0)
+        await admin
+            .from('production_orders')
+            .update({
+                status: oldStatus,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('company_id', companyId)
+            .eq('id', input.productionOrderId);
+
+        throw new Error(`Ghi nhận kiểm toán cập nhật tiến độ thất bại, đã rollback trạng thái (Fail-closed): ${auditError.message}`);
     }
 }
 
 /**
  * 3. Đánh giá chất lượng sản phẩm - QC (Việc 30)
- * Yêu cầu: Xác nhận QC vật lý do người thật thao tác có định danh inspectorId và ghi kiểm toán.
+ * Ràng buộc P0:
+ * - Bắt buộc kiểm tra productionOrder.status === 'QC_IN_PROGRESS'. Nếu không ở bước này, ném lỗi cấm duyệt QC.
+ * - Khi QC_PASSED -> tự động chuyển sang READY_FOR_DISPATCH và đồng bộ qc_status = 'PASSED'.
+ * - Nguyên tử & Rollback: Cập nhật orders (READY_FOR_INSTALL) và ghi audit_logs fail-closed.
  */
 export async function recordQualityCheck(
     companyId: string,
@@ -264,26 +318,41 @@ export async function recordQualityCheck(
         .maybeSingle();
 
     if (findErr || !currentOrder) {
-        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
+        const notFoundErr = new Error('RESOURCE_NOT_FOUND: Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
         (notFoundErr as any).status = 404;
         throw notFoundErr;
     }
 
-    const oldStatus = currentOrder.status;
-
-    // Xác định trạng thái lệnh sản xuất dựa trên kết quả QC
-    let nextStatus: ProductionOrderStatus = 'QC_IN_PROGRESS';
-    if (input.qcStatus === 'PASSED') {
-        nextStatus = 'READY_FOR_DISPATCH';
-    } else if (input.qcStatus === 'REWORK_REQUIRED' || input.qcStatus === 'REJECTED') {
-        nextStatus = 'QC_FAILED';
+    // BẮT BUỘC KIỂM TRA TRẠNG THÁI XƯỞNG (P0):
+    // Chỉ cho phép duyệt QC khi lệnh sản xuất đang ở trạng thái 'QC_IN_PROGRESS'
+    if (currentOrder.status !== 'QC_IN_PROGRESS') {
+        throw new Error(
+            `INVALID_STATE_TRANSITION: Lệnh xưởng phải ở trạng thái 'QC_IN_PROGRESS' để kiểm tra QC. Trạng thái hiện tại: '${currentOrder.status}'.`
+        );
     }
 
-    // Cập nhật với kiểm tra affected rows (P1: .select('id, order_id').single())
+    const oldStatus = currentOrder.status;
+    const oldQcStatus = currentOrder.qc_status;
+
+    // Xác định trạng thái lệnh sản xuất và qc_status đồng bộ dựa trên kết quả QC (P0)
+    let nextStatus: ProductionOrderStatus;
+    let dbQcStatus: QCStatus;
+
+    if (input.qcStatus === 'PASSED') {
+        nextStatus = 'READY_FOR_DISPATCH';
+        dbQcStatus = 'PASSED';
+    } else if (input.qcStatus === 'REWORK_REQUIRED' || input.qcStatus === 'REJECTED') {
+        nextStatus = 'QC_FAILED';
+        dbQcStatus = input.qcStatus;
+    } else {
+        throw new Error(`INVALID_INPUT: Trạng thái QC không hợp lệ: '${input.qcStatus}'.`);
+    }
+
+    // Cập nhật production_orders
     const { data: updated, error } = await admin
         .from('production_orders')
         .update({
-            qc_status: input.qcStatus,
+            qc_status: dbQcStatus,
             status: nextStatus,
             updated_at: new Date().toISOString(),
         })
@@ -293,21 +362,49 @@ export async function recordQualityCheck(
         .single();
 
     if (error || !updated) {
-        const notFoundErr = new Error('Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
+        const notFoundErr = new Error('RESOURCE_NOT_FOUND: Không tìm thấy lệnh sản xuất để kiểm tra QC (404).');
         (notFoundErr as any).status = 404;
         throw notFoundErr;
     }
 
-    // Nếu QC Đạt, chuẩn bị sẵn sàng cho lịch lắp đặt
-    if (input.qcStatus === 'PASSED') {
-        await admin
+    // Nếu QC Đạt, chuẩn bị sẵn sàng cho lịch lắp đặt (orders.order_status = 'READY_FOR_INSTALL')
+    let orderUpdated = false;
+    let previousOrderStatus: string | null = null;
+
+    if (dbQcStatus === 'PASSED') {
+        const { data: ord } = await admin
+            .from('orders')
+            .select('order_status')
+            .eq('company_id', companyId)
+            .eq('id', updated.order_id)
+            .maybeSingle();
+
+        previousOrderStatus = ord?.order_status || 'IN_PRODUCTION';
+
+        const { error: orderUpdateErr } = await admin
             .from('orders')
             .update({ order_status: 'READY_FOR_INSTALL', updated_at: new Date().toISOString() })
             .eq('company_id', companyId)
             .eq('id', updated.order_id);
+
+        if (orderUpdateErr) {
+            // Rollback production_orders
+            await admin
+                .from('production_orders')
+                .update({
+                    qc_status: oldQcStatus,
+                    status: oldStatus,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq('company_id', companyId)
+                .eq('id', input.productionOrderId);
+
+            throw new Error(`Cập nhật đơn hàng sang READY_FOR_INSTALL thất bại, đã rollback lệnh xưởng: ${orderUpdateErr.message}`);
+        }
+        orderUpdated = true;
     }
 
-    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs (Sanitized: chỉ lưu from_status, to_status, qc_status, actor_id - P1)
+    // BẮT BUỘC ghi bản ghi kiểm toán vào bảng public.audit_logs (Sanitized - Fail-closed - P0 & P1)
     const { error: auditError } = await admin
         .from('audit_logs')
         .insert({
@@ -320,12 +417,31 @@ export async function recordQualityCheck(
             metadata: {
                 from_status: oldStatus,
                 to_status: nextStatus,
-                qc_status: input.qcStatus,
+                qc_status: dbQcStatus,
                 actor_id: input.inspectorId,
             },
         });
 
     if (auditError) {
-        throw new Error(`Ghi nhận kiểm toán QC thất bại: ${auditError.message}`);
+        // Rollback cả orders và production_orders nếu ghi audit thất bại
+        if (orderUpdated && previousOrderStatus) {
+            await admin
+                .from('orders')
+                .update({ order_status: previousOrderStatus, updated_at: new Date().toISOString() })
+                .eq('company_id', companyId)
+                .eq('id', updated.order_id);
+        }
+
+        await admin
+            .from('production_orders')
+            .update({
+                qc_status: oldQcStatus,
+                status: oldStatus,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('company_id', companyId)
+            .eq('id', input.productionOrderId);
+
+        throw new Error(`Ghi nhận kiểm toán QC thất bại, đã rollback toàn bộ trạng thái (Fail-closed): ${auditError.message}`);
     }
 }
