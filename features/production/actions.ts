@@ -10,8 +10,8 @@ import {
 import type {
     CreateProductionOrderInput,
     ProductionOrderDTO,
-    ProductionOrderStatus,
     QCStatus,
+    SettableProductionStatus,
 } from './types';
 
 /**
@@ -42,7 +42,7 @@ export async function createProductionOrderAction(
  */
 export async function updateProductionProgressAction(
     productionOrderId: string,
-    status: ProductionOrderStatus,
+    status: SettableProductionStatus,
     note?: string
 ): Promise<{ success: boolean; error?: string }> {
     try {

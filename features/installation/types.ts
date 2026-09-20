@@ -39,6 +39,12 @@ export interface ScheduleInstallationInput {
 
 export interface CompleteInstallationInput {
     installationId: string;
-    photos: string[];
-    handoverRef: string;
 }
+
+export type InstallationEvidenceType = 'photo' | 'handover';
+
+export interface AttachInstallationEvidenceInput {
+    installationId: string;
+    fileKey: string;
+    type: InstallationEvidenceType;
+}

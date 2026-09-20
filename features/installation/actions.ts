@@ -3,12 +3,14 @@
 import { AuthError, getActorContext, requireCompanyRole } from '../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
 import {
+    attachInstallationEvidence,
     completeInstallationAndHandover,
     scheduleInstallation,
     updateInstallationStatus,
     verifyTechnicianInstallationAssignment,
 } from './installation-service';
 import type {
+    AttachInstallationEvidenceInput,
     CompleteInstallationInput,
     InstallationDTO,
     ScheduleInstallationInput,
@@ -69,6 +71,39 @@ export async function updateInstallationStatusAction(
         }
         const error = err as Error;
         return { success: false, error: error.message || 'Lỗi cập nhật lắp đặt.' };
+    }
+}
+
+/**
+ * Action: Đính kèm tài liệu nghiệm thu (ảnh hiện trường / biên bản bàn giao) (P0)
+ * - Nếu caller là TECHNICIAN: bắt buộc kiểm tra appointments liên kết.
+ */
+export async function attachInstallationEvidenceAction(
+    input: AttachInstallationEvidenceInput
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const actor = await getActorContext();
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức làm việc.' };
+        }
+
+        await requireCompanyRole(actor.companyId, [
+            APPLICATION_ROLES.BOSS_ADMIN,
+            APPLICATION_ROLES.TECHNICIAN,
+        ]);
+
+        if (actor.role === APPLICATION_ROLES.TECHNICIAN) {
+            await verifyTechnicianInstallationAssignment(actor.companyId, actor.userId, input.installationId);
+        }
+
+        await attachInstallationEvidence(actor.companyId, input, undefined, actor);
+        return { success: true };
+    } catch (err: unknown) {
+        if (err instanceof AuthError) {
+            throw err;
+        }
+        const error = err as Error;
+        return { success: false, error: error.message || 'Lỗi đính kèm tài liệu nghiệm thu.' };
     }
 }
 

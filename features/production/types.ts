@@ -7,6 +7,12 @@ export type ProductionOrderStatus =
     | 'QC_FAILED'
     | 'READY_FOR_DISPATCH';
 
+export type SettableProductionStatus =
+    | 'PENDING_SPECS'
+    | 'RELEASED_TO_FACTORY'
+    | 'IN_PRODUCTION'
+    | 'QC_IN_PROGRESS';
+
 export type QCStatus = 'PENDING' | 'PASSED' | 'REWORK_REQUIRED' | 'REJECTED';
 
 export interface ProductionOrderDTO {
@@ -31,7 +37,7 @@ export interface CreateProductionOrderInput {
 
 export interface UpdateProductionProgressInput {
     productionOrderId: string;
-    status: ProductionOrderStatus;
+    status: SettableProductionStatus;
     note?: string;
     actorId?: string;
 }
