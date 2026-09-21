@@ -45,35 +45,10 @@ export class MockAiCallProvider implements CallProvider {
  * Development/CI: trả về MockAiCallProvider.
  */
 export function resolveAiCallProvider(injected?: CallProvider): CallProvider {
-  if (injected) {
-    return injected;
-  }
-
-  if (process.env.NODE_ENV === 'production') {
-    // Production bắt buộc có provider thật
-    const provider = process.env.VOICE_PROVIDER;
-    if (provider === 'STRINGEE') {
-      // Import động để không bundle trong dev nếu chưa cấu hình
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { StringeeProvider } = require('./stringee-provider') as {
-        StringeeProvider: new (apiKey: string, apiSecret: string) => CallProvider;
-      };
-      const apiKey = process.env.STRINGEE_API_KEY;
-      const apiSecret = process.env.STRINGEE_API_SECRET;
-      if (!apiKey || !apiSecret) {
-        throw new Error(
-          'STRINGEE_API_KEY và STRINGEE_API_SECRET phải được cấu hình trong production.'
-        );
-      }
-      return new StringeeProvider(apiKey, apiSecret);
-    }
-
-    throw new Error(
-      `VOICE_PROVIDER="${provider}" chưa được cấu hình hoặc không hợp lệ. ` +
-        `Giá trị hợp lệ: STRINGEE. Đặt biến môi trường VOICE_PROVIDER.`
-    );
-  }
-
-  // Development / CI
-  return new MockAiCallProvider();
+  // Compatibility wrapper for callers created before provider-factory.ts.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { resolveVoiceCallProvider } = require('./provider-factory') as {
+    resolveVoiceCallProvider: (provider?: CallProvider) => CallProvider;
+  };
+  return resolveVoiceCallProvider(injected);
 }

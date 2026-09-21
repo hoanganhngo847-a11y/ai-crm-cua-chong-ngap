@@ -216,7 +216,7 @@ export async function markAttemptResult(
   }
 
   // Ghi kết quả
-  const { error: updateError } = await adminClient
+  const { data: updatedRows, error: updateError } = await adminClient
     .from('call_attempts')
     .update({
       result,
@@ -225,7 +225,8 @@ export async function markAttemptResult(
     })
     .eq('id', attemptId)
     .eq('company_id', companyId)
-    .eq('result', 'PENDING'); // Optimistic lock — chỉ update nếu vẫn PENDING
+    .eq('result', 'PENDING') // Optimistic lock — chỉ update nếu vẫn PENDING
+    .select('id');
 
   if (updateError) {
     throw new ServerAuthError(
@@ -233,6 +234,10 @@ export async function markAttemptResult(
       500,
       'INTERNAL_ERROR'
     );
+  }
+
+  if (!updatedRows || updatedRows.length === 0) {
+    return { nextAttemptId: null };
   }
 
   const attemptNo = attempt.attempt_no as 1 | 2 | 3;
@@ -335,6 +340,8 @@ export async function cancelPendingAttemptsInCycle(
     .eq('company_id', companyId)
     .eq('contact_cycle_id', contactCycleId)
     .eq('result', 'PENDING')
+    .is('called_at', null)
+    .is('call_id', null)
     .select('id');
 
   if (error) {

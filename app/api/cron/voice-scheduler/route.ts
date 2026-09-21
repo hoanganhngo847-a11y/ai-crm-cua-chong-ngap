@@ -3,6 +3,7 @@ import {
   getPendingDueAttempts,
 } from '../../../../features/voice/services/call-attempt-scheduler';
 import { dispatchAiOutboundCall } from '../../../../features/voice/services/call-dispatcher';
+import { processDueVoiceMediaJobs } from '../../../../features/voice/services/media-pipeline';
 
 // GET /api/cron/voice-scheduler
 //
@@ -53,10 +54,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Database error' }, { status: 500 });
   }
 
-  if (attempts.length === 0) {
-    return NextResponse.json({ ok: true, processed: 0, message: 'No pending attempts' });
-  }
-
   // ── Dispatch từng attempt ─────────────────────────────────────────────────
   let successCount = 0;
   let failCount = 0;
@@ -75,11 +72,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
   }
 
+  let media = { processed: 0, failed: 0 };
+  try {
+    media = await processDueVoiceMediaJobs(10);
+  } catch (error) {
+    console.error('[cron/voice-scheduler] Voice media worker failed:', (error as Error).message);
+  }
+
   const result = {
     ok: true,
     processed: successCount,
     failed: failCount,
     total: attempts.length,
+    media,
     // Không trả errors array có thể chứa thông tin nhạy cảm ra ngoài
     // Chỉ log ở server
   };

@@ -2,8 +2,9 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
-import { resolveAiCallProvider } from '../providers/mock-provider';
+import { resolveVoiceCallProvider } from '../providers/provider-factory';
 import type { CallProvider } from '../../../shared/contracts/sensitive';
+import { markAttemptResult } from './call-attempt-scheduler';
 
 // ---------------------------------------------------------------------------
 // Types nội bộ
@@ -47,12 +48,12 @@ export async function dispatchAiOutboundCall(
   _client?: SupabaseClient // unused — dispatcher dùng adminClient
 ): Promise<DispatchResult> {
   const adminClient = createAdminClient();
-  const callProvider = resolveAiCallProvider(provider);
+  const callProvider = resolveVoiceCallProvider(provider);
 
   // ── 1. Load attempt ──────────────────────────────────────────────────────
   const { data: attempt, error: attemptError } = await adminClient
     .from('call_attempts')
-    .select('id, company_id, customer_id, contact_cycle_id, attempt_no, result')
+    .select('id, company_id, customer_id, contact_cycle_id, attempt_no, result, called_at, call_id')
     .eq('id', attemptId)
     .eq('company_id', companyId)
     .maybeSingle();
@@ -69,6 +70,23 @@ export async function dispatchAiOutboundCall(
       'INTERNAL_ERROR'
     );
   }
+
+
+  if (attempt.called_at || attempt.call_id) {
+    throw new ServerAuthError('Lịch gọi đã được xử lý.', 409, 'INTERNAL_ERROR');
+  }
+
+  // Claim before accessing the phone or invoking the provider. Only one worker wins.
+  const { data: claim } = await adminClient
+    .from('call_attempts')
+    .update({ called_at: new Date().toISOString() })
+    .eq('id', attemptId)
+    .eq('company_id', companyId)
+    .eq('result', 'PENDING')
+    .is('called_at', null)
+    .select('id')
+    .maybeSingle();
+  if (!claim) throw new ServerAuthError('Lịch gọi đang được xử lý.', 409, 'INTERNAL_ERROR');
 
   const customerId = attempt.customer_id;
 
@@ -187,8 +205,7 @@ export async function dispatchAiOutboundCall(
     // (có thể chứa raw phone hoặc provider credentials)
     await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callId);
 
-    await adminClient.from('call_attempts').update({ result: 'FAILED', called_at: new Date().toISOString(), call_id: callId })
-      .eq('id', attemptId);
+    await markAttemptResult(attemptId, companyId, 'FAILED', callId);
 
     throw new ServerAuthError(
       'Không thể thực hiện cuộc gọi qua tổng đài.',
@@ -210,7 +227,6 @@ export async function dispatchAiOutboundCall(
   await adminClient
     .from('call_attempts')
     .update({
-      called_at: new Date().toISOString(),
       call_id: callId,
     })
     .eq('id', attemptId);

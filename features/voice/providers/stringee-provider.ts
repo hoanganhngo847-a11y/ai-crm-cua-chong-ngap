@@ -1,38 +1,53 @@
 import 'server-only';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { CallProvider } from '../../../shared/contracts/sensitive';
 
-/**
- * Stringee VoIP Provider Adapter — STUB
- *
- * Đây là skeleton để tích hợp Stringee khi có API key thật.
- * Hiện tại mọi cuộc gọi đều throw NotImplemented.
- *
- * Khi tích hợp thật, cần:
- *   - STRINGEE_API_KEY (env)
- *   - STRINGEE_API_SECRET (env)
- *   - STRINGEE_FROM_NUMBER — số Hotline đã đăng ký với Stringee
- *
- * Tài liệu: https://developer.stringee.com/docs/voice-api
- *
- * SECURITY NOTE: Stringee là SIP/VoIP — sale nghe qua softphone/headset.
- * Số khách hiển thị ở phía Stringee nhưng KHÔNG xuất hiện trên giao diện CRM.
- * Xem disclaimer trong CallToCustomerButton.tsx.
- */
+type FetchLike = typeof fetch;
+
+interface StringeeResponse {
+  r?: number;
+  message?: string;
+  call_id?: string;
+  callId?: string;
+  data?: { call_id?: string; callId?: string };
+}
+
+function base64Url(value: string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
+/** Create the short-lived HS256 token required by Stringee REST APIs. */
+export function createStringeeRestToken(
+  apiKey: string,
+  apiSecret: string,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): string {
+  const header = base64Url(JSON.stringify({ typ: 'JWT', alg: 'HS256', cty: 'stringee-api;v=1' }));
+  const payload = base64Url(JSON.stringify({
+    jti: `${apiKey}_${nowSeconds}_${randomUUID()}`,
+    iss: apiKey,
+    exp: nowSeconds + 300,
+    rest_api: true,
+  }));
+  const unsigned = `${header}.${payload}`;
+  const signature = createHmac('sha256', apiSecret).update(unsigned).digest('base64url');
+  return `${unsigned}.${signature}`;
+}
+
+/** Provider-specific Stringee details stay behind the generic CallProvider contract. */
 export class StringeeProvider implements CallProvider {
   readonly name = 'STRINGEE' as const;
-
-  private readonly apiKey: string;
-  private readonly apiSecret: string;
   private readonly fromNumber: string;
+  private readonly answerUrl: string;
 
-  constructor(apiKey: string, apiSecret: string) {
-    this.apiKey = apiKey;
-    this.apiSecret = apiSecret;
+  constructor(
+    private readonly apiKey: string,
+    private readonly apiSecret: string,
+    private readonly fetchImpl: FetchLike = fetch
+  ) {
     this.fromNumber = process.env.STRINGEE_FROM_NUMBER || '';
-
-    if (!this.fromNumber) {
-      throw new Error('STRINGEE_FROM_NUMBER phải được cấu hình.');
-    }
+    this.answerUrl = process.env.STRINGEE_ANSWER_URL || '';
+    if (!this.fromNumber || !this.answerUrl) throw new Error('Stringee configuration is incomplete.');
   }
 
   async initiateCall(params: {
@@ -41,39 +56,57 @@ export class StringeeProvider implements CallProvider {
     customerId: string;
     companyId: string;
   }): Promise<{ providerCallId: string; status: string }> {
-    // TODO: Implement Stringee REST API call
-    // POST https://api.stringee.com/v1/call2/callout
-    // Headers: X-STRINGEE-AUTH: <JWT>
-    // Body: { from: { type: 'external', number: fromNumber, alias: 'AI CRM' },
-    //         to:   { type: 'external', number: params.targetRawPhone },
-    //         answer_url: process.env.STRINGEE_ANSWER_URL }
-    //
-    // SECURITY: targetRawPhone được truyền vào hàm này trong bộ nhớ server.
-    // Không bao giờ log params.targetRawPhone.
-    // Nếu Stringee trả lỗi, bắt exception và throw generic error (không leak phone).
+    const correlationId = `crm_${randomUUID()}`;
+    const agentUserId = params.fromStaffUserId === 'AI_WORKER'
+      ? process.env.STRINGEE_AI_AGENT_USER_ID
+      : process.env.STRINGEE_SALE_AGENT_USER_ID;
+    if (!agentUserId) throw new Error('Stringee agent is not configured.');
+    const answerUrl = new URL(this.answerUrl);
+    answerUrl.searchParams.set('crmCorrelationId', correlationId);
+    answerUrl.searchParams.set('agentUserId', agentUserId);
 
-    void params; // suppress lint — remove when implemented
-    void this.apiKey;
-    void this.apiSecret;
+    const response = await this.fetchImpl('https://api.stringee.com/v1/call2/callout', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-stringee-auth': createStringeeRestToken(this.apiKey, this.apiSecret),
+      },
+      body: JSON.stringify({
+        from: { type: 'external', number: this.fromNumber, alias: 'AI CRM' },
+        to: [{ type: 'external', number: params.targetRawPhone, alias: 'Khach hang' }],
+        answer_url: answerUrl.toString(),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
 
-    throw new Error(
-      'StringeeProvider chưa được triển khai. ' +
-        'Cài đặt VOICE_PROVIDER=STRINGEE, STRINGEE_API_KEY, STRINGEE_API_SECRET, ' +
-        'STRINGEE_FROM_NUMBER và hoàn thiện Stringee REST integration.'
+    if (!response.ok) throw new Error('Stringee request failed.');
+    const body = (await response.json()) as StringeeResponse;
+    if (body.r !== 0) throw new Error('Stringee rejected the call.');
+
+    // The documented response only guarantees r/message. The signed answer_url
+    // replaces this temporary correlation id with Stringee's canonical callId.
+    const providerCallId =
+      body.call_id || body.callId || body.data?.call_id || body.data?.callId || correlationId;
+    return { providerCallId, status: 'INITIATED' };
+  }
+
+  async downloadRecording(recordingId: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+    if (!/^[A-Za-z0-9._-]{8,200}$/.test(recordingId)) throw new Error('Invalid recording id.');
+
+    const response = await this.fetchImpl(
+      `https://api.stringee.com/v1/call/recording/${encodeURIComponent(recordingId)}`,
+      {
+        headers: { 'x-stringee-auth': createStringeeRestToken(this.apiKey, this.apiSecret) },
+        signal: AbortSignal.timeout(30_000),
+      }
     );
+    if (!response.ok) throw new Error('Recording download failed.');
+
+    const maxBytes = Number(process.env.VOICE_MAX_RECORDING_BYTES || 25 * 1024 * 1024);
+    const contentLength = Number(response.headers.get('content-length') || '0');
+    if (contentLength > maxBytes) throw new Error('Recording exceeds configured size limit.');
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > maxBytes) throw new Error('Recording exceeds configured size limit.');
+    return { bytes, contentType: response.headers.get('content-type') || 'audio/mpeg' };
   }
 }
-
-/**
- * Ghi chú về che số điện thoại với Stringee:
- *
- * ✅ Số khách KHÔNG xuất hiện trên giao diện CRM (web).
- * ✅ Số khách KHÔNG có trong API response, log server, hay JSON gửi về browser.
- *
- * ⚠️  Stringee softphone / app có thể hiển thị số khách cho sale trong giao diện của Stringee.
- * ⚠️  Nếu sale dùng điện thoại vật lý kết nối SIP thì nhật ký cuộc gọi trên điện thoại
- *     sẽ có số khách — CRM KHÔNG THỂ ngăn chặn điều này.
- *
- * Để che số tuyệt đối: cấu hình Stringee để số khách bị mask ở phía Stringee
- * trước khi hiển thị cho agent (tính năng "number masking" của Stringee).
- */
