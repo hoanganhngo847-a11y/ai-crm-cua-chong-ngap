@@ -370,13 +370,16 @@ export async function searchCustomersForCall(
 
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+  // PostgREST `.or()` has its own filter grammar. Keep user text out of that grammar.
+  const safeQuery = query.replace(/[%_(),.\\"]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  if (safeQuery.length < 2) return { items: [], total: 0 };
 
   // Tìm theo tên hoặc customer_code (ilike = case-insensitive)
   const { data, error, count } = await userClient
     .from('customers')
     .select('id, customer_code, name, stage, source', { count: 'exact' })
     .eq('company_id', companyId)
-    .or(`name.ilike.%${query}%,customer_code.ilike.%${query}%`)
+    .or(`name.ilike.%${safeQuery}%,customer_code.ilike.%${safeQuery}%`)
     .order('name', { ascending: true })
     .range(from, to);
 

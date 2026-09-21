@@ -8,6 +8,19 @@ import { ServerAuthError } from '../../../lib/server-auth/errors';
 
 /** Delay tính bằng milliseconds cho lần gọi 2 (2.5 giờ) */
 const RETRY_DELAY_ATTEMPT_2_MS = 2.5 * 60 * 60 * 1000;
+const VIETNAM_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+/** Deterministic schedule independent of the server's local timezone. */
+export function calculateRetryScheduledAt(now: Date, attemptNo: 2 | 3): string {
+  if (attemptNo === 2) return new Date(now.getTime() + RETRY_DELAY_ATTEMPT_2_MS).toISOString();
+  const vietnamNow = new Date(now.getTime() + VIETNAM_OFFSET_MS);
+  return new Date(Date.UTC(
+    vietnamNow.getUTCFullYear(),
+    vietnamNow.getUTCMonth(),
+    vietnamNow.getUTCDate() + 1,
+    2, 0, 0, 0
+  )).toISOString();
+}
 
 /**
  * Stage customers tương ứng với từng attempt.
@@ -131,18 +144,7 @@ export async function scheduleRetryAttempt(
 ): Promise<{ attemptId: string }> {
   const adminClient = createAdminClient();
 
-  let scheduledAt: string;
-
-  if (attemptNo === 2) {
-    scheduledAt = new Date(Date.now() + RETRY_DELAY_ATTEMPT_2_MS).toISOString();
-  } else {
-    // Attempt 3: sáng hôm sau 09:00 Asia/Ho_Chi_Minh (UTC+7)
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    // Set 09:00 UTC+7 = 02:00 UTC
-    tomorrow.setUTCHours(2, 0, 0, 0);
-    scheduledAt = tomorrow.toISOString();
-  }
+  const scheduledAt = calculateRetryScheduledAt(new Date(), attemptNo);
 
   const { data: attempt, error } = await adminClient
     .from('call_attempts')

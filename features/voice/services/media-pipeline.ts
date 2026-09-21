@@ -3,8 +3,9 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import { StringeeProvider } from '../providers/stringee-provider';
 import type { VoiceWebhookPayload, WebhookProcessResult } from './webhook-processor';
+import { extractAndStoreCallIntake } from './intake-extractor';
 
-type JobType = 'RECORDING_IMPORT' | 'TRANSCRIPTION';
+type JobType = 'RECORDING_IMPORT' | 'TRANSCRIPTION' | 'INTAKE_EXTRACTION';
 
 interface VoiceMediaJob {
   id: string;
@@ -20,6 +21,15 @@ const BUCKET = 'call-recordings';
 
 export function getVoiceMediaRetryDelayMs(attempts: number): number {
   return Math.min(60 * 60 * 1000, 30_000 * 2 ** Math.max(0, attempts - 1));
+}
+
+export function getVoiceMediaFailureOutcome(currentAttempts: number, maxAttempts: number) {
+  const attempts = currentAttempts + 1;
+  return {
+    attempts,
+    terminal: attempts >= maxAttempts,
+    nextRunDelayMs: getVoiceMediaRetryDelayMs(attempts),
+  };
 }
 
 async function enqueueJob(
@@ -150,12 +160,25 @@ async function transcribeRecording(job: VoiceMediaJob): Promise<void> {
   if (transcriptError) throw new Error('TRANSCRIPT_WRITE_FAILED');
   await adminClient.from('calls').update({ transcript_status: 'COMPLETED' })
     .eq('id', job.call_id).eq('company_id', job.company_id);
+  await enqueueJob(job.company_id, job.call_id, 'INTAKE_EXTRACTION', null);
+}
+
+async function extractIntake(job: VoiceMediaJob): Promise<void> {
+  const adminClient = createAdminClient();
+  const { data, error } = await adminClient.rpc('get_call_transcript_for_voice_worker', {
+    p_company_id: job.company_id,
+    p_call_id: job.call_id,
+  });
+  if (error) throw new Error('TRANSCRIPT_READ_FAILED');
+  const row = Array.isArray(data) ? data[0] : data;
+  const transcript = (row as { transcript?: string } | null)?.transcript;
+  if (!transcript) throw new Error('TRANSCRIPT_NOT_READY');
+  await extractAndStoreCallIntake(job.company_id, job.call_id, transcript);
 }
 
 async function markJobFailure(job: VoiceMediaJob, error: unknown): Promise<void> {
   const adminClient = createAdminClient();
-  const attempts = job.attempts + 1;
-  const terminal = attempts >= job.max_attempts;
+  const { attempts, terminal, nextRunDelayMs } = getVoiceMediaFailureOutcome(job.attempts, job.max_attempts);
   const code = error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message)
     ? error.message
     : 'VOICE_MEDIA_JOB_FAILED';
@@ -164,7 +187,7 @@ async function markJobFailure(job: VoiceMediaJob, error: unknown): Promise<void>
     attempts,
     locked_at: null,
     last_error_code: code,
-    next_run_at: new Date(Date.now() + getVoiceMediaRetryDelayMs(attempts)).toISOString(),
+    next_run_at: new Date(Date.now() + nextRunDelayMs).toISOString(),
   }).eq('id', job.id);
   if (terminal && job.job_type === 'TRANSCRIPTION') {
     await adminClient.from('calls').update({ transcript_status: 'FAILED' })
@@ -194,7 +217,8 @@ export async function processDueVoiceMediaJobs(limit = 10): Promise<{ processed:
     if (!claimed) continue;
     try {
       if (row.job_type === 'RECORDING_IMPORT') await importRecording(row);
-      else await transcribeRecording(row);
+      else if (row.job_type === 'TRANSCRIPTION') await transcribeRecording(row);
+      else await extractIntake(row);
       await adminClient.from('voice_media_jobs').update({
         status: 'COMPLETED', completed_at: new Date().toISOString(), locked_at: null,
       }).eq('id', row.id);

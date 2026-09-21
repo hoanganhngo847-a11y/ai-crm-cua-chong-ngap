@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { getCompanyCallHistoryAction } from '../../actions/voice';
 import CallHistoryTable from './components/CallHistoryTable';
+import CustomerCallSearch from './components/CustomerCallSearch';
 
 export default async function CallsPage() {
   const actor = await getActorContext();
@@ -42,6 +43,8 @@ export default async function CallsPage() {
             : 'Cuộc gọi trong hệ thống — tìm khách và bấm GỌI KHÁCH để liên hệ.'}
         </p>
       </div>
+
+      <CustomerCallSearch provider={(process.env.VOICE_PROVIDER || 'MANUAL').toUpperCase()} />
 
       {/* Kết quả */}
       {result.success && result.data ? (

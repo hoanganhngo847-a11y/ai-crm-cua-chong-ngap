@@ -1,5 +1,4 @@
 import 'server-only';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import { resolveVoiceCallProvider } from '../providers/provider-factory';
@@ -44,8 +43,7 @@ export interface DispatchResult {
 export async function dispatchAiOutboundCall(
   attemptId: string,
   companyId: string,
-  provider?: CallProvider,
-  _client?: SupabaseClient // unused — dispatcher dùng adminClient
+  provider?: CallProvider
 ): Promise<DispatchResult> {
   const adminClient = createAdminClient();
   const callProvider = resolveVoiceCallProvider(provider);
@@ -125,6 +123,7 @@ export async function dispatchAiOutboundCall(
       rawPhone = (row as { raw_phone: string }).raw_phone;
     }
   } catch (err) {
+    await markAttemptResult(attemptId, companyId, 'FAILED');
     if (err instanceof ServerAuthError) throw err;
     // Không leak bất kỳ thông tin nào từ private schema
     throw new ServerAuthError(
@@ -157,6 +156,8 @@ export async function dispatchAiOutboundCall(
     .single();
 
   if (callError || !callRecord) {
+    await adminClient.from('call_attempts').update({ called_at: null })
+      .eq('id', attemptId).eq('company_id', companyId).eq('result', 'PENDING');
     throw new ServerAuthError('Lỗi khởi tạo hồ sơ cuộc gọi.', 500, 'INTERNAL_ERROR');
   }
 
@@ -183,6 +184,7 @@ export async function dispatchAiOutboundCall(
   if (auditError) {
     // FAIL CLOSED — đánh dấu call FAILED và không gọi provider
     await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callId);
+    await markAttemptResult(attemptId, companyId, 'FAILED', callId);
     throw new ServerAuthError(
       'Lỗi ghi nhận kiểm toán bắt buộc. Cuộc gọi bị từ chối.',
       500,
