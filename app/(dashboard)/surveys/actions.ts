@@ -5,8 +5,10 @@ import { getActorContext } from '../../../lib/auth/context';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import {
   uploadSurveyPhotoToStorage,
-  deleteSurveyPhotoFromStorage,
+  deleteSurveyPhotosForSlot,
+  findSurveyPhotoPathForSlot,
   getSurveyPhotoSignedUrl,
+  sanitizePhotoSlot,
 } from '../../../features/survey/services/storage-upload.service';
 
 export interface ActionResponse {
@@ -23,12 +25,25 @@ export interface UploadPhotoActionResponse {
 }
 
 /**
- * Validates technician / actor permissions on target appointment.
+ * Validates technician / actor permissions on target appointment with a fail-closed strategy.
  */
-async function verifyAppointmentPermission(appointmentId: string) {
+async function verifyAppointmentPermission(
+  appointmentId: string,
+  allowedRoles: string[] = ['BOSS_ADMIN', 'TECHNICIAN']
+) {
   const actor = await getActorContext();
-  if (!actor || actor.profileStatus !== 'ACTIVE' || !actor.companyId) {
-    throw new Error('Bạn chưa đăng nhập hoặc tài khoản không hoạt động.');
+  if (
+    !actor ||
+    !actor.userId ||
+    !actor.companyId ||
+    actor.profileStatus !== 'ACTIVE' ||
+    actor.membershipStatus !== 'ACTIVE'
+  ) {
+    throw new Error('Bạn chưa đăng nhập hoặc tài khoản/thành viên không hoạt động.');
+  }
+
+  if (!actor.role || !allowedRoles.includes(actor.role)) {
+    throw new Error('Bạn không có quyền thực hiện thao tác này.');
   }
 
   const adminClient = createAdminClient();
@@ -46,9 +61,20 @@ async function verifyAppointmentPermission(appointmentId: string) {
     throw new Error('Lịch hẹn không thuộc doanh nghiệp của bạn.');
   }
 
-  // Technicians can only operate on their own assigned appointments
-  if (actor.role === 'TECHNICIAN' && appointment.assignee_id !== actor.userId) {
-    throw new Error('Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.');
+  if (appointment.type !== 'SURVEY') {
+    throw new Error('Lịch hẹn không phải là lịch khảo sát hợp lệ.');
+  }
+
+  // Technicians can only operate on their own active appointments
+  if (actor.role === 'TECHNICIAN') {
+    if (appointment.assignee_id !== actor.userId) {
+      throw new Error('Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.');
+    }
+
+    const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
+    if (!validStatuses.includes(appointment.status)) {
+      throw new Error('Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.');
+    }
   }
 
   return { actor, appointment, adminClient };
@@ -190,7 +216,7 @@ export async function cancelSurveyAppointmentAction(
 
 /**
  * Action: Tải ảnh khảo sát lên bucket 'survey-photos'
- * Cấu trúc đường dẫn: `${company_id}/${customer_id}/${appointment_id}/${photo_slot}_${timestamp}.jpg`
+ * Cấu trúc đường dẫn canonical được server hoàn toàn kiểm soát sau verifyAppointmentPermission.
  */
 export async function uploadSurveyPhotoAction(
   formData: FormData
@@ -204,7 +230,32 @@ export async function uploadSurveyPhotoAction(
       return { success: false, message: 'Thiếu thông tin ảnh hoặc mã lịch hẹn.' };
     }
 
-    const { appointment } = await verifyAppointmentPermission(appointmentId);
+    if (file.size === 0) {
+      return { success: false, message: 'Tệp tải lên rỗng (0 bytes).' };
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      return { success: false, message: 'Dung lượng ảnh không được vượt quá 10MB.' };
+    }
+
+    const { appointment } = await verifyAppointmentPermission(appointmentId, [
+      'BOSS_ADMIN',
+      'TECHNICIAN',
+    ]);
+
+    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
+
+    // Dọn dẹp ảnh cũ trong slot trước khi tải ảnh mới
+    try {
+      await deleteSurveyPhotosForSlot({
+        companyId: appointment.company_id,
+        customerId: appointment.customer_id,
+        appointmentId: appointment.id,
+        photoSlot: sanitizedSlot,
+      });
+    } catch {
+      // Non-blocking cleanup
+    }
 
     const arrayBuffer = await file.arrayBuffer();
     const result = await uploadSurveyPhotoToStorage({
@@ -212,7 +263,7 @@ export async function uploadSurveyPhotoAction(
       companyId: appointment.company_id,
       customerId: appointment.customer_id,
       appointmentId: appointment.id,
-      photoSlot,
+      photoSlot: sanitizedSlot,
       contentType: file.type || 'image/jpeg',
     });
 
@@ -232,14 +283,27 @@ export async function uploadSurveyPhotoAction(
 
 /**
  * Action: Xóa ảnh khảo sát khỏi bucket 'survey-photos'
+ * Nhận appointmentId và photoSlot, server tự sinh canonical path và xác thực quyền hạn.
  */
 export async function deleteSurveyPhotoAction(
   appointmentId: string,
-  objectPath: string
+  photoSlot: string
 ): Promise<ActionResponse> {
   try {
-    await verifyAppointmentPermission(appointmentId);
-    await deleteSurveyPhotoFromStorage(objectPath);
+    const { appointment } = await verifyAppointmentPermission(appointmentId, [
+      'BOSS_ADMIN',
+      'TECHNICIAN',
+    ]);
+
+    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
+
+    await deleteSurveyPhotosForSlot({
+      companyId: appointment.company_id,
+      customerId: appointment.customer_id,
+      appointmentId: appointment.id,
+      photoSlot: sanitizedSlot,
+    });
+
     return { success: true, message: 'Đã xóa ảnh.' };
   } catch (err) {
     return {
@@ -251,17 +315,42 @@ export async function deleteSurveyPhotoAction(
 
 /**
  * Action: Làm mới signed URL cho ảnh khảo sát (hết hạn sau 3600s)
+ * Nhận appointmentId và photoSlot, server tìm file thực tế hoặc tự sinh canonical path an toàn.
  */
 export async function refreshPhotoSignedUrlAction(
   appointmentId: string,
-  objectPath: string
-): Promise<{ success: boolean; signedUrl?: string }> {
+  photoSlot: string
+): Promise<{ success: boolean; signedUrl?: string; message?: string }> {
   try {
-    await verifyAppointmentPermission(appointmentId);
+    const { appointment } = await verifyAppointmentPermission(appointmentId, [
+      'BOSS_ADMIN',
+      'TECHNICIAN',
+    ]);
+
+    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
+
+    const objectPath = await findSurveyPhotoPathForSlot({
+      companyId: appointment.company_id,
+      customerId: appointment.customer_id,
+      appointmentId: appointment.id,
+      photoSlot: sanitizedSlot,
+    });
+
+    if (!objectPath) {
+      return { success: false, message: 'Không tìm thấy ảnh của vị trí này.' };
+    }
+
     const signedUrl = await getSurveyPhotoSignedUrl(objectPath, 3600);
-    return { success: !!signedUrl, signedUrl: signedUrl || undefined };
-  } catch {
-    return { success: false };
+    return {
+      success: !!signedUrl,
+      signedUrl: signedUrl || undefined,
+      message: signedUrl ? 'Làm mới URL thành công.' : 'Không thể tạo đường dẫn xem trước.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'Lỗi hệ thống khi làm mới URL ảnh.',
+    };
   }
 }
 
@@ -272,6 +361,7 @@ export interface CompleteSurveyActionResponse {
   missingFields?: string[];
   errors?: Record<string, string>;
   redirectUrl?: string;
+  isExisting?: boolean;
 }
 
 /**
@@ -281,9 +371,25 @@ export async function completeSurveyAction(
   input: import('../../../features/survey/types/survey').CompleteSurveyInput
 ): Promise<CompleteSurveyActionResponse> {
   try {
-    const { actor } = await verifyAppointmentPermission(input.appointmentId);
+    const { actor } = await verifyAppointmentPermission(input.appointmentId, [
+      'BOSS_ADMIN',
+      'TECHNICIAN',
+    ]);
 
-    const { completeSurvey } = await import('../../../features/survey/services/survey.service');
+    const { completeSurvey, validateSurveyCompletionGate } = await import(
+      '../../../features/survey/services/survey.service'
+    );
+
+    const validation = validateSurveyCompletionGate(input);
+    if (!validation.isValid) {
+      return {
+        success: false,
+        message: 'Dữ liệu khảo sát chưa đạt yêu cầu kỹ thuật.',
+        missingFields: validation.missingFields,
+        errors: validation.errors,
+      };
+    }
+
     const result = await completeSurvey(input, actor.userId, actor.companyId!);
 
     if (!result.success) {
@@ -300,8 +406,11 @@ export async function completeSurveyAction(
 
     return {
       success: true,
-      message: 'Khảo sát đã hoàn tất. Dữ liệu đã sẵn sàng cho bộ phận tính giá.',
+      message: result.isExisting
+        ? 'Khảo sát cho lịch hẹn này đã được ghi nhận trước đó.'
+        : 'Khảo sát đã hoàn tất. Dữ liệu đã sẵn sàng cho bộ phận tính giá.',
       surveyId: result.surveyId,
+      isExisting: result.isExisting,
       redirectUrl: '/surveys',
     };
   } catch (err) {

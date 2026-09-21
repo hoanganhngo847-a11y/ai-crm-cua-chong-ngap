@@ -8,6 +8,7 @@ import type {
 import {
   uploadSurveyPhotoAction,
   deleteSurveyPhotoAction,
+  refreshPhotoSignedUrlAction,
 } from '../../../app/(dashboard)/surveys/actions';
 
 interface PhotoCaptureGridProps {
@@ -195,7 +196,10 @@ export default function PhotoCaptureGrid({
 
     try {
       setUploadingSlot(slot);
-      await deleteSurveyPhotoAction(appointmentId, existingPhoto.objectPath);
+      const res = await deleteSurveyPhotoAction(appointmentId, slot);
+      if (!res.success) {
+        throw new Error(res.message || 'Không thể xóa ảnh.');
+      }
 
       const nextPhotos = { ...photos };
       delete nextPhotos[slot];
@@ -323,11 +327,38 @@ export default function PhotoCaptureGrid({
                           src={photo.signedUrl}
                           alt={def.label}
                           className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                          onError={async () => {
+                            const res = await refreshPhotoSignedUrlAction(appointmentId, def.slot);
+                            if (res.success && res.signedUrl) {
+                              onChange({
+                                ...photos,
+                                [def.slot]: {
+                                  ...photo,
+                                  signedUrl: res.signedUrl,
+                                },
+                              });
+                            }
+                          }}
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">
-                          Đang tạo preview...
-                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await refreshPhotoSignedUrlAction(appointmentId, def.slot);
+                            if (res.success && res.signedUrl) {
+                              onChange({
+                                ...photos,
+                                [def.slot]: {
+                                  ...photo,
+                                  signedUrl: res.signedUrl,
+                                },
+                              });
+                            }
+                          }}
+                          className="w-full h-full flex flex-col items-center justify-center text-xs text-blue-400 hover:underline"
+                        >
+                          Tải lại xem trước
+                        </button>
                       )}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1 text-white text-xs font-semibold">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

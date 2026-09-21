@@ -73,6 +73,8 @@ export interface MeasurementData {
   barrier_height_mm: number;
   /** Cao độ đỉnh ngập dự kiến / lịch sử (mm) - Bắt buộc > 0 */
   anticipated_flood_height_mm: number;
+  /** Chiều cao bậc tam cấp / cốt chênh (mm) */
+  step_height_mm?: number;
   /** Đo kiểm tra khẩu độ má tường trên đỉnh (mm) */
   width_top_mm?: number;
   /** Đo kiểm tra khẩu độ má tường dưới chân (mm) */
@@ -97,6 +99,8 @@ export interface SiteConditionData {
   slope_grade: SlopeGrade;
   /** Ghi chú kỹ thuật bổ sung */
   notes?: string;
+  /** Yêu cầu đặc biệt hiện trường */
+  specialRequirements?: string;
 }
 
 /**
@@ -142,9 +146,23 @@ export interface SurveyValidationResult {
  */
 export interface CompleteSurveyInput {
   appointmentId: string;
-  measurements: Partial<MeasurementData>;
-  siteCondition: Partial<SiteConditionData>;
-  photos: Record<string, SurveyPhotoItem>;
+  measurements: Partial<MeasurementData> & {
+    clearWidthMm?: number;
+    waterHeightMm?: number;
+    barrierHeightMm?: number;
+    stepHeightMm?: number;
+    anticipatedFloodHeightMm?: number;
+    gateType?: GateType;
+    mountingMethod?: MountingMethod;
+  };
+  siteCondition: Partial<SiteConditionData> & {
+    wallMaterial?: WallMaterial;
+    floorMaterial?: FloorMaterial;
+    floorEvenness?: FloorEvenness;
+    slopeGrade?: SlopeGrade;
+    specialRequirements?: string;
+  };
+  photos: Record<string, SurveyPhotoItem> | SurveyPhotoItem[];
   notes?: string;
 }
 
@@ -167,11 +185,11 @@ export interface SurveyPricingData {
     anticipatedFloodHeightMm: number;
     widthTopMm?: number;
     widthBottomMm?: number;
-    gateType: GateType;
-    mountingMethod: MountingMethod;
+    gateType?: GateType;
+    mountingMethod?: MountingMethod;
   };
   /** Kết cấu nền tường hiện trạng */
-  siteCondition: SiteConditionData;
+  siteCondition: Partial<SiteConditionData>;
   /** Bằng chứng ảnh chụp hiện trường */
   photos: {
     overviewUrl?: string;
@@ -181,4 +199,8 @@ export interface SurveyPricingData {
   };
   /** Cờ sẵn sàng áp biểu giá */
   isPricingReady: boolean;
+  /** Cờ alias sẵn sàng tính giá cho TV7 */
+  isReadyForPricing?: boolean;
+  /** Danh sách các trường kỹ thuật còn thiếu nếu chưa sẵn sàng tính giá */
+  missingTechnicalFields?: string[];
 }

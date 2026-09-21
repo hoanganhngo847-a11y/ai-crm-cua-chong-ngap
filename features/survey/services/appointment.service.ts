@@ -79,11 +79,71 @@ async function resolveClient(client?: SupabaseClient): Promise<SupabaseClient> {
 }
 
 /**
+ * Verifies that the designated assignee:
+ * 1. Exists in public.user_profiles with status === 'ACTIVE'.
+ * 2. Has an active membership in public.company_members with:
+ *    - company_id === targetCompanyId
+ *    - role === 'TECHNICIAN'
+ *    - status === 'ACTIVE'
+ * Throws "Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty." if invalid.
+ */
+export async function verifyActiveCompanyTechnician(
+  assigneeId: string,
+  targetCompanyId: string,
+  supabase: SupabaseClient
+): Promise<{ id: string; full_name: string }> {
+  if (!assigneeId) {
+    throw new Error('Kỹ thuật viên phụ trách (assignee_id) là bắt buộc.');
+  }
+
+  // 1. Verify user profile exists and is ACTIVE
+  const { data: profile, error: profileError } = await supabase
+    .from('user_profiles')
+    .select('id, full_name, status')
+    .eq('id', assigneeId)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
+  }
+
+  if (profile.status && profile.status !== 'ACTIVE') {
+    throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
+  }
+
+  // 2. Verify membership in company_members: role === 'TECHNICIAN' and status === 'ACTIVE' in targetCompanyId
+  const { data: membership, error: memberError } = await supabase
+    .from('company_members')
+    .select('id, user_id, company_id, role, status')
+    .eq('user_id', assigneeId)
+    .eq('company_id', targetCompanyId)
+    .maybeSingle();
+
+  if (memberError || !membership) {
+    throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
+  }
+
+  if (membership.role !== 'TECHNICIAN') {
+    throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
+  }
+
+  if (membership.status !== 'ACTIVE') {
+    throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
+  }
+
+  return {
+    id: profile.id,
+    full_name: profile.full_name,
+  };
+}
+
+/**
  * Creates a new survey appointment linked to customer_id and technician.
  *
  * Validations:
  * - Customer must exist in the database (resolves tenant company_id).
- * - Assignee must exist in user_profiles.
+ * - Caller-provided input.company_id is IGNORED; derived strictly from customer.company_id.
+ * - Assignee must be an ACTIVE TECHNICIAN in the same company.
  * - Address and valid appointment_date are required.
  * - Enforces data privacy: returns SafeCustomer (name, customer_code, address; NO PHONE).
  */
@@ -123,18 +183,16 @@ export async function createAppointment(
     throw new Error('Không tìm thấy hồ sơ khách hàng.');
   }
 
-  // 3. Verify assignee profile exists
-  const { data: assignee, error: assigneeError } = await supabase
-    .from('user_profiles')
-    .select('id, full_name')
-    .eq('id', input.assignee_id)
-    .maybeSingle();
-
-  if (assigneeError || !assignee) {
-    throw new Error('Không tìm thấy thông tin kỹ thuật viên được phân công.');
+  if (!customer.company_id) {
+    throw new Error('Hồ sơ khách hàng không hợp lệ (thiếu company_id).');
   }
 
-  const companyId = input.company_id || customer.company_id;
+  // Luôn derive company_id trực tiếp từ customer, KHÔNG tin input.company_id
+  const companyId = customer.company_id;
+
+  // 3. Verify assignee: Bắt buộc là kỹ thuật viên đang hoạt động thuộc cùng công ty
+  const assignee = await verifyActiveCompanyTechnician(input.assignee_id, companyId, supabase);
+
   const dbStatus = toDbStatus(input.status || 'SCHEDULED');
   const appointmentType = input.type || 'SURVEY';
 
@@ -231,16 +289,8 @@ export async function updateAppointment(
     if (!input.assignee_id) {
       throw new Error('Mã kỹ thuật viên không hợp lệ.');
     }
-    // Verify assignee exists
-    const { data: assigneeExists } = await supabase
-      .from('user_profiles')
-      .select('id')
-      .eq('id', input.assignee_id)
-      .maybeSingle();
-
-    if (!assigneeExists) {
-      throw new Error('Không tìm thấy kỹ thuật viên được chỉ định.');
-    }
+    // Verify assignee: must be ACTIVE TECHNICIAN in the same company
+    await verifyActiveCompanyTechnician(input.assignee_id, existing.company_id, supabase);
     updates.assignee_id = input.assignee_id;
   }
 
@@ -299,6 +349,20 @@ export async function updateAppointment(
   };
 
   return formatAppointment(updated, safeCustomer, safeAssignee);
+}
+
+/**
+ * Assigns or reassigns an appointment to a technician.
+ * Bắt buộc kiểm tra:
+ * - Assignee tồn tại trong hệ thống với profile status === 'ACTIVE'.
+ * - Assignee có role là 'TECHNICIAN' và membership status === 'ACTIVE' trong cùng company_id của lịch hẹn.
+ */
+export async function assignAppointment(
+  appointmentId: string,
+  assigneeId: string,
+  client?: SupabaseClient
+): Promise<Appointment> {
+  return updateAppointment(appointmentId, { assignee_id: assigneeId }, client);
 }
 
 /**

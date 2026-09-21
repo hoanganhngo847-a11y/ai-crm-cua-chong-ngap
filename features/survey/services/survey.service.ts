@@ -4,18 +4,16 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
   CompleteSurveyInput,
   SurveyValidationResult,
-  SurveyPricingData,
-  SurveyRecord,
-  SurveyPhotoItem,
   MeasurementData,
-  SiteConditionData,
   GateType,
   MountingMethod,
-  WallMaterial,
-  FloorMaterial,
-  FloorEvenness,
-  SlopeGrade,
 } from '../types/survey';
+
+import {
+  validateSurveyInput,
+  sanitizeSurveyInput,
+} from '../validations/survey.schema';
+import { verifyMandatoryPhotosInStorage } from './storage-upload.service';
 
 /**
  * Formal Validation Gate: Prevents partial/incomplete surveys from entering DB.
@@ -25,71 +23,7 @@ import type {
 export function validateSurveyCompletionGate(
   input: CompleteSurveyInput
 ): SurveyValidationResult {
-  const missingFields: string[] = [];
-  const errors: Record<string, string> = {};
-
-  const m = input.measurements;
-  const s = input.siteCondition;
-  const p = input.photos || {};
-
-  // 1. Mandatory Geometric Measurements (> 0)
-  if (!m.clear_width_mm || m.clear_width_mm <= 0) {
-    missingFields.push('clear_width_mm');
-    errors.clear_width_mm = 'Chiều rộng lọt lòng (clear_width_mm) bắt buộc phải lớn hơn 0 mm.';
-  }
-
-  if (!m.barrier_height_mm || m.barrier_height_mm <= 0) {
-    missingFields.push('barrier_height_mm');
-    errors.barrier_height_mm = 'Chiều cao tấm chắn đề xuất (barrier_height_mm) bắt buộc phải lớn hơn 0 mm.';
-  }
-
-  if (m.anticipated_flood_height_mm === undefined || m.anticipated_flood_height_mm <= 0) {
-    missingFields.push('anticipated_flood_height_mm');
-    errors.anticipated_flood_height_mm =
-      'Cao độ đỉnh ngập dự kiến (anticipated_flood_height_mm) bắt buộc phải lớn hơn 0 mm.';
-  }
-
-  // 2. Mandatory Site Condition Elements
-  if (!s.wall_material) {
-    missingFields.push('wall_material');
-    errors.wall_material = 'Vật liệu kết cấu tường hai bên bắt buộc phải được chọn.';
-  }
-
-  if (!s.floor_material) {
-    missingFields.push('floor_material');
-    errors.floor_material = 'Vật liệu bề mặt sàn đáy bắt buộc phải được chọn.';
-  }
-
-  if (!s.floor_evenness) {
-    missingFields.push('floor_evenness');
-    errors.floor_evenness = 'Độ phẳng của sàn đáy bắt buộc phải được đánh giá.';
-  }
-
-  // 3. Mandatory Field Evidence Photos (At least 3 canonical slots)
-  const hasOverview = !!p['OVERVIEW']?.objectPath;
-  const hasBottomLeft = !!p['BOTTOM_LEFT']?.objectPath;
-  const hasBottomRight = !!p['BOTTOM_RIGHT']?.objectPath;
-
-  if (!hasOverview) {
-    missingFields.push('photos.OVERVIEW');
-    errors['photos.OVERVIEW'] = 'Thiếu ảnh toàn cảnh vị trí lắp đặt (OVERVIEW).';
-  }
-
-  if (!hasBottomLeft) {
-    missingFields.push('photos.BOTTOM_LEFT');
-    errors['photos.BOTTOM_LEFT'] = 'Thiếu ảnh cận cảnh chân tường & sàn góc trái (BOTTOM_LEFT).';
-  }
-
-  if (!hasBottomRight) {
-    missingFields.push('photos.BOTTOM_RIGHT');
-    errors['photos.BOTTOM_RIGHT'] = 'Thiếu ảnh cận cảnh chân tường & sàn góc phải (BOTTOM_RIGHT).';
-  }
-
-  return {
-    isValid: missingFields.length === 0,
-    missingFields,
-    errors,
-  };
+  return validateSurveyInput(input);
 }
 
 export interface CompleteSurveyResult {
@@ -98,20 +32,24 @@ export interface CompleteSurveyResult {
   message?: string;
   missingFields?: string[];
   errors?: Record<string, string>;
+  isExisting?: boolean;
 }
 
 /**
  * Service: Finalize Survey & Register Formal Record in Supabase
  * - Validates input against validation gate
- * - Inserts row into public.surveys
- * - Updates public.appointments status to 'COMPLETED'
+ * - Idempotency: Returns existing survey if already created for this appointment
+ * - Checks appointment status (must be IN_PROGRESS or ACCEPTED; rejects CANCELLED)
+ * - Strips ephemeral Signed URLs, storing only canonical references
+ * - Atomic: Inserts survey and updates appointment to COMPLETED; rolls back survey on failure
  */
 export async function completeSurvey(
   input: CompleteSurveyInput,
   completedByUserId: string,
-  companyId: string
+  companyId: string,
+  client?: import('@supabase/supabase-js').SupabaseClient
 ): Promise<CompleteSurveyResult> {
-  // 1. Enforce Validation Gate
+  // 1. Enforce Validation Gate & Text Sanitization
   const validation = validateSurveyCompletionGate(input);
   if (!validation.isValid) {
     return {
@@ -122,13 +60,14 @@ export async function completeSurvey(
     };
   }
 
-  const adminClient = createAdminClient();
+  const sanitizedInput = sanitizeSurveyInput(input);
+  const adminClient = client || createAdminClient();
 
   // 2. Fetch and verify appointment
   const { data: appointment, error: aptError } = await adminClient
     .from('appointments')
     .select('id, company_id, customer_id, assignee_id, status, type')
-    .eq('id', input.appointmentId)
+    .eq('id', sanitizedInput.appointmentId)
     .maybeSingle();
 
   if (aptError || !appointment) {
@@ -145,45 +84,96 @@ export async function completeSurvey(
     };
   }
 
-  if (appointment.status === 'COMPLETED') {
+  // 3. Idempotent check: Tránh trùng lặp & Race Condition
+  // Trước khi tạo survey mới, kiểm tra xem appointment này đã có bản ghi surveys nào chưa
+  const { data: existingSurvey } = await adminClient
+    .from('surveys')
+    .select('id')
+    .eq('appointment_id', sanitizedInput.appointmentId)
+    .maybeSingle();
+
+  if (existingSurvey) {
     return {
-      success: false,
-      message: 'Lịch hẹn này đã được hoàn tất khảo sát trước đó.',
+      success: true,
+      surveyId: existingSurvey.id,
+      isExisting: true,
+      message: 'Khảo sát cho lịch hẹn này đã tồn tại.',
     };
   }
 
-  // 3. Serialize photos and site condition
-  const photosArray: SurveyPhotoItem[] = Object.values(input.photos).filter(
-    (item): item is SurveyPhotoItem => Boolean(item && item.objectPath)
+  // Kiểm tra trạng thái hiện tại của appointment
+  if (appointment.status === 'CANCELLED') {
+    return {
+      success: false,
+      message: 'Lịch hẹn đã bị hủy, không thể hoàn tất khảo sát.',
+    };
+  }
+
+  if (appointment.status !== 'IN_PROGRESS' && appointment.status !== 'ACCEPTED') {
+    return {
+      success: false,
+      message: `Lịch hẹn đang ở trạng thái ${appointment.status}, không thể hoàn tất khảo sát. Chỉ chấp nhận trạng thái IN_PROGRESS hoặc ACCEPTED.`,
+    };
+  }
+
+  // 4. Xác thực ảnh thực tế từ Server Storage - KHÔNG tin mảng photos do browser tự gửi
+  const storageVerification = await verifyMandatoryPhotosInStorage(
+    {
+      companyId: appointment.company_id,
+      customerId: appointment.customer_id,
+      appointmentId: appointment.id,
+    },
+    adminClient
   );
 
+  if (!storageVerification.isValid) {
+    return {
+      success: false,
+      message: 'Thiếu ảnh hiện trường bắt buộc trong kho lưu trữ.',
+      missingFields: storageVerification.missingSlots.map((s) => `photos.${s}`),
+    };
+  }
+
+  // Dữ liệu ghi vào trường photos của bảng surveys là danh sách tệp được xác thực từ storage này
+  const sanitizedPhotosArray = storageVerification.photos;
+
+  const rawM = sanitizedInput.measurements;
   const measurementsPayload: MeasurementData = {
-    clear_width_mm: Number(input.measurements.clear_width_mm),
-    barrier_height_mm: Number(input.measurements.barrier_height_mm),
-    anticipated_flood_height_mm: Number(input.measurements.anticipated_flood_height_mm),
-    width_top_mm: input.measurements.width_top_mm
-      ? Number(input.measurements.width_top_mm)
-      : undefined,
-    width_bottom_mm: input.measurements.width_bottom_mm
-      ? Number(input.measurements.width_bottom_mm)
-      : undefined,
-    gate_type: (input.measurements.gate_type as GateType) || 'REMOVABLE_PANEL',
-    mounting_method: (input.measurements.mounting_method as MountingMethod) || 'INSIDE_JAMB',
+    clear_width_mm: Number(rawM.clear_width_mm ?? rawM.clearWidthMm),
+    barrier_height_mm: Number(rawM.barrier_height_mm ?? rawM.waterHeightMm ?? rawM.barrierHeightMm),
+    anticipated_flood_height_mm: Number(
+      rawM.anticipated_flood_height_mm ??
+        rawM.anticipatedFloodHeightMm ??
+        rawM.barrier_height_mm ??
+        rawM.waterHeightMm
+    ),
+    step_height_mm:
+      rawM.step_height_mm !== undefined
+        ? Number(rawM.step_height_mm)
+        : rawM.stepHeightMm !== undefined
+        ? Number(rawM.stepHeightMm)
+        : undefined,
+    width_top_mm: rawM.width_top_mm ? Number(rawM.width_top_mm) : undefined,
+    width_bottom_mm: rawM.width_bottom_mm ? Number(rawM.width_bottom_mm) : undefined,
+    gate_type: (rawM.gate_type || rawM.gateType) as GateType | undefined,
+    mounting_method: (rawM.mounting_method || rawM.mountingMethod) as MountingMethod | undefined,
   };
 
   // Structured readable text string for public.surveys.site_condition (text NOT NULL column)
+  const rawS = sanitizedInput.siteCondition;
   const siteConditionText = JSON.stringify({
-    wall_material: input.siteCondition.wall_material,
-    floor_material: input.siteCondition.floor_material,
-    floor_evenness: input.siteCondition.floor_evenness,
-    slope_grade: input.siteCondition.slope_grade || 'SLOPING_OUT',
-    notes: input.siteCondition.notes || '',
+    wall_material: rawS.wall_material || rawS.wallMaterial || null,
+    floor_material: rawS.floor_material || rawS.floorMaterial || null,
+    floor_evenness: rawS.floor_evenness || rawS.floorEvenness || null,
+    slope_grade: rawS.slope_grade || rawS.slopeGrade || null,
+    notes: rawS.notes || sanitizedInput.notes || '',
+    specialRequirements: rawS.specialRequirements || null,
   });
 
-  const notes = input.notes || input.siteCondition.notes || null;
+  const notes = sanitizedInput.notes || rawS.notes || null;
   const completedAt = new Date().toISOString();
 
-  // 4. Insert Survey Record into Supabase
+  // 5. Insert Survey Record into Supabase
   const { data: insertedSurvey, error: insertError } = await adminClient
     .from('surveys')
     .insert({
@@ -192,7 +182,7 @@ export async function completeSurvey(
       appointment_id: appointment.id,
       completed_by: completedByUserId,
       measurements: measurementsPayload,
-      photos: photosArray,
+      photos: sanitizedPhotosArray,
       site_condition: siteConditionText,
       notes,
       completed_at: completedAt,
@@ -207,7 +197,7 @@ export async function completeSurvey(
     };
   }
 
-  // 5. Update Appointment status to 'COMPLETED'
+  // 6. Update Appointment status to 'COMPLETED' (Atomic check with rollback)
   const { error: updateAptError } = await adminClient
     .from('appointments')
     .update({
@@ -217,7 +207,14 @@ export async function completeSurvey(
     .eq('id', appointment.id);
 
   if (updateAptError) {
-    console.error('Warning: Survey saved but failed to update appointment status:', updateAptError);
+    console.error('Lỗi cập nhật appointments, đang rollback bản ghi survey:', updateAptError);
+    // Rollback: Xóa bản ghi survey vừa tạo theo newSurvey.id để giữ tính Atomic
+    await adminClient.from('surveys').delete().eq('id', insertedSurvey.id);
+
+    return {
+      success: false,
+      message: 'Không thể cập nhật trạng thái lịch hẹn, đã hủy thao tác tạo khảo sát.',
+    };
   }
 
   return {
@@ -227,111 +224,9 @@ export async function completeSurvey(
   };
 }
 
-/**
- * Maps and standardizes a raw SurveyRecord into the formal SurveyPricingData
- * contract required by Member 7 (TV7: Pricing Engine).
- */
-export function formatSurveyForPricing(survey: SurveyRecord): SurveyPricingData {
-  const m = survey.measurements;
-
-  // Safely parse site condition text (JSON string or text fallback)
-  let parsedSiteCondition: SiteConditionData;
-  try {
-    const parsed = JSON.parse(survey.site_condition);
-    parsedSiteCondition = {
-      wall_material: (parsed.wall_material as WallMaterial) || 'SOLID_BRICK',
-      floor_material: (parsed.floor_material as FloorMaterial) || 'CONCRETE_SMOOTH',
-      floor_evenness: (parsed.floor_evenness as FloorEvenness) || 'FLAT',
-      slope_grade: (parsed.slope_grade as SlopeGrade) || 'SLOPING_OUT',
-      notes: parsed.notes || survey.notes || '',
-    };
-  } catch {
-    parsedSiteCondition = {
-      wall_material: 'SOLID_BRICK',
-      floor_material: 'CONCRETE_SMOOTH',
-      floor_evenness: 'FLAT',
-      slope_grade: 'SLOPING_OUT',
-      notes: survey.site_condition || survey.notes || '',
-    };
-  }
-
-  const photosArray = Array.isArray(survey.photos) ? survey.photos : [];
-  const overviewPhoto = photosArray.find((p) => p.slot === 'OVERVIEW');
-  const bottomLeftPhoto = photosArray.find((p) => p.slot === 'BOTTOM_LEFT');
-  const bottomRightPhoto = photosArray.find((p) => p.slot === 'BOTTOM_RIGHT');
-
-  const isPricingReady =
-    Boolean(m.clear_width_mm && m.clear_width_mm > 0) &&
-    Boolean(m.barrier_height_mm && m.barrier_height_mm > 0) &&
-    Boolean(m.anticipated_flood_height_mm !== undefined && m.anticipated_flood_height_mm > 0) &&
-    Boolean(overviewPhoto?.objectPath) &&
-    Boolean(bottomLeftPhoto?.objectPath) &&
-    Boolean(bottomRightPhoto?.objectPath);
-
-  return {
-    surveyId: survey.id,
-    appointmentId: survey.appointment_id,
-    customerId: survey.customer_id,
-    companyId: survey.company_id,
-    completedAt: survey.completed_at,
-    completedBy: survey.completed_by,
-    dimensions: {
-      clearWidthMm: m.clear_width_mm,
-      barrierHeightMm: m.barrier_height_mm,
-      anticipatedFloodHeightMm: m.anticipated_flood_height_mm,
-      widthTopMm: m.width_top_mm,
-      widthBottomMm: m.width_bottom_mm,
-      gateType: m.gate_type || 'REMOVABLE_PANEL',
-      mountingMethod: m.mounting_method || 'INSIDE_JAMB',
-    },
-    siteCondition: parsedSiteCondition,
-    photos: {
-      overviewUrl: overviewPhoto?.signedUrl,
-      bottomLeftUrl: bottomLeftPhoto?.signedUrl,
-      bottomRightUrl: bottomRightPhoto?.signedUrl,
-      items: photosArray,
-    },
-    isPricingReady,
-  };
-}
-
-/**
- * Adapter / Data Contract for Member 7 (TV7: Price Calculation)
- * Allows TV7 to reliably fetch full technical measurements and site conditions
- * by surveyId or customerId for automated pricing formula computation.
- */
-export async function getSurveyForPricing(
-  params: {
-    surveyId?: string;
-    appointmentId?: string;
-    customerId?: string;
-    companyId: string;
-  },
-  clientOverride?: ReturnType<typeof createAdminClient>
-): Promise<SurveyPricingData | null> {
-  const adminClient = clientOverride || createAdminClient();
-
-  let query = adminClient
-    .from('surveys')
-    .select('*')
-    .eq('company_id', params.companyId);
-
-  if (params.surveyId) {
-    query = query.eq('id', params.surveyId);
-  } else if (params.appointmentId) {
-    query = query.eq('appointment_id', params.appointmentId);
-  } else if (params.customerId) {
-    query = query.eq('customer_id', params.customerId).order('completed_at', { ascending: false });
-  } else {
-    return null;
-  }
-
-  const { data: rawSurvey, error } = await query.limit(1).maybeSingle();
-
-  if (error || !rawSurvey) {
-    return null;
-  }
-
-  return formatSurveyForPricing(rawSurvey as SurveyRecord);
-}
+// Re-export Pricing Adapter functions for TV7: Price Calculation
+export {
+  formatSurveyForPricing,
+  getSurveyForPricing,
+} from '../adapters/pricing.adapter';
 
