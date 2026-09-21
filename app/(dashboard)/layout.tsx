@@ -1,5 +1,6 @@
 import React from 'react';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getActorContext } from '../../lib/auth/context';
 import { logoutAction } from '../(auth)/actions';
 
@@ -45,28 +46,28 @@ export default async function DashboardLayout({
           </span>
           <nav className="flex items-center gap-4 text-sm">
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
-              <a href="/crm" className="text-slate-300 hover:text-white transition">
+              <Link href="/crm" className="text-slate-300 hover:text-white transition">
                 CRM &amp; Hộp thư
-              </a>
+              </Link>
             )}
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
-              <a href="/calls" className="text-slate-300 hover:text-white transition">
+              <Link href="/calls" className="text-slate-300 hover:text-white transition">
                 Cuộc gọi
-              </a>
+              </Link>
             )}
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'TECHNICIAN') && (
-              <a href="/field" className="text-slate-300 hover:text-white transition">
+              <Link href="/field" className="text-slate-300 hover:text-white transition">
                 Hiện trường & Khảo sát
-              </a>
+              </Link>
             )}
             {actor.role === 'BOSS_ADMIN' && (
-              <a href="/admin" className="text-slate-300 hover:text-white transition">
+              <Link href="/admin" className="text-slate-300 hover:text-white transition">
                 Quản trị hệ thống
-              </a>
+              </Link>
             )}
-            <a href="/account" className="text-slate-300 hover:text-white transition">
+            <Link href="/account" className="text-slate-300 hover:text-white transition">
               Tài khoản
-            </a>
+            </Link>
           </nav>
         </div>
 

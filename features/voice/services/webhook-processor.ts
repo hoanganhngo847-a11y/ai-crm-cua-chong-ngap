@@ -6,7 +6,6 @@ import { normalizeVietnamPhoneToE164 } from '../utils/phone';
 import { processRecordingReady } from './media-pipeline';
 import {
   markAttemptResult,
-  markCustomerUnreachable,
 } from './call-attempt-scheduler';
 
 // ---------------------------------------------------------------------------
@@ -62,8 +61,7 @@ export interface WebhookProcessResult {
 /**
  * Xác thực chữ ký webhook từ tổng đài.
  *
- * Placeholder — điền logic thật khi có provider.
- * Stringee: header X-STRINGEE-SIGNATURE = HMAC-SHA256(body, apiSecret)
+ * Stringee: header X-STRINGEE-SIGNATURE = Base64(HMAC-SHA1(request data, secret)).
  * Viettel: header Authorization = Bearer <token>
  *
  * @returns true nếu hợp lệ
@@ -420,8 +418,6 @@ export async function processInboundCall(
   if (callError || !callRecord) {
     throw new ServerAuthError('Lỗi lưu cuộc gọi Hotline inbound.', 500, 'INTERNAL_ERROR');
   }
-
-  const callId = (callRecord as { id: string }).id;
 
   // INSERT interactions (HOTLINE, CALL_EVENT, NOT_REQUIRED, SYSTEM)
   await adminClient.from('interactions').insert({
