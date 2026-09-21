@@ -10,6 +10,7 @@ import {
 import { ServerAuthError } from '../server-auth/errors';
 import { authorizeCustomerAccess } from '../server-auth/resource-access';
 import { resolveCustomerPrivateContactForTrustedOperation } from './customer-contact';
+import { resolveVoiceCallProvider } from '../../features/voice/providers/provider-factory';
 
 /**
  * Standard Mock Call Provider for local testing and CI only.
@@ -32,19 +33,15 @@ export class MockCallProvider implements CallProvider {
  * INVARIANT: In production, if no provider is configured, FAILS CLOSED with CALL_PROVIDER_NOT_CONFIGURED.
  */
 function resolveCallProvider(injectedProvider?: CallProvider): CallProvider {
-  if (injectedProvider) {
-    return injectedProvider;
-  }
-
-  if (process.env.NODE_ENV === 'production') {
+  try {
+    return resolveVoiceCallProvider(injectedProvider);
+  } catch {
     throw new ServerAuthError(
       'Dịch vụ tổng đài chưa được cấu hình cho môi trường sản xuất.',
       503,
       'CALL_PROVIDER_NOT_CONFIGURED'
     );
   }
-
-  return new MockCallProvider();
 }
 
 /**
