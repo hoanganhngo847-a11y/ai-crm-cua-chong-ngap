@@ -46,7 +46,12 @@ export default async function DashboardLayout({
           <nav className="flex items-center gap-4 text-sm">
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
               <a href="/crm" className="text-slate-300 hover:text-white transition">
-                CRM & Hộp thư
+                CRM &amp; Hộp thư
+              </a>
+            )}
+            {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
+              <a href="/calls" className="text-slate-300 hover:text-white transition">
+                Cuộc gọi
               </a>
             )}
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'TECHNICIAN') && (
