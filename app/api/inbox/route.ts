@@ -250,8 +250,10 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
       data: sanitizedConversations,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Lỗi không xác định khi tải hộp thư.';
-    return NextResponse.json({ success: false, error: 'INTERNAL_ERROR', message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
+      { status: 500 }
+    );
   }
 }
 
@@ -338,7 +340,9 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
       throw sendErr;
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Lỗi máy chủ khi gửi tin nhắn.';
-    return NextResponse.json({ success: false, error: 'INTERNAL_ERROR', message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
+      { status: 500 }
+    );
   }
 }

@@ -54,6 +54,7 @@ export interface Conversation {
 
 /**
  * Message/Interaction item within a conversation
+ * Tuân thủ public.interactions (Sanitized Derivative Security Zone) & private.interaction_raw_contents
  */
 export interface InboxMessage {
   id: string;
@@ -63,7 +64,10 @@ export interface InboxMessage {
   channel: InboxChannel;
   sender_type: SenderType;
   sender_name?: string;
-  content: string;
+  content: string; // Mặc định hiển thị sanitized_content (an toàn cho DTO công khai)
+  sanitized_content?: string; // Bản làm sạch che số điện thoại (Zero-Phone Security Zone)
+  sanitization_status?: 'CLEAN' | 'SANITIZED' | 'RAW'; // Trạng thái làm sạch dữ liệu
+  raw_content?: string; // Vùng riêng tư (private): chỉ cấp cho BOSS_ADMIN khi có thẩm quyền
   created_at: string;
   direction?: 'inbound' | 'outbound';
 }

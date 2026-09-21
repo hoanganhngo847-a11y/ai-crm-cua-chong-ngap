@@ -64,6 +64,34 @@ export type CustomerStage =
   | 'DANG_THUONG_LUONG';
 
 /**
+ * Helper chuẩn hóa và kiểm thực danh mục giai đoạn khách hàng (Strict Runtime Allowlist)
+ * Thắt chặt Runtime Allowlist - Lỗi P1 (Mục 12)
+ */
+export function toCanonicalStage(stage: unknown): CustomerStage {
+  if (typeof stage !== 'string' || !stage.trim()) {
+    throw new Error(`Giai đoạn khách hàng không hợp lệ: ${stage}`);
+  }
+
+  const upper = stage.trim().toUpperCase();
+
+  // Hỗ trợ business alias sang canonical stage
+  if (upper === 'KHACH_MOI') return CUSTOMER_STAGES.LEAD_NEW;
+  if (upper === 'DA_CO_GIA') return CUSTOMER_STAGES.PRICE_OFFERED;
+  if (upper === 'DANG_THUONG_LUONG') return CUSTOMER_STAGES.NEGOTIATING;
+
+  const validStages = Object.values(CUSTOMER_STAGES) as string[];
+  if (validStages.includes(upper)) {
+    return upper as CustomerStage;
+  }
+
+  if (upper in CUSTOMER_STAGES) {
+    return (CUSTOMER_STAGES as Record<string, CustomerStage>)[upper];
+  }
+
+  throw new Error(`Giai đoạn khách hàng không hợp lệ: ${stage}`);
+}
+
+/**
  * Identity Channels (public.identities.channel)
  * Database check constraint: CHECK (channel IN ('ZALO', 'FACEBOOK', 'WEBSITE', 'PHONE'))
  */
@@ -104,7 +132,6 @@ export interface Customer {
   stage: CustomerStage;
   created_at: string;
   updated_at: string;
-  metadata?: Record<string, any>;
 }
 
 /**
@@ -204,7 +231,8 @@ export interface CustomerResponse {
 export interface UpdateCustomerStageParams {
   customerId: string;
   companyId: string;
-  newStage: CustomerStage | string;
+  newStage?: CustomerStage | string;
+  to_stage?: CustomerStage | string; // Business alias for newStage
   actorType?: StageActorType;
   note?: string;
   userId?: string | null;
@@ -221,10 +249,17 @@ export interface FindOrCreateCustomerParams {
   name: string;
   source?: CustomerSource;
   stage?: CustomerStage;
+  note?: string;
   channel?: IdentityChannel;
   externalId?: string;
   metadata?: Record<string, unknown>;
   verified?: boolean;
+  /**
+   * SERVER AUTHORITY (Lỗi P1 - Mục 9):
+   * Chỉ có Webhook từ provider (hoặc quy trình xác thực OTP / trusted server)
+   * có bằng chứng xác thực mới được phép gán true. Luồng thủ công từ client mặc định là false.
+   */
+  isTrustedProvider?: boolean;
   actorUserId?: string;
 }
 

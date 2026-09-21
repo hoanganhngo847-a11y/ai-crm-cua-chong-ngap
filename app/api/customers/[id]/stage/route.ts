@@ -3,7 +3,11 @@ import { createClient as createServerClient } from '../../../../../lib/supabase/
 import { createAdminClient } from '../../../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../../../shared/constants/roles';
 import { CustomerService } from '../../../../../features/crm/services/customer.service';
-import { STAGE_ACTOR_TYPES } from '../../../../../features/crm/types/customer.types';
+import {
+  STAGE_ACTOR_TYPES,
+  toCanonicalStage,
+  type CustomerStage,
+} from '../../../../../features/crm/types/customer.types';
 import type { ActorContext } from '../../../../../shared/contracts/auth';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { resolveCustomerPrivateContactForTrustedOperation } from '../../../../../lib/sensitive/customer-contact';
@@ -145,10 +149,27 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       );
     }
 
-    const { stage, note, source_ref } = body;
-    if (!stage || typeof stage !== 'string') {
+    const { stage, to_stage, note, source_ref } = body;
+    const rawStage = to_stage !== undefined ? to_stage : stage;
+    if (rawStage === undefined || rawStage === null || (typeof rawStage === 'string' && !rawStage.trim())) {
       return NextResponse.json(
-        { success: false, error: 'MISSING_FIELD', message: 'Trạng thái mới (stage) là bắt buộc.' },
+        { success: false, error: 'MISSING_FIELD', message: 'Trạng thái mới (to_stage) là bắt buộc.' },
+        { status: 400 }
+      );
+    }
+
+    // Thắt chặt Runtime Allowlist - Lỗi P1 (Mục 12):
+    // Validate to_stage qua toCanonicalStage(). Nếu không hợp lệ, trả về HTTP 400 INVALID_STAGE.
+    let canonicalStage: CustomerStage;
+    try {
+      canonicalStage = toCanonicalStage(rawStage);
+    } catch (validationErr: unknown) {
+      const msg =
+        validationErr instanceof Error
+          ? validationErr.message
+          : `Giai đoạn khách hàng không hợp lệ: ${rawStage}`;
+      return NextResponse.json(
+        { success: false, error: 'INVALID_STAGE', message: msg },
         { status: 400 }
       );
     }
@@ -160,7 +181,8 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       {
         customerId,
         companyId, // DERIVED DIRECTLY FROM SERVER CONTEXT
-        newStage: stage,
+        newStage: canonicalStage,
+        to_stage: canonicalStage,
         actorType: STAGE_ACTOR_TYPES.USER,
         note: note ? String(note).trim() : undefined,
         userId,
@@ -227,6 +249,12 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       message: `Chuyển giai đoạn khách hàng sang [${result.customer.stage}] thành công.`,
     });
   } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes('Giai đoạn khách hàng không hợp lệ')) {
+      return NextResponse.json(
+        { success: false, error: 'INVALID_STAGE', message: err.message },
+        { status: 400 }
+      );
+    }
     const errorObj = err as any;
     if (errorObj?.status === 404 || errorObj?.code === 'NOT_FOUND') {
       return NextResponse.json(
@@ -244,7 +272,9 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
         { status: 403 }
       );
     }
-    const message = err instanceof Error ? err.message : 'Lỗi máy chủ khi cập nhật trạng thái.';
-    return NextResponse.json({ success: false, error: 'INTERNAL_ERROR', message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
+      { status: 500 }
+    );
   }
 }

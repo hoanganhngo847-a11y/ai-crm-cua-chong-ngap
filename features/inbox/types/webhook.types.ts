@@ -102,3 +102,74 @@ export interface WebhookVerificationResult {
   valid: boolean;
   reason?: string;
 }
+
+// ============================================================================
+// ARCHITECTURAL BOUNDARIES (Lỗi P1 - Mục 15):
+// - Member 2: Chủ quản NormalizedIngressEvent & Core Ingestion Engine (InboxIngressService.ingestNormalizedEvent)
+// - Member 3: Chủ quản Zalo OA Adapter (ZaloWebhookEnvelope & ZaloAdapter)
+// - Member 4: Chủ quản Facebook Messenger Adapter (FacebookWebhookEnvelope & FacebookAdapter)
+// ============================================================================
+
+/**
+ * Facebook Webhook Raw Envelope (Member 4 ownership boundary)
+ */
+export interface FacebookWebhookEnvelope {
+  object?: string;
+  entry?: Array<{
+    id?: string;
+    time?: number;
+    messaging?: Array<{
+      sender?: { id: string };
+      recipient?: { id: string };
+      timestamp?: number;
+      message?: {
+        mid: string;
+        text?: string;
+        attachments?: any[];
+      };
+    }>;
+  }>;
+  recipient?: { id: string };
+  page_id?: string;
+  [key: string]: any;
+}
+
+/**
+ * Zalo OA Webhook Raw Envelope (Member 3 ownership boundary)
+ */
+export interface ZaloWebhookEnvelope {
+  event_name?: string;
+  app_id?: string;
+  oa_id?: string;
+  timestamp?: number | string;
+  user_id_by_app?: string;
+  sender?: {
+    id: string;
+    name?: string;
+    phone?: string;
+  };
+  recipient?: {
+    id: string;
+  };
+  message?: {
+    msg_id?: string;
+    text?: string;
+    attachments?: any[];
+  };
+  msg_id?: string;
+  [key: string]: any;
+}
+
+/**
+ * Clean decoupled Adapter Contract for Provider Handlers (Member 3 & Member 4)
+ */
+export interface ProviderWebhookAdapter<T = any> {
+  provider: IngressProvider;
+  verifySignature(
+    rawBody: string,
+    signature: string | null | undefined,
+    secret: string | null | undefined
+  ): WebhookVerificationResult;
+  deriveTenant(payload: T | string): string | null;
+  parseToNormalized(payload: T, resolvedCompanyId: string): NormalizedIngressEvent;
+}

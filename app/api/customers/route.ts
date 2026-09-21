@@ -4,17 +4,22 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { CustomerService } from '../../../features/crm/services/customer.service';
 import { InboxService } from '../../../features/inbox/services/inbox.service';
-import type {
-  Customer,
-  CustomerSource,
-  CustomerStage,
-  CustomerWithContact,
-  Identity,
-  IdentityChannel,
+import {
+  CUSTOMER_SOURCES,
+  toCanonicalStage,
+  type Customer,
+  type CustomerSource,
+  type CustomerStage,
+  type CustomerWithContact,
+  type Identity,
+  type IdentityChannel,
 } from '../../../features/crm/types/customer.types';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ActorContext } from '../../../shared/contracts/auth';
+import { resolveCustomerPrivateContactForTrustedOperation } from '../../../lib/sensitive/customer-contact';
+import { CONTACT_ACCESS_PURPOSES } from '../../../shared/contracts/sensitive';
+import { ServerAuthError } from '../../../lib/server-auth/errors';
 
 export interface CustomerRouteContext {
   params?: Promise<Record<string, string | string[]>>;
@@ -83,6 +88,59 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       }
     } catch {}
 
+    // Nếu yêu cầu danh sách hàng chờ "CẦN SALE CHỐT": Gọi trực tiếp getUrgentClosingCustomers với Tenant Isolation bắt buộc (actor.companyId)
+    if (urgentClosing) {
+      const urgentCustomers = await CustomerService.getUrgentClosingCustomers(
+        actor.companyId,
+        limit,
+        actor.role,
+        pendingSaleCustomerIds,
+        adminClient
+      );
+
+      // Ghi nhận kiểm toán (AUDIT LOG): Bắt buộc khi vai trò là BOSS_ADMIN xem số điện thoại thật (FAIL-CLOSED)
+      if (actor.role === APPLICATION_ROLES.BOSS_ADMIN && urgentCustomers.length > 0) {
+        const customerIds = urgentCustomers.map((c) => c.id);
+        const { error: auditErr } = await adminClient.from('audit_logs').insert({
+          company_id: actor.companyId,
+          user_id: actor.userId,
+          action: 'VIEW_RAW_PHONE',
+          resource_type: 'CUSTOMER',
+          resource_id: customerIds[0],
+          customer_id: customerIds.length === 1 ? customerIds[0] : null,
+          result: 'SUCCESS',
+          metadata: {
+            viewed_count: customerIds.length,
+            customer_ids: customerIds,
+            purpose: 'CUSTOMER_LIST_VIEW',
+            reason: 'Xem danh sách khách hàng cần chốt gấp kèm số điện thoại thật (BOSS_ADMIN)',
+          },
+        });
+
+        if (auditErr) {
+          console.error('Lỗi khi ghi audit log truy cập số điện thoại:', auditErr);
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'AUDIT_WRITE_FAILED',
+              message: 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem thông tin bảo mật bị từ chối.',
+            },
+            { status: 500 }
+          );
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: urgentCustomers,
+        pagination: {
+          total: urgentCustomers.length,
+          limit,
+          offset: 0,
+        },
+      });
+    }
+
     // 1. Truy vấn danh sách khách hàng từ public.customers
     let query = adminClient
       .from('customers')
@@ -108,7 +166,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
 
     if (fetchErr) {
       return NextResponse.json(
-        { success: false, error: 'DATABASE_ERROR', message: fetchErr.message },
+        { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
         { status: 500 }
       );
     }
@@ -187,34 +245,49 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
         contactMap.set('cust-4', { raw_phone: '0977889900', normalized_phone: '+84977889900', is_verified: true });
       }
 
-      // Đối với ID thật trong database: Sử dụng Trusted RPC của Foundation thay vì chọc trực tiếp vào schema private
+      // Đối với ID thật trong database: Sử dụng Trusted Server primitive của Foundation thay vì tự gọi RPC trực tiếp
       const realDbCustomerIds = customerIds.filter((cid) => !cid.startsWith('cust-'));
       for (const realCid of realDbCustomerIds) {
         try {
-          const { data: rpcData, error: rpcErr } = await adminClient.rpc('get_customer_private_contact', {
-            p_company_id: actor.companyId,
-            p_customer_id: realCid,
+          const contact = await resolveCustomerPrivateContactForTrustedOperation(
+            realCid,
+            CONTACT_ACCESS_PURPOSES.PRIVILEGED_ADMIN_OPERATION,
+            {
+              reason: 'Xem danh sách khách hàng kèm số điện thoại thật (BOSS_ADMIN)',
+              overrideAdminClient: adminClient,
+            }
+          );
+          contactMap.set(realCid, {
+            raw_phone: contact.rawPhone,
+            normalized_phone: contact.normalizedPhone,
+            is_verified: contact.isVerified,
           });
-          if (rpcErr && !isDemoMode) {
+        } catch (err: unknown) {
+          if (err instanceof ServerAuthError) {
+            if (err.code === 'RESOURCE_NOT_FOUND') {
+              // Khách hàng không có thông tin liên hệ bảo mật trong private schema
+              continue;
+            }
+            if (err.code === 'AUDIT_WRITE_FAILED') {
+              return NextResponse.json(
+                {
+                  success: false,
+                  error: 'AUDIT_WRITE_FAILED',
+                  message: 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem thông tin bảo mật bị từ chối.',
+                },
+                { status: 500 }
+              );
+            }
             return NextResponse.json(
-              { success: false, error: 'DATABASE_ERROR', message: rpcErr.message },
-              { status: 500 }
+              {
+                success: false,
+                error: err.code || 'AUTHORIZATION_FAILED',
+                message: err.message,
+              },
+              { status: err.status || 500 }
             );
           }
-          if (rpcData && rpcData.length > 0) {
-            contactMap.set(realCid, {
-              raw_phone: rpcData[0].raw_phone,
-              normalized_phone: rpcData[0].normalized_phone,
-              is_verified: rpcData[0].is_verified,
-            });
-          }
-        } catch (rpcEx: unknown) {
-          if (!isDemoMode) {
-            return NextResponse.json(
-              { success: false, error: 'DATABASE_ERROR', message: rpcEx instanceof Error ? rpcEx.message : 'RPC_ERROR' },
-              { status: 500 }
-            );
-          }
+          throw err;
         }
       }
     }
@@ -313,9 +386,8 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Lỗi không xác định khi tải danh sách khách hàng.';
     return NextResponse.json(
-      { success: false, error: 'INTERNAL_ERROR', message },
+      { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
     );
   }
@@ -368,7 +440,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       );
     }
 
-    const { name, phone, source, stage, channel, external_id, metadata, verified } = body;
+    const { name, phone, source, stage, note } = body;
 
     if (!name || typeof name !== 'string' || !name.trim()) {
       return NextResponse.json(
@@ -384,21 +456,64 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       );
     }
 
+    // SERVER AUTHORITY (Lỗi P1 - Mục 9):
+    // 1. Client chỉ được gửi các trường thông tin cơ bản: name, phone, source, note, stage (tùy chọn).
+    // 2. Tuyệt đối KHÔNG tin cậy client tự gửi cờ is_verified: true hoặc verified: true.
+    //    Mọi identity tạo thủ công từ client mặc định phải có is_verified: false (override về false).
+    // 3. Chặn client tự claim các identity kênh mạng xã hội (FACEBOOK, ZALO) kèm cờ verified từ request body
+    //    nếu không đi qua Webhook Ingress chính thức hoặc OAuth flow có bằng chứng (Server Authority).
+    const rawChannel = typeof body.channel === 'string' ? body.channel.trim().toUpperCase() : undefined;
+    const rawExternalId = typeof body.external_id === 'string' ? body.external_id.trim() : undefined;
+
+    let safeChannel: IdentityChannel | undefined = undefined;
+    let safeExternalId: string | undefined = undefined;
+
+    if (rawChannel && rawExternalId) {
+      if (rawChannel === 'FACEBOOK' || rawChannel === 'ZALO' || rawChannel === 'WEBSITE') {
+        safeChannel = rawChannel as IdentityChannel;
+        safeExternalId = rawExternalId;
+      }
+    }
+
+    let canonicalStage: CustomerStage | undefined = undefined;
+    if (stage !== undefined && stage !== null && stage !== '') {
+      try {
+        canonicalStage = toCanonicalStage(stage);
+      } catch {
+        return NextResponse.json(
+          { success: false, error: 'VALIDATION_ERROR', message: 'Giai đoạn khách hàng không hợp lệ.' },
+          { status: 400 }
+        );
+      }
+    }
+
+    const safeSource =
+      typeof source === 'string' && Object.values(CUSTOMER_SOURCES).includes(source as any)
+        ? (source as CustomerSource)
+        : undefined;
+
+    const safeNote = typeof note === 'string' ? note.trim() : undefined;
+
     // Thực hiện tìm kiếm hoặc tạo mới khách hàng qua CustomerService
     let result;
     try {
-      result = await CustomerService.findOrCreateByPhone({
-        companyId: actor.companyId,
-        phone: phone.trim(),
-        name: name.trim(),
-        source: source as CustomerSource | undefined,
-        stage: stage as CustomerStage | undefined,
-        channel: channel as IdentityChannel | undefined,
-        externalId: external_id,
-        metadata,
-        verified: Boolean(verified),
-        actorUserId: actor.userId,
-      }, context?.adminClient);
+      result = await CustomerService.findOrCreateByPhone(
+        {
+          companyId: actor.companyId,
+          phone: phone.trim(),
+          name: name.trim(),
+          source: safeSource,
+          stage: canonicalStage,
+          note: safeNote,
+          channel: safeChannel,
+          externalId: safeExternalId,
+          metadata: undefined, // Client không được phép tự truyền metadata
+          verified: false, // SERVER AUTHORITY: Bỏ qua mọi cờ verified client gửi, override về false
+          isTrustedProvider: false, // SERVER AUTHORITY: Luồng CRM thủ công không phải Webhook/OAuth
+          actorUserId: actor.userId,
+        },
+        context?.adminClient
+      );
     } catch (serviceErr: unknown) {
       const errMsg =
         serviceErr instanceof Error ? serviceErr.message : 'Lỗi xử lý khách hàng theo số điện thoại.';
@@ -419,13 +534,13 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
         errMsg.includes('DATABASE_ERROR')
       ) {
         return NextResponse.json(
-          { success: false, error: 'DATABASE_ERROR', message: errMsg },
+          { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
           { status: 500 }
         );
       }
 
       return NextResponse.json(
-        { success: false, error: 'VALIDATION_FAILED', message: errMsg },
+        { success: false, error: 'VALIDATION_ERROR', message: 'Dữ liệu yêu cầu không hợp lệ.' },
         { status: 400 }
       );
     }
@@ -484,9 +599,8 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       { status: result.isNew ? 201 : 200 }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Lỗi máy chủ khi tạo khách hàng.';
     return NextResponse.json(
-      { success: false, error: 'INTERNAL_ERROR', message },
+      { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
     );
   }

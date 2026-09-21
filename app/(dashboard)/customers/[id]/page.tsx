@@ -316,17 +316,13 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     actor.role
   );
 
-  // Nếu trong database có lịch sử stage changes, bổ sung vào timeline
+  // Nếu trong database có lịch sử stage changes, bổ sung vào timeline với Tenant Scoping bắt buộc
   try {
-    const { data: stageHistories, error: stageHistErr } = await adminClient
-      .from('customer_stage_histories')
-      .select('*')
-      .eq('customer_id', customerData.id)
-      .order('created_at', { ascending: false });
-
-    if (stageHistErr && !isDemoMode) {
-      throw new Error(`DATABASE_ERROR: Lỗi truy vấn lịch sử trạng thái: ${stageHistErr.message}`);
-    }
+    const stageHistories = await CustomerService.getStageHistories(
+      actor.companyId,
+      customerData.id,
+      adminClient
+    );
 
     if (stageHistories && stageHistories.length > 0) {
       for (const sh of stageHistories) {
@@ -338,7 +334,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
             type: 'STAGE_CHANGE',
             title: `Chuyển trạng thái sang: ${sh.to_stage}`,
             description: actor.role === APPLICATION_ROLES.SALE ? sanitizePhoneInText(rawDesc) : rawDesc,
-            timestamp: sh.created_at,
+            timestamp: sh.created_at || sh.changed_at || new Date().toISOString(),
             actor_type: (sh.actor_type?.toLowerCase() as CustomerTimelineEvent['actor_type']) || 'system',
           });
         }

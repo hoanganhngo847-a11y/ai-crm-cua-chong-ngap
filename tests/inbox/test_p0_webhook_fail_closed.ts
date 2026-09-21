@@ -260,6 +260,72 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(directResult.message_id, 'msg-direct-003');
   console.log('✓ PASS 3d: Direct ingestNormalizedEvent contract functions cleanly for Member 3 & Member 4');
 
+  // ============================================================================
+  // SECTION 4: ELIMINATION OF DEFAULT TENANT FALLBACK (FAIL-CLOSED VERIFICATION)
+  // Tuân thủ Lỗi P1 (Mục 10): Xóa bỏ hoàn toàn DEFAULT_INBOX_COMPANY_ID fallback
+  // ============================================================================
+  console.log('\n--- Section 4: Elimination of DEFAULT_INBOX_COMPANY_ID Fallback ---');
+
+  // 4a. addInboundMessage without company_id must throw Fail-Closed error immediately
+  let errorAddNoTenant: Error | null = null;
+  try {
+    await InboxService.addInboundMessage({
+      channel: 'facebook',
+      senderId: 'fb-user-fail-closed',
+      content: 'Tin nhắn không kèm company_id',
+    } as any);
+  } catch (err) {
+    errorAddNoTenant = err as Error;
+  }
+  assert(errorAddNoTenant !== null, 'addInboundMessage must throw error when company_id is missing');
+  assert.strictEqual(
+    errorAddNoTenant.message,
+    'company_id là bắt buộc để xử lý tin nhắn và bảo vệ cách ly tenant (Fail-Closed).'
+  );
+  console.log('✓ PASS 4a: addInboundMessage without company_id throws Fail-Closed exception (no default tenant fallback)');
+
+  // 4b. addInboundMessage with invalid UUID company_id must throw Fail-Closed error
+  let errorAddInvalidUuid: Error | null = null;
+  try {
+    await InboxService.addInboundMessage({
+      channel: 'facebook',
+      senderId: 'fb-user-fail-closed',
+      company_id: 'invalid-not-uuid',
+      content: 'Tin nhắn với invalid company_id',
+    });
+  } catch (err) {
+    errorAddInvalidUuid = err as Error;
+  }
+  assert(errorAddInvalidUuid !== null, 'addInboundMessage must throw error when company_id is invalid UUID');
+  assert.strictEqual(
+    errorAddInvalidUuid.message,
+    'company_id là bắt buộc để xử lý tin nhắn và bảo vệ cách ly tenant (Fail-Closed).'
+  );
+  console.log('✓ PASS 4b: addInboundMessage with invalid UUID company_id throws Fail-Closed exception');
+
+  // 4c. ingestNormalizedEvent without company_id returns MISSING_COMPANY_ID
+  const resultIngestNoTenant = await InboxIngressService.ingestNormalizedEvent({
+    provider: 'FACEBOOK',
+    company_id: '',
+    external_user_id: 'fb-user-direct-999',
+    message_id: 'msg-direct-no-tenant',
+    content: 'Tin nhắn thiếu company_id trong normalized event',
+    timestamp: new Date().toISOString(),
+  });
+  assert.strictEqual(resultIngestNoTenant.success, false);
+  assert.strictEqual(resultIngestNoTenant.error, 'MISSING_COMPANY_ID');
+  console.log('✓ PASS 4c: ingestNormalizedEvent with empty company_id returns MISSING_COMPANY_ID');
+
+  // 4d. deriveTenantFromIntegrationAccount must NOT fall back to DEFAULT_COMPANY_ID
+  process.env.FB_PAGE_ID = 'page-test-no-tenant';
+  delete process.env.FB_COMPANY_ID;
+  (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
+  const derivedTenant = InboxIngressService.deriveTenantFromIntegrationAccount('FACEBOOK', 'page-test-no-tenant');
+  assert.strictEqual(derivedTenant, null, 'Must NOT fall back to DEFAULT_COMPANY_ID');
+  delete (process.env as any).DEFAULT_COMPANY_ID;
+  delete process.env.FB_PAGE_ID;
+  console.log('✓ PASS 4d: deriveTenantFromIntegrationAccount never falls back to DEFAULT_COMPANY_ID');
+
   console.log('\n======================================================================');
   console.log('ALL P0 & P1 WEBHOOK FAIL-CLOSED TESTS PASSED SUCCESSFULLY! (100%)');
   console.log('======================================================================\n');

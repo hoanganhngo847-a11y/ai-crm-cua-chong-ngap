@@ -516,14 +516,16 @@ async function runFailClosedAndZeroPhoneTests() {
     from: (table: string) => ({
       select: () => ({
         eq: () => ({
-          order: async () => ({ data: null, error: new Error('Postgres connection pool exhausted') }),
+          eq: () => ({
+            order: async () => ({ data: null, error: new Error('Postgres connection pool exhausted') }),
+          }),
         }),
       }),
     }),
   } as any;
 
   await assert.rejects(
-    async () => CustomerService.getStageHistories('cust-real-1', mockDbWithHistError),
+    async () => CustomerService.getStageHistories(companyA, 'cust-real-1', mockDbWithHistError),
     /DATABASE_ERROR/,
     'getStageHistories must throw DATABASE_ERROR in production when DB fails'
   );
@@ -532,13 +534,22 @@ async function runFailClosedAndZeroPhoneTests() {
   const mockDbWithUrgentError = {
     from: (table: string) => ({
       select: () => ({
-        in: async () => ({ data: null, error: new Error('Table locks timeout') }),
+        eq: () => ({
+          in: async () => ({ data: null, error: new Error('Table locks timeout') }),
+        }),
       }),
     }),
   } as any;
 
   await assert.rejects(
-    async () => CustomerService.getUrgentClosingCustomers(APPLICATION_ROLES.BOSS_ADMIN, undefined, mockDbWithUrgentError),
+    async () =>
+      CustomerService.getUrgentClosingCustomers(
+        companyA,
+        5,
+        APPLICATION_ROLES.BOSS_ADMIN,
+        undefined,
+        mockDbWithUrgentError
+      ),
     /DATABASE_ERROR/,
     'getUrgentClosingCustomers must throw DATABASE_ERROR in production when DB query fails'
   );
@@ -547,12 +558,16 @@ async function runFailClosedAndZeroPhoneTests() {
   const mockDbWithEmptyUrgent = {
     from: (table: string) => ({
       select: () => ({
-        in: async () => ({ data: [], error: null }),
+        eq: () => ({
+          in: async () => ({ data: [], error: null }),
+        }),
       }),
     }),
   } as any;
 
   const urgentEmpty = await CustomerService.getUrgentClosingCustomers(
+    companyA,
+    5,
     APPLICATION_ROLES.BOSS_ADMIN,
     undefined,
     mockDbWithEmptyUrgent

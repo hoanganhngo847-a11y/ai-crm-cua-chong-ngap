@@ -10,6 +10,8 @@ import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
 import { maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ============================================================================
 // In-Memory Normalized Mock Store for Phase 2
 // (Ready for Phase 3 integration with Member 3 Zalo OA & Member 4 Facebook Messenger)
@@ -396,16 +398,39 @@ export async function getMessagesByConversationId(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
 
-  // Zero-Phone Sanitization: Nếu là SALE, làm sạch số điện thoại xuất hiện trong message.content
-  // Chỉ có BOSS_ADMIN mới được nhận nguyên văn nội dung tin nhắn gốc.
-  if (callerRole === APPLICATION_ROLES.SALE) {
-    return sorted.map((m) => ({
-      ...m,
-      content: sanitizePhoneInText(m.content),
-    }));
+  // Zero-Phone Sanitization & Interaction Security Zone (Lỗi P0 số 6):
+  // - Với vai trò SALE: Chỉ được đọc sanitized_content. Đảm bảo DTO không chứa bất kỳ trường nào mang raw phone (loại bỏ raw_content).
+  // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc.
+  if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
+    return sorted.map((m) => {
+      const raw = m.raw_content || m.content;
+      const sanitized = m.sanitized_content || sanitizePhoneInText(raw);
+      const status: 'CLEAN' | 'SANITIZED' | 'RAW' =
+        m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
+      return {
+        ...m,
+        content: raw, // BOSS_ADMIN nhận nguyên văn bản gốc
+        sanitized_content: sanitized,
+        sanitization_status: status,
+        raw_content: raw,
+      };
+    });
   }
 
-  return sorted;
+  // Mặc định hoặc SALE: Luôn trả về sanitized derivative, tuyệt đối không lộ raw phone
+  return sorted.map((m) => {
+    const raw = m.raw_content || m.content;
+    const sanitized = m.sanitized_content || sanitizePhoneInText(m.content);
+    const status: 'CLEAN' | 'SANITIZED' | 'RAW' =
+      m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
+    const { raw_content, ...rest } = m;
+    return {
+      ...rest,
+      content: sanitized, // Mặc định hiển thị sanitized_content
+      sanitized_content: sanitized,
+      sanitization_status: status,
+    };
+  });
 }
 
 /**
@@ -444,6 +469,11 @@ export async function sendMessage(
     throw notFoundErr;
   }
 
+  const rawContent = content.trim();
+  const sanitizedContent = sanitizePhoneInText(rawContent);
+  const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
+    sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+
   const newMessage: InboxMessage = {
     id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     company_id: companyId,
@@ -452,7 +482,10 @@ export async function sendMessage(
     channel: conv.channel,
     sender_type,
     sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
-    content: content.trim(),
+    content: sanitizedContent, // DTO công khai hiển thị sanitized
+    sanitized_content: sanitizedContent,
+    sanitization_status: sanitizationStatus,
+    raw_content: rawContent, // Lưu trữ vùng riêng tư (private)
     created_at: new Date().toISOString(),
     direction: sender_type === 'customer' ? 'inbound' : 'outbound',
   };
@@ -464,7 +497,7 @@ export async function sendMessage(
   messagesStore[conversation_id].push(newMessage);
 
   // Cập nhật thông tin hội thoại
-  conv.last_message = newMessage.content;
+  conv.last_message = rawContent;
   conv.updated_at = newMessage.created_at;
   conv.last_message_at = newMessage.created_at;
 
@@ -496,6 +529,11 @@ export async function getCustomerTimeline(
   for (const convId of allowedConvIds) {
     const msgs = messagesStore[convId] || [];
     for (const m of msgs) {
+      const isBoss = callerRole === APPLICATION_ROLES.BOSS_ADMIN;
+      const desc = isBoss
+        ? (m.raw_content || m.content)
+        : (m.sanitized_content || sanitizePhoneInText(m.content));
+
       events.push({
         id: m.id,
         company_id: companyId,
@@ -508,7 +546,7 @@ export async function getCustomerTimeline(
             : m.sender_type === 'ai'
               ? 'AI phản hồi tự động'
               : 'Sale gửi tin nhắn tư vấn',
-        description: m.content,
+        description: desc,
         timestamp: m.created_at,
         actor_type: m.sender_type,
         actor_name: m.sender_name,
@@ -607,7 +645,16 @@ export async function addInboundMessage(params: {
   externalMessageId?: string;
   customerId?: string;
 }): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
-  const companyId = params.company_id || DEFAULT_INBOX_COMPANY_ID;
+  // Fail-Closed: Bắt buộc phải có company_id hợp lệ, xóa bỏ hoàn toàn fallback DEFAULT_INBOX_COMPANY_ID
+  if (
+    !params.company_id ||
+    typeof params.company_id !== 'string' ||
+    !params.company_id.trim() ||
+    !UUID_REGEX.test(params.company_id.trim())
+  ) {
+    throw new Error('company_id là bắt buộc để xử lý tin nhắn và bảo vệ cách ly tenant (Fail-Closed).');
+  }
+  const companyId = params.company_id.trim();
   const timestamp = params.timestamp || new Date().toISOString();
   let isNewConversation = false;
 
@@ -657,6 +704,12 @@ export async function addInboundMessage(params: {
     conversation.updated_at = timestamp;
   }
 
+  // Ingress Sanitization: Làm sạch ngay tại thời điểm tiếp nhận (Zero-Phone Security Zone)
+  const rawContent = params.content || '';
+  const sanitizedContent = sanitizePhoneInText(rawContent);
+  const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
+    sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+
   // Tạo tin nhắn mới
   const newMessage: InboxMessage = {
     id: params.externalMessageId || `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -666,7 +719,10 @@ export async function addInboundMessage(params: {
     channel: params.channel,
     sender_type: 'customer',
     sender_name: params.senderName || conversation.customer_name,
-    content: params.content,
+    content: sanitizedContent, // DTO công khai mặc định hiển thị nội dung làm sạch
+    sanitized_content: sanitizedContent,
+    sanitization_status: sanitizationStatus,
+    raw_content: rawContent, // Lưu trữ an toàn vùng private
     created_at: timestamp,
     direction: 'inbound',
   };
