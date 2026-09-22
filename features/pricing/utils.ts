@@ -17,9 +17,16 @@ export function calculatePrice(measurements: { width?: number; height?: number; 
     };
   }
 
-  // Nếu đủ thông số, tính ra tổng tiền dựa trên giá trị trong price_rules
-  // Dưới đây là ví dụ giả định (diện tích * đơn giá mỗi m2)
-  const basePricePerSqm = pricingPolicy?.price_rules?.base_price_per_sqm || 2000000;
+  const basePricePerSqm = pricingPolicy?.price_rules?.base_price_per_sqm;
+  
+  if (basePricePerSqm === undefined || basePricePerSqm === null) {
+    missingFields.push('base_price_per_sqm');
+    return {
+      status: 'NEED_INFO',
+      amount: null,
+      missing_fields: missingFields
+    };
+  }
   
   const widthInMeters = measurements.width;
   const heightInMeters = measurements.height;

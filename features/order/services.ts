@@ -6,40 +6,32 @@ import { generateContractForOrder } from '@/features/contract/services';
  * remaining_amount = total_amount - deposit_amount
  */
 export async function updateOrderDepositAndDebt(orderId: string, depositAmount: number) {
-  const supabase = createClient();
+  const supabase = await createClient();
   
-  // 1. Lấy đơn hàng hiện tại để tính toán với total_amount
+  // 1. Gọi RPC để cập nhật tiền cọc và ghi nhận công nợ (finance_summaries) trong một transaction atomic
+  const { data, error } = await supabase.rpc('update_order_deposit_rpc', {
+    p_order_id: orderId,
+    p_deposit_amount: depositAmount
+  });
+
+  if (error || !data?.success) {
+    console.error('Lỗi khi cập nhật tiền cọc và công nợ đơn hàng (Atomic RPC):', error);
+    throw error || new Error('Không thể cập nhật cọc');
+  }
+
+  // 2. Lấy thông tin order để tự động sinh hợp đồng
   const { data: order, error: fetchError } = await supabase
     .from('orders')
-    .select('total_amount, customer_id')
+    .select('customer_id')
     .eq('id', orderId)
     .single();
 
   if (fetchError || !order) {
-    throw new Error('Không tìm thấy đơn hàng (Order not found)');
+    throw new Error('Lỗi lấy thông tin order sau khi cập nhật cọc');
   }
 
-  // 2. Tính toán công nợ tự động
-  const remainingAmount = (order.total_amount || 0) - depositAmount;
-
-  // 3. Cập nhật đơn hàng thành ĐÃ CỌC (DEPOSIT_CONFIRMED theo hợp đồng dữ liệu)
-  const { error: updateError } = await supabase
-    .from('orders')
-    .update({ 
-      deposit_amount: depositAmount,
-      remaining_amount: remainingAmount,
-      status: 'DEPOSIT_CONFIRMED'
-    })
-    .eq('id', orderId);
-
-  if (updateError) {
-    console.error('Lỗi khi cập nhật tiền cọc và công nợ đơn hàng:', updateError);
-    throw updateError;
-  }
-
-  // 4. Tự động sinh hợp đồng (Automation Trigger)
-  // Việc sinh hợp đồng tuân thủ tuyệt đối dữ liệu đã chốt
+  // 3. Tự động sinh hợp đồng (Automation Trigger)
   await generateContractForOrder(orderId, order.customer_id);
 
-  return { success: true, remainingAmount };
+  return { success: true };
 }

@@ -23,8 +23,10 @@ export default async function ContractsPage() {
             {contracts?.map((contract: any) => {
               // Xử lý dữ liệu fallback
               const order = contract.orders || {};
-              const customer = contract.customers || {};
+              const customer = order.customers || {};
               const isSigned = !!contract.signed_file_ref;
+              const finance = order.finance_summaries || {};
+              const receivableAmount = finance.receivable_amount != null ? finance.receivable_amount : 0;
 
               return (
                 <tr key={contract.id} className="hover:bg-gray-50 transition-colors">
@@ -35,10 +37,10 @@ export default async function ContractsPage() {
                     {customer.name || customer.id || 'N/A'}
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-900 text-right">
-                    {order.total_amount != null ? order.total_amount.toLocaleString('vi-VN') : '0'}
+                    {order.final_amount != null ? order.final_amount.toLocaleString('vi-VN') : '0'}
                   </td>
                   <td className="py-3 px-4 text-sm font-bold text-red-600 text-right">
-                    {order.remaining_amount != null ? order.remaining_amount.toLocaleString('vi-VN') : '0'}
+                    {receivableAmount.toLocaleString('vi-VN')}
                   </td>
                   <td className="py-3 px-4 text-sm text-center">
                     {isSigned ? (

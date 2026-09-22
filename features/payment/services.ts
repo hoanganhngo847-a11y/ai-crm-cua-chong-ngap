@@ -5,70 +5,31 @@ export async function processPaymentWebhook(payload: {
   amount: number;
   occurred_at: string;
   transfer_content: string;
-  company_id: string;
+  company_id?: string;
 }) {
-  const supabase = createClient();
-  const { provider_ref, amount, occurred_at, transfer_content, company_id } = payload;
+  const supabase = await createClient();
+  const { provider_ref, amount, occurred_at, transfer_content } = payload;
 
-  // 1. Trích xuất mã đơn hàng từ nội dung chuyển khoản
-  // Trong dự án thực tế, order_code có thể có định dạng riêng, ví dụ: /ORDER-[A-Z0-9]+/
-  // Ở đây giả định tìm thấy UUID hoặc một mã định danh dài
-  const orderIdMatch = transfer_content.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
-  const matchedOrderId = orderIdMatch ? orderIdMatch[0] : null;
+  // 1. Trích xuất mã đối soát (payment_reference) từ nội dung chuyển khoản
+  // Thay vì UUID, giờ ta tìm kiếm mã cấu trúc /DH[A-Z0-9]+/ hoặc lấy trực tiếp provider_ref
+  // Giả định đơn giản: Nội dung CK chứa mã đối soát
+  const paymentRefMatch = transfer_content.match(/[A-Za-z0-9_-]+/);
+  const matchedPaymentRef = paymentRefMatch ? paymentRefMatch[0] : transfer_content;
 
-  if (matchedOrderId) {
-    // 2. Truy vấn đơn hàng để đối chiếu
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .select('id, deposit_amount, status')
-      .eq('id', matchedOrderId)
-      .single();
+  // 2. Gọi RPC xử lý thanh toán (Atomic, check finance summary)
+  const { data, error } = await supabase.rpc('process_payment_webhook_rpc', {
+    p_provider: 'BANK', // Hoặc lấy từ payload
+    p_provider_ref: provider_ref,
+    p_amount: amount,
+    p_occurred_at: occurred_at,
+    p_transfer_content: transfer_content,
+    p_payment_reference: matchedPaymentRef
+  });
 
-    if (!orderError && order) {
-      // 3. Kiểm tra số tiền chuyển có khớp hoặc lớn hơn yêu cầu cọc không
-      if (amount >= order.deposit_amount) {
-        // Cập nhật trạng thái đơn hàng thành ĐÃ CỌC (DEPOSITED / DEPOSIT_CONFIRMED)
-        // Lưu ý: Theo DATA_CONTRACT.md, canonical value là DEPOSIT_CONFIRMED
-        await supabase
-          .from('orders')
-          .update({ status: 'DEPOSIT_CONFIRMED' }) 
-          .eq('id', order.id);
-
-        // Lưu giao dịch thanh toán với trạng thái MATCHED, độ tự tin 100
-        const { error: txError } = await supabase
-          .from('payment_transactions')
-          .insert({
-            provider_ref,
-            amount,
-            occurred_at,
-            transfer_content,
-            company_id,
-            matched_order_id: order.id,
-            match_confidence: '100',
-            status: 'MATCHED'
-          });
-
-        if (txError) console.error('Lỗi khi lưu giao dịch MATCHED:', txError);
-        return { status: 'MATCHED', orderId: order.id };
-      }
-    }
+  if (error) {
+    console.error('Lỗi khi gọi RPC process_payment_webhook_rpc:', error);
+    throw error;
   }
 
-  // 4. Không tìm thấy đơn hoặc số tiền bị thiếu -> Chờ kiểm tra thủ công
-  // Tuyệt đối không tự động chuyển trạng thái đơn hàng.
-  const { error: pendingTxError } = await supabase
-    .from('payment_transactions')
-    .insert({
-      provider_ref,
-      amount,
-      occurred_at,
-      transfer_content,
-      company_id,
-      matched_order_id: matchedOrderId || null,
-      match_confidence: matchedOrderId ? '50' : '0',
-      status: 'PENDING_REVIEW'
-    });
-
-  if (pendingTxError) console.error('Lỗi khi lưu giao dịch PENDING_REVIEW:', pendingTxError);
-  return { status: 'PENDING_REVIEW', orderId: matchedOrderId };
+  return data;
 }

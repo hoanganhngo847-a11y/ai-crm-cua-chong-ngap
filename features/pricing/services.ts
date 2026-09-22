@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 
 export async function getCurrentPricingPolicy(companyId: string) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('pricing_policies')
     .select('*')
@@ -19,7 +19,7 @@ export async function getCurrentPricingPolicy(companyId: string) {
 }
 
 export async function savePriceCalculation(calculation: any) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('price_calculations')
     .insert([calculation])
@@ -34,7 +34,7 @@ export async function savePriceCalculation(calculation: any) {
 }
 
 export async function getPriceCalculations() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('price_calculations')
     .select('*')
