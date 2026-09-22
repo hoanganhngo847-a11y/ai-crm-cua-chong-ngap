@@ -84,21 +84,9 @@ export async function completeSurvey(
     };
   }
 
-  // 3. Idempotent check: Tránh trùng lặp & Race Condition
-  // Trước khi tạo survey mới, kiểm tra xem appointment này đã có bản ghi surveys nào chưa
-  const { data: existingSurvey } = await adminClient
-    .from('surveys')
-    .select('id')
-    .eq('appointment_id', sanitizedInput.appointmentId)
-    .maybeSingle();
-
-  if (existingSurvey) {
-    return {
-      success: true,
-      surveyId: existingSurvey.id,
-      isExisting: true,
-      message: 'Khảo sát cho lịch hẹn này đã tồn tại.',
-    };
+  // Tự phòng vệ (fail-closed) độc lập ở tầng service: Chỉ cho phép hoàn tất lịch hẹn loại SURVEY
+  if (appointment.type !== 'SURVEY') {
+    throw new Error('Lịch hẹn không phải loại SURVEY.');
   }
 
   // Kiểm tra trạng thái hiện tại của appointment
@@ -116,7 +104,7 @@ export async function completeSurvey(
     };
   }
 
-  // 4. Xác thực ảnh thực tế từ Server Storage - KHÔNG tin mảng photos do browser tự gửi
+  // 3. Xác thực ảnh thực tế từ Server Storage - KHÔNG tin mảng photos do browser tự gửi
   const storageVerification = await verifyMandatoryPhotosInStorage(
     {
       companyId: appointment.company_id,
@@ -173,43 +161,54 @@ export async function completeSurvey(
   const notes = sanitizedInput.notes || rawS.notes || null;
   const completedAt = new Date().toISOString();
 
-  // 5. Insert Survey Record into Supabase
-  const { data: insertedSurvey, error: insertError } = await adminClient
-    .from('surveys')
-    .insert({
-      company_id: companyId,
-      customer_id: appointment.customer_id,
-      appointment_id: appointment.id,
-      completed_by: completedByUserId,
-      measurements: measurementsPayload,
-      photos: sanitizedPhotosArray,
-      site_condition: siteConditionText,
-      notes,
-      completed_at: completedAt,
-    })
-    .select('id')
-    .single();
+  // 4. Atomic Single-Shot Survey Completion qua PostgreSQL RPC function
+  // Đảm bảo lock dòng appointment FOR UPDATE, update status sang COMPLETED và insert survey trong duy nhất 1 transaction
+  const payload = {
+    company_id: companyId,
+    customer_id: appointment.customer_id,
+    completed_by: completedByUserId,
+    measurements: measurementsPayload,
+    photos: sanitizedPhotosArray,
+    site_condition: siteConditionText,
+    notes,
+    completed_at: completedAt,
+  };
 
-  if (insertError || !insertedSurvey) {
-    return {
-      success: false,
-      message: `Lỗi ghi dữ liệu khảo sát: ${insertError?.message || 'Không rõ nguyên nhân'}`,
-    };
-  }
+  const { data: rpcData, error: rpcError } = await adminClient.rpc(
+    'complete_survey_atomic',
+    {
+      p_appointment_id: sanitizedInput.appointmentId,
+      p_survey_payload: payload,
+    }
+  );
 
-  // 6. Update Appointment status to 'COMPLETED' (Atomic check with rollback)
-  const { error: updateAptError } = await adminClient
-    .from('appointments')
-    .update({
-      status: 'COMPLETED',
-      updated_at: completedAt,
-    })
-    .eq('id', appointment.id);
+  if (rpcError) {
+    if (
+      rpcError.message?.includes('APPOINTMENT_ALREADY_TERMINAL') ||
+      rpcError.message?.includes('CANCELLED') ||
+      rpcError.message?.includes('COMPLETED')
+    ) {
+      throw new Error(
+        'APPOINTMENT_ALREADY_TERMINAL: Lịch hẹn đã ở trạng thái kết thúc hoặc bị hủy, không thể hoàn tất khảo sát.'
+      );
+    }
 
-  if (updateAptError) {
-    console.error('Lỗi cập nhật appointments, đang rollback bản ghi survey:', updateAptError);
-    // Rollback: Xóa bản ghi survey vừa tạo theo newSurvey.id để giữ tính Atomic
-    await adminClient.from('surveys').delete().eq('id', insertedSurvey.id);
+    if (
+      rpcError.code === '23505' ||
+      rpcError.message?.includes('unique_survey_appointment') ||
+      rpcError.message?.includes('SURVEY_ALREADY_EXISTS') ||
+      rpcError.message?.includes('duplicate key')
+    ) {
+      throw new Error('SURVEY_ALREADY_EXISTS: Khảo sát cho lịch hẹn này đã tồn tại.');
+    }
+
+    if (rpcError.message?.includes('APPOINTMENT_NOT_FOUND')) {
+      throw new Error('APPOINTMENT_NOT_FOUND: Không tìm thấy thông tin lịch hẹn khảo sát.');
+    }
+
+    if (rpcError.message?.includes('APPOINTMENT_TYPE_NOT_SURVEY')) {
+      throw new Error('APPOINTMENT_TYPE_NOT_SURVEY: Lịch hẹn không phải là lịch khảo sát hợp lệ.');
+    }
 
     return {
       success: false,
@@ -217,9 +216,11 @@ export async function completeSurvey(
     };
   }
 
+  const createdSurvey = rpcData as { id?: string } | null;
+
   return {
     success: true,
-    surveyId: insertedSurvey.id,
+    surveyId: createdSurvey?.id,
     message: 'Khảo sát đã được hoàn tất và chuyển giao dữ liệu kỹ thuật thành công.',
   };
 }

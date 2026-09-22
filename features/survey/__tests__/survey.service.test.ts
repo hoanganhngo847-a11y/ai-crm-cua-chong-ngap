@@ -991,6 +991,23 @@ async function main() {
         }
         throw new Error(`Unexpected table: ${table}`);
       },
+      rpc: async (
+        fnName: string,
+        args: { p_appointment_id: string; p_survey_payload: Record<string, unknown> }
+      ) => {
+        if (fnName === 'complete_survey_atomic') {
+          insertedSurveyRecord = args.p_survey_payload;
+          return {
+            data: {
+              id: 'srv-verified-001',
+              appointment_id: args.p_appointment_id,
+              ...args.p_survey_payload,
+            },
+            error: null,
+          };
+        }
+        return { data: null, error: new Error(`Unknown RPC function: ${fnName}`) };
+      },
       storage: {
         from: () => ({
           list: async () => ({
@@ -1415,6 +1432,28 @@ async function main() {
     assert.equal(updated.assignee_id, 'user-tech-valid');
   });
 
+  await runAsyncTest('Kịch bản 8.7: createAppointment ném lỗi khi caller truyền type không phải SURVEY', async () => {
+    const mockClient = createMockAppointmentClient();
+
+    await assert.rejects(
+      async () => {
+        await createAppointment(
+          {
+            customer_id: 'cust-100',
+            assignee_id: 'user-tech-valid',
+            address: '123 Đường Láng',
+            appointment_date: '2026-09-25T09:00:00.000Z',
+            type: 'INSTALLATION' as unknown as 'SURVEY',
+          },
+          mockClient as unknown as Parameters<typeof createAppointment>[1]
+        );
+      },
+      {
+        message: 'Chỉ hỗ trợ tạo lịch hẹn loại SURVEY trong phân hệ này.',
+      }
+    );
+  });
+
   // ==========================================================================
   // KỊCH BẢN 9: Khắc phục P1 (Lỗi 14) - Authorization & RBAC chuyên sâu
   // ==========================================================================
@@ -1442,8 +1481,11 @@ async function main() {
   function verifySurveyAppointmentAccess(
     actor: MockActor | null,
     appointment: MockAppointmentAccess | null,
-    allowedRoles: string[] = ['BOSS_ADMIN', 'TECHNICIAN']
+    allowedRoles: string[] = ['BOSS_ADMIN', 'TECHNICIAN'],
+    options: { isMutation?: boolean } = {}
   ) {
+    const { isMutation = false } = options;
+
     if (
       !actor ||
       !actor.userId ||
@@ -1470,15 +1512,24 @@ async function main() {
       throw new Error('Lịch hẹn không phải là lịch khảo sát hợp lệ.');
     }
 
-    // Technicians can only operate on their own active appointments
+    // Khóa mutation đối với trạng thái terminal (COMPLETED, CANCELLED) cho TẤT CẢ các vai trò
+    if (isMutation) {
+      if (appointment.status === 'COMPLETED' || appointment.status === 'CANCELLED') {
+        throw new Error('Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.');
+      }
+    }
+
+    // Technicians can only operate on their own appointments
     if (actor.role === 'TECHNICIAN') {
       if (appointment.assignee_id !== actor.userId) {
         throw new Error('Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.');
       }
 
-      const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
-      if (!validStatuses.includes(appointment.status)) {
-        throw new Error('Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.');
+      if (isMutation) {
+        const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
+        if (!validStatuses.includes(appointment.status)) {
+          throw new Error('Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.');
+        }
       }
     }
 
@@ -1576,7 +1627,7 @@ async function main() {
       membershipStatus: 'ACTIVE',
     };
 
-    // 9.4a: Các trạng thái kết thúc/hủy bị chặn (COMPLETED, CANCELLED, REJECTED)
+    // 9.4a: Các trạng thái kết thúc/hủy bị chặn khi mutation (COMPLETED, CANCELLED, REJECTED)
     const invalidStatuses = ['COMPLETED', 'CANCELLED', 'REJECTED'];
     for (const status of invalidStatuses) {
       const apt: MockAppointmentAccess = {
@@ -1589,16 +1640,22 @@ async function main() {
 
       assert.throws(
         () => {
-          verifySurveyAppointmentAccess(actorTech, apt);
+          verifySurveyAppointmentAccess(actorTech, apt, ['TECHNICIAN'], { isMutation: true });
         },
-        {
-          message: 'Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.',
+        (err: Error) => {
+          if (status === 'COMPLETED' || status === 'CANCELLED') {
+            return (
+              err.message ===
+              'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.'
+            );
+          }
+          return err.message === 'Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.';
         },
-        `Status ${status} phải bị từ chối`
+        `Status ${status} phải bị từ chối khi mutation`
       );
     }
 
-    // 9.4b: Các trạng thái hiệu lực được chấp thuận (ASSIGNED, ACCEPTED, IN_PROGRESS)
+    // 9.4b: Các trạng thái hiệu lực được chấp thuận khi mutation (ASSIGNED, ACCEPTED, IN_PROGRESS)
     const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
     for (const status of validStatuses) {
       const apt: MockAppointmentAccess = {
@@ -1609,7 +1666,7 @@ async function main() {
         type: 'SURVEY',
       };
 
-      const result = verifySurveyAppointmentAccess(actorTech, apt);
+      const result = verifySurveyAppointmentAccess(actorTech, apt, ['TECHNICIAN'], { isMutation: true });
       assert.equal(result.appointment.status, status);
     }
   });
@@ -1641,21 +1698,109 @@ async function main() {
     );
   });
 
+  runTest('Kịch bản 9.6: Khóa mutation (isMutation: true) trên trạng thái terminal cho cả BOSS_ADMIN và TECHNICIAN', () => {
+    const actorBoss: MockActor = {
+      userId: 'boss-01',
+      companyId: 'comp-A',
+      role: 'BOSS_ADMIN',
+      profileStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+    };
+
+    const actorTech: MockActor = {
+      userId: 'tech-01',
+      companyId: 'comp-A',
+      role: 'TECHNICIAN',
+      profileStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+    };
+
+    for (const status of ['COMPLETED', 'CANCELLED']) {
+      const apt: MockAppointmentAccess = {
+        id: `apt-term-${status.toLowerCase()}`,
+        company_id: 'comp-A',
+        assignee_id: 'tech-01',
+        status,
+        type: 'SURVEY',
+      };
+
+      // BOSS_ADMIN cũng bị chặn mutation khi terminal
+      assert.throws(
+        () => {
+          verifySurveyAppointmentAccess(actorBoss, apt, ['BOSS_ADMIN', 'TECHNICIAN'], {
+            isMutation: true,
+          });
+        },
+        {
+          message: 'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.',
+        },
+        `BOSS_ADMIN phải bị chặn mutation khi appointment là ${status}`
+      );
+
+      // TECHNICIAN cũng bị chặn mutation khi terminal
+      assert.throws(
+        () => {
+          verifySurveyAppointmentAccess(actorTech, apt, ['BOSS_ADMIN', 'TECHNICIAN'], {
+            isMutation: true,
+          });
+        },
+        {
+          message: 'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.',
+        },
+        `TECHNICIAN phải bị chặn mutation khi appointment là ${status}`
+      );
+    }
+  });
+
+  runTest('Kịch bản 9.7: Cho phép truy cập chỉ đọc (isMutation: false) khi appointment ở trạng thái COMPLETED', () => {
+    const actorBoss: MockActor = {
+      userId: 'boss-01',
+      companyId: 'comp-A',
+      role: 'BOSS_ADMIN',
+      profileStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+    };
+
+    const actorTech: MockActor = {
+      userId: 'tech-01',
+      companyId: 'comp-A',
+      role: 'TECHNICIAN',
+      profileStatus: 'ACTIVE',
+      membershipStatus: 'ACTIVE',
+    };
+
+    const aptCompleted: MockAppointmentAccess = {
+      id: 'apt-completed-01',
+      company_id: 'comp-A',
+      assignee_id: 'tech-01',
+      status: 'COMPLETED',
+      type: 'SURVEY',
+    };
+
+    // BOSS_ADMIN được phép đọc/xem lịch hẹn đã hoàn tất
+    const bossRead = verifySurveyAppointmentAccess(actorBoss, aptCompleted, ['BOSS_ADMIN', 'TECHNICIAN'], {
+      isMutation: false,
+    });
+    assert.equal(bossRead.appointment.status, 'COMPLETED');
+
+    // TECHNICIAN phụ trách được phép đọc/xem và refresh signed URL lịch hẹn đã hoàn tất
+    const techRead = verifySurveyAppointmentAccess(actorTech, aptCompleted, ['BOSS_ADMIN', 'TECHNICIAN'], {
+      isMutation: false,
+    });
+    assert.equal(techRead.appointment.status, 'COMPLETED');
+  });
+
   // ==========================================================================
   // KỊCH BẢN 10: Khắc phục P1 (Lỗi 15) - Atomicity & Rollback Survey Completion
   // ==========================================================================
-  await runAsyncTest('Kịch bản 10.1: completeSurvey rollback xóa survey mồ côi khi update appointment thất bại', async () => {
-    const deletedSurveyIds: string[] = [];
+  await runAsyncTest('Kịch bản 10.1: completeSurvey atomic transaction rollback khi RPC gặp lỗi', async () => {
+    let rpcCalled = false;
 
     const mockDbRollback = {
       from: (table: string) => {
-        const eqFilters: Record<string, string> = {};
         const q: Record<string, unknown> = {
           select: () => q,
-          eq: (col: string, val: string) => {
-            eqFilters[col] = val;
-            return q;
-          },
+          eq: () => q,
           maybeSingle: async () => {
             if (table === 'appointments') {
               return {
@@ -1670,40 +1815,23 @@ async function main() {
                 error: null,
               };
             }
-            if (table === 'surveys') {
-              // Chưa có survey tồn tại
-              return { data: null, error: null };
-            }
             return { data: null, error: null };
-          },
-          insert: (payload: Record<string, unknown>) => {
-            const newSurveyRecord = {
-              id: 'survey-orphan-rollback-001',
-              ...payload,
-            };
-            return {
-              select: () => ({
-                single: async () => ({ data: newSurveyRecord, error: null }),
-              }),
-            };
-          },
-          update: () => ({
-            eq: () => ({
-              error: {
-                message: 'Database lock timeout or constraint violation on appointments update',
-              },
-            }),
-          }),
-          delete: () => {
-            return {
-              eq: (_col: string, val: string) => {
-                deletedSurveyIds.push(val);
-                return Promise.resolve({ error: null });
-              },
-            };
           },
         };
         return q;
+      },
+      rpc: async (fnName: string) => {
+        if (fnName === 'complete_survey_atomic') {
+          rpcCalled = true;
+          // Mô phỏng lỗi trong transaction atomic RPC (PostgreSQL tự động rollback toàn bộ transaction)
+          return {
+            data: null,
+            error: {
+              message: 'Database lock timeout or constraint violation on appointments update',
+            },
+          };
+        }
+        return { data: null, error: null };
       },
       storage: {
         from: () => ({
@@ -1733,16 +1861,60 @@ async function main() {
       mockDbRollback as unknown as Parameters<typeof completeSurvey>[3]
     );
 
-    // 1. Phải trả về thất bại
+    // 1. Phải gọi RPC và trả về thất bại với thông điệp rõ ràng
+    assert.equal(rpcCalled, true);
     assert.equal(result.success, false);
     assert.equal(
       result.message,
       'Không thể cập nhật trạng thái lịch hẹn, đã hủy thao tác tạo khảo sát.'
     );
 
-    // 2. Phải kích hoạt rollback: Xóa chính xác bản ghi survey vừa tạo để tránh mồ côi
-    assert.equal(deletedSurveyIds.length, 1);
-    assert.equal(deletedSurveyIds[0], 'survey-orphan-rollback-001');
+    // 2. Kiểm tra RPC ném exception khi appointment đã ở trạng thái terminal
+    const mockDbTerminalRpc = {
+      ...mockDbRollback,
+      rpc: async () => ({
+        data: null,
+        error: { message: 'APPOINTMENT_ALREADY_TERMINAL' },
+      }),
+    };
+    await assert.rejects(
+      async () => {
+        await completeSurvey(
+          inputData,
+          'tech-1',
+          'comp-1',
+          mockDbTerminalRpc as unknown as Parameters<typeof completeSurvey>[3]
+        );
+      },
+      {
+        message: /APPOINTMENT_ALREADY_TERMINAL/,
+      }
+    );
+
+    // 3. Kiểm tra RPC ném exception khi vi phạm unique constraint (duplicate survey)
+    const mockDbDuplicateRpc = {
+      ...mockDbRollback,
+      rpc: async () => ({
+        data: null,
+        error: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "unique_survey_appointment"',
+        },
+      }),
+    };
+    await assert.rejects(
+      async () => {
+        await completeSurvey(
+          inputData,
+          'tech-1',
+          'comp-1',
+          mockDbDuplicateRpc as unknown as Parameters<typeof completeSurvey>[3]
+        );
+      },
+      {
+        message: /SURVEY_ALREADY_EXISTS/,
+      }
+    );
   });
 
   await runAsyncTest('Kịch bản 10.2: completeSurvey từ chối lịch hẹn ở trạng thái không hợp lệ (CANCELLED, COMPLETED)', async () => {
@@ -1801,6 +1973,55 @@ async function main() {
       resCompleted.message?.includes(
         'Lịch hẹn đang ở trạng thái COMPLETED, không thể hoàn tất khảo sát.'
       )
+    );
+  });
+
+  await runAsyncTest('Kịch bản 10.3: completeSurvey ném lỗi khi appointment.type !== SURVEY', async () => {
+    const mockClientWrongType = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => {
+            if (table === 'appointments') {
+              return {
+                data: {
+                  id: 'apt-wrong-type-01',
+                  company_id: 'comp-1',
+                  customer_id: 'cust-1',
+                  assignee_id: 'tech-1',
+                  status: 'IN_PROGRESS',
+                  type: 'INSTALLATION', // Sai type
+                },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return q;
+      },
+    };
+
+    const inputData: CompleteSurveyInput = {
+      appointmentId: 'apt-wrong-type-01',
+      measurements: VALID_MEASUREMENTS,
+      siteCondition: VALID_SITE_CONDITION,
+      photos: MOCK_PHOTOS,
+    };
+
+    await assert.rejects(
+      async () => {
+        await completeSurvey(
+          inputData,
+          'tech-1',
+          'comp-1',
+          mockClientWrongType as unknown as Parameters<typeof completeSurvey>[3]
+        );
+      },
+      {
+        message: 'Lịch hẹn không phải loại SURVEY.',
+      }
     );
   });
 

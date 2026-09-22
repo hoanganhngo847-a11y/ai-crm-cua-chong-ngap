@@ -193,17 +193,21 @@ export async function createAppointment(
   // 3. Verify assignee: Bắt buộc là kỹ thuật viên đang hoạt động thuộc cùng công ty
   const assignee = await verifyActiveCompanyTechnician(input.assignee_id, companyId, supabase);
 
-  const dbStatus = toDbStatus(input.status || 'SCHEDULED');
-  const appointmentType = input.type || 'SURVEY';
+  // Enforce type: Chỉ hỗ trợ tạo lịch hẹn loại SURVEY trong phân hệ này
+  if (input.type && input.type !== 'SURVEY') {
+    throw new Error('Chỉ hỗ trợ tạo lịch hẹn loại SURVEY trong phân hệ này.');
+  }
 
-  // 4. Insert into appointments table
+  const dbStatus = toDbStatus(input.status || 'SCHEDULED');
+
+  // 4. Insert into appointments table (luôn gán cứng type: 'SURVEY')
   const { data: newAppointment, error: insertError } = await supabase
     .from('appointments')
     .insert({
       company_id: companyId,
       customer_id: customer.id,
       assignee_id: assignee.id,
-      type: appointmentType,
+      type: 'SURVEY',
       address: input.address.trim(),
       start_time: parsedDate.toISOString(),
       status: dbStatus,

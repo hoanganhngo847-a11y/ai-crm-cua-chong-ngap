@@ -1,0 +1,112 @@
+-- Migration 005: Survey Atomic Completion & DB Transaction
+-- Enforces single-shot completion and atomic commitment of survey and appointment status.
+
+-- 1. Thêm UNIQUE constraint trên bảng surveys để loại bỏ triệt để Race Condition trùng lặp
+ALTER TABLE public.surveys ADD CONSTRAINT unique_survey_appointment UNIQUE (appointment_id);
+
+-- 2. Tạo PostgreSQL RPC function complete_survey_atomic
+CREATE OR REPLACE FUNCTION public.complete_survey_atomic(
+  p_appointment_id uuid,
+  p_survey_payload jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_appointment record;
+  v_survey record;
+  v_now timestamptz := clock_timestamp();
+  v_company_id uuid;
+  v_customer_id uuid;
+  v_completed_by uuid;
+  v_measurements jsonb;
+  v_photos jsonb;
+  v_site_condition text;
+  v_notes text;
+  v_completed_at timestamptz;
+BEGIN
+  -- 2.1. Khóa dòng appointment bằng SELECT FOR UPDATE
+  SELECT id, company_id, customer_id, status, type, assignee_id
+  INTO v_appointment
+  FROM public.appointments
+  WHERE id = p_appointment_id
+  FOR UPDATE;
+
+  -- 2.2. Kiểm tra tồn tại
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'APPOINTMENT_NOT_FOUND';
+  END IF;
+
+  -- 2.3. Kiểm tra type
+  IF v_appointment.type <> 'SURVEY' THEN
+    RAISE EXCEPTION 'APPOINTMENT_TYPE_NOT_SURVEY';
+  END IF;
+
+  -- 2.4. Kiểm tra trạng thái terminal
+  IF v_appointment.status IN ('COMPLETED', 'CANCELLED') THEN
+    RAISE EXCEPTION 'APPOINTMENT_ALREADY_TERMINAL';
+  END IF;
+
+  -- 2.5. Trích xuất an toàn từ payload (kèm fallback an toàn vào appointment)
+  v_company_id := COALESCE((p_survey_payload->>'company_id')::uuid, v_appointment.company_id);
+  v_customer_id := COALESCE((p_survey_payload->>'customer_id')::uuid, v_appointment.customer_id);
+  v_completed_by := COALESCE(
+    (p_survey_payload->>'completed_by')::uuid,
+    (p_survey_payload->>'completedBy')::uuid,
+    v_appointment.assignee_id
+  );
+  v_measurements := COALESCE(p_survey_payload->'measurements', '{}'::jsonb);
+  v_photos := COALESCE(p_survey_payload->'photos', '[]'::jsonb);
+  v_site_condition := COALESCE(p_survey_payload->>'site_condition', p_survey_payload->>'siteCondition', '');
+  v_notes := p_survey_payload->>'notes';
+  v_completed_at := COALESCE((p_survey_payload->>'completed_at')::timestamptz, v_now);
+
+  -- 2.6. Atomic Step A: Cập nhật appointment sang COMPLETED
+  UPDATE public.appointments
+  SET status = 'COMPLETED',
+      updated_at = v_now
+  WHERE id = p_appointment_id;
+
+  -- 2.7. Atomic Step B: Insert survey
+  INSERT INTO public.surveys (
+    company_id,
+    customer_id,
+    appointment_id,
+    completed_by,
+    measurements,
+    photos,
+    site_condition,
+    notes,
+    completed_at,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_company_id,
+    v_customer_id,
+    p_appointment_id,
+    v_completed_by,
+    v_measurements,
+    v_photos,
+    v_site_condition,
+    v_notes,
+    v_completed_at,
+    v_now,
+    v_now
+  )
+  RETURNING * INTO v_survey;
+
+  -- 2.8. Trả về bản ghi survey vừa tạo dạng JSON
+  RETURN to_jsonb(v_survey);
+END;
+$$;
+
+COMMENT ON FUNCTION public.complete_survey_atomic(uuid, jsonb)
+  IS 'Single-shot atomic survey completion function: locks appointment, updates status to COMPLETED, inserts survey, rolls back automatically on error.';
+
+-- 3. Cấu hình quyền truy cập RPC
+REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, jsonb) FROM anon;
+GRANT EXECUTE ON FUNCTION public.complete_survey_atomic(uuid, jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_survey_atomic(uuid, jsonb) TO service_role;
