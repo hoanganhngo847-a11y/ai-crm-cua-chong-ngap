@@ -1,7 +1,7 @@
 import 'server-only';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
-import { resolveVoiceCallProvider } from '../providers/provider-factory';
+import { resolveVoiceCallProviderForCompany } from '../providers/provider-factory';
 import type { CallProvider } from '../../../shared/contracts/sensitive';
 import { markAttemptResult } from './call-attempt-scheduler';
 
@@ -46,92 +46,24 @@ export async function dispatchAiOutboundCall(
   provider?: CallProvider
 ): Promise<DispatchResult> {
   const adminClient = createAdminClient();
-  const callProvider = resolveVoiceCallProvider(provider);
+  const callProvider = await resolveVoiceCallProviderForCompany(companyId, provider);
 
-  // ── 1. Load attempt ──────────────────────────────────────────────────────
-  const { data: attempt, error: attemptError } = await adminClient
-    .from('call_attempts')
-    .select('id, company_id, customer_id, contact_cycle_id, attempt_no, result, called_at, call_id')
-    .eq('id', attemptId)
-    .eq('company_id', companyId)
-    .maybeSingle();
-
-  if (attemptError || !attempt) {
-    throw new ServerAuthError('Không tìm thấy lịch gọi.', 404, 'RESOURCE_NOT_FOUND');
+  // A single bounded RPC validates tenant+attempt, reads only that phone and claims the attempt.
+  const { data: claimData, error: claimError } = await adminClient.rpc('claim_voice_attempt_phone', {
+    p_company_id: companyId,
+    p_attempt_id: attemptId,
+  });
+  const attempt = (Array.isArray(claimData) ? claimData[0] : claimData) as {
+    customer_id: string;
+    contact_cycle_id: string;
+    attempt_no: number;
+    raw_phone: string;
+  } | null;
+  if (claimError || !attempt?.raw_phone) {
+    throw new ServerAuthError('Lịch gọi không hợp lệ hoặc không có liên hệ.', 409, 'INTERNAL_ERROR');
   }
-
-  if (attempt.result !== 'PENDING') {
-    // Idempotent — đã được dispatch rồi (webhook race condition)
-    throw new ServerAuthError(
-      `Attempt ${attemptId} không còn PENDING (result=${attempt.result}).`,
-      409,
-      'INTERNAL_ERROR'
-    );
-  }
-
-
-  if (attempt.called_at || attempt.call_id) {
-    throw new ServerAuthError('Lịch gọi đã được xử lý.', 409, 'INTERNAL_ERROR');
-  }
-
-  // Claim before accessing the phone or invoking the provider. Only one worker wins.
-  const { data: claim } = await adminClient
-    .from('call_attempts')
-    .update({ called_at: new Date().toISOString() })
-    .eq('id', attemptId)
-    .eq('company_id', companyId)
-    .eq('result', 'PENDING')
-    .is('called_at', null)
-    .select('id')
-    .maybeSingle();
-  if (!claim) throw new ServerAuthError('Lịch gọi đang được xử lý.', 409, 'INTERNAL_ERROR');
-
   const customerId = attempt.customer_id;
-
-  // ── 2. Resolve raw phone (private schema, server memory only) ───────────
-  let rawPhone: string;
-  try {
-    const { data: phoneData, error: phoneError } = await adminClient.rpc(
-      'get_customer_private_contact',
-      {
-        p_company_id: companyId,
-        p_customer_id: customerId,
-      }
-    );
-
-    if (phoneError || !phoneData || phoneData.length === 0) {
-      // Fallback: direct private schema query
-      const { data: directData, error: directError } = await adminClient
-        .schema('private')
-        .from('customer_private_contacts')
-        .select('raw_phone')
-        .eq('company_id', companyId)
-        .eq('customer_id', customerId)
-        .maybeSingle();
-
-      if (directError || !directData?.raw_phone) {
-        throw new ServerAuthError(
-          'Không tìm thấy thông tin liên hệ khách hàng.',
-          404,
-          'RESOURCE_NOT_FOUND'
-        );
-      }
-      rawPhone = directData.raw_phone as string;
-    } else {
-      // RPC trả array
-      const row = Array.isArray(phoneData) ? phoneData[0] : phoneData;
-      rawPhone = (row as { raw_phone: string }).raw_phone;
-    }
-  } catch (err) {
-    await markAttemptResult(attemptId, companyId, 'FAILED');
-    if (err instanceof ServerAuthError) throw err;
-    // Không leak bất kỳ thông tin nào từ private schema
-    throw new ServerAuthError(
-      'Lỗi truy xuất thông tin liên hệ.',
-      500,
-      'INTERNAL_ERROR'
-    );
-  }
+  const rawPhone = attempt.raw_phone;
 
   // ── 3. INSERT calls (INITIATED) — durable record trước khi gọi ──────────
   const providerDbValue = (['MANUAL', 'STRINGEE', 'VIETTEL', 'TWILIO', 'VINFON'] as const).includes(
@@ -156,12 +88,25 @@ export async function dispatchAiOutboundCall(
     .single();
 
   if (callError || !callRecord) {
-    await adminClient.from('call_attempts').update({ called_at: null })
-      .eq('id', attemptId).eq('company_id', companyId).eq('result', 'PENDING');
+    await adminClient.rpc('release_voice_attempt_claim', {
+      p_company_id: companyId, p_attempt_id: attemptId,
+    });
     throw new ServerAuthError('Lỗi khởi tạo hồ sơ cuộc gọi.', 500, 'INTERNAL_ERROR');
   }
 
   const callId = callRecord.id as string;
+
+  const { error: bindError } = await adminClient.rpc('bind_voice_attempt_call', {
+    p_company_id: companyId, p_attempt_id: attemptId, p_call_id: callId,
+  });
+  if (bindError) {
+    await adminClient.from('calls').update({ status: 'FAILED' })
+      .eq('id', callId).eq('company_id', companyId);
+    await adminClient.rpc('release_voice_attempt_claim', {
+      p_company_id: companyId, p_attempt_id: attemptId,
+    });
+    throw new ServerAuthError('Lỗi liên kết lịch gọi.', 500, 'INTERNAL_ERROR');
+  }
 
   // ── 4. MANDATORY AUDIT — FAIL CLOSED ────────────────────────────────────
   const { error: auditError } = await adminClient.from('audit_logs').insert({
@@ -183,7 +128,8 @@ export async function dispatchAiOutboundCall(
 
   if (auditError) {
     // FAIL CLOSED — đánh dấu call FAILED và không gọi provider
-    await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callId);
+    await adminClient.from('calls').update({ status: 'FAILED' })
+      .eq('id', callId).eq('company_id', companyId);
     await markAttemptResult(attemptId, companyId, 'FAILED', callId);
     throw new ServerAuthError(
       'Lỗi ghi nhận kiểm toán bắt buộc. Cuộc gọi bị từ chối.',
@@ -205,7 +151,8 @@ export async function dispatchAiOutboundCall(
   } catch {
     // CRITICAL SECURITY: KHÔNG bao giờ log hoặc expose _err.message
     // (có thể chứa raw phone hoặc provider credentials)
-    await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callId);
+    await adminClient.from('calls').update({ status: 'FAILED' })
+      .eq('id', callId).eq('company_id', companyId);
 
     await markAttemptResult(attemptId, companyId, 'FAILED', callId);
 
@@ -223,15 +170,7 @@ export async function dispatchAiOutboundCall(
       provider_call_id: providerResult.providerCallId,
       status: 'RINGING',
     })
-    .eq('id', callId);
-
-  // ── 7. UPDATE call_attempts ───────────────────────────────────────────────
-  await adminClient
-    .from('call_attempts')
-    .update({
-      call_id: callId,
-    })
-    .eq('id', attemptId);
+    .eq('id', callId).eq('company_id', companyId);
 
   // ── 8. INSERT interactions (CALL_EVENT, non-textual system event) ─────────
   await adminClient.from('interactions').insert({

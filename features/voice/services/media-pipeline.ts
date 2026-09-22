@@ -4,6 +4,7 @@ import { ServerAuthError } from '../../../lib/server-auth/errors';
 import { StringeeProvider } from '../providers/stringee-provider';
 import type { VoiceWebhookPayload, WebhookProcessResult } from './webhook-processor';
 import { extractAndStoreCallIntake } from './intake-extractor';
+import { resolveCompanyVoiceIntegration } from './integration-resolver';
 
 type JobType = 'RECORDING_IMPORT' | 'TRANSCRIPTION' | 'INTAKE_EXTRACTION';
 
@@ -58,7 +59,8 @@ async function enqueueJob(
 /** Persist only an opaque provider recording id; provider URLs are deliberately discarded. */
 export async function processRecordingReady(
   payload: VoiceWebhookPayload,
-  companyId: string
+  companyId: string,
+  provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON' = 'STRINGEE'
 ): Promise<WebhookProcessResult> {
   const providerCallId = payload.provider_call_id || payload.call_id;
   if (!providerCallId) return { handled: false, message: 'provider call id missing' };
@@ -68,6 +70,7 @@ export async function processRecordingReady(
     .from('calls')
     .select('id, company_id, provider')
     .eq('company_id', companyId)
+    .eq('provider', provider)
     .eq('provider_call_id', providerCallId)
     .maybeSingle();
   if (!call) return { handled: false, message: 'call not found' };
@@ -79,11 +82,16 @@ export async function processRecordingReady(
 
 async function importRecording(job: VoiceMediaJob): Promise<void> {
   if (!job.source_ref) throw new Error('RECORDING_SOURCE_MISSING');
-  const apiKey = process.env.STRINGEE_API_KEY;
-  const apiSecret = process.env.STRINGEE_API_SECRET;
-  if (!apiKey || !apiSecret) throw new Error('PROVIDER_NOT_CONFIGURED');
-
-  const provider = new StringeeProvider(apiKey, apiSecret);
+  const integration = await resolveCompanyVoiceIntegration(job.company_id, 'STRINGEE');
+  if (!integration?.apiKey || !integration.apiSecret || !integration.fromNumber || !integration.answerUrl) {
+    throw new Error('PROVIDER_NOT_CONFIGURED');
+  }
+  const provider = new StringeeProvider(integration.apiKey, integration.apiSecret, fetch, {
+    fromNumber: integration.fromNumber,
+    answerUrl: integration.answerUrl,
+    aiAgentUserId: integration.aiAgentUserId,
+    saleAgentUserId: integration.saleAgentUserId,
+  });
   const recording = await provider.downloadRecording(job.source_ref);
   const extension = recording.contentType.includes('ogg') ? 'ogg'
     : recording.contentType.includes('wav') ? 'wav'
@@ -115,7 +123,8 @@ interface DiarizedTranscription {
 }
 
 async function transcribeRecording(job: VoiceMediaJob): Promise<void> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const integration = await resolveCompanyVoiceIntegration(job.company_id, 'OPENAI_REALTIME');
+  const apiKey = integration?.apiKey;
   if (!apiKey) throw new Error('TRANSCRIPTION_NOT_CONFIGURED');
   const adminClient = createAdminClient();
   const { data: call } = await adminClient
@@ -173,7 +182,9 @@ async function extractIntake(job: VoiceMediaJob): Promise<void> {
   const row = Array.isArray(data) ? data[0] : data;
   const transcript = (row as { transcript?: string } | null)?.transcript;
   if (!transcript) throw new Error('TRANSCRIPT_NOT_READY');
-  await extractAndStoreCallIntake(job.company_id, job.call_id, transcript);
+  const integration = await resolveCompanyVoiceIntegration(job.company_id, 'OPENAI_REALTIME');
+  if (!integration?.apiKey) throw new Error('INTAKE_EXTRACTION_NOT_CONFIGURED');
+  await extractAndStoreCallIntake(job.company_id, job.call_id, transcript, integration.apiKey);
 }
 
 async function markJobFailure(job: VoiceMediaJob, error: unknown): Promise<void> {
@@ -198,23 +209,12 @@ async function markJobFailure(job: VoiceMediaJob, error: unknown): Promise<void>
 /** Claim and process due jobs. Optimistic status update prevents duplicate workers. */
 export async function processDueVoiceMediaJobs(limit = 10): Promise<{ processed: number; failed: number }> {
   const adminClient = createAdminClient();
-  const staleBefore = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-  await adminClient.from('voice_media_jobs').update({ status: 'PENDING', locked_at: null })
-    .eq('status', 'PROCESSING').lt('locked_at', staleBefore);
-
-  const { data, error } = await adminClient.from('voice_media_jobs')
-    .select('id, company_id, call_id, job_type, source_ref, attempts, max_attempts')
-    .eq('status', 'PENDING').lte('next_run_at', new Date().toISOString())
-    .order('next_run_at', { ascending: true }).limit(limit);
+  const { data, error } = await adminClient.rpc('claim_voice_media_jobs', { p_limit: limit });
   if (error) throw new Error('VOICE_MEDIA_QUEUE_READ_FAILED');
 
   let processed = 0;
   let failed = 0;
   for (const row of (data || []) as VoiceMediaJob[]) {
-    const { data: claimed } = await adminClient.from('voice_media_jobs')
-      .update({ status: 'PROCESSING', locked_at: new Date().toISOString() })
-      .eq('id', row.id).eq('status', 'PENDING').select('id').maybeSingle();
-    if (!claimed) continue;
     try {
       if (row.job_type === 'RECORDING_IMPORT') await importRecording(row);
       else if (row.job_type === 'TRANSCRIPTION') await transcribeRecording(row);

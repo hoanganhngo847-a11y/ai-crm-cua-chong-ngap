@@ -12,6 +12,13 @@ interface StringeeResponse {
   data?: { call_id?: string; callId?: string };
 }
 
+export interface StringeeProviderConfig {
+  fromNumber: string;
+  answerUrl: string;
+  aiAgentUserId?: string;
+  saleAgentUserId?: string;
+}
+
 function base64Url(value: string): string {
   return Buffer.from(value).toString('base64url');
 }
@@ -39,14 +46,19 @@ export class StringeeProvider implements CallProvider {
   readonly name = 'STRINGEE' as const;
   private readonly fromNumber: string;
   private readonly answerUrl: string;
+  private readonly aiAgentUserId?: string;
+  private readonly saleAgentUserId?: string;
 
   constructor(
     private readonly apiKey: string,
     private readonly apiSecret: string,
-    private readonly fetchImpl: FetchLike = fetch
+    private readonly fetchImpl: FetchLike = fetch,
+    config?: StringeeProviderConfig
   ) {
-    this.fromNumber = process.env.STRINGEE_FROM_NUMBER || '';
-    this.answerUrl = process.env.STRINGEE_ANSWER_URL || '';
+    this.fromNumber = config?.fromNumber || process.env.STRINGEE_FROM_NUMBER || '';
+    this.answerUrl = config?.answerUrl || process.env.STRINGEE_ANSWER_URL || '';
+    this.aiAgentUserId = config?.aiAgentUserId || process.env.STRINGEE_AI_AGENT_USER_ID;
+    this.saleAgentUserId = config?.saleAgentUserId || process.env.STRINGEE_SALE_AGENT_USER_ID;
     if (!this.fromNumber || !this.answerUrl) throw new Error('Stringee configuration is incomplete.');
   }
 
@@ -58,8 +70,8 @@ export class StringeeProvider implements CallProvider {
   }): Promise<{ providerCallId: string; status: string }> {
     const correlationId = `crm_${randomUUID()}`;
     const agentUserId = params.fromStaffUserId === 'AI_WORKER'
-      ? process.env.STRINGEE_AI_AGENT_USER_ID
-      : process.env.STRINGEE_SALE_AGENT_USER_ID;
+      ? this.aiAgentUserId
+      : this.saleAgentUserId;
     if (!agentUserId) throw new Error('Stringee agent is not configured.');
     const answerUrl = new URL(this.answerUrl);
     answerUrl.searchParams.set('crmCorrelationId', correlationId);

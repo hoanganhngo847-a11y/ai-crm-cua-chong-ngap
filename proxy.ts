@@ -60,8 +60,7 @@ type CookieOptions = Parameters<NextResponse['cookies']['set']>[2];
     pathname.startsWith('/admin') ||
     pathname.startsWith('/crm') ||
     pathname.startsWith('/field') ||
-    pathname.startsWith('/account') ||
-    pathname.startsWith('/calls'); // voice/hotline module
+    pathname.startsWith('/account');
 
   // Public auth route patterns
   const isAuthRoute =

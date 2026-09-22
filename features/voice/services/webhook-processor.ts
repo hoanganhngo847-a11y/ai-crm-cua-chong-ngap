@@ -31,6 +31,8 @@ export interface VoiceWebhookPayload {
   endCallCause?: string;
   answerDuration?: number;
   callCreatedReason?: string;
+  project_id?: string | number;
+  projectId?: string | number;
   from?: { number?: string; type?: string };
   to?: { number?: string; type?: string };
   intake?: {
@@ -68,9 +70,11 @@ export interface WebhookProcessResult {
  */
 export function verifyWebhookSignature(
   headers: Headers,
-  rawBody: string
+  rawBody: string,
+  secretOverride?: string,
+  providerOverride?: string
 ): boolean {
-  const webhookSecret = process.env.VOICE_WEBHOOK_SECRET;
+  const webhookSecret = secretOverride || process.env.VOICE_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
     // Nếu chưa cấu hình secret → chỉ cho phép trong dev
@@ -83,7 +87,7 @@ export function verifyWebhookSignature(
   }
 
   // Provider-specific signature verification
-  const provider = process.env.VOICE_PROVIDER || 'MANUAL';
+  const provider = providerOverride || process.env.VOICE_PROVIDER || 'MANUAL';
 
   if (provider === 'STRINGEE') {
     const signature = headers.get('x-stringee-signature');
@@ -144,18 +148,17 @@ export function normalizeVoiceWebhookPayload(payload: VoiceWebhookPayload): Voic
 
 async function findCallByProviderCallId(
   providerCallId: string,
-  companyId?: string
+  companyId: string,
+  provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON'
 ): Promise<{ id: string; company_id: string; customer_id: string; status: string } | null> {
   const adminClient = createAdminClient();
 
-  let query = adminClient
+  const query = adminClient
     .from('calls')
     .select('id, company_id, customer_id, status')
+    .eq('company_id', companyId)
+    .eq('provider', provider)
     .eq('provider_call_id', providerCallId);
-
-  if (companyId) {
-    query = query.eq('company_id', companyId);
-  }
 
   const { data, error } = await query.maybeSingle();
 
@@ -197,7 +200,9 @@ export async function bindStringeeCallId(
  * recording_ref = path nội bộ (không phải URL provider).
  */
 export async function processCallStatusUpdate(
-  payload: VoiceWebhookPayload
+  payload: VoiceWebhookPayload,
+  companyId: string,
+  provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON'
 ): Promise<WebhookProcessResult> {
   const providerCallId = payload.provider_call_id;
 
@@ -205,12 +210,10 @@ export async function processCallStatusUpdate(
     return { handled: false, message: 'provider_call_id missing' };
   }
 
-  const call = await findCallByProviderCallId(providerCallId);
+  const call = await findCallByProviderCallId(providerCallId, companyId, provider);
 
   if (!call) {
-    // Không tìm thấy — có thể là webhook đến trước INSERT call (race condition)
-    // Trả 200 để tổng đài không retry vô hạn
-    console.warn(`[webhook-processor] Call not found for provider_call_id=${providerCallId}`);
+    // Do not log provider correlation IDs; acknowledge races without leaking metadata.
     return { handled: false, message: 'call not found — ignored' };
   }
 
@@ -240,12 +243,8 @@ export async function processCallStatusUpdate(
     updateFields.ended_at = new Date().toISOString();
   }
 
-  // recording_ref: chỉ ghi nếu đã được lưu nội bộ (không phải URL provider)
-  if (payload.recording_ref) {
-    updateFields.recording_ref = payload.recording_ref;
-  }
-
-  const { error: updateError } = await adminClient.from('calls').update(updateFields).eq('id', call.id);
+  const { error: updateError } = await adminClient.from('calls').update(updateFields)
+    .eq('id', call.id).eq('company_id', companyId).eq('provider', provider);
   if (updateError) throw new ServerAuthError('Lỗi cập nhật trạng thái cuộc gọi.', 500, 'INTERNAL_ERROR');
 
   // Nếu cuộc gọi kết thúc → cập nhật attempt result
@@ -286,7 +285,7 @@ export async function processCallStatusUpdate(
         event: 'call.recording_ready',
         provider_call_id: providerCallId,
         recording_id: payload.recording_id || providerCallId,
-      }, call.company_id);
+      }, call.company_id, provider);
     } catch {
       // Status delivery must remain idempotent; the provider may send recording_ready later.
     }
@@ -316,123 +315,47 @@ export async function processCallStatusUpdate(
  */
 export async function processInboundCall(
   payload: VoiceWebhookPayload,
-  companyId: string
+  companyId: string,
+  provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON' = 'STRINGEE'
 ): Promise<WebhookProcessResult> {
   const adminClient = createAdminClient();
 
   // Chống ghi trùng: kiểm tra provider_call_id đã tồn tại chưa
   if (payload.provider_call_id) {
-    const existing = await findCallByProviderCallId(payload.provider_call_id, companyId);
+    const existing = await findCallByProviderCallId(payload.provider_call_id, companyId, provider);
     if (existing) {
       return { handled: true, message: `inbound call already recorded: ${existing.id}` };
     }
   }
 
-  // Tìm customer theo phone (HMAC lookup qua identities hoặc private contacts)
-  let customerId: string | null = null;
-
   const normalizedPhone = payload.from_number
     ? normalizeVietnamPhoneToE164(payload.from_number)
     : null;
-
-  if (normalizedPhone) {
-    // Tìm qua private.customer_private_contacts
-    // SECURITY: KHÔNG log payload.from_number
-    try {
-      const { data: contacts } = await adminClient.rpc('find_customer_by_normalized_phone', {
-        p_company_id: companyId,
-        p_normalized_phone: normalizedPhone,
-      });
-      const contact = Array.isArray(contacts) ? contacts[0] : contacts;
-      if (contact) customerId = (contact as { customer_id: string }).customer_id;
-    } catch {
-      // Private schema không accessible — không panic, tạo customer ẩn danh
-    }
+  const identitySecret = process.env.PHONE_IDENTITY_HMAC_SECRET;
+  if (!normalizedPhone || !payload.from_number || !payload.provider_call_id || !identitySecret) {
+    return { handled: false, message: 'canonical inbound identity is unavailable' };
   }
-
-  // Nếu không tìm được → tạo customer mới (hotline anonymous)
-  if (!customerId) {
-    const { data: newCustomer, error: createError } = await adminClient
-      .from('customers')
-      .insert({
-        company_id: companyId,
-        name: 'Khách gọi Hotline',
-        source: 'HOTLINE',
-        stage: 'LEAD_NEW',
-      })
-      .select('id')
-      .single();
-
-    if (createError || !newCustomer) {
-      throw new ServerAuthError(
-        'Lỗi tạo hồ sơ khách hàng mới từ cuộc gọi Hotline.',
-        500,
-        'INTERNAL_ERROR'
-      );
+  const identityHash = createHmac('sha256', identitySecret)
+    .update(`${companyId}:${normalizedPhone}`).digest('hex');
+  const { data: customerData, error: customerError } = await adminClient.rpc(
+    'resolve_or_create_hotline_customer', {
+      p_company_id: companyId,
+      p_normalized_phone: normalizedPhone,
+      p_raw_phone: payload.from_number,
+      p_phone_identity_hash: identityHash,
     }
-
-    customerId = (newCustomer as { id: string }).id;
-
-    // Lưu private contact nếu có phone — fire-and-forget, không critical
-    if (normalizedPhone && payload.from_number) {
-      try {
-        await adminClient.rpc('upsert_customer_private_contact', {
-          p_company_id: companyId,
-          p_customer_id: customerId,
-          p_normalized_phone: normalizedPhone,
-          p_raw_phone: payload.from_number,
-        });
-      } catch {
-        // Fire-and-forget — không critical nếu lỗi
-      }
-    }
+  );
+  if (customerError || !customerData) {
+    throw new ServerAuthError('Lỗi định danh khách gọi Hotline.', 500, 'INTERNAL_ERROR');
   }
-
-  // INSERT calls (INBOUND, AI)
-  const configuredProvider = (process.env.VOICE_PROVIDER || 'MANUAL').toUpperCase();
-  const provider = (['STRINGEE', 'VIETTEL', 'TWILIO', 'VINFON'].includes(configuredProvider)
-    ? configuredProvider
-    : 'MANUAL') as
-    | 'MANUAL'
-    | 'STRINGEE'
-    | 'VIETTEL'
-    | 'TWILIO'
-    | 'VINFON';
-
-  const { data: callRecord, error: callError } = await adminClient
-    .from('calls')
-    .insert({
-      company_id: companyId,
-      customer_id: customerId,
-      direction: 'INBOUND',
-      agent_type: 'AI',
-      provider,
-      ...(payload.provider_call_id ? { provider_call_id: payload.provider_call_id } : {}),
-      started_at: new Date().toISOString(),
-      status: 'CONNECTED',
-      transcript_status: 'PENDING',
-    })
-    .select('id')
-    .single();
-
-  if (callError || !callRecord) {
-    throw new ServerAuthError('Lỗi lưu cuộc gọi Hotline inbound.', 500, 'INTERNAL_ERROR');
-  }
-
-  // INSERT interactions (HOTLINE, CALL_EVENT, NOT_REQUIRED, SYSTEM)
-  await adminClient.from('interactions').insert({
-    company_id: companyId,
-    customer_id: customerId,
-    conversation_id: null,
-    channel: 'HOTLINE',
-    type: 'CALL_EVENT',
-    direction: 'INBOUND',
-    sanitized_content: null,
-    sanitization_status: 'NOT_REQUIRED',
-    actor_type: 'SYSTEM',
-    actor_user_id: null,
-    external_ref: payload.provider_call_id || null,
+  const customerId = customerData as string;
+  const { error: callError } = await adminClient.rpc('create_inbound_voice_call', {
+    p_company_id: companyId,
+    p_customer_id: customerId,
+    p_provider: provider,
+    p_provider_call_id: payload.provider_call_id,
   });
+  if (callError) throw new ServerAuthError('Lỗi lưu cuộc gọi Hotline inbound.', 500, 'INTERNAL_ERROR');
 
   // KHÔNG tạo call_attempts — inbound không thuộc chu kỳ 3 lần
   return {
@@ -497,11 +420,12 @@ function cleanText(value: unknown, maxLength: number): string | null {
 /** Store a whitelisted AI intake result and create an unassigned survey request. */
 export async function processCallIntake(
   payload: VoiceWebhookPayload,
-  companyId: string
+  companyId: string,
+  provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON' = 'STRINGEE'
 ): Promise<WebhookProcessResult> {
   const providerCallId = payload.provider_call_id || payload.call_id;
   if (!providerCallId || !payload.intake) return { handled: false, message: 'intake data missing' };
-  const call = await findCallByProviderCallId(providerCallId, companyId);
+  const call = await findCallByProviderCallId(providerCallId, companyId, provider);
   if (!call) return { handled: false, message: 'call not found' };
 
   const intake = payload.intake;

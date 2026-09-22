@@ -32,9 +32,9 @@ function boundedInteger(value: unknown, min: number, max: number): number | null
 export async function extractAndStoreCallIntake(
   companyId: string,
   callId: string,
-  transcript: string
+  transcript: string,
+  apiKey: string
 ): Promise<void> {
-  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('INTAKE_EXTRACTION_NOT_CONFIGURED');
 
   const admin = createAdminClient();

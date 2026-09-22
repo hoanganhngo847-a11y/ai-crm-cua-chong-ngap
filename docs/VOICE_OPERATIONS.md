@@ -14,17 +14,40 @@ Tài liệu: [Stringee outbound](https://developer.stringee.com/docs/rest-api-re
 
 ## Cấu hình
 
-1. Apply lần lượt migration `20260921000001_voice_media_pipeline.sql` và `20260921000002_openai_realtime.sql`.
+1. Apply lần lượt migration `20260921000001_voice_media_pipeline.sql`, `20260921000002_openai_realtime.sql` và `20260922000001_voice_security_hardening.sql`.
 2. Chép nhóm biến Voice trong `.env.example` sang môi trường triển khai.
-3. Trên Stringee Dashboard, cấu hình Event URL và Answer URL thành `https://<domain>/api/webhooks/voice`, bật recording và dùng signing secret trùng `VOICE_WEBHOOK_SECRET`.
-4. Tạo Stringee user/SIP endpoint cho sale rồi cấu hình `STRINGEE_SALE_AGENT_USER_ID`.
-5. Tạo OpenAI Project webhook trỏ tới `https://<domain>/api/webhooks/openai-realtime`, đăng ký event `realtime.call.incoming`, rồi chép signing secret vào `OPENAI_WEBHOOK_SECRET`.
-6. Route leg AI từ Stringee qua SBC/SIP bridge tới `sip:<OPENAI_PROJECT_ID>@sip.api.openai.com;transport=tls`. Gán Stringee user đầu bridge vào `STRINGEE_AI_AGENT_USER_ID`. Stringee SCCO chỉ route Hotline tới internal user, nên bridge/SBC là thành phần bắt buộc; không dùng điện thoại sale làm AI endpoint.
-7. Chọn `OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE`; prompt mặc định đã hỏi tên, loại cửa, kích thước, mức ngập, số ô, địa chỉ và lịch khảo sát.
-8. Vercel Cron đã đặt lịch `*/5 * * * *`; request cần `Authorization: Bearer $CRON_SECRET`.
+3. Sinh hai routing token ngẫu nhiên tối thiểu 32 ký tự (một Stringee, một OpenAI). Chỉ lưu SHA-256 của token và tên biến môi trường trong `voice_provider_integrations`; secret thật không nằm trong DB.
+4. Trên Stringee Dashboard, cấu hình Event URL và Answer URL thành `https://<domain>/api/webhooks/voice/<STRINGEE_ROUTING_TOKEN>`, bật recording. `project_id` từ webhook phải khớp `provider_account_id` đã cấu hình.
+5. Tạo Stringee user/SIP endpoint cho sale và AI; cấu hình qua các biến env được integration row tham chiếu.
+6. Tạo OpenAI Project webhook trỏ tới `https://<domain>/api/webhooks/openai-realtime/<OPENAI_ROUTING_TOKEN>` và đăng ký event `realtime.call.incoming`.
+7. Route leg AI từ Stringee qua SBC/SIP bridge tới `sip:<OPENAI_PROJECT_ID>@sip.api.openai.com;transport=tls`.
+8. Chọn `OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE`; prompt mặc định đã hỏi tên, loại cửa, kích thước, mức ngập, số ô, địa chỉ và lịch khảo sát.
+9. Vercel Cron đã đặt lịch `*/5 * * * *`; request cần `Authorization: Bearer $CRON_SECRET`.
+
+Ví dụ bootstrap integration (thay UUID/account/token; các giá trị `*_env` là **tên biến môi trường**, không phải secret):
+
+```sql
+INSERT INTO public.voice_provider_integrations (
+  company_id, provider, provider_account_id, routing_key_hash,
+  webhook_secret_env, api_key_env, api_secret_env, from_number_env,
+  answer_url_env, ai_agent_user_env, sale_agent_user_env
+) VALUES (
+  '<company-uuid>', 'STRINGEE', '<stringee-project-id>',
+  encode(digest('<stringee-routing-token>', 'sha256'), 'hex'),
+  'VOICE_ACME_STRINGEE_WEBHOOK_SECRET', 'VOICE_ACME_STRINGEE_API_KEY',
+  'VOICE_ACME_STRINGEE_API_SECRET', 'VOICE_ACME_STRINGEE_FROM_NUMBER',
+  'VOICE_ACME_STRINGEE_ANSWER_URL', 'VOICE_ACME_STRINGEE_AI_AGENT_USER_ID',
+  'VOICE_ACME_STRINGEE_SALE_AGENT_USER_ID'
+), (
+  '<company-uuid>', 'OPENAI_REALTIME', '<openai-project-id>',
+  encode(digest('<openai-routing-token>', 'sha256'), 'hex'),
+  'VOICE_ACME_OPENAI_WEBHOOK_SECRET', 'VOICE_ACME_OPENAI_API_KEY',
+  NULL, NULL, NULL, NULL, NULL
+);
+```
 
 Luồng SIP: `PSTN -> Stringee Hotline -> STRINGEE_AI_AGENT_USER_ID/SBC -> OpenAI SIP -> webhook accept`.
-Webhook OpenAI được xác minh bằng SDK chính thức và chống xử lý trùng theo event id. SIP headers không được lưu.
+Webhook OpenAI được xác minh bằng SDK chính thức và chống xử lý trùng theo event id. Cả hai webhook đều derive tenant từ integration token + provider account/signature; endpoint không token trả 404. SIP headers không được lưu.
 
 ## Gọi thử
 
