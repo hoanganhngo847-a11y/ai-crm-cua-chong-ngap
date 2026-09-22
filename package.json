@@ -9,7 +9,9 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
-    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts"
+    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
+    "test:zalo": "tsx --conditions=react-server tests/zalo/quick_run_all.ts",
+    "test:zalo:inbox": "tsx --conditions=react-server tests/zalo/demo_webhook_and_reply.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
