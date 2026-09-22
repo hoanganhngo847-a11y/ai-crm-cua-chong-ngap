@@ -42,3 +42,31 @@ export interface ResponseSlaEvaluation {
   elapsedSeconds: number;
   deadlineAt: string;
 }
+
+export type ResponseSlaClaimDecision =
+  | ResponseSlaAiDecision
+  | 'RECLAIMED'
+  | 'ALREADY_CLAIMED'
+  | 'WRONG_COMPANY';
+
+export interface ResponseSlaClaimResult {
+  claimed: boolean;
+  decision: ResponseSlaClaimDecision;
+  windowId: string;
+  claimId: string | null;
+  conversationId: string;
+  customerId: string;
+  claimedAt: string | null;
+  claimExpiresAt: string | null;
+  deadlineAt: string;
+}
+
+export interface ResponseSlaDurableWindow extends ResponseSlaWindowSnapshot {
+  id: string;
+  companyId: string;
+  aiClaimedAt: string | null;
+  aiClaimId: string | null;
+  aiClaimExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

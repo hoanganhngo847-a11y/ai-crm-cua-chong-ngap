@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
-    "test:response-sla": "tsx --conditions=react-server tests/response-sla/evaluate-response-sla.test.ts"
+    "test:response-sla": "tsx --conditions=react-server tests/response-sla/evaluate-response-sla.test.ts",
+    "test:response-sla-db": "tsx --conditions=react-server tests/response-sla/response-sla-db.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
