@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useTransition } from 'react';
-import { clickToCallAction } from '../../../actions/sensitive';
+import { callCustomerViaVoiceAction } from '../../../actions/voice';
 import type { ClickToCallParams } from '../../../../shared/contracts/sensitive';
 
 interface Props {
@@ -46,14 +46,14 @@ export default function CallToCustomerButton({
       setCallState({ type: 'idle' });
 
       const params: ClickToCallParams = { customerId };
-      const result = await clickToCallAction(params);
+      const result = await callCustomerViaVoiceAction(params);
 
       if (result.success && result.data) {
         setCallState({ type: 'calling', callId: result.data.callId });
       } else {
         setCallState({
           type: 'error',
-          message: result.error || result.message || 'Không thể thực hiện cuộc gọi.',
+          message: result.error || 'Không thể thực hiện cuộc gọi.',
         });
       }
     });

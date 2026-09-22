@@ -9,6 +9,9 @@ import {
   cancelPendingAttemptsInCycle,
 } from '../../features/voice/services/call-attempt-scheduler';
 import { dispatchAiOutboundCall } from '../../features/voice/services/call-dispatcher';
+import { resolveVoiceCallProviderForCompany } from '../../features/voice/providers/provider-factory';
+import { executeClickToCall } from '../../lib/sensitive/click-to-call';
+import type { ClickToCallParams } from '../../shared/contracts/sensitive';
 import {
   getCallHistoryForCustomer,
   getCompanyCallHistory,
@@ -220,6 +223,27 @@ export async function searchCustomersForCallAction(
     return {
       success: false,
       error: error instanceof ServerAuthError ? error.message : 'Không thể tìm kiếm khách hàng.',
+    };
+  }
+}
+
+/** Production sale call adapter; keeps Foundation execution unchanged and injects tenant provider config. */
+export async function callCustomerViaVoiceAction(
+  params: ClickToCallParams
+): Promise<{ success: boolean; data?: { callId: string; status: string }; error?: string }> {
+  try {
+    const { companyId, client } = await resolveCompanyId();
+    const actor = await requireActiveMember(companyId, client);
+    if (actor.role === 'TECHNICIAN') {
+      return { success: false, error: 'Kỹ thuật viên không có quyền gọi khách.' };
+    }
+    const provider = await resolveVoiceCallProviderForCompany(companyId);
+    const result = await executeClickToCall(params, provider, client);
+    return { success: true, data: { callId: result.callId, status: result.status } };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof ServerAuthError ? err.message : 'Không thể thực hiện cuộc gọi.',
     };
   }
 }
