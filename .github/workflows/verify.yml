@@ -1,0 +1,42 @@
+name: Verify
+on:
+  pull_request:
+  push:
+    branches: [main, feature/facebook-website]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:omnichannel
+      - name: Start isolated local Supabase
+        run: npx --yes supabase@2.117.0 start
+      - name: Export local test credentials
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          const config = JSON.parse(execFileSync('npx', ['--yes', 'supabase@2.117.0', 'status', '-o', 'json'], { encoding: 'utf8' }));
+          for (const [target, source] of Object.entries({ NEXT_PUBLIC_SUPABASE_URL: 'API_URL', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'ANON_KEY', SUPABASE_SERVICE_ROLE_KEY: 'SERVICE_ROLE_KEY' })) {
+            if (!config[source]) throw new Error(`Missing local ${source}`);
+            appendFileSync(process.env.GITHUB_ENV, `${target}=${config[source]}\n`);
+          }
+          NODE
+      - run: npm run test:auth
+      - run: npm run test:security
+      - run: npm run test:omnichannel:db
+      - run: npm run build
+      - run: git diff --check

@@ -1,7 +1,11 @@
 import 'server-only';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { verifyActorForCompany } from '@/lib/server-auth/authorize';
+import { ServerAuthError } from '@/lib/server-auth/errors';
+import { binding } from './binding';
+export { binding } from './binding';
 import { dispatchMessage } from './transport';
 
 import {
@@ -25,17 +29,18 @@ export function env(key: string): string {
     return value.trim();
 }
 
-export function binding() {
-    const page = env('META_PAGE_ID');
-
-    if (!/^\d+$/.test(page)) {
-        throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
+async function authorizeResourceCompany(company: string, actorClient?: SupabaseClient) {
+    try {
+        return await verifyActorForCompany(company, {
+            allowedRoles: ['BOSS_ADMIN', 'SALE'],
+        }, actorClient);
+    } catch (error) {
+        // Same semantics as Foundation's private verifyActorWithTenantMasking.
+        if (error instanceof ServerAuthError && error.code === 'NOT_A_MEMBER') {
+            throw new ChannelError('NOT_FOUND', 404);
+        }
+        throw error;
     }
-
-    return {
-        company: uuid(env('OMNICHANNEL_COMPANY_ID')),
-        page,
-    };
 }
 
 export async function rpc(
@@ -105,7 +110,7 @@ export function sameOrigin(request: Request) {
     }
 }
 
-export async function authorizeConversation(id: string) {
+export async function authorizeConversation(id: string, actorClient?: SupabaseClient) {
     uuid(id);
 
     const client = createAdminClient();
@@ -126,12 +131,9 @@ export async function authorizeConversation(id: string) {
         throw new ChannelError('NOT_FOUND', 404);
     }
 
-    const actor = await verifyActorForCompany(
-        conversation.company_id,
-        { allowedRoles: ['BOSS_ADMIN', 'SALE'] },
-    );
+    const actor = await authorizeResourceCompany(conversation.company_id, actorClient);
 
-    const config = binding();
+    const config = binding(conversation.external_conversation_id.split(':')[0]);
 
     if (
         conversation.company_id !== config.company ||
@@ -145,8 +147,8 @@ export async function authorizeConversation(id: string) {
     return { client, conversation, actor, config };
 }
 
-export async function listConversations(before?: string | null) {
-    const config = binding();
+export async function listConversations(before?: string | null, page?: string | null) {
+    const config = binding(page);
 
     await verifyActorForCompany(config.company, {
         allowedRoles: ['BOSS_ADMIN', 'SALE'],
@@ -160,7 +162,7 @@ export async function listConversations(before?: string | null) {
         .eq('company_id', config.company)
         .eq('channel', 'FACEBOOK')
         .like('external_conversation_id', config.page + ':%')
-        .order('created_at', { ascending: false })
+        .order('last_message_at', { ascending: false })
         .order('id', { ascending: false })
         .limit(50);
 
@@ -168,7 +170,7 @@ export async function listConversations(before?: string | null) {
         const cursor = decodeCursor(before);
 
         query = query.or(
-            `created_at.lt.${cursor.time},and(created_at.eq.${cursor.time},id.lt.${cursor.id})`,
+            `last_message_at.lt.${cursor.time},and(last_message_at.eq.${cursor.time},id.lt.${cursor.id})`,
         );
     }
 
@@ -182,7 +184,10 @@ export async function listConversations(before?: string | null) {
         conversations: data,
         next_cursor:
             data.length === 50
-                ? encodeCursor(data[data.length - 1])
+                ? encodeCursor({
+                    created_at: data[data.length - 1].last_message_at,
+                    id: data[data.length - 1].id,
+                })
                 : null,
     };
 }
@@ -282,7 +287,7 @@ export async function sendMessage(
         throw new ChannelError('MESSAGING_WINDOW_CLOSED', 409);
     }
 
-    const token = env('META_PAGE_ACCESS_TOKEN');
+    const token = env(config.tokenEnv);
     const version = env('META_GRAPH_VERSION');
 
     if (!/^v\d+\.\d+$/.test(version)) {
@@ -332,7 +337,7 @@ export async function sendMessage(
     };
 }
 
-export async function campaignStats(id: string) {
+export async function campaignStats(id: string, actorClient?: SupabaseClient) {
     uuid(id);
 
     const client = createAdminClient();
@@ -351,9 +356,7 @@ export async function campaignStats(id: string) {
         throw new ChannelError('NOT_FOUND', 404);
     }
 
-    await verifyActorForCompany(campaign.company_id, {
-        allowedRoles: ['BOSS_ADMIN', 'SALE'],
-    });
+    await authorizeResourceCompany(campaign.company_id, actorClient);
 
     return rpc('han_care_stats', {
         p_company: campaign.company_id,

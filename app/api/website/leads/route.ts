@@ -49,15 +49,6 @@ export async function POST(request: Request) {
             .update(lead.phone)
             .digest('hex');
 
-        const allowed = await rpc('han_rate_limit', {
-            p_company: company,
-            p_key: key,
-        });
-
-        if (!allowed) {
-            throw new ChannelError('RATE_LIMITED', 429);
-        }
-
         if (
             process.env.NODE_ENV === 'production' ||
             process.env.TURNSTILE_SECRET_KEY
@@ -97,12 +88,22 @@ export async function POST(request: Request) {
             }
         }
 
+        // Business quotas must only be consumed by CAPTCHA-verified requests.
+        const allowed = await rpc('han_rate_limit', {
+            p_company: company,
+            p_key: key,
+        });
+
+        if (!allowed) {
+            throw new ChannelError('RATE_LIMITED', 429);
+        }
+
         const safe = sanitize(lead.need);
 
         await rpc('han_ingest', {
             p_company: company,
             p_channel: 'WEBSITE',
-            p_external: lead.requestId,
+            p_external: null,
             p_key: lead.requestId,
             p_name: sanitize(lead.name).content || 'Khách Website',
             p_phone: lead.phone,

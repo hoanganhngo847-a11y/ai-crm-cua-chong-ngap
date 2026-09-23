@@ -8,7 +8,7 @@ export async function GET(request: Request) {
         const before = new URL(request.url).searchParams.get('before');
 
         return Response.json(
-            await listConversations(before),
+            await listConversations(before, new URL(request.url).searchParams.get('page')),
             { headers: { 'Cache-Control': 'no-store' } },
         );
     } catch (error) {

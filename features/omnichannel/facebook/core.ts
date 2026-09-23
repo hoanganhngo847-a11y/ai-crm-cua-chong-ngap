@@ -81,35 +81,55 @@ export function extractPhone(content: string): string | null {
 
 export function sanitize(content: string): {
     content: string | null;
-    status: 'SUCCEEDED' | 'PENDING';
+    status: 'SUCCEEDED' | 'FAILED';
 } {
+    // Synchronous, bounded processing: never enqueue work without a consumer.
+    if (content.length > 10000) return { content: null, status: 'FAILED' };
     const normalized = content
         .normalize('NFKC')
         .replace(/[\u200B-\u200D\uFEFF]/g, '');
 
-    const words = normalized.toLocaleLowerCase('vi').match(/\p{L}+/gu) || [];
-
     const numberWords = new Set([
         'không', 'một', 'hai', 'ba', 'bốn', 'tư',
         'năm', 'sáu', 'bảy', 'tám', 'chín',
+        'khong', 'mot', 'bon', 'tu', 'nam', 'sau', 'bay', 'tam', 'chin',
         'zero', 'one', 'two', 'three', 'four',
         'five', 'six', 'seven', 'eight', 'nine',
     ]);
 
-    const suspicious =
-        words.filter((word) => numberWords.has(word)).length >= 3 ||
-        /(?:sđt|sdt|điện thoại|phone|zalo|liên hệ)\s*[:=]/i.test(normalized);
+    const atom = `(?:${[...numberWords].join('|')}|[0-9])`;
+    const spokenPhone = new RegExp(
+        `(?<![\\p{L}\\p{N}])${atom}(?:[\\s,;.()\\-]+${atom}){2,}(?![\\p{L}\\p{N}])`,
+        'giu',
+    );
+    const safe = normalized
+        .replace(/https?:\/\/\S+/gi, '[liên kết đã ẩn]')
+        .replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu, '[email đã ẩn]')
+        .replace(spokenPhone, '[số liên hệ đã ẩn]')
+        .replace(/(?:\+|00)?[0-9](?:[\s()./_,:-]*[0-9]){6,}/g, (match) => {
+            // Preserve a recognizable calendar date (optionally followed by time).
+            const date = match.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/);
+            if (date) {
+                const [, day, month, year, hour = '0', minute = '0'] = date;
+                const parsed = new Date(Date.UTC(+year, +month - 1, +day));
+                if (+year >= 1900 && +year <= 2100 && parsed.getUTCMonth() === +month - 1 &&
+                    parsed.getUTCDate() === +day && +hour < 24 && +minute < 60) return match;
+            }
+            return '[số liên hệ đã ẩn]';
+        })
+        // Explicit contact fields can contain obfuscation; redact the whole field.
+        .replace(/(?:sđt|sdt|điện thoại|phone|zalo|liên hệ)\s*[:=][^\r\n]*/gi, '[liên hệ đã ẩn]');
 
-    if (suspicious) {
-        return { content: null, status: 'PENDING' };
+    const remainingWords = safe.toLocaleLowerCase('vi').match(/\p{L}+/gu) || [];
+    if (
+        remainingWords.filter((word) => numberWords.has(word)).length >= 3 ||
+        /[^\x00-\x7F]/.test(safe.replace(/[^\p{N}]/gu, ''))
+    ) {
+        // Ambiguous obfuscation fails closed, with no raw fallback or stuck job.
+        return { content: null, status: 'FAILED' };
     }
 
-    return {
-        content: normalized
-            .replace(/\p{N}/gu, '•')
-            .replace(/https?:\/\/\S+/gi, '[liên kết đã ẩn]'),
-        status: 'SUCCEEDED',
-    };
+    return { content: safe, status: 'SUCCEEDED' };
 }
 
 export function secureEqual(a: string, b: string): boolean {

@@ -9,7 +9,9 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
-    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts"
+    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
+    "test:omnichannel": "tsx --conditions=react-server --test tests/omnichannel/runtime.test.ts",
+    "test:omnichannel:db": "tsx tests/omnichannel/database.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
