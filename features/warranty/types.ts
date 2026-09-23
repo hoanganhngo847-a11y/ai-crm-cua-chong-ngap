@@ -4,7 +4,9 @@ export type WarrantyTicketStatus =
     | 'IN_PROGRESS'
     | 'RESOLVED'
     | 'CLOSED'
-    | 'REOPENED';
+    | 'REOPENED'
+    | 'CANCELLED'
+    | 'FAILED';
 
 export interface WarrantyTicketDTO {
     id: string;
@@ -27,7 +29,7 @@ export interface CreateWarrantyTicketInput {
     orderId: string;
     installationId?: string | null;
     issue: string;
-    notes?: string;
+    notes?: string | null;
 }
 
 export interface AssignWarrantyTicketInput {

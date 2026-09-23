@@ -19,7 +19,9 @@ import type { SettableProductionStatus } from '../../features/production/types';
 /**
  * In-Memory Mock Supabase Client Builder
  * Hỗ trợ mô phỏng chính xác các thao tác DB của Supabase Query Builder:
- * from(), select(), insert(), update(), eq(), single(), maybeSingle()
+ * from(), select(), insert(), update(), delete(), eq(), single(), maybeSingle()
+ * Hỗ trợ mock Supabase Storage: storage.from(bucket).upload(), list(), exists()
+ * Hỗ trợ mock Postgres RPC Transaction: rpc(fnName, args) cho tính nguyên tử (Atomicity - P0)
  * Hỗ trợ simulate lỗi để kiểm tra Atomicity & Rollback (P0).
  */
 function createMockClient(
@@ -32,9 +34,13 @@ function createMockClient(
         audit_logs?: any[];
         appointments?: any[];
         company_members?: any[];
+        storageFiles?: { [bucket: string]: string[] };
     },
     options?: {
         failTables?: { [table: string]: 'insert' | 'update' | 'delete' | 'all' };
+        failStorage?: { [bucket: string]: 'upload' | 'list' };
+        failRpc?: string;
+        disableRpc?: boolean;
     }
 ) {
     const db: Record<string, any[]> = {
@@ -50,6 +56,10 @@ function createMockClient(
 
     const updateCalls: Array<{ table: string; payload: any; filters: Record<string, any> }> = [];
     const insertCalls: Array<{ table: string; payload: any }> = [];
+
+    const storageFiles: Record<string, Set<string>> = {
+        'installation-docs': new Set(initialData.storageFiles?.['installation-docs'] || []),
+    };
 
     function queryBuilder(table: string) {
         let filters: Record<string, any> = {};
@@ -71,7 +81,7 @@ function createMockClient(
             },
             insert(payload: any) {
                 insertPayload = payload;
-                if (!options?.failTables?.[table] || options.failTables[table] !== 'insert' && options.failTables[table] !== 'all') {
+                if (!options?.failTables?.[table] || (options.failTables[table] !== 'insert' && options.failTables[table] !== 'all')) {
                     const row = {
                         id: payload.id || `mock-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
                         created_at: new Date().toISOString(),
@@ -141,7 +151,6 @@ function createMockClient(
             },
         };
 
-        // If insert, update, or delete returns promise directly (not calling .single() or .maybeSingle())
         builder.then = function (resolve: any, _reject: any) {
             if (isDelete) {
                 if (options?.failTables?.[table] === 'delete' || options?.failTables?.[table] === 'all') {
@@ -180,12 +189,130 @@ function createMockClient(
         return builder;
     }
 
-    return {
+    const storage = {
+        from: (bucket: string) => {
+            if (!storageFiles[bucket]) storageFiles[bucket] = new Set();
+            return {
+                upload: async (path: string, _file: any, _opts?: any) => {
+                    if (options?.failStorage?.[bucket] === 'upload') {
+                        return { data: null, error: { message: `Simulated storage upload error on ${bucket}` } };
+                    }
+                    storageFiles[bucket].add(path);
+                    return { data: { path }, error: null };
+                },
+                list: async (folder: string, listOptions?: { search?: string }) => {
+                    if (options?.failStorage?.[bucket] === 'list') {
+                        return { data: null, error: { message: `Simulated storage list error on ${bucket}` } };
+                    }
+                    const files = Array.from(storageFiles[bucket]);
+                    const search = listOptions?.search;
+                    const matched = files
+                        .filter((f) => f.startsWith(folder ? `${folder}/` : ''))
+                        .map((f) => {
+                            const name = f.split('/').pop() || f;
+                            return { name, id: name };
+                        })
+                        .filter((item) => !search || item.name.includes(search));
+                    return { data: matched, error: null };
+                },
+                exists: async (path: string) => {
+                    return { data: storageFiles[bucket].has(path), error: null };
+                },
+            };
+        },
+    };
+
+    const client: any = {
         from: (table: string) => queryBuilder(table),
+        storage,
         _db: db,
+        _storageFiles: storageFiles,
         _updateCalls: updateCalls,
         _insertCalls: insertCalls,
     };
+
+    if (!options?.disableRpc) {
+        client.rpc = async (fnName: string, args: any) => {
+            if (fnName === 'complete_installation_atomic') {
+                if (options?.failTables?.audit_logs || options?.failRpc === 'complete_installation_atomic') {
+                    return {
+                        data: null,
+                        error: { message: 'Transaction rolled back in complete_installation_atomic (audit_logs error)' },
+                    };
+                }
+                if (options?.failTables?.orders) {
+                    return {
+                        data: null,
+                        error: { message: 'Transaction rolled back in complete_installation_atomic (orders error)' },
+                    };
+                }
+                const inst = db.installations.find((i) => i.company_id === args.p_company_id && i.id === args.p_installation_id);
+                if (!inst) return { data: null, error: { message: 'RESOURCE_NOT_FOUND: Không tìm thấy thông tin lắp đặt.' } };
+                if (inst.status !== 'HANDOVER_PENDING' && inst.status !== 'COMPLETED') {
+                    return { data: null, error: { message: `INVALID_STATE_TRANSITION: Chỉ cho phép nghiệm thu ở HANDOVER_PENDING.` } };
+                }
+                const ord = db.orders.find((o) => o.company_id === args.p_company_id && o.id === inst.order_id);
+                if (!ord) return { data: null, error: { message: 'RESOURCE_NOT_FOUND: Không tìm thấy thông tin đơn hàng.' } };
+
+                inst.status = 'COMPLETED';
+                inst.completed_at = args.p_completed_at || new Date().toISOString();
+                ord.order_status = 'COMPLETED';
+                db.audit_logs.push({
+                    id: `audit-${Date.now()}`,
+                    company_id: args.p_company_id,
+                    user_id: args.p_actor_id,
+                    action: 'COMPLETE_INSTALLATION_AND_HANDOVER',
+                    resource_type: 'installations',
+                    resource_id: args.p_installation_id,
+                    result: 'SUCCESS',
+                    metadata: { to_status: 'COMPLETED' },
+                });
+                return { data: { success: true, installation_id: args.p_installation_id, order_id: inst.order_id }, error: null };
+            }
+
+            if (fnName === 'record_quality_check_atomic') {
+                if (options?.failTables?.audit_logs || options?.failRpc === 'record_quality_check_atomic') {
+                    return {
+                        data: null,
+                        error: { message: 'Transaction rolled back in record_quality_check_atomic (audit_logs error)' },
+                    };
+                }
+                if (options?.failTables?.orders) {
+                    return {
+                        data: null,
+                        error: { message: 'Transaction rolled back in record_quality_check_atomic (orders error)' },
+                    };
+                }
+                const prod = db.production_orders.find((p) => p.company_id === args.p_company_id && p.id === args.p_production_order_id);
+                if (!prod) return { data: null, error: { message: 'RESOURCE_NOT_FOUND: Không tìm thấy lệnh sản xuất.' } };
+                if (prod.status !== 'QC_IN_PROGRESS') {
+                    return { data: null, error: { message: `INVALID_STATE_TRANSITION: Lệnh xưởng phải ở trạng thái QC_IN_PROGRESS.` } };
+                }
+                const nextStatus = args.p_qc_status === 'PASSED' ? 'READY_FOR_DISPATCH' : 'QC_FAILED';
+                prod.status = nextStatus;
+                prod.qc_status = args.p_qc_status;
+                if (args.p_qc_status === 'PASSED') {
+                    const ord = db.orders.find((o) => o.company_id === args.p_company_id && o.id === prod.order_id);
+                    if (ord) ord.order_status = 'READY_FOR_INSTALL';
+                }
+                db.audit_logs.push({
+                    id: `audit-${Date.now()}`,
+                    company_id: args.p_company_id,
+                    user_id: args.p_inspector_id,
+                    action: 'RECORD_QUALITY_CHECK',
+                    resource_type: 'production_orders',
+                    resource_id: args.p_production_order_id,
+                    result: 'SUCCESS',
+                    metadata: { to_status: nextStatus },
+                });
+                return { data: { success: true, status: nextStatus }, error: null };
+            }
+
+            return { data: null, error: { message: `Unknown RPC function: ${fnName}` } };
+        };
+    }
+
+    return client;
 }
 
 async function runTests() {
@@ -201,12 +328,14 @@ async function runTests() {
         scheduleInstallation,
         updateInstallationStatus,
         isValidInstallationStorageRef,
+        isValidCanonicalInstallationStorageRef,
     } = await import('../../features/installation/installation-service');
     const {
         assignWarrantyTicket,
         createWarrantyTicket,
         reopenWarrantyTicket,
         updateWarrantyStatus,
+        VALID_WARRANTY_TRANSITIONS,
     } = await import('../../features/warranty/warranty-service');
 
     console.log('================================================================');
@@ -222,19 +351,23 @@ async function runTests() {
     const TECH_USER_2 = 'tech-user-002';
     const BOSS_USER = 'boss-admin-001';
 
+    // Canonical test paths
+    const CANONICAL_PHOTO = `${COMPANY_ID}/installations/${INSTALLATION_ID}/photo_01.jpg`;
+    const CANONICAL_HANDOVER = `${COMPANY_ID}/installations/${INSTALLATION_ID}/handover_01.pdf`;
+
     // =========================================================================
     // TEST 1: Chặn TECHNICIAN sửa/hoàn tất installation khi không phải assignee (P0)
     // =========================================================================
     console.log('▶ TEST 1: Chặn TECHNICIAN sửa/hoàn tất installation khi không phải assignee');
     {
-        // 1a: TECHNICIAN không được phân công cố gắng cập nhật trạng thái lắp đặt -> 403 AuthError
         const mockUnauthorizedTech = createMockClient({
             appointments: [
                 {
                     id: APPOINTMENT_ID,
                     company_id: COMPANY_ID,
-                    assignee_id: TECH_USER_1, // Phân công cho TECH_USER_1
+                    assignee_id: TECH_USER_1,
                     status: 'ASSIGNED',
+                    type: 'INSTALLATION',
                 },
             ],
             installations: [
@@ -268,7 +401,6 @@ async function runTests() {
             'Phải chặn Kỹ thuật viên không được phân công cập nhật tiến độ'
         );
 
-        // 1b: TECHNICIAN không được phân công cố gắng nghiệm thu hoàn tất -> 403 AuthError
         await assert.rejects(
             async () => {
                 await completeInstallationAndHandover(
@@ -287,14 +419,14 @@ async function runTests() {
             'Phải chặn Kỹ thuật viên không được phân công nghiệm thu'
         );
 
-        // 1c: TECHNICIAN đúng assignee nhưng lịch hẹn đã CANCELLED -> 403 AuthError
         const mockCancelledAppt = createMockClient({
             appointments: [
                 {
                     id: APPOINTMENT_ID,
                     company_id: COMPANY_ID,
                     assignee_id: TECH_USER_1,
-                    status: 'CANCELLED', // Lịch hẹn đã hủy!
+                    status: 'CANCELLED',
+                    type: 'INSTALLATION',
                 },
             ],
             installations: [
@@ -328,7 +460,6 @@ async function runTests() {
             'Phải chặn khi lịch hẹn liên kết không ở trạng thái hợp lệ'
         );
 
-        // 1d: TECHNICIAN đúng assignee và lịch hẹn IN_PROGRESS -> Cập nhật thành công
         const mockValidTech = createMockClient({
             appointments: [
                 {
@@ -336,6 +467,7 @@ async function runTests() {
                     company_id: COMPANY_ID,
                     assignee_id: TECH_USER_1,
                     status: 'IN_PROGRESS',
+                    type: 'INSTALLATION',
                 },
             ],
             installations: [
@@ -383,7 +515,6 @@ async function runTests() {
             ],
         });
 
-        // 2a: Chặn trực tiếp cập nhật lên 'COMPLETED' qua updateInstallationStatus
         await assert.rejects(
             async () => {
                 await updateInstallationStatus(
@@ -403,7 +534,6 @@ async function runTests() {
             'Phải chặn tuyệt đối cửa sau COMPLETED qua hàm cập nhật thông thường'
         );
 
-        // 2b: Chặn chuyển đổi trạng thái vi phạm State Machine (SCHEDULED -> HANDOVER_PENDING)
         await assert.rejects(
             async () => {
                 await updateInstallationStatus(
@@ -423,7 +553,6 @@ async function runTests() {
             'Phải chặn nhảy cóc trạng thái trái phép'
         );
 
-        // 2c: Chuyển đổi hợp lệ SCHEDULED -> IN_TRANSIT -> INSTALLING -> TESTING -> HANDOVER_PENDING
         await updateInstallationStatus(COMPANY_ID, INSTALLATION_ID, 'IN_TRANSIT', mockClient);
         assert.strictEqual(mockClient._db.installations[0].status, 'IN_TRANSIT');
 
@@ -440,14 +569,12 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST A (P0 MỚI): Khóa State Machine nghiệm thu lắp đặt (installation)
-    // Chỉ cho phép completeInstallationAndHandover khi installRecord.status === 'HANDOVER_PENDING'
+    // TEST A (P0): Khóa State Machine nghiệm thu lắp đặt (chỉ cho phép ở HANDOVER_PENDING)
     // =========================================================================
     console.log('▶ TEST A (P0): Khóa State Machine nghiệm thu lắp đặt (chỉ cho phép ở HANDOVER_PENDING)');
     {
-        // Aa: Chặn khi installation đang ở INSTALLING
         const mockInstalling = createMockClient({
-            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS' }],
+            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', type: 'INSTALLATION' }],
             orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
             installations: [
                 {
@@ -455,11 +582,14 @@ async function runTests() {
                     company_id: COMPANY_ID,
                     order_id: ORDER_ID,
                     appointment_id: APPOINTMENT_ID,
-                    status: 'INSTALLING', // Chưa đến HANDOVER_PENDING
-                    photos: ['installation-docs/photo_01.jpg'],
-                    handover_ref: 'installation-docs/handover.pdf',
+                    status: 'INSTALLING',
+                    photos: [CANONICAL_PHOTO],
+                    handover_ref: CANONICAL_HANDOVER,
                 },
             ],
+            storageFiles: {
+                'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+            },
         });
 
         await assert.rejects(
@@ -481,9 +611,8 @@ async function runTests() {
             'Phải chặn nghiệm thu khi đơn lắp đặt chưa ở HANDOVER_PENDING'
         );
 
-        // Ab: Chặn khi appointment liên kết không phải IN_PROGRESS hoặc ACCEPTED
         const mockInvalidAppt = createMockClient({
-            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'SCHEDULED' }], // Sai trạng thái
+            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'SCHEDULED', type: 'INSTALLATION' }],
             orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
             installations: [
                 {
@@ -492,10 +621,13 @@ async function runTests() {
                     order_id: ORDER_ID,
                     appointment_id: APPOINTMENT_ID,
                     status: 'HANDOVER_PENDING',
-                    photos: ['installation-docs/photo_01.jpg'],
-                    handover_ref: 'installation-docs/handover.pdf',
+                    photos: [CANONICAL_PHOTO],
+                    handover_ref: CANONICAL_HANDOVER,
                 },
             ],
+            storageFiles: {
+                'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+            },
         });
 
         await assert.rejects(
@@ -517,10 +649,9 @@ async function runTests() {
             'Phải chặn nghiệm thu khi lịch hẹn liên kết chưa ở IN_PROGRESS/ACCEPTED'
         );
 
-        // Ac: Chặn khi đơn hàng liên kết không ở READY_FOR_INSTALL hoặc INSTALLING
         const mockInvalidOrder = createMockClient({
-            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS' }],
-            orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'IN_PRODUCTION' }], // Sai trạng thái
+            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', type: 'INSTALLATION' }],
+            orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'IN_PRODUCTION' }],
             installations: [
                 {
                     id: INSTALLATION_ID,
@@ -528,10 +659,13 @@ async function runTests() {
                     order_id: ORDER_ID,
                     appointment_id: APPOINTMENT_ID,
                     status: 'HANDOVER_PENDING',
-                    photos: ['installation-docs/photo_01.jpg'],
-                    handover_ref: 'installation-docs/handover.pdf',
+                    photos: [CANONICAL_PHOTO],
+                    handover_ref: CANONICAL_HANDOVER,
                 },
             ],
+            storageFiles: {
+                'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+            },
         });
 
         await assert.rejects(
@@ -557,12 +691,12 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST B (P0 MỚI): Khắc phục Storage Evidence do Browser tự khai & Kiểm tra Canonical Evidence
+    // TEST B (P0): Khóa Toàn diện Storage Evidence Phía Server (Canonical & Bucket Verification)
     // =========================================================================
     console.log('▶ TEST B (P0): Khắc phục Storage Evidence do Browser tự khai (attachInstallationEvidence & canonical DB check)');
     {
         const mockClient = createMockClient({
-            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', assignee_id: TECH_USER_1 }],
+            appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', assignee_id: TECH_USER_1, type: 'INSTALLATION' }],
             orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
             installations: [
                 {
@@ -582,7 +716,29 @@ async function runTests() {
         assert.strictEqual(isValidInstallationStorageRef('https://evil.com/fake.jpg'), false, 'URL bên ngoài không đáng tin cậy phải bị chặn');
         assert.strictEqual(isValidInstallationStorageRef('malicious_executable.exe'), false, 'Chuỗi ngẫu nhiên phải bị chặn');
 
-        // Ba: Chặn attachInstallationEvidence khi fileKey là link rác hoặc domain không tin cậy
+        // B0.1: Kiểm tra hàm thẩm định canonical path chuẩn theo công ty và mã lắp đặt
+        assert.strictEqual(
+            isValidCanonicalInstallationStorageRef(COMPANY_ID, INSTALLATION_ID, CANONICAL_PHOTO),
+            true,
+            'Canonical path theo công ty và mã lắp đặt phải hợp lệ'
+        );
+        assert.strictEqual(
+            isValidCanonicalInstallationStorageRef(COMPANY_ID, INSTALLATION_ID, 'other-company/installations/' + INSTALLATION_ID + '/photo.jpg'),
+            false,
+            'Sai công ty phải bị chặn'
+        );
+        assert.strictEqual(
+            isValidCanonicalInstallationStorageRef(COMPANY_ID, INSTALLATION_ID, COMPANY_ID + '/installations/other-inst/photo.jpg'),
+            false,
+            'Sai mã lắp đặt phải bị chặn'
+        );
+        assert.strictEqual(
+            isValidCanonicalInstallationStorageRef(COMPANY_ID, INSTALLATION_ID, 'installation-docs/fake.jpg'),
+            false,
+            'FileKey tự chế không thuộc canonical path phải bị chặn'
+        );
+
+        // Ba: Chặn attachInstallationEvidence khi fileKey là file tự chế hoặc link ngoài
         await assert.rejects(
             async () => {
                 await attachInstallationEvidence(
@@ -599,7 +755,48 @@ async function runTests() {
                 assert.ok(err.message.includes('INVALID_STORAGE_REF'), `Lỗi: ${err.message}`);
                 return true;
             },
-            'Phải chặn đính kèm tài liệu với fileKey không hợp lệ'
+            'Phải chặn đính kèm tài liệu với fileKey không thuộc canonical structure'
+        );
+
+        // Ba2: Chặn attachInstallationEvidence khi fileKey tự chế kiểu installation-docs/fake.jpg
+        await assert.rejects(
+            async () => {
+                await attachInstallationEvidence(
+                    COMPANY_ID,
+                    {
+                        installationId: INSTALLATION_ID,
+                        fileKey: 'installation-docs/fake.jpg',
+                        type: 'photo',
+                    },
+                    mockClient
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('INVALID_STORAGE_REF'));
+                return true;
+            },
+            'Phải chặn tuyệt đối fileKey tự chế installation-docs/fake.jpg'
+        );
+
+        // Ba3: Chặn attachInstallationEvidence khi fileKey có canonical path nhưng CHƯA TỒN TẠI trong Storage
+        await assert.rejects(
+            async () => {
+                await attachInstallationEvidence(
+                    COMPANY_ID,
+                    {
+                        installationId: INSTALLATION_ID,
+                        fileKey: CANONICAL_PHOTO,
+                        type: 'photo',
+                    },
+                    mockClient,
+                    { userId: TECH_USER_1, role: 'TECHNICIAN' }
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('STORAGE_OBJECT_NOT_FOUND'), `Lỗi: ${err.message}`);
+                return true;
+            },
+            'Phải chặn khi file chưa được upload thực sự lên Storage bucket'
         );
 
         // Bb: Chặn completeInstallationAndHandover khi DB chưa có photos hoặc handover_ref (Fail-closed)
@@ -612,21 +809,19 @@ async function runTests() {
                 );
             },
             (err: Error) => {
-                assert.ok(
-                    err.message.includes('MISSING_EVIDENCE'),
-                    `Lỗi: ${err.message}`
-                );
+                assert.ok(err.message.includes('MISSING_EVIDENCE'), `Lỗi: ${err.message}`);
                 return true;
             },
             'Phải chặn nghiệm thu nếu DB chưa có đầy đủ bằng chứng'
         );
 
-        // Bc: Đính kèm ảnh hiện trường hợp lệ qua attachInstallationEvidence
+        // Bc: Upload tệp hợp lệ lên mock Storage rồi đính kèm ảnh
+        await mockClient.storage.from('installation-docs').upload(CANONICAL_PHOTO, Buffer.from('mock photo data'));
         await attachInstallationEvidence(
             COMPANY_ID,
             {
                 installationId: INSTALLATION_ID,
-                fileKey: 'installation-docs/field_proof_01.jpg',
+                fileKey: CANONICAL_PHOTO,
                 type: 'photo',
             },
             mockClient,
@@ -649,19 +844,20 @@ async function runTests() {
             'Phải chặn khi mới chỉ có photos mà chưa có handover_ref'
         );
 
-        // Bd: Đính kèm biên bản bàn giao hợp lệ qua attachInstallationEvidence
+        // Bd: Upload tệp biên bản bàn giao lên mock Storage rồi đính kèm
+        await mockClient.storage.from('installation-docs').upload(CANONICAL_HANDOVER, Buffer.from('mock pdf data'));
         await attachInstallationEvidence(
             COMPANY_ID,
             {
                 installationId: INSTALLATION_ID,
-                fileKey: 'installation-docs/handover_signed_order101.pdf',
+                fileKey: CANONICAL_HANDOVER,
                 type: 'handover',
             },
             mockClient,
             { userId: TECH_USER_1, role: 'TECHNICIAN' }
         );
 
-        // Be: Bây giờ đã đủ evidence từ DB -> Nghiệm thu thành công!
+        // Be: Bây giờ đã đủ evidence canonical và tồn tại trong bucket -> Nghiệm thu thành công!
         await completeInstallationAndHandover(
             COMPANY_ID,
             { installationId: INSTALLATION_ID },
@@ -675,7 +871,7 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST C (P0 MỚI): Chặn updateProductionProgress nhảy cóc sang READY_FOR_DISPATCH hoặc QC_PASSED
+    // TEST C (P0): Chặn updateProductionProgress nhảy cóc sang READY_FOR_DISPATCH hoặc QC_PASSED
     // =========================================================================
     console.log('▶ TEST C (P0): Chặn updateProductionProgress nhảy cóc sang READY_FOR_DISPATCH / QC_PASSED');
     {
@@ -694,7 +890,6 @@ async function runTests() {
             audit_logs: [],
         });
 
-        // Ca: Thử set 'QC_PASSED' qua generic updateProductionProgress -> Chặn
         await assert.rejects(
             async () => {
                 await updateProductionProgress(
@@ -720,7 +915,6 @@ async function runTests() {
             'Phải chặn generic update set QC_PASSED'
         );
 
-        // Cb: Thử set 'READY_FOR_DISPATCH' qua generic updateProductionProgress -> Chặn
         await assert.rejects(
             async () => {
                 await updateProductionProgress(
@@ -746,7 +940,6 @@ async function runTests() {
             'Phải chặn generic update set READY_FOR_DISPATCH'
         );
 
-        // Cc: Thử set 'QC_FAILED' qua generic updateProductionProgress -> Chặn
         await assert.rejects(
             async () => {
                 await updateProductionProgress(
@@ -772,7 +965,6 @@ async function runTests() {
             'Phải chặn generic update set QC_FAILED'
         );
 
-        // Cd: Chuyển đổi hợp lệ: IN_PRODUCTION -> QC_IN_PROGRESS -> Thành công
         await updateProductionProgress(
             COMPANY_ID,
             {
@@ -790,7 +982,7 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST D (P0 MỚI): Chặn recordQualityCheck khi lệnh xưởng chưa ở QC_IN_PROGRESS
+    // TEST D (P0): Chặn recordQualityCheck khi lệnh xưởng chưa ở QC_IN_PROGRESS
     // =========================================================================
     console.log('▶ TEST D (P0): Chặn recordQualityCheck khi lệnh xưởng chưa ở QC_IN_PROGRESS');
     {
@@ -801,7 +993,7 @@ async function runTests() {
                     id: PROD_ID,
                     company_id: COMPANY_ID,
                     order_id: ORDER_ID,
-                    status: 'IN_PRODUCTION', // Chưa ở QC_IN_PROGRESS!
+                    status: 'IN_PRODUCTION',
                     qc_status: 'PENDING',
                 },
             ],
@@ -809,7 +1001,6 @@ async function runTests() {
             audit_logs: [],
         });
 
-        // Da: Thử duyệt QC khi lệnh chưa ở QC_IN_PROGRESS -> Bị chặn ngay
         await assert.rejects(
             async () => {
                 await recordQualityCheck(
@@ -836,7 +1027,6 @@ async function runTests() {
             'Phải chặn duyệt QC khi lệnh xưởng chưa chuyển sang QC_IN_PROGRESS'
         );
 
-        // Db: Chuyển sang QC_IN_PROGRESS và duyệt QC PASSED -> Thành công, chuyển sang READY_FOR_DISPATCH và đồng bộ orders
         mockProdClient._db.production_orders[0].status = 'QC_IN_PROGRESS';
 
         await recordQualityCheck(
@@ -860,10 +1050,18 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST E (P1 MỚI): Chặn gán kỹ thuật viên vào ticket bảo hành đã RESOLVED/CLOSED & State Machine Bảo hành
+    // TEST E (P1): Chặn gán kỹ thuật viên vào ticket bảo hành đã RESOLVED/CLOSED & State Machine
     // =========================================================================
     console.log('▶ TEST E (P1): Chặn gán kỹ thuật viên vào ticket bảo hành đã RESOLVED/CLOSED & State Machine');
     {
+        // Kiểm tra khai báo cấu trúc VALID_WARRANTY_TRANSITIONS
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.OPEN, ['ASSIGNED', 'CANCELLED']);
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.ASSIGNED, ['IN_PROGRESS', 'OPEN', 'CANCELLED']);
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.IN_PROGRESS, ['RESOLVED', 'FAILED']);
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.RESOLVED, ['CLOSED', 'REOPENED']);
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.CLOSED, ['REOPENED']);
+        assert.deepStrictEqual(VALID_WARRANTY_TRANSITIONS.REOPENED, ['ASSIGNED', 'IN_PROGRESS']);
+
         const TICKET_ID = 'wt-test-e-001';
         const mockClient = createMockClient({
             company_members: [
@@ -879,7 +1077,7 @@ async function runTests() {
                 {
                     id: TICKET_ID,
                     company_id: COMPANY_ID,
-                    status: 'RESOLVED', // Ticket đã hoàn tất!
+                    status: 'RESOLVED',
                     assigned_to: TECH_USER_1,
                     notes: 'Đã xử lý xong',
                 },
@@ -968,13 +1166,52 @@ async function runTests() {
             },
             (err: Error) => {
                 assert.ok(
-                    err.message.includes('INVALID_STATE_TRANSITION') &&
-                    err.message.includes('đã ở trạng thái'),
+                    err.message.includes('INVALID_STATE_TRANSITION'),
                     `Lỗi: ${err.message}`
                 );
                 return true;
             },
             'Phải chặn update trên ticket đã RESOLVED/CLOSED'
+        );
+
+        // Ed2: Chặn transition không hợp lệ OPEN -> CLOSED (chỉ cho phép ASSIGNED hoặc CANCELLED)
+        mockClient._db.warranty_tickets[0].status = 'OPEN';
+        await assert.rejects(
+            async () => {
+                await updateWarrantyStatus(
+                    COMPANY_ID,
+                    {
+                        ticketId: TICKET_ID,
+                        status: 'CLOSED',
+                    },
+                    mockClient
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('INVALID_STATE_TRANSITION'));
+                return true;
+            },
+            'Phải chặn chuyển đổi trực tiếp OPEN -> CLOSED'
+        );
+
+        // Ed3: Chặn transition không hợp lệ RESOLVED -> ASSIGNED
+        mockClient._db.warranty_tickets[0].status = 'RESOLVED';
+        await assert.rejects(
+            async () => {
+                await updateWarrantyStatus(
+                    COMPANY_ID,
+                    {
+                        ticketId: TICKET_ID,
+                        status: 'ASSIGNED',
+                    },
+                    mockClient
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('INVALID_STATE_TRANSITION'));
+                return true;
+            },
+            'Phải chặn chuyển đổi RESOLVED -> ASSIGNED'
         );
 
         // Ee: Chặn tạo phiếu bảo hành khi đơn hàng chưa hoàn tất nghiệm thu COMPLETED
@@ -984,7 +1221,7 @@ async function runTests() {
                     id: ORDER_ID,
                     company_id: COMPANY_ID,
                     customer_id: CUSTOMER_ID,
-                    order_status: 'INSTALLING', // Chưa COMPLETED!
+                    order_status: 'INSTALLING',
                 },
             ],
         });
@@ -1025,7 +1262,7 @@ async function runTests() {
                         status: 'IN_PROGRESS',
                     },
                     mockClient,
-                    { userId: TECH_USER_2, role: 'TECHNICIAN' } // TECH_USER_2 không phải assignee!
+                    { userId: TECH_USER_2, role: 'TECHNICIAN' }
                 );
             },
             (err: any) => {
@@ -1044,7 +1281,7 @@ async function runTests() {
                     id: 'cm-sale-1',
                     company_id: COMPANY_ID,
                     user_id: 'sale-user-001',
-                    role: 'SALE', // Không phải TECHNICIAN!
+                    role: 'SALE',
                     status: 'ACTIVE',
                 },
             ],
@@ -1079,14 +1316,142 @@ async function runTests() {
     }
 
     // =========================================================================
-    // TEST G (P0 MỚI): Bảo đảm Tính nguyên tử (Atomicity) & Fail-closed Rollback
+    // TEST H (P1): Kiểm tra Lịch hẹn Liên kết khi Lên lịch Lắp đặt (scheduleInstallation)
+    // =========================================================================
+    console.log('▶ TEST H (P1): Kiểm tra trạng thái appointment liên kết khi scheduleInstallation');
+    {
+        // Base valid data setup
+        const baseOrder = { id: ORDER_ID, company_id: COMPANY_ID, customer_id: CUSTOMER_ID, order_status: 'READY_FOR_INSTALL' };
+        const baseProdOrder = { id: 'po-test-h', company_id: COMPANY_ID, order_id: ORDER_ID, status: 'READY_FOR_DISPATCH' };
+
+        // Ha: Lịch hẹn không tồn tại
+        const mockNoAppt = createMockClient({
+            orders: [baseOrder],
+            production_orders: [baseProdOrder],
+            appointments: [],
+        });
+
+        await assert.rejects(
+            async () => {
+                await scheduleInstallation(
+                    COMPANY_ID,
+                    { customerId: CUSTOMER_ID, orderId: ORDER_ID, appointmentId: 'non-existent-appt', crew: [TECH_USER_1] },
+                    mockNoAppt
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('RESOURCE_NOT_FOUND'), `Lỗi: ${err.message}`);
+                return true;
+            },
+            'Phải chặn khi lịch hẹn không tồn tại'
+        );
+
+        // Hb: Lịch hẹn thuộc công ty khác
+        const mockOtherCompanyAppt = createMockClient({
+            orders: [baseOrder],
+            production_orders: [baseProdOrder],
+            appointments: [
+                { id: 'appt-other-comp', company_id: 'other-company', type: 'INSTALLATION', status: 'ASSIGNED' },
+            ],
+        });
+
+        await assert.rejects(
+            async () => {
+                await scheduleInstallation(
+                    COMPANY_ID,
+                    { customerId: CUSTOMER_ID, orderId: ORDER_ID, appointmentId: 'appt-other-comp', crew: [TECH_USER_1] },
+                    mockOtherCompanyAppt
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('RESOURCE_NOT_FOUND'), `Lỗi: ${err.message}`);
+                return true;
+            },
+            'Phải chặn khi lịch hẹn thuộc công ty khác'
+        );
+
+        // Hc: Lịch hẹn không phải loại INSTALLATION (ví dụ SURVEY)
+        const mockSurveyAppt = createMockClient({
+            orders: [baseOrder],
+            production_orders: [baseProdOrder],
+            appointments: [
+                { id: 'appt-survey-type', company_id: COMPANY_ID, type: 'SURVEY', status: 'ASSIGNED' },
+            ],
+        });
+
+        await assert.rejects(
+            async () => {
+                await scheduleInstallation(
+                    COMPANY_ID,
+                    { customerId: CUSTOMER_ID, orderId: ORDER_ID, appointmentId: 'appt-survey-type', crew: [TECH_USER_1] },
+                    mockSurveyAppt
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('INVALID_INPUT') && err.message.includes('INSTALLATION'), `Lỗi: ${err.message}`);
+                return true;
+            },
+            'Phải chặn khi lịch hẹn có type là SURVEY'
+        );
+
+        // Hd: Lịch hẹn có trạng thái không hợp lệ (ví dụ CANCELLED hoặc COMPLETED)
+        const mockCancelledAppt = createMockClient({
+            orders: [baseOrder],
+            production_orders: [baseProdOrder],
+            appointments: [
+                { id: 'appt-cancelled-status', company_id: COMPANY_ID, type: 'INSTALLATION', status: 'CANCELLED' },
+            ],
+        });
+
+        await assert.rejects(
+            async () => {
+                await scheduleInstallation(
+                    COMPANY_ID,
+                    { customerId: CUSTOMER_ID, orderId: ORDER_ID, appointmentId: 'appt-cancelled-status', crew: [TECH_USER_1] },
+                    mockCancelledAppt
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('INVALID_STATE_TRANSITION'), `Lỗi: ${err.message}`);
+                return true;
+            },
+            'Phải chặn khi lịch hẹn ở trạng thái CANCELLED'
+        );
+
+        // He: Lịch hẹn hợp lệ (type: INSTALLATION, status: ASSIGNED) -> Thành công
+        const mockValidAppt = createMockClient({
+            orders: [baseOrder],
+            production_orders: [baseProdOrder],
+            appointments: [
+                { id: 'appt-valid-install', company_id: COMPANY_ID, type: 'INSTALLATION', status: 'ASSIGNED' },
+            ],
+        });
+
+        const scheduled = await scheduleInstallation(
+            COMPANY_ID,
+            { customerId: CUSTOMER_ID, orderId: ORDER_ID, appointmentId: 'appt-valid-install', crew: [TECH_USER_1] },
+            mockValidAppt
+        );
+
+        assert.strictEqual(scheduled.status, 'SCHEDULED');
+        assert.strictEqual(mockValidAppt._db.installations[0].status, 'SCHEDULED');
+
+        console.log('  ✔ Test H ĐẠT: Kiểm tra chặt chẽ điều kiện appointment liên kết trước khi scheduleInstallation.');
+    }
+
+    // =========================================================================
+    // TEST G (P0): Bảo đảm Tính nguyên tử (Atomicity) & Transaction Rollback
     // =========================================================================
     console.log('▶ TEST G (P0): Bảo đảm tính nguyên tử (Atomicity) & Fail-closed Rollback khi lỗi');
     {
-        // Ga: completeInstallationAndHandover: Order update thất bại -> Rollback installations về HANDOVER_PENDING
-        const mockOrderFailClient = createMockClient(
+        // ---------------------------------------------------------------------
+        // G-RPC 1: completeInstallationAndHandover qua Postgres RPC Atomicity
+        // Khi audit_logs lỗi trong Postgres RPC, transaction tự động ROLLBACK:
+        // installation không COMPLETED và order không COMPLETED.
+        // ---------------------------------------------------------------------
+        const mockRpcAuditFailClient = createMockClient(
             {
-                appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS' }],
+                appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', type: 'INSTALLATION' }],
                 orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
                 installations: [
                     {
@@ -1095,12 +1460,121 @@ async function runTests() {
                         order_id: ORDER_ID,
                         appointment_id: APPOINTMENT_ID,
                         status: 'HANDOVER_PENDING',
-                        photos: ['installation-docs/photo.jpg'],
-                        handover_ref: 'installation-docs/handover.pdf',
+                        photos: [CANONICAL_PHOTO],
+                        handover_ref: CANONICAL_HANDOVER,
                     },
                 ],
+                storageFiles: {
+                    'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+                },
             },
-            { failTables: { orders: 'update' } } // Giả lập lỗi cập nhật orders
+            { failTables: { audit_logs: 'insert' } } // Kích hoạt lỗi audit_logs trong RPC
+        );
+
+        await assert.rejects(
+            async () => {
+                await completeInstallationAndHandover(
+                    COMPANY_ID,
+                    { installationId: INSTALLATION_ID },
+                    mockRpcAuditFailClient
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('Transaction rolled back') || err.message.includes('rollback'));
+                return true;
+            },
+            'Phải ném lỗi khi RPC thất bại do audit_logs'
+        );
+
+        assert.strictEqual(
+            mockRpcAuditFailClient._db.installations[0].status,
+            'HANDOVER_PENDING',
+            'Postgres Transaction đảm bảo installations không bị đổi sang COMPLETED khi RPC thất bại'
+        );
+        assert.strictEqual(
+            mockRpcAuditFailClient._db.orders[0].order_status,
+            'INSTALLING',
+            'Postgres Transaction đảm bảo orders không bị đổi sang COMPLETED khi RPC thất bại'
+        );
+
+        // ---------------------------------------------------------------------
+        // G-RPC 2: recordQualityCheck qua Postgres RPC Atomicity
+        // Khi audit_logs lỗi trong Postgres RPC, production_order không READY_FOR_DISPATCH
+        // và orders không READY_FOR_INSTALL.
+        // ---------------------------------------------------------------------
+        const mockRpcQcAuditFail = createMockClient(
+            {
+                orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'IN_PRODUCTION' }],
+                production_orders: [
+                    {
+                        id: 'po-test-qc-rpc-fail',
+                        company_id: COMPANY_ID,
+                        order_id: ORDER_ID,
+                        status: 'QC_IN_PROGRESS',
+                        qc_status: 'PENDING',
+                    },
+                ],
+                audit_logs: [],
+            },
+            { failTables: { audit_logs: 'insert' } }
+        );
+
+        await assert.rejects(
+            async () => {
+                await recordQualityCheck(
+                    COMPANY_ID,
+                    {
+                        productionOrderId: 'po-test-qc-rpc-fail',
+                        qcStatus: 'PASSED',
+                        inspectorId: BOSS_USER,
+                    },
+                    undefined,
+                    undefined,
+                    undefined,
+                    mockRpcQcAuditFail
+                );
+            },
+            (err: Error) => {
+                assert.ok(err.message.includes('Transaction rolled back') || err.message.includes('rollback'));
+                return true;
+            },
+            'Phải ném lỗi khi QC RPC thất bại do audit_logs'
+        );
+
+        assert.strictEqual(
+            mockRpcQcAuditFail._db.production_orders[0].status,
+            'QC_IN_PROGRESS',
+            'Postgres Transaction đảm bảo production_orders không đổi sang READY_FOR_DISPATCH khi RPC thất bại'
+        );
+        assert.strictEqual(
+            mockRpcQcAuditFail._db.orders[0].order_status,
+            'IN_PRODUCTION',
+            'Postgres Transaction đảm bảo orders không đổi sang READY_FOR_INSTALL khi RPC thất bại'
+        );
+
+        // ---------------------------------------------------------------------
+        // G-Fallback 1: completeInstallationAndHandover Fallback Rollback (khi disableRpc)
+        // ---------------------------------------------------------------------
+        const mockOrderFailClient = createMockClient(
+            {
+                appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', type: 'INSTALLATION' }],
+                orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
+                installations: [
+                    {
+                        id: INSTALLATION_ID,
+                        company_id: COMPANY_ID,
+                        order_id: ORDER_ID,
+                        appointment_id: APPOINTMENT_ID,
+                        status: 'HANDOVER_PENDING',
+                        photos: [CANONICAL_PHOTO],
+                        handover_ref: CANONICAL_HANDOVER,
+                    },
+                ],
+                storageFiles: {
+                    'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+                },
+            },
+            { failTables: { orders: 'update' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1124,10 +1598,10 @@ async function runTests() {
             'Installation phải được rollback về HANDOVER_PENDING'
         );
 
-        // Gb: completeInstallationAndHandover: Audit log thất bại -> Fail-closed rollback toàn bộ
+        // G-Fallback 2: completeInstallationAndHandover: Audit log thất bại -> Fail-closed rollback toàn bộ
         const mockAuditFailClient = createMockClient(
             {
-                appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS' }],
+                appointments: [{ id: APPOINTMENT_ID, company_id: COMPANY_ID, status: 'IN_PROGRESS', type: 'INSTALLATION' }],
                 orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'INSTALLING' }],
                 installations: [
                     {
@@ -1136,12 +1610,15 @@ async function runTests() {
                         order_id: ORDER_ID,
                         appointment_id: APPOINTMENT_ID,
                         status: 'HANDOVER_PENDING',
-                        photos: ['installation-docs/photo.jpg'],
-                        handover_ref: 'installation-docs/handover.pdf',
+                        photos: [CANONICAL_PHOTO],
+                        handover_ref: CANONICAL_HANDOVER,
                     },
                 ],
+                storageFiles: {
+                    'installation-docs': [CANONICAL_PHOTO, CANONICAL_HANDOVER],
+                },
             },
-            { failTables: { audit_logs: 'insert' } } // Giả lập lỗi ghi audit_logs
+            { failTables: { audit_logs: 'insert' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1170,7 +1647,7 @@ async function runTests() {
             'Order phải giữ nguyên / rollback về INSTALLING khi audit thất bại'
         );
 
-        // Gc: recordQualityCheck: Cập nhật orders sang READY_FOR_INSTALL thất bại -> Rollback lệnh xưởng
+        // G-Fallback 3: recordQualityCheck: Cập nhật orders thất bại -> Rollback lệnh xưởng
         const mockQcOrderFailClient = createMockClient(
             {
                 orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'IN_PRODUCTION' }],
@@ -1185,7 +1662,7 @@ async function runTests() {
                 ],
                 audit_logs: [],
             },
-            { failTables: { orders: 'update' } }
+            { failTables: { orders: 'update' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1221,7 +1698,7 @@ async function runTests() {
             'Trạng thái QC phải rollback về PENDING'
         );
 
-        // Gd: recordQualityCheck: Ghi audit_logs thất bại -> Rollback cả orders và production_orders (Fail-closed)
+        // G-Fallback 4: recordQualityCheck: Ghi audit_logs thất bại -> Rollback cả orders và production_orders
         const mockQcAuditFailClient = createMockClient(
             {
                 orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'IN_PRODUCTION' }],
@@ -1236,7 +1713,7 @@ async function runTests() {
                 ],
                 audit_logs: [],
             },
-            { failTables: { audit_logs: 'insert' } }
+            { failTables: { audit_logs: 'insert' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1272,7 +1749,7 @@ async function runTests() {
             'Đơn hàng phải rollback về IN_PRODUCTION'
         );
 
-        // Ge: updateProductionProgress: Ghi audit_logs thất bại -> Rollback production_orders
+        // G-Fallback 5: updateProductionProgress: Ghi audit_logs thất bại -> Rollback production_orders
         const mockProgAuditFailClient = createMockClient(
             {
                 production_orders: [
@@ -1286,7 +1763,7 @@ async function runTests() {
                 ],
                 audit_logs: [],
             },
-            { failTables: { audit_logs: 'insert' } }
+            { failTables: { audit_logs: 'insert' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1317,7 +1794,7 @@ async function runTests() {
             'Lệnh xưởng phải rollback về trạng thái IN_PRODUCTION ban đầu'
         );
 
-        // Gf: createProductionOrder: Cập nhật orders thất bại -> Rollback lệnh xưởng (xóa bản ghi)
+        // G-Fallback 6: createProductionOrder: Cập nhật orders thất bại -> Rollback xóa lệnh xưởng
         const mockCreateProdFailClient = createMockClient(
             {
                 contracts: [
@@ -1333,7 +1810,7 @@ async function runTests() {
                 orders: [{ id: ORDER_ID, company_id: COMPANY_ID, order_status: 'CONTRACT_SIGNED' }],
                 production_orders: [],
             },
-            { failTables: { orders: 'update' } }
+            { failTables: { orders: 'update' }, disableRpc: true }
         );
 
         await assert.rejects(
@@ -1407,7 +1884,8 @@ async function runTests() {
                     id: E2E_APPOINTMENT_ID,
                     company_id: COMPANY_ID,
                     assignee_id: TECH_USER_1,
-                    status: 'IN_PROGRESS',
+                    status: 'ASSIGNED',
+                    type: 'INSTALLATION',
                 },
             ],
             production_orders: [],
@@ -1477,7 +1955,7 @@ async function runTests() {
         assert.strictEqual(e2eMock._db.production_orders[0].qc_status, 'PASSED');
         assert.strictEqual(e2eMock._db.orders[0].order_status, 'READY_FOR_INSTALL');
 
-        // 5. Lên lịch lắp đặt
+        // 5. Lên lịch lắp đặt (Appointment có type = INSTALLATION và status = ASSIGNED)
         const installDto = await scheduleInstallation(
             COMPANY_ID,
             {
@@ -1489,6 +1967,9 @@ async function runTests() {
             e2eMock
         );
         assert.strictEqual(installDto.status, 'SCHEDULED');
+
+        // Cập nhật appointment sang IN_PROGRESS cho bước thi công
+        e2eMock._db.appointments[0].status = 'IN_PROGRESS';
 
         // 6. Thợ hiện trường cập nhật tiến độ thi công: SCHEDULED -> IN_TRANSIT -> INSTALLING -> TESTING -> HANDOVER_PENDING
         await updateInstallationStatus(
@@ -1521,12 +2002,18 @@ async function runTests() {
         );
         assert.strictEqual(e2eMock._db.installations[0].status, 'HANDOVER_PENDING');
 
-        // 7. Thợ tải lên chứng từ nghiệm thu hợp lệ qua attachInstallationEvidence
+        // 7. Thợ tải lên chứng từ nghiệm thu canonical vào Storage rồi đính kèm qua attachInstallationEvidence
+        const e2ePhotoKey = `${COMPANY_ID}/installations/${installDto.id}/photo_e2e_01.jpg`;
+        const e2eHandoverKey = `${COMPANY_ID}/installations/${installDto.id}/handover_e2e_01.pdf`;
+
+        await e2eMock.storage.from('installation-docs').upload(e2ePhotoKey, Buffer.from('photo data'));
+        await e2eMock.storage.from('installation-docs').upload(e2eHandoverKey, Buffer.from('handover pdf data'));
+
         await attachInstallationEvidence(
             COMPANY_ID,
             {
                 installationId: installDto.id,
-                fileKey: 'installation-docs/e2e_photo.jpg',
+                fileKey: e2ePhotoKey,
                 type: 'photo',
             },
             e2eMock,
@@ -1536,7 +2023,7 @@ async function runTests() {
             COMPANY_ID,
             {
                 installationId: installDto.id,
-                fileKey: 'installation-docs/e2e_handover.pdf',
+                fileKey: e2eHandoverKey,
                 type: 'handover',
             },
             e2eMock,
@@ -1619,6 +2106,31 @@ async function runTests() {
             },
             e2eMock
         );
+        assert.strictEqual(e2eMock._db.warranty_tickets[0].status, 'ASSIGNED');
+
+        await updateWarrantyStatus(
+            COMPANY_ID,
+            {
+                ticketId: ticket.id,
+                status: 'IN_PROGRESS',
+            },
+            e2eMock,
+            { userId: TECH_USER_1, role: 'TECHNICIAN' }
+        );
+        assert.strictEqual(e2eMock._db.warranty_tickets[0].status, 'IN_PROGRESS');
+
+        await updateWarrantyStatus(
+            COMPANY_ID,
+            {
+                ticketId: ticket.id,
+                status: 'RESOLVED',
+                notes: 'Đã kiểm tra lại độ đàn hồi và gia cố hoàn tất',
+            },
+            e2eMock,
+            { userId: TECH_USER_1, role: 'TECHNICIAN' }
+        );
+        assert.strictEqual(e2eMock._db.warranty_tickets[0].status, 'RESOLVED');
+
         await updateWarrantyStatus(
             COMPANY_ID,
             {

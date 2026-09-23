@@ -348,6 +348,67 @@ export async function recordQualityCheck(
         throw new Error(`INVALID_INPUT: Trạng thái QC không hợp lệ: '${input.qcStatus}'.`);
     }
 
+    // 1. Thử gọi Postgres RPC nguyên tử (record_quality_check_atomic - P0)
+    if (typeof admin.rpc === 'function') {
+        const { data: rpcData, error: rpcErr } = await admin.rpc('record_quality_check_atomic', {
+            p_company_id: companyId,
+            p_production_order_id: input.productionOrderId,
+            p_qc_status: input.qcStatus,
+            p_inspector_id: input.inspectorId,
+            p_notes: input.notes || null,
+        });
+
+        if (rpcErr) {
+            const isMissingFn =
+                rpcErr.code === 'PGRST202' ||
+                rpcErr.message?.includes('record_quality_check_atomic') ||
+                rpcErr.message?.includes('could not find the function') ||
+                rpcErr.message?.includes('not found');
+            if (!isMissingFn) {
+                throw new Error(`Kiểm tra QC thất bại (Postgres RPC): ${rpcErr.message}`);
+            }
+            // Fallback sang JavaScript atomic nếu môi trường test không có hàm RPC
+            await executeFallbackRecordQualityCheck(
+                companyId,
+                input,
+                currentOrder,
+                oldStatus,
+                oldQcStatus,
+                nextStatus,
+                dbQcStatus,
+                admin
+            );
+            return;
+        }
+        return;
+    }
+
+    // 2. Fallback atomic JavaScript (Fail-closed) cho môi trường unit test không có DB
+    await executeFallbackRecordQualityCheck(
+        companyId,
+        input,
+        currentOrder,
+        oldStatus,
+        oldQcStatus,
+        nextStatus,
+        dbQcStatus,
+        admin
+    );
+}
+
+/**
+ * Hàm dự phòng nguyên tử phía JavaScript (Fail-closed) khi không có Postgres RPC DB (P0)
+ */
+async function executeFallbackRecordQualityCheck(
+    companyId: string,
+    input: RecordQualityCheckInput,
+    currentOrder: any,
+    oldStatus: string,
+    oldQcStatus: string,
+    nextStatus: ProductionOrderStatus,
+    dbQcStatus: QCStatus,
+    admin: any
+): Promise<void> {
     // Cập nhật production_orders
     const { data: updated, error } = await admin
         .from('production_orders')

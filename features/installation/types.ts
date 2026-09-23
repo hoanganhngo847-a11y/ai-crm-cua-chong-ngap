@@ -41,7 +41,7 @@ export interface CompleteInstallationInput {
     installationId: string;
 }
 
-export type InstallationEvidenceType = 'photo' | 'handover';
+export type InstallationEvidenceType = 'photo' | 'handover' | 'PHOTO' | 'HANDOVER';
 
 export interface AttachInstallationEvidenceInput {
     installationId: string;

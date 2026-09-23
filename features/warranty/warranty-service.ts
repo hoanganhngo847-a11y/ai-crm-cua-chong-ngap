@@ -11,6 +11,20 @@ import type {
 } from './types';
 
 /**
+ * Bản đồ chuyển đổi trạng thái hợp lệ của phiếu bảo hành (State Machine - P1)
+ */
+export const VALID_WARRANTY_TRANSITIONS: Record<WarrantyTicketStatus, WarrantyTicketStatus[]> = {
+    OPEN: ['ASSIGNED', 'CANCELLED'],
+    ASSIGNED: ['IN_PROGRESS', 'OPEN', 'CANCELLED'],
+    IN_PROGRESS: ['RESOLVED', 'FAILED'],
+    RESOLVED: ['CLOSED', 'REOPENED'],
+    CLOSED: ['REOPENED'],
+    REOPENED: ['ASSIGNED', 'IN_PROGRESS'],
+    CANCELLED: [],
+    FAILED: [],
+};
+
+/**
  * 1. Tiếp nhận và mở phiếu bảo hành (Việc 32)
  * Ràng buộc: Phiếu gắn chính xác với khách hàng, đơn hàng và lần lắp đặt (nếu có).
  * Bắt buộc đơn hàng phải hoàn tất nghiệm thu và bàn giao (order_status === 'COMPLETED').
@@ -196,11 +210,21 @@ export async function updateWarrantyStatus(
         throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy phiếu bảo hành.');
     }
 
-    // Chặn cập nhật khi ticket đã RESOLVED hoặc CLOSED
-    if ((ticket.status === 'RESOLVED' || ticket.status === 'CLOSED') && input.status !== ticket.status) {
+    // Chặn cập nhật trực tiếp trên ticket đã CLOSED (bắt buộc dùng reopenWarrantyTicket)
+    if (ticket.status === 'CLOSED' && input.status !== ticket.status) {
         throw new Error(
-            `INVALID_STATE_TRANSITION: Không thể cập nhật phiếu bảo hành đã ở trạng thái '${ticket.status}'. Vui lòng sử dụng reopenWarrantyTicket để mở lại.`
+            `INVALID_STATE_TRANSITION: Không thể cập nhật phiếu bảo hành đã ở trạng thái 'CLOSED'. Vui lòng sử dụng reopenWarrantyTicket để mở lại.`
         );
+    }
+
+    // Kiểm tra chuyển đổi trạng thái hợp lệ theo State Machine (P1)
+    if (ticket.status !== input.status) {
+        const allowedTransitions = VALID_WARRANTY_TRANSITIONS[ticket.status as WarrantyTicketStatus] || [];
+        if (!allowedTransitions.includes(input.status)) {
+            throw new Error(
+                `INVALID_STATE_TRANSITION: Chuyển đổi trạng thái bảo hành không hợp lệ từ '${ticket.status}' sang '${input.status}'.`
+            );
+        }
     }
 
     // Giới hạn quyền TECHNICIAN: Chỉ được cập nhật ticket được phân công cho mình (P0)
