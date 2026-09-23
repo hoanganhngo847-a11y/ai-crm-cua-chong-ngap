@@ -189,7 +189,10 @@ export async function completeSurvey(
       );
     }
 
-    if (rpcError.message?.includes('INVALID_PREDECESSOR_STATE')) {
+    if (
+      rpcError.message?.includes('INVALID_PREDECESSOR_STATE') ||
+      rpcError.message?.includes('APPOINTMENT_STATE_INVALID')
+    ) {
       throw new Error(
         'INVALID_PREDECESSOR_STATE: Lịch hẹn chưa ở trạng thái đang thực hiện (IN_PROGRESS/ACCEPTED), không thể hoàn tất khảo sát.'
       );
