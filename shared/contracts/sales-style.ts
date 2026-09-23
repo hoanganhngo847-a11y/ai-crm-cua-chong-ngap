@@ -133,6 +133,27 @@ export interface SalesStyleProfileRecord {
   sourceRefs: SalesStyleSourceRef[];
   modelVersion: string | null;
   generationStatus: SalesStyleGenerationStatus;
+  activatedAt: string | null;
+  activatedByUserId: string | null;
+  supersededAt: string | null;
+  supersededByProfileId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Bounded runtime active sales style profile consumed by AI auto-reply runtime.
+ * STRICT SECURITY FIREWALL: Excludes examples and sourceRefs to prevent private message body leaks.
+ */
+export interface ActiveSalesStyleProfile {
+  id: string;
+  saleUserId: string;
+  version: string;
+  salutationRules: SalutationRules;
+  sentenceStyle: SentenceStyle;
+  questionStyle: QuestionStyle;
+  objectionStyle: ObjectionStyle;
+  closingStyle: ClosingStyle;
+  modelVersion: string | null;
+  activatedAt: string;
 }

@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
+  ActiveSalesStyleProfile,
   ClosingStyle,
   ObjectionStyle,
   QuestionStyle,
@@ -30,6 +31,11 @@ export interface PersistSalesStyleProfileParams {
   modelVersion: string;
 }
 
+export interface FetchActiveSalesStyleProfileParams {
+  companyId: string;
+  saleUserId: string;
+}
+
 interface RawInputRow {
   interaction_id: string;
   channel: string;
@@ -51,8 +57,25 @@ interface RawProfileRow {
   source_refs: SalesStyleSourceRef[];
   model_version: string | null;
   generation_status: SalesStyleGenerationStatus;
+  activated_at: string | null;
+  activated_by_user_id: string | null;
+  superseded_at: string | null;
+  superseded_by_profile_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface RawActiveProfileRuntimeRow {
+  id: string;
+  sale_user_id: string;
+  version: string;
+  salutation_rules: SalutationRules;
+  sentence_style: SentenceStyle;
+  question_style: QuestionStyle;
+  objection_style: ObjectionStyle;
+  closing_style: ClosingStyle;
+  model_version: string | null;
+  activated_at: string;
 }
 
 /**
@@ -133,7 +156,49 @@ export async function persistSalesStyleProfile(
     sourceRefs: row.source_refs,
     modelVersion: row.model_version,
     generationStatus: row.generation_status,
+    activatedAt: row.activated_at ?? null,
+    activatedByUserId: row.activated_by_user_id ?? null,
+    supersededAt: row.superseded_at ?? null,
+    supersededByProfileId: row.superseded_by_profile_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Fetches the canonical ACTIVE Sales Style Profile for AI runtime via get_active_sales_style_profile RPC.
+ * Restricted to service_role client. Excludes examples and source refs.
+ * Returns null if no active profile exists for the validated Sale.
+ */
+export async function fetchActiveSalesStyleProfile(
+  client: SupabaseClient,
+  params: FetchActiveSalesStyleProfileParams
+): Promise<ActiveSalesStyleProfile | null> {
+  const { data, error } = await client.rpc('get_active_sales_style_profile', {
+    p_company_id: params.companyId,
+    p_sale_user_id: params.saleUserId,
+  });
+
+  if (error) {
+    throw new Error(`Failed to fetch active sales style profile: ${error.message} (code: ${error.code})`);
+  }
+
+  const rows = (data || []) as RawActiveProfileRuntimeRow[];
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const row = rows[0];
+  return {
+    id: row.id,
+    saleUserId: row.sale_user_id,
+    version: row.version,
+    salutationRules: row.salutation_rules,
+    sentenceStyle: row.sentence_style,
+    questionStyle: row.question_style,
+    objectionStyle: row.objection_style,
+    closingStyle: row.closing_style,
+    modelVersion: row.model_version,
+    activatedAt: row.activated_at,
   };
 }
