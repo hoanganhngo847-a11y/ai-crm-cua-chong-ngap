@@ -4,16 +4,17 @@ import { CUSTOMER_STAGES, STAGE_ACTOR_TYPES } from '../../features/crm/types/cus
 
 async function runAtomicCompensationTests() {
   console.log('======================================================================');
-  console.log('STARTING P0 TEST SUITE: ATOMIC ROLLBACK & COMPENSATION AUDIT');
+  console.log('STARTING P0 TEST SUITE: ATOMIC DATABASE TRANSACTIONS & RPC ROLLBACK');
   console.log('======================================================================');
 
   process.env.PHONE_HASH_SECRET = process.env.PHONE_HASH_SECRET || 'ai-crm-phone-hmac-secret-v1';
   const companyId = '11111111-1111-1111-1111-111111111111';
 
   // ============================================================================
-  // TEST SECTION 1: updateStage ATOMICITY & ROLLBACK COMPENSATION
+  // TEST SECTION 1: updateStage ATOMIC TRANSACTION & DATABASE ROLLBACK
+  // Tuân thủ Lỗi P0 số 3: RPC update_customer_stage_atomic thay thế rollback thủ công
   // ============================================================================
-  console.log('\n--- Test 1: updateStage Atomic Rollback on customer_stage_histories Failure ---');
+  console.log('\n--- Test 1: updateStage Atomic Transaction on update_customer_stage_atomic RPC ---');
 
   // Simulated Database State
   const initialUpdatedAt = '2026-09-20T10:00:00.000Z';
@@ -33,77 +34,59 @@ async function runAtomicCompensationTests() {
   };
 
   function createMockSupabaseForUpdateStage(shouldFailHistory: boolean) {
+    let rpcCalled = false;
     return {
-      from: (table: string) => {
-        if (table === 'customers') {
+      rpc: async (fnName: string, params: any) => {
+        assert.strictEqual(fnName, 'update_customer_stage_atomic', 'Must call RPC update_customer_stage_atomic');
+        assert.strictEqual(params.p_company_id, companyId);
+        assert.strictEqual(params.p_customer_id, 'cust-atomic-001');
+        rpcCalled = true;
+
+        if (shouldFailHistory) {
+          // Mô phỏng Database Transaction Rollback:
+          // Khi bất kỳ câu lệnh nào trong khối PL/pgSQL thất bại, PostgreSQL tự động ROLLBACK toàn bộ transaction.
+          // dbState không bị thay đổi bất kỳ trường nào (Zero state divergence).
           return {
-            select: () => ({
-              eq: (col1: string, val1: string) => ({
-                eq: (col2: string, val2: string) => ({
-                  maybeSingle: async () => {
-                    const cust = dbState.customers.find((c) => c.id === val1 && c.company_id === val2);
-                    return { data: cust ? { ...cust } : null, error: null };
-                  },
-                }),
-              }),
-            }),
-            update: (payload: any) => ({
-              eq: (col1: string, val1: string) => ({
-                eq: (col2: string, val2: string) => {
-                  const targetIndex = dbState.customers.findIndex((c) => c.id === val1 && c.company_id === val2);
-                  if (targetIndex !== -1) {
-                    Object.assign(dbState.customers[targetIndex], payload);
-                  }
-                  return {
-                    select: () => ({
-                      single: async () => ({
-                        data: targetIndex !== -1 ? { ...dbState.customers[targetIndex] } : null,
-                        error: null,
-                      }),
-                    }),
-                    // Support direct await for compensation rollback without select().single()
-                    then: (resolve: any) => resolve({ data: null, error: null }),
-                  };
-                },
-              }),
-            }),
+            data: null,
+            error: new Error('Postgres customer_stage_histories disk space full (Database Transaction Rollback)'),
           };
         }
 
-        if (table === 'customer_stage_histories') {
-          return {
-            insert: (payload: any) => {
-              if (shouldFailHistory) {
-                return {
-                  select: () => ({
-                    single: async () => ({
-                      data: null,
-                      error: new Error('Postgres customer_stage_histories disk space full'),
-                    }),
-                  }),
-                  then: (resolve: any) =>
-                    resolve({ data: null, error: new Error('Postgres customer_stage_histories disk space full') }),
-                };
-              }
+        // Happy path: Update stage and insert history atomically in 1 transaction block
+        const target = dbState.customers.find((c) => c.id === params.p_customer_id && c.company_id === params.p_company_id);
+        if (!target) return { data: null, error: { message: 'Not found', code: 'P0002' } };
 
-              const row = { id: `hist-${Date.now()}`, ...payload };
-              dbState.customer_stage_histories.push(row);
-              return {
-                select: () => ({
-                  single: async () => ({ data: row, error: null }),
-                }),
-                then: (resolve: any) => resolve({ data: row, error: null }),
-              };
-            },
-          };
-        }
+        const oldStage = target.stage;
+        target.stage = params.p_new_stage;
+        target.updated_at = new Date().toISOString();
 
-        return {};
+        const histRow = {
+          id: `hist-${Date.now()}`,
+          company_id: params.p_company_id,
+          customer_id: params.p_customer_id,
+          from_stage: oldStage,
+          to_stage: params.p_new_stage,
+          actor_type: params.p_actor_type,
+          changed_by_user_id: params.p_changed_by,
+          reason: params.p_note,
+          source_ref: params.p_source_ref,
+          changed_at: target.updated_at,
+        };
+        dbState.customer_stage_histories.push(histRow);
+
+        return {
+          data: {
+            customer: { ...target },
+            history: histRow,
+          },
+          error: null,
+        };
       },
+      wasRpcCalled: () => rpcCalled,
     } as any;
   }
 
-  // 1a. Happy path: updateStage succeeds
+  // 1a. Happy path: updateStage succeeds via RPC
   const mockClientSuccess = createMockSupabaseForUpdateStage(false);
   const successResult = await CustomerService.updateStage(
     {
@@ -117,17 +100,18 @@ async function runAtomicCompensationTests() {
     mockClientSuccess
   );
 
+  assert(mockClientSuccess.wasRpcCalled(), 'update_customer_stage_atomic RPC must be invoked');
   assert.strictEqual(successResult.customer.stage, CUSTOMER_STAGES.PRICE_OFFERED);
   assert.strictEqual(dbState.customers[0].stage, CUSTOMER_STAGES.PRICE_OFFERED);
   assert.strictEqual(dbState.customer_stage_histories.length, 1);
-  console.log('✓ 1a. Normal updateStage succeeded and persisted both customer.stage and history');
+  console.log('✓ 1a. Normal updateStage succeeded and persisted both customer.stage and history via RPC atomic transaction');
 
   // Reset stage to LEAD_NEW
   dbState.customers[0].stage = CUSTOMER_STAGES.LEAD_NEW;
   dbState.customers[0].updated_at = initialUpdatedAt;
   dbState.customer_stage_histories = [];
 
-  // 1b. Failure path: customer_stage_histories insert fails -> stage rolled back to oldStage
+  // 1b. Failure path: update_customer_stage_atomic RPC fails -> stage stays at oldStage via DB Rollback
   const mockClientWithFailure = createMockSupabaseForUpdateStage(true);
 
   await assert.rejects(
@@ -143,32 +127,34 @@ async function runAtomicCompensationTests() {
         },
         mockClientWithFailure
       ),
-    /Lỗi ghi lịch sử customer_stage_histories/,
-    'updateStage must re-throw error when customer_stage_histories fails'
+    /update_customer_stage_atomic/,
+    'updateStage must re-throw error when update_customer_stage_atomic RPC fails'
   );
 
-  // Assert atomic rollback: customer stage must be rolled back to LEAD_NEW, not CONTRACT_SIGNED
+  assert(mockClientWithFailure.wasRpcCalled(), 'update_customer_stage_atomic RPC must be invoked on failure');
+  // Assert atomic rollback: customer stage must remain at LEAD_NEW, not CONTRACT_SIGNED
   assert.strictEqual(
     dbState.customers[0].stage,
     CUSTOMER_STAGES.LEAD_NEW,
-    'Compensation rollback MUST restore customer.stage to oldStage (LEAD_NEW)'
+    'Database transaction rollback MUST leave customer.stage at oldStage (LEAD_NEW)'
   );
   assert.strictEqual(
     dbState.customers[0].updated_at,
     initialUpdatedAt,
-    'Compensation rollback MUST restore customer.updated_at to previous timestamp'
+    'Database transaction rollback MUST leave customer.updated_at unchanged'
   );
   assert.strictEqual(
     dbState.customer_stage_histories.length,
     0,
-    'customer_stage_histories must remain empty (zero state divergence)'
+    'customer_stage_histories must remain empty (zero partial records committed in DB)'
   );
-  console.log('✓ 1b. PASS: When history insert fails, customers.stage is rolled back to oldStage (LEAD_NEW)!');
+  console.log('✓ 1b. PASS: When RPC fails, database transaction rolls back and customers.stage remains at oldStage (LEAD_NEW)!');
 
   // ============================================================================
-  // TEST SECTION 2: findOrCreateByPhone ATOMICITY & CLEANUP COMPENSATION
+  // TEST SECTION 2: findOrCreateByPhone ATOMIC TRANSACTION & DATABASE ROLLBACK
+  // Tuân thủ Lỗi P0 số 3: RPC create_customer_atomic thay thế compensation rollback
   // ============================================================================
-  console.log('\n--- Test 2: findOrCreateByPhone Atomic Cleanup on Partial Creation Failure ---');
+  console.log('\n--- Test 2: findOrCreateByPhone Atomic Database Transaction Rollback on Failure ---');
 
   interface MockDbRecord {
     id: string;
@@ -181,96 +167,118 @@ async function runAtomicCompensationTests() {
       customer_private_contacts: [] as MockDbRecord[],
       identities: [] as MockDbRecord[],
       customer_stage_histories: [] as MockDbRecord[],
-      deletedRecords: [] as { table: string; id?: string; customer_id?: string; company_id?: string }[],
     };
 
-    const makeQueryBuilder = (tableName: string) => {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: null, error: null }),
-              }),
-              then: (resolve: any) => resolve({ data: [], error: null }),
-            }),
-          }),
-        }),
-        insert: (payload: any) => {
-          if (tableName === 'customer_private_contacts' && failingStep === 'private_contact') {
-            return {
-              select: () => ({
-                single: async () => ({ data: null, error: new Error('Disk error on private contacts insert') }),
-              }),
-              then: (resolve: any) =>
-                resolve({ data: null, error: new Error('Disk error on private contacts insert') }),
-            };
-          }
-          if (tableName === 'identities' && failingStep === 'identities') {
-            return {
-              select: () => ({
-                single: async () => ({ data: null, error: new Error('Unique constraint violation on identities') }),
-              }),
-              then: (resolve: any) =>
-                resolve({ data: null, error: new Error('Unique constraint violation on identities') }),
-            };
-          }
-          if (tableName === 'customer_stage_histories' && failingStep === 'stage_history') {
-            return {
-              select: () => ({
-                single: async () => ({
-                  data: null,
-                  error: new Error('Postgres connection reset on stage history insert'),
-                }),
-              }),
-              then: (resolve: any) =>
-                resolve({ data: null, error: new Error('Postgres connection reset on stage history insert') }),
-            };
-          }
-
-          const record = { id: `id-${tableName}-${Date.now()}`, ...payload };
-          (memory as any)[tableName]?.push(record);
-
-          return {
-            data: record,
-            error: null,
-            select: () => ({
-              single: async () => ({ data: record, error: null }),
-            }),
-            then: (resolve: any) => resolve({ data: record, error: null }),
-          };
-        },
-        delete: () => ({
-          eq: (col1: string, val1: string) => ({
-            eq: async (col2: string, val2: string) => {
-              memory.deletedRecords.push({
-                table: tableName,
-                [col1]: val1,
-                [col2]: val2,
-              });
-              // Perform actual in-memory deletion
-              const arr: MockDbRecord[] = (memory as any)[tableName] || [];
-              const filtered = arr.filter((item) => !(item[col1] === val1 && item[col2] === val2));
-              (memory as any)[tableName] = filtered;
-              return { data: null, error: null };
-            },
-          }),
-        }),
-      };
-    };
+    let rpcCalled = false;
 
     const client = {
-      from: (table: string) => makeQueryBuilder(table),
-      schema: (schemaName: string) => ({
-        from: (table: string) => makeQueryBuilder(table),
-      }),
+      from: (table: string) => {
+        // Query kiểm tra identity số điện thoại hiện tại
+        if (table === 'identities') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: async () => ({ data: null, error: null }),
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        return {};
+      },
+      rpc: async (fnName: string, params: any) => {
+        assert.strictEqual(fnName, 'create_customer_atomic', 'Must invoke create_customer_atomic RPC');
+        assert.strictEqual(params.p_company_id, companyId);
+        rpcCalled = true;
+
+        // Mô phỏng Database Transaction Block:
+        // Trong PL/pgSQL, tất cả các câu lệnh INSERT nằm trong 1 khối transaction nguyên tử.
+        // Nếu bất kỳ bước nào gặp lỗi, PostgreSQL tự động ROLLBACK toàn bộ transaction,
+        // không có bất kỳ bản ghi nào được lưu vào CSDL (Zero Dangling / Orphan Records).
+        if (failingStep === 'private_contact') {
+          return {
+            data: null,
+            error: new Error('Lỗi lưu thông tin liên hệ bảo mật: Disk error on private contacts insert (Database Rollback)'),
+          };
+        }
+        if (failingStep === 'identities') {
+          return {
+            data: null,
+            error: new Error('Lỗi tạo danh tính số điện thoại khách hàng: Unique constraint violation on identities (Database Rollback)'),
+          };
+        }
+        if (failingStep === 'stage_history') {
+          return {
+            data: null,
+            error: new Error('Lỗi ghi nhận lịch sử trạng thái ban đầu: Postgres connection reset on stage history insert (Database Rollback)'),
+          };
+        }
+
+        // Happy path: All records committed atomically in 1 transaction
+        const custId = `cust-${Date.now()}`;
+        const cust = {
+          id: custId,
+          company_id: params.p_company_id,
+          customer_code: params.p_customer_code || 'KH-000001',
+          name: params.p_name,
+          source: params.p_source,
+          stage: params.p_stage,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const contact = {
+          id: `cpc-${Date.now()}`,
+          company_id: params.p_company_id,
+          customer_id: custId,
+          raw_phone: params.p_raw_phone,
+          normalized_phone: params.p_normalized_phone,
+          is_verified: params.p_is_verified,
+        };
+        const phoneId = {
+          id: `ident-${Date.now()}-phone`,
+          company_id: params.p_company_id,
+          customer_id: custId,
+          channel: 'PHONE',
+          external_id: params.p_phone_hash,
+          verified: params.p_is_verified,
+        };
+        const hist = {
+          id: `hist-${Date.now()}`,
+          company_id: params.p_company_id,
+          customer_id: custId,
+          from_stage: null,
+          to_stage: params.p_stage,
+          actor_type: 'SYSTEM',
+          reason: params.p_note || 'Khách hàng mới tạo',
+          changed_at: new Date().toISOString(),
+        };
+
+        memory.customers.push(cust);
+        memory.customer_private_contacts.push(contact);
+        memory.identities.push(phoneId);
+        memory.customer_stage_histories.push(hist);
+
+        return {
+          data: {
+            customer: cust,
+            contact,
+            identities: [phoneId],
+            history: hist,
+          },
+          error: null,
+        };
+      },
+      wasRpcCalled: () => rpcCalled,
       memory,
     };
 
     return client;
   }
 
-  // 2a. Failure during identities step -> triggers compensation rollback
+  // 2a. Failure during identities step -> triggers atomic database rollback
   const mockCreationFailIdentity = createMockSupabaseForCreation('identities');
 
   await assert.rejects(
@@ -283,32 +291,28 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailIdentity as any
       ),
-    /Lỗi tạo danh tính số điện thoại khách hàng/,
-    'findOrCreateByPhone must throw error when identities step fails'
+    /create_customer_atomic/,
+    'findOrCreateByPhone must throw error when identities step fails in RPC'
   );
 
-  // Assert compensation rollback cleaned up customer and private contact
+  assert(mockCreationFailIdentity.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
+  // Assert atomic database rollback: zero dangling records left in any table
   const mem1 = mockCreationFailIdentity.memory;
   assert.strictEqual(
     mem1.customers.length,
     0,
-    'Customer record MUST be completely deleted on creation failure (zero dangling customers)'
+    'Customer record MUST NOT be committed on creation failure (zero dangling customers)'
   );
   assert.strictEqual(
     mem1.customer_private_contacts.length,
     0,
-    'Customer private contact MUST be cleaned up on creation failure'
+    'Customer private contact MUST NOT be committed on creation failure'
   );
-  assert.strictEqual(mem1.identities.length, 0, 'Zero identities left');
-  assert.strictEqual(mem1.customer_stage_histories.length, 0, 'Zero stage histories left');
+  assert.strictEqual(mem1.identities.length, 0, 'Zero identities left in DB');
+  assert.strictEqual(mem1.customer_stage_histories.length, 0, 'Zero stage histories left in DB');
+  console.log('✓ 2a. PASS: Failure at identities step rolled back all rows via Database Transaction (Zero partial records)!');
 
-  // Verify deletion calls recorded
-  const customerDeletedRecord = mem1.deletedRecords.find((r) => r.table === 'customers');
-  assert(customerDeletedRecord, 'A delete call on customers table must have been executed');
-  assert.strictEqual(customerDeletedRecord.company_id, companyId);
-  console.log('✓ 2a. PASS: Failure at identities step rolled back and deleted created customer row!');
-
-  // 2b. Failure during stage_history step -> triggers compensation rollback
+  // 2b. Failure during stage_history step -> triggers atomic database rollback
   const mockCreationFailStage = createMockSupabaseForCreation('stage_history');
 
   await assert.rejects(
@@ -321,33 +325,19 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailStage as any
       ),
-    /Lỗi ghi nhận lịch sử trạng thái ban đầu/,
-    'findOrCreateByPhone must throw error when stage history step fails'
+    /create_customer_atomic/,
+    'findOrCreateByPhone must throw error when stage history step fails in RPC'
   );
 
+  assert(mockCreationFailStage.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
   const mem2 = mockCreationFailStage.memory;
-  assert.strictEqual(
-    mem2.customers.length,
-    0,
-    'Customer record MUST be completely deleted when stage history insert fails'
-  );
-  assert.strictEqual(
-    mem2.customer_private_contacts.length,
-    0,
-    'Customer private contact MUST be cleaned up when stage history insert fails'
-  );
-  assert.strictEqual(
-    mem2.identities.length,
-    0,
-    'Identities MUST be cleaned up when stage history insert fails'
-  );
-  assert.strictEqual(mem2.customer_stage_histories.length, 0, 'Stage history is empty');
+  assert.strictEqual(mem2.customers.length, 0, 'Zero customers committed');
+  assert.strictEqual(mem2.customer_private_contacts.length, 0, 'Zero private contacts committed');
+  assert.strictEqual(mem2.identities.length, 0, 'Zero identities committed');
+  assert.strictEqual(mem2.customer_stage_histories.length, 0, 'Zero stage histories committed');
+  console.log('✓ 2b. PASS: Failure at stage_history step rolled back all rows via Database Transaction!');
 
-  const customerDeletedRecord2 = mem2.deletedRecords.find((r) => r.table === 'customers');
-  assert(customerDeletedRecord2, 'Delete on customers must have been executed');
-  console.log('✓ 2b. PASS: Failure at stage_history step cleaned up customer, private contact, and identity rows!');
-
-  // 2c. Failure during private_contact step -> triggers compensation rollback
+  // 2c. Failure during private_contact step -> triggers atomic database rollback
   const mockCreationFailPrivate = createMockSupabaseForCreation('private_contact');
 
   await assert.rejects(
@@ -360,24 +350,44 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailPrivate as any
       ),
-    /Lỗi lưu thông tin liên hệ bảo mật/,
-    'findOrCreateByPhone must throw error when private contact step fails'
+    /create_customer_atomic/,
+    'findOrCreateByPhone must throw error when private contact step fails in RPC'
   );
 
+  assert(mockCreationFailPrivate.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
   const mem3 = mockCreationFailPrivate.memory;
-  assert.strictEqual(
-    mem3.customers.length,
-    0,
-    'Customer record MUST be deleted when private contact step fails'
+  assert.strictEqual(mem3.customers.length, 0, 'Zero customers committed');
+  assert.strictEqual(mem3.customer_private_contacts.length, 0, 'Zero private contacts committed');
+  assert.strictEqual(mem3.identities.length, 0, 'Zero identities committed');
+  assert.strictEqual(mem3.customer_stage_histories.length, 0, 'Zero stage histories committed');
+  console.log('✓ 2c. PASS: Failure at private_contact step rolled back all rows via Database Transaction!');
+
+  // 2d. Happy path creation via RPC
+  console.log('\n--- Test 2d: findOrCreateByPhone Happy Path via create_customer_atomic RPC ---');
+  const mockCreationSuccess = createMockSupabaseForCreation('none');
+  const createResult = await CustomerService.findOrCreateByPhone(
+    {
+      companyId,
+      name: 'Khách Hàng Thành Công',
+      phone: '0988776652',
+      source: 'FACEBOOK',
+      channel: 'FACEBOOK',
+      externalId: 'fb-atomic-123',
+    },
+    mockCreationSuccess as any
   );
-  assert.strictEqual(mem3.customer_private_contacts.length, 0);
-  assert.strictEqual(mem3.identities.length, 0);
-  const customerDeletedRecord3 = mem3.deletedRecords.find((r) => r.table === 'customers');
-  assert(customerDeletedRecord3, 'Delete on customers must have been executed');
-  console.log('✓ 2c. PASS: Failure at private_contact step cleaned up created customer row!');
+
+  assert(mockCreationSuccess.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
+  assert.strictEqual(createResult.isNew, true);
+  assert.strictEqual(createResult.customer.name, 'Khách Hàng Thành Công');
+  assert.strictEqual(mockCreationSuccess.memory.customers.length, 1);
+  assert.strictEqual(mockCreationSuccess.memory.customer_private_contacts.length, 1);
+  assert.strictEqual(mockCreationSuccess.memory.identities.length, 1);
+  assert.strictEqual(mockCreationSuccess.memory.customer_stage_histories.length, 1);
+  console.log('✓ 2d. PASS: Happy path create_customer_atomic RPC creates all entities in single atomic transaction!');
 
   console.log('\n======================================================================');
-  console.log('>>> ALL P0 ATOMICITY & COMPENSATION ROLLBACK TESTS PASSED (100%) <<<');
+  console.log('>>> ALL P0 ATOMIC DATABASE TRANSACTIONS & RPC TESTS PASSED (100%) <<<');
   console.log('======================================================================\n');
 }
 

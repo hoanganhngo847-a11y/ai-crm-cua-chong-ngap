@@ -12,7 +12,6 @@ import {
   type CustomerStage,
   type CustomerWithContact,
   type Identity,
-  type IdentityChannel,
 } from '../../../features/crm/types/customer.types';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -456,25 +455,13 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       );
     }
 
-    // SERVER AUTHORITY (Lỗi P1 - Mục 9):
+    // SERVER AUTHORITY & ANTI-POISON IDENTITY (Lỗi P1 số 6):
     // 1. Client chỉ được gửi các trường thông tin cơ bản: name, phone, source, note, stage (tùy chọn).
     // 2. Tuyệt đối KHÔNG tin cậy client tự gửi cờ is_verified: true hoặc verified: true.
     //    Mọi identity tạo thủ công từ client mặc định phải có is_verified: false (override về false).
-    // 3. Chặn client tự claim các identity kênh mạng xã hội (FACEBOOK, ZALO) kèm cờ verified từ request body
-    //    nếu không đi qua Webhook Ingress chính thức hoặc OAuth flow có bằng chứng (Server Authority).
-    const rawChannel = typeof body.channel === 'string' ? body.channel.trim().toUpperCase() : undefined;
-    const rawExternalId = typeof body.external_id === 'string' ? body.external_id.trim() : undefined;
-
-    let safeChannel: IdentityChannel | undefined = undefined;
-    let safeExternalId: string | undefined = undefined;
-
-    if (rawChannel && rawExternalId) {
-      if (rawChannel === 'FACEBOOK' || rawChannel === 'ZALO' || rawChannel === 'WEBSITE') {
-        safeChannel = rawChannel as IdentityChannel;
-        safeExternalId = rawExternalId;
-      }
-    }
-
+    // 3. XÓA BỎ hoàn toàn việc trích xuất và xử lý channel, external_id từ client request body.
+    //    Tuyệt đối không cho phép client liên kết bất kỳ provider identity nào (FACEBOOK, ZALO, WEBSITE)
+    //    trong luồng tạo thủ công này. Hệ thống chỉ khởi tạo duy nhất danh tính PHONE.
     let canonicalStage: CustomerStage | undefined = undefined;
     if (stage !== undefined && stage !== null && stage !== '') {
       try {
@@ -505,8 +492,8 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
           source: safeSource,
           stage: canonicalStage,
           note: safeNote,
-          channel: safeChannel,
-          externalId: safeExternalId,
+          channel: undefined, // ANTI-POISON IDENTITY: Không nhận provider identity từ client
+          externalId: undefined, // ANTI-POISON IDENTITY: Chỉ tạo duy nhất identity PHONE
           metadata: undefined, // Client không được phép tự truyền metadata
           verified: false, // SERVER AUTHORITY: Bỏ qua mọi cờ verified client gửi, override về false
           isTrustedProvider: false, // SERVER AUTHORITY: Luồng CRM thủ công không phải Webhook/OAuth

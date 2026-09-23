@@ -160,7 +160,7 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
     if (authResult.errorResponse) {
       return authResult.errorResponse;
     }
-    const { companyId, role } = authResult.actor!;
+    const { companyId, role, userId } = authResult.actor!;
 
     const { searchParams } = new URL(request.url);
     const conversationId = searchParams.get('conversation_id')?.trim();
@@ -170,7 +170,12 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
     // Nếu có conversation_id: Lấy chi tiết cuộc trò chuyện và danh sách tin nhắn
     if (conversationId) {
       // Resource Authorization: getConversationById lọc nghiêm ngặt theo companyId
-      const conversation = await InboxService.getConversationById(companyId, conversationId, role);
+      const conversation = await InboxService.getConversationById(
+        companyId,
+        conversationId,
+        role,
+        context?.supabaseClient
+      );
       if (!conversation) {
         return NextResponse.json(
           {
@@ -183,10 +188,27 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
       }
 
       // Lấy tin nhắn (bảo vệ tài nguyên, fail-closed 404 nếu sai tenant & làm sạch Zero-Phone cho SALE)
+      // Khi BOSS_ADMIN yêu cầu raw content, InboxService kích hoạt fail-closed audit log vào public.audit_logs.
       let messages;
       try {
-        messages = await InboxService.getMessagesByConversationId(companyId, conversationId, role);
+        messages = await InboxService.getMessagesByConversationId(
+          companyId,
+          conversationId,
+          role,
+          context?.supabaseClient,
+          { userId, actorId: userId }
+        );
       } catch (err: any) {
+        if (err?.code === 'AUDIT_WRITE_FAILED') {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'AUDIT_WRITE_FAILED',
+              message: err.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
+            },
+            { status: 500 }
+          );
+        }
         if (err?.status === 404 || err?.code === 'NOT_FOUND') {
           return NextResponse.json(
             {
@@ -249,7 +271,17 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
       success: true,
       data: sanitizedConversations,
     });
-  } catch (err: unknown) {
+  } catch (err: any) {
+    if (err?.code === 'AUDIT_WRITE_FAILED') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'AUDIT_WRITE_FAILED',
+          message: err.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
+        },
+        { status: 500 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }

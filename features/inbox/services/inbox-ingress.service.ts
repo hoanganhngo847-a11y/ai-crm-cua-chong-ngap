@@ -1,12 +1,12 @@
 import * as crypto from 'crypto';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createAdminClient } from '../../../lib/supabase/admin';
 import type { InboxChannel } from '../types/inbox.types';
 import type {
   OmnichannelWebhookPayload,
   NormalizedIngressEvent,
   IngressProcessResult,
   WebhookVerificationResult,
-  FacebookWebhookEnvelope,
-  ZaloWebhookEnvelope,
   ProviderWebhookAdapter,
 } from '../types/webhook.types';
 import { InboxService } from './inbox.service';
@@ -16,6 +16,18 @@ declare module '../types/webhook.types' {
   interface IngressProcessResult {
     company_id?: string;
   }
+}
+
+export type IngressOptions = {
+  client?: SupabaseClient;
+};
+
+export interface DurableInteractionMatch {
+  id: string;
+  conversation_id: string;
+  customer_id: string;
+  customer_name?: string;
+  channel?: InboxChannel;
 }
 
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,275 +40,7 @@ const processedEventIds = new Set<string>();
 const processedResults = new Map<string, IngressProcessResult>();
 const MAX_CACHE_SIZE = 10000;
 
-// ============================================================================
-// ADAPTER 1: FACEBOOK MESSENGER ADAPTER (Ranh giới bàn giao cho Member 4)
-// Chuyên biệt giải mã envelope, xác thực chữ ký HMAC Facebook và derive tenant Page ID
-// ============================================================================
 
-/**
- * Xác thực chữ ký số Facebook Messenger (x-hub-signature-256 = sha256=<hex>)
- */
-export function verifyFacebookSignature(
-  rawBody: string,
-  signature: string | null | undefined,
-  secret: string | null | undefined
-): WebhookVerificationResult {
-  // Fail-closed: Thiếu secret trong env phải từ chối ngay lập tức, không bypass
-  if (!secret || !secret.trim()) {
-    return {
-      valid: false,
-      reason: 'Chưa cấu hình Facebook Webhook secret trên hệ thống (Configuration Error)',
-    };
-  }
-
-  // Fail-closed: Thiếu header chữ ký
-  if (!signature || !signature.trim()) {
-    return {
-      valid: false,
-      reason: 'Thiếu header chữ ký số xác thực Facebook (Missing Signature Header)',
-    };
-  }
-
-  try {
-    const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(rawBody);
-    const expectedSignature = 'sha256=' + hmac.digest('hex');
-
-    const cleanSig = signature.trim();
-    const sigBuffer = Buffer.from(cleanSig);
-    const expectedBuffer = Buffer.from(expectedSignature);
-
-    if (sigBuffer.length !== expectedBuffer.length) {
-      return { valid: false, reason: 'Độ dài chữ ký Facebook không hợp lệ' };
-    }
-
-    const isValid = crypto.timingSafeEqual(sigBuffer, expectedBuffer);
-    return { valid: isValid, reason: isValid ? undefined : 'Chữ ký số Facebook không khớp' };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Lỗi xác thực chữ ký Facebook';
-    return { valid: false, reason: msg };
-  }
-}
-
-/**
- * Phân giải tenant (company_id) từ Facebook Page ID
- */
-export function deriveFacebookTenant(pageIdOrEnvelope: string | FacebookWebhookEnvelope): string | null {
-  let cleanId: string | null = null;
-
-  if (typeof pageIdOrEnvelope === 'string') {
-    cleanId = pageIdOrEnvelope.trim();
-  } else if (pageIdOrEnvelope && typeof pageIdOrEnvelope === 'object') {
-    cleanId =
-      pageIdOrEnvelope.entry?.[0]?.id ||
-      pageIdOrEnvelope.entry?.[0]?.messaging?.[0]?.recipient?.id ||
-      pageIdOrEnvelope.recipient?.id ||
-      pageIdOrEnvelope.page_id ||
-      null;
-    if (cleanId) cleanId = String(cleanId).trim();
-  }
-
-  if (!cleanId) return null;
-
-  // 1. Kiểm tra JSON mapping FB_PAGE_TENANT_MAP
-  if (process.env.FB_PAGE_TENANT_MAP) {
-    try {
-      const map = JSON.parse(process.env.FB_PAGE_TENANT_MAP);
-      if (map && typeof map === 'object' && map[cleanId]) {
-        return String(map[cleanId]).trim();
-      }
-    } catch {
-      // Fail-safe
-    }
-  }
-
-  // 2. Kiểm tra biến môi trường đơn lẻ FB_PAGE_ID & FB_COMPANY_ID (Xóa bỏ hoàn toàn fallback)
-  if (process.env.FB_PAGE_ID && process.env.FB_PAGE_ID.trim() === cleanId) {
-    const companyId = process.env.FB_COMPANY_ID;
-    if (companyId && companyId.trim()) {
-      return companyId.trim();
-    }
-  }
-
-  return null;
-}
-
-/**
- * Trích xuất và chuyển đổi Facebook Webhook Envelope sang NormalizedIngressEvent
- */
-export function parseFacebookWebhookToNormalized(
-  body: any,
-  resolvedCompanyId: string
-): NormalizedIngressEvent {
-  const entry = body.entry?.[0];
-  const messaging = entry?.messaging?.[0];
-
-  const externalUserId =
-    messaging?.sender?.id || body.external_user_id || body.sender?.id || 'fb-anon-user';
-  const messageId =
-    messaging?.message?.mid || body.message_id || body.message?.id || `fb-msg-${Date.now()}`;
-  const content =
-    messaging?.message?.text || body.content || body.message?.text || '(Tin nhắn hình ảnh/tệp)';
-  const senderName =
-    body.sender_name || body.sender?.name || messaging?.sender?.name || 'Khách hàng Facebook';
-  const senderPhone = body.sender_phone || body.sender?.phone;
-
-  let timestamp = new Date().toISOString();
-  if (messaging?.timestamp) {
-    timestamp = new Date(messaging.timestamp).toISOString();
-  } else if (body.timestamp) {
-    timestamp = new Date(body.timestamp).toISOString();
-  }
-
-  return {
-    provider: 'FACEBOOK',
-    company_id: resolvedCompanyId.trim(),
-    external_user_id: externalUserId,
-    sender_name: senderName,
-    sender_phone: senderPhone,
-    message_id: messageId,
-    content: content.trim(),
-    timestamp,
-    metadata: body.metadata || { entry_id: entry?.id },
-  };
-}
-
-export const FacebookAdapter: ProviderWebhookAdapter<FacebookWebhookEnvelope> = {
-  provider: 'FACEBOOK',
-  verifySignature: verifyFacebookSignature,
-  deriveTenant: deriveFacebookTenant,
-  parseToNormalized: parseFacebookWebhookToNormalized,
-};
-
-// ============================================================================
-// ADAPTER 2: ZALO OFFICIAL ACCOUNT ADAPTER (Ranh giới bàn giao cho Member 3)
-// Chuyên biệt giải mã envelope, xác thực chữ ký HMAC Zalo và derive tenant OA ID
-// ============================================================================
-
-/**
- * Xác thực chữ ký số Zalo OA (x-zalo-signature hoặc mac = HMAC-SHA256 hex)
- */
-export function verifyZaloSignature(
-  rawBody: string,
-  signature: string | null | undefined,
-  secret: string | null | undefined
-): WebhookVerificationResult {
-  // Fail-closed: Thiếu secret trong env phải từ chối ngay lập tức
-  if (!secret || !secret.trim()) {
-    return {
-      valid: false,
-      reason: 'Chưa cấu hình Zalo Webhook secret trên hệ thống (Configuration Error)',
-    };
-  }
-
-  // Fail-closed: Thiếu header chữ ký
-  if (!signature || !signature.trim()) {
-    return {
-      valid: false,
-      reason: 'Thiếu header chữ ký số xác thực Zalo (Missing Signature Header)',
-    };
-  }
-
-  try {
-    const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(rawBody);
-    const expectedSignature = hmac.digest('hex');
-
-    const cleanSig = signature.trim().replace(/^sha256=/, '');
-    const sigBuffer = Buffer.from(cleanSig);
-    const expectedBuffer = Buffer.from(expectedSignature);
-
-    if (sigBuffer.length !== expectedBuffer.length) {
-      return { valid: false, reason: 'Độ dài chữ ký Zalo không hợp lệ' };
-    }
-
-    const isValid = crypto.timingSafeEqual(sigBuffer, expectedBuffer);
-    return { valid: isValid, reason: isValid ? undefined : 'Chữ ký số Zalo không khớp' };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Lỗi xác thực chữ ký Zalo';
-    return { valid: false, reason: msg };
-  }
-}
-
-/**
- * Phân giải tenant (company_id) từ Zalo OA ID
- */
-export function deriveZaloTenant(oaIdOrEnvelope: string | ZaloWebhookEnvelope): string | null {
-  let cleanId: string | null = null;
-
-  if (typeof oaIdOrEnvelope === 'string') {
-    cleanId = oaIdOrEnvelope.trim();
-  } else if (oaIdOrEnvelope && typeof oaIdOrEnvelope === 'object') {
-    cleanId = oaIdOrEnvelope.oa_id || oaIdOrEnvelope.recipient?.id || null;
-    if (cleanId) cleanId = String(cleanId).trim();
-  }
-
-  if (!cleanId) return null;
-
-  // 1. Kiểm tra JSON mapping ZALO_OA_TENANT_MAP
-  if (process.env.ZALO_OA_TENANT_MAP) {
-    try {
-      const map = JSON.parse(process.env.ZALO_OA_TENANT_MAP);
-      if (map && typeof map === 'object' && map[cleanId]) {
-        return String(map[cleanId]).trim();
-      }
-    } catch {
-      // Fail-safe
-    }
-  }
-
-  // 2. Kiểm tra biến môi trường đơn lẻ ZALO_OA_ID & ZALO_COMPANY_ID (Xóa bỏ hoàn toàn fallback)
-  if (process.env.ZALO_OA_ID && process.env.ZALO_OA_ID.trim() === cleanId) {
-    const companyId = process.env.ZALO_COMPANY_ID;
-    if (companyId && companyId.trim()) {
-      return companyId.trim();
-    }
-  }
-
-  return null;
-}
-
-/**
- * Trích xuất và chuyển đổi Zalo OA Webhook Envelope sang NormalizedIngressEvent
- */
-export function parseZaloWebhookToNormalized(
-  body: any,
-  resolvedCompanyId: string
-): NormalizedIngressEvent {
-  const externalUserId =
-    body.sender?.id || body.user_id_by_app || body.external_user_id || 'zalo-anon-user';
-  const messageId =
-    body.message?.msg_id || body.msg_id || body.message_id || `zalo-msg-${Date.now()}`;
-  const content =
-    body.message?.text || body.content || '(Tin nhắn Zalo)';
-  const senderName =
-    body.sender?.name || body.sender_name || 'Khách hàng Zalo';
-  const senderPhone = body.sender?.phone || body.sender_phone;
-
-  let timestamp = new Date().toISOString();
-  if (body.timestamp) {
-    timestamp = new Date(body.timestamp).toISOString();
-  }
-
-  return {
-    provider: 'ZALO',
-    company_id: resolvedCompanyId.trim(),
-    external_user_id: externalUserId,
-    sender_name: senderName,
-    sender_phone: senderPhone,
-    message_id: messageId,
-    content: content.trim(),
-    timestamp,
-    metadata: body.metadata || { event_name: body.event_name, oa_id: body.oa_id },
-  };
-}
-
-export const ZaloAdapter: ProviderWebhookAdapter<ZaloWebhookEnvelope> = {
-  provider: 'ZALO',
-  verifySignature: verifyZaloSignature,
-  deriveTenant: deriveZaloTenant,
-  parseToNormalized: parseZaloWebhookToNormalized,
-};
 
 // ============================================================================
 // ADAPTER 3: SYSTEM / INTERNAL NORMALIZED ADAPTER
@@ -347,45 +91,7 @@ export const SystemAdapter: ProviderWebhookAdapter = {
   parseToNormalized: parseSystemWebhookToNormalized,
 };
 
-// ============================================================================
-// FACADES FOR BACKWARD COMPATIBILITY
-// ============================================================================
 
-/**
- * Facade xác thực chữ ký số webhook tổng hợp
- */
-export function verifyWebhookSignature(
-  rawBody: string,
-  signature: string | null | undefined,
-  secret: string | null | undefined,
-  channel: InboxChannel
-): WebhookVerificationResult {
-  if (channel === 'facebook') {
-    return verifyFacebookSignature(rawBody, signature, secret);
-  } else if (channel === 'zalo') {
-    return verifyZaloSignature(rawBody, signature, secret);
-  }
-  return { valid: false, reason: 'Kênh không hỗ trợ xác thực chữ ký số' };
-}
-
-/**
- * Facade ánh xạ tài khoản tích hợp (Facebook Page ID / Zalo OA ID) sang Tenant (company_id)
- */
-export function deriveTenantFromIntegrationAccount(
-  provider: 'FACEBOOK' | 'ZALO' | 'SYSTEM',
-  accountId: string | null | undefined
-): string | null {
-  if (!accountId || typeof accountId !== 'string' || !accountId.trim()) {
-    return null;
-  }
-  if (provider === 'FACEBOOK') {
-    return deriveFacebookTenant(accountId);
-  }
-  if (provider === 'ZALO') {
-    return deriveZaloTenant(accountId);
-  }
-  return null;
-}
 
 /**
  * Kiểm tra tính trùng lặp sự kiện (Idempotency) theo namespaced key
@@ -402,6 +108,157 @@ export function isDuplicateEvent(
   return processedEventIds.has(keyOrEventId);
 }
 
+/**
+ * L2 Durable Check: Kiểm tra sự tồn tại bền vững của interaction tại Database
+ * dựa trên (company_id, channel, external_ref = message_id) tuân thủ
+ * ràng buộc UNIQUE uq_interactions_company_channel_ext_ref trong Foundation.
+ *
+ * Đảm bảo khi restart process (RAM cache rỗng), tin nhắn cũ vẫn được nhận diện là trùng lặp.
+ */
+export async function findExistingInteractionDurable(
+  companyId: string,
+  channel: InboxChannel,
+  messageId: string,
+  client?: SupabaseClient
+): Promise<DurableInteractionMatch | null> {
+  const cleanCompanyId = companyId.trim();
+  const cleanMsgId = messageId.trim();
+  const dbChannel = channel === 'zalo' ? 'ZALO' : 'FACEBOOK';
+
+  // 1. Kiểm tra CSDL qua Supabase Client
+  let adminClient = client;
+  if (!adminClient) {
+    try {
+      adminClient = createAdminClient();
+    } catch {
+      adminClient = undefined;
+    }
+  }
+
+  if (adminClient) {
+    try {
+      // 1a. Tra cứu theo (company_id, channel, external_ref) - Tận dụng index UNIQUE uq_interactions_company_channel_ext_ref
+      const { data: byExtRef, error: errExtRef } = await adminClient
+        .from('interactions')
+        .select('id, conversation_id, customer_id, channel, external_ref')
+        .eq('company_id', cleanCompanyId)
+        .eq('channel', dbChannel)
+        .eq('external_ref', cleanMsgId)
+        .maybeSingle();
+
+      if (!errExtRef && byExtRef) {
+        return {
+          id: byExtRef.id,
+          conversation_id: byExtRef.conversation_id,
+          customer_id: byExtRef.customer_id,
+          channel,
+        };
+      }
+
+      // 1b. Nếu messageId là UUID hợp lệ, tra cứu theo id của bảng interactions
+      if (UUID_REGEX.test(cleanMsgId)) {
+        const { data: byId, error: errId } = await adminClient
+          .from('interactions')
+          .select('id, conversation_id, customer_id, channel, external_ref')
+          .eq('company_id', cleanCompanyId)
+          .eq('channel', dbChannel)
+          .eq('id', cleanMsgId)
+          .maybeSingle();
+
+        if (!errId && byId) {
+          return {
+            id: byId.id,
+            conversation_id: byId.conversation_id,
+            customer_id: byId.customer_id,
+            channel,
+          };
+        }
+      }
+
+      // 1c. Kiểm tra tại private.interaction_raw_contents (source_metadata->>external_message_id)
+      try {
+        const { data: rawData } = await adminClient
+          .schema('private')
+          .from('interaction_raw_contents')
+          .select('interaction_id, source_metadata')
+          .eq('company_id', cleanCompanyId)
+          .contains('source_metadata', { external_message_id: cleanMsgId })
+          .maybeSingle();
+
+        if (rawData?.interaction_id) {
+          const { data: intData } = await adminClient
+            .from('interactions')
+            .select('id, conversation_id, customer_id, channel')
+            .eq('id', rawData.interaction_id)
+            .eq('company_id', cleanCompanyId)
+            .maybeSingle();
+
+          if (intData) {
+            return {
+              id: intData.id,
+              conversation_id: intData.conversation_id,
+              customer_id: intData.customer_id,
+              channel,
+            };
+          }
+        }
+      } catch {
+        // Bỏ qua nếu môi trường test/mock không có schema private
+      }
+    } catch {
+      // Bỏ qua lỗi kết nối CSDL và tiếp tục kiểm tra fallback
+    }
+  }
+
+  // 2. Tra cứu bền vững trong chế độ DEMO_MODE (bảo toàn qua các lần xóa L1 RAM cache)
+  if (process.env.DEMO_MODE === 'true') {
+    try {
+      const conversations = await InboxService.getConversations(cleanCompanyId);
+      for (const conv of conversations) {
+        if (conv.channel === channel) {
+          const messages = await InboxService.getMessagesByConversationId(
+            cleanCompanyId,
+            conv.id,
+            'BOSS_ADMIN'
+          );
+          const matched = messages.find((m) => m.id === cleanMsgId);
+          if (matched) {
+            return {
+              id: matched.id,
+              conversation_id: conv.id,
+              customer_id: conv.customer_id,
+              customer_name: conv.customer_name,
+              channel,
+            };
+          }
+        }
+      }
+    } catch {
+      // Bỏ qua lỗi trong demo store lookup
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Kiểm tra tính trùng lặp sự kiện bất đồng bộ phối hợp L1 Cache và L2 Database Lookup
+ */
+export async function isDuplicateEventAsync(
+  keyOrEventId: string,
+  companyId: string,
+  provider: 'FACEBOOK' | 'ZALO' | 'SYSTEM' = 'FACEBOOK',
+  client?: SupabaseClient
+): Promise<boolean> {
+  const namespacedKey = `${provider}:${companyId.trim()}:${keyOrEventId.trim()}`;
+  if (processedEventIds.has(namespacedKey)) {
+    return true;
+  }
+  const channel: InboxChannel = provider === 'ZALO' ? 'zalo' : 'facebook';
+  const match = await findExistingInteractionDurable(companyId, channel, keyOrEventId, client);
+  return match !== null;
+}
+
 // ============================================================================
 // CORE INGESTION ENGINE (Trách nhiệm kiến trúc của Member 2)
 // Quản lý: Normalized Ingress Contract, Idempotency, Ingest-time Sanitization, Tenant Isolation
@@ -412,7 +269,8 @@ export function isDuplicateEvent(
  * Tiếp nhận NormalizedIngressEvent hợp lệ từ các Adapter (Member 3 Zalo / Member 4 Facebook).
  */
 export async function ingestNormalizedEvent(
-  event: NormalizedIngressEvent
+  event: NormalizedIngressEvent,
+  optionsOrClient?: IngressOptions | SupabaseClient
 ): Promise<IngressProcessResult> {
   if (!event) {
     return {
@@ -420,6 +278,11 @@ export async function ingestNormalizedEvent(
       error: 'Thiếu dữ liệu sự kiện NormalizedIngressEvent.',
     };
   }
+
+  const passedClient: SupabaseClient | undefined =
+    optionsOrClient && 'from' in optionsOrClient
+      ? (optionsOrClient as SupabaseClient)
+      : (optionsOrClient as IngressOptions)?.client;
 
   // Bắt buộc kiểm tra tenant isolation và định dạng UUID an toàn từ tầng adapter mapping (Fail-Closed)
   if (!event.company_id || typeof event.company_id !== 'string' || !event.company_id.trim()) {
@@ -463,7 +326,9 @@ export async function ingestNormalizedEvent(
   // Lỗi P0 số 5: Tạo Namespaced Idempotency Key chống đụng độ giữa các tenant
   const idempotencyKey = `${event.provider}:${cleanCompanyId}:${event.message_id.trim()}`;
 
-  // Chống ghi trùng lặp (Idempotency) theo namespaced idempotencyKey
+  // ============================================================================
+  // TẦNG 1 (L1 CACHE): Kiểm tra nhanh qua in-memory cache
+  // ============================================================================
   if (isDuplicateEvent(idempotencyKey)) {
     const cached = processedResults.get(idempotencyKey);
     if (cached) {
@@ -494,22 +359,96 @@ export async function ingestNormalizedEvent(
     };
   }
 
+  // ============================================================================
+  // TẦNG 2 (L2 DURABLE DB CHECK): Kiểm tra bền vững tại CSDL nếu L1 Cache Miss
+  // Tuân thủ Lỗi P0 số 2: Chuyển Idempotency sang Database Durable Invariant.
+  // Khi restart process / RAM rỗng, sự kiện trùng lặp vẫn được phát hiện qua CSDL.
+  // ============================================================================
+  const durableMatch = await findExistingInteractionDurable(
+    cleanCompanyId,
+    channel,
+    event.message_id,
+    passedClient
+  );
+
+  if (durableMatch) {
+    const durableResult: IngressProcessResult = {
+      success: true,
+      duplicate: true,
+      conversation_id: durableMatch.conversation_id,
+      message_id: event.message_id,
+      customer_id: durableMatch.customer_id,
+      customer_name: durableMatch.customer_name,
+      channel,
+      company_id: cleanCompanyId,
+    };
+
+    // Cập nhật ngược lại vào L1 cache để tối ưu hóa hiệu năng đọc cho các lần gọi tiếp theo
+    if (processedEventIds.size >= MAX_CACHE_SIZE) {
+      const firstKey = processedEventIds.values().next().value;
+      if (firstKey) {
+        processedEventIds.delete(firstKey);
+        processedResults.delete(firstKey);
+      }
+    }
+    processedEventIds.add(idempotencyKey);
+    processedResults.set(idempotencyKey, durableResult);
+
+    return durableResult;
+  }
+
   try {
     // Ingress Sanitization: Làm sạch ngay tại thời điểm tiếp nhận (Zero-Phone Security Zone)
     const rawContent = event.content.trim();
     const sanitizedContent = sanitizePhoneInText(rawContent);
 
     // Thêm tin nhắn và cập nhật/tạo mới cuộc hội thoại với đúng company_id (tự động phân tách raw/sanitized)
-    const result = await InboxService.addInboundMessage({
-      channel,
-      senderId: event.external_user_id,
-      company_id: cleanCompanyId,
-      senderName: event.sender_name,
-      senderPhone: event.sender_phone,
-      content: rawContent,
-      timestamp: event.timestamp || new Date().toISOString(),
-      externalMessageId: event.message_id,
-    });
+    // Lưu externalMessageId vào CSDL (external_ref và source_metadata) để phục vụ L2 Durable Idempotency
+    let result;
+    try {
+      result = await InboxService.addInboundMessage({
+        channel,
+        senderId: event.external_user_id,
+        company_id: cleanCompanyId,
+        senderName: event.sender_name,
+        senderPhone: event.sender_phone,
+        content: rawContent,
+        timestamp: event.timestamp || new Date().toISOString(),
+        externalMessageId: event.message_id,
+      }, passedClient);
+    } catch (insertErr: any) {
+      // Xử lý xung đột ghi đồng thời (Concurrent Race Condition) vi phạm UNIQUE index uq_interactions_company_channel_ext_ref
+      const errMsg = String(insertErr?.message || '');
+      if (
+        errMsg.includes('uq_interactions_company_channel_ext_ref') ||
+        errMsg.includes('duplicate key') ||
+        errMsg.includes('unique constraint') ||
+        insertErr?.code === '23505'
+      ) {
+        const concurrentMatch = await findExistingInteractionDurable(
+          cleanCompanyId,
+          channel,
+          event.message_id,
+          passedClient
+        );
+        if (concurrentMatch) {
+          const concurrentResult: IngressProcessResult = {
+            success: true,
+            duplicate: true,
+            conversation_id: concurrentMatch.conversation_id,
+            message_id: event.message_id,
+            customer_id: concurrentMatch.customer_id,
+            customer_name: concurrentMatch.customer_name,
+            channel,
+            company_id: cleanCompanyId,
+          };
+          processedEventIds.add(idempotencyKey);
+          processedResults.set(idempotencyKey, concurrentResult);
+          return concurrentResult;
+        }
+      }
+      throw insertErr;
+    }
 
     const processResult: IngressProcessResult = {
       success: true,
@@ -549,7 +488,8 @@ export async function ingestNormalizedEvent(
  * Wrapper tương thích cho OmnichannelWebhookPayload
  */
 export async function processInboundWebhook(
-  payload: OmnichannelWebhookPayload
+  payload: OmnichannelWebhookPayload,
+  optionsOrClient?: IngressOptions | SupabaseClient
 ): Promise<IngressProcessResult> {
   if (!payload || !payload.event_id) {
     return {
@@ -578,7 +518,7 @@ export async function processInboundWebhook(
     content: payload.message?.text || '',
     timestamp: payload.message?.timestamp || new Date().toISOString(),
     metadata: payload.metadata,
-  });
+  }, optionsOrClient);
 }
 
 /**
@@ -593,26 +533,13 @@ export const InboxIngressService = {
   // Core Ingestion Engine (Member 2 Authority)
   ingestNormalizedEvent,
   isDuplicateEvent,
+  isDuplicateEventAsync,
+  findExistingInteractionDurable,
   processInboundWebhook,
   resetIngressCache,
 
-  // Adapters
-  adapters: {
-    facebook: FacebookAdapter,
-    zalo: ZaloAdapter,
-    system: SystemAdapter,
-  },
-  FacebookAdapter,
-  ZaloAdapter,
+  // System Internal Adapter
   SystemAdapter,
-
-  // Facades & Handover Helpers
-  verifyFacebookSignature,
-  deriveFacebookTenant,
-  parseFacebookWebhookToNormalized,
-  verifyZaloSignature,
-  deriveZaloTenant,
-  parseZaloWebhookToNormalized,
-  verifyWebhookSignature,
-  deriveTenantFromIntegrationAccount,
+  verifySystemSignature,
+  parseSystemWebhookToNormalized,
 };

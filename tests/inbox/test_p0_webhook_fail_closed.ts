@@ -4,8 +4,11 @@ import { NextRequest } from 'next/server';
 import { GET as webhookGetHandler, POST as webhookPostHandler } from '../../app/api/inbox/webhook/route';
 import { InboxIngressService } from '../../features/inbox/services/inbox-ingress.service';
 import { InboxService } from '../../features/inbox/services/inbox.service';
+import { FacebookAdapter } from '../../features/inbox/adapters/facebook.adapter';
+import { ZaloAdapter } from '../../features/inbox/adapters/zalo.adapter';
 
 async function runWebhookFailClosedTests() {
+  process.env.DEMO_MODE = 'true';
   console.log('======================================================================');
   console.log('STARTING P0 & P1 TEST SUITE: WEBHOOK INGRESS FAIL-CLOSED & NORMALIZED CONTRACT');
   console.log('======================================================================');
@@ -187,7 +190,7 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(convsCompanyB.length, 0, 'Company B must have 0 conversations (Tenant Isolation)');
   console.log('✓ PASS 3a: Valid Facebook HMAC ingress successfully processed and saved with strict tenant isolation');
 
-  // 3b. Idempotency test: Re-send same message_id -> returns duplicate: true (200 OK)
+  // 3b. Idempotency test (L1 RAM Cache): Re-send same message_id -> returns duplicate: true (200 OK)
   const reqPostDuplicate = new NextRequest('http://localhost:3000/api/inbox/webhook', {
     method: 'POST',
     headers: {
@@ -206,7 +209,118 @@ async function runWebhookFailClosedTests() {
   // Verify no duplicate conversation or messages were created
   const convsAfterDup = await InboxService.getConversations(testCompanyA);
   assert.strictEqual(convsAfterDup.length, 1);
-  console.log('✓ PASS 3b: Idempotency verified: duplicate message_id detected, no duplicate records created');
+  console.log('✓ PASS 3b: Idempotency verified: duplicate message_id detected via L1 cache, no duplicate records created');
+
+  // 3b-1. Durable Idempotency test: Xóa sạch hoàn toàn L1 RAM cache (mô phỏng process restart / crash / eviction)
+  // Gửi lại sự kiện trùng lặp -> Khẳng định hệ thống vẫn truy vấn CSDL và phát hiện trùng lặp bền vững (L2 Durable Invariant)
+  InboxIngressService.resetIngressCache();
+  assert.strictEqual(
+    InboxIngressService.isDuplicateEvent('msg-fb-001', testCompanyA, 'FACEBOOK'),
+    false,
+    'L1 RAM cache must be completely cleared after reset'
+  );
+
+  const reqPostDurableDup = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${validHmacFb}`,
+    },
+    body: rawBodyFb,
+  });
+  const resPostDurableDup = await webhookPostHandler(reqPostDurableDup);
+  assert.strictEqual(resPostDurableDup.status, 200, 'Durable duplicate must return 200 OK (not 201 Created)');
+  const dataPostDurableDup = await resPostDurableDup.json();
+  assert.strictEqual(dataPostDurableDup.success, true);
+  assert.strictEqual(dataPostDurableDup.data.duplicate, true, 'Must detect duplicate via durable persistence');
+  assert.strictEqual(dataPostDurableDup.data.message_id, 'msg-fb-001');
+  assert.strictEqual(dataPostDurableDup.data.conversation_id, convsCompanyA[0].id);
+  assert.strictEqual(dataPostDurableDup.data.customer_id, convsCompanyA[0].customer_id);
+
+  // Khẳng định kho lưu trữ không bị sinh thêm cuộc hội thoại hay tin nhắn thừa
+  const convsAfterDurable = await InboxService.getConversations(testCompanyA);
+  assert.strictEqual(convsAfterDurable.length, 1, 'Conversations count must remain 1');
+  const msgsAfterDurable = await InboxService.getMessagesByConversationId(
+    testCompanyA,
+    convsCompanyA[0].id,
+    'BOSS_ADMIN'
+  );
+  assert.strictEqual(msgsAfterDurable.length, 1, 'Messages count must remain 1 (no duplicate interaction created)');
+
+  // Khẳng định L1 cache đã được tự động nạp ngược lại từ kết quả truy vấn bền vững
+  assert.strictEqual(
+    InboxIngressService.isDuplicateEvent('msg-fb-001', testCompanyA, 'FACEBOOK'),
+    true,
+    'L1 cache must be backfilled from L2 durable match'
+  );
+  console.log('✓ PASS 3b-1: Durable Idempotency verified: duplicate detected via durable store across RAM reset, L1 backfilled');
+
+  // 3b-2. Mock Supabase Database Durable Idempotency (Direct SQL test)
+  // Khẳng định truy vấn CSDL chính xác theo (company_id, channel, external_ref) theo index UNIQUE Foundation
+  let queriedInteractionsTable = false;
+  let queriedExtRefValue = '';
+  let queriedCompanyId = '';
+  let queriedChannel = '';
+
+  const mockDbClient: any = {
+    from: (table: string) => {
+      if (table === 'interactions') {
+        queriedInteractionsTable = true;
+      }
+      return {
+        select: (_cols: string) => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (col2: string, val2: string) => ({
+              eq: (col3: string, val3: string) => ({
+                maybeSingle: async () => {
+                  if (col1 === 'company_id') queriedCompanyId = val1;
+                  if (col2 === 'channel') queriedChannel = val2;
+                  if (col3 === 'external_ref') queriedExtRefValue = val3;
+                  return {
+                    data: {
+                      id: 'int-durable-sql-001',
+                      conversation_id: 'conv-durable-sql-001',
+                      customer_id: 'cust-durable-sql-001',
+                      channel: 'FACEBOOK',
+                      external_ref: val3,
+                    },
+                    error: null,
+                  };
+                },
+              }),
+            }),
+          }),
+        }),
+        insert: () => {
+          assert.fail('Should NOT insert when duplicate is found in DB!');
+        },
+      };
+    },
+  };
+
+  InboxIngressService.resetIngressCache();
+  const dbDurableResult = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb-user-db-999',
+      message_id: 'msg-sql-durable-999',
+      content: 'Tin nhắn kiểm thử SQL durable lookup',
+      timestamp: new Date().toISOString(),
+    },
+    mockDbClient
+  );
+
+  assert.strictEqual(dbDurableResult.success, true);
+  assert.strictEqual(dbDurableResult.duplicate, true, 'Must return duplicate = true from DB lookup');
+  assert.strictEqual(dbDurableResult.conversation_id, 'conv-durable-sql-001');
+  assert.strictEqual(dbDurableResult.customer_id, 'cust-durable-sql-001');
+  assert.strictEqual(queriedInteractionsTable, true, 'Must query interactions table in DB');
+  assert.strictEqual(queriedCompanyId, testCompanyA, 'Must query with company_id for Tenant Isolation');
+  assert.strictEqual(queriedChannel, 'FACEBOOK', 'Must query with channel for Tenant Isolation');
+  assert.strictEqual(queriedExtRefValue, 'msg-sql-durable-999', 'Must query by external_ref matching message_id');
+  console.log('✓ PASS 3b-2: Mock DB Durable Idempotency verified: queried public.interactions by (company_id, channel, external_ref)');
 
   // 3c. Valid Zalo OA Webhook Ingress
   process.env.ZALO_APP_SECRET = testZaloSecret;
@@ -316,15 +430,23 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(resultIngestNoTenant.error, 'MISSING_COMPANY_ID');
   console.log('✓ PASS 4c: ingestNormalizedEvent with empty company_id returns MISSING_COMPANY_ID');
 
-  // 4d. deriveTenantFromIntegrationAccount must NOT fall back to DEFAULT_COMPANY_ID
+  // 4d. FacebookAdapter & ZaloAdapter deriveTenant must NOT fall back to DEFAULT_COMPANY_ID
   process.env.FB_PAGE_ID = 'page-test-no-tenant';
   delete process.env.FB_COMPANY_ID;
   (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
-  const derivedTenant = InboxIngressService.deriveTenantFromIntegrationAccount('FACEBOOK', 'page-test-no-tenant');
-  assert.strictEqual(derivedTenant, null, 'Must NOT fall back to DEFAULT_COMPANY_ID');
+  const derivedTenantFb = FacebookAdapter.deriveTenant('page-test-no-tenant');
+  assert.strictEqual(derivedTenantFb, null, 'FacebookAdapter must NOT fall back to DEFAULT_COMPANY_ID');
   delete (process.env as any).DEFAULT_COMPANY_ID;
   delete process.env.FB_PAGE_ID;
-  console.log('✓ PASS 4d: deriveTenantFromIntegrationAccount never falls back to DEFAULT_COMPANY_ID');
+
+  process.env.ZALO_OA_ID = 'oa-test-no-tenant';
+  delete process.env.ZALO_COMPANY_ID;
+  (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
+  const derivedTenantZalo = ZaloAdapter.deriveTenant('oa-test-no-tenant');
+  assert.strictEqual(derivedTenantZalo, null, 'ZaloAdapter must NOT fall back to DEFAULT_COMPANY_ID');
+  delete (process.env as any).DEFAULT_COMPANY_ID;
+  delete process.env.ZALO_OA_ID;
+  console.log('✓ PASS 4d: FacebookAdapter & ZaloAdapter deriveTenant never fall back to DEFAULT_COMPANY_ID');
 
   console.log('\n======================================================================');
   console.log('ALL P0 & P1 WEBHOOK FAIL-CLOSED TESTS PASSED SUCCESSFULLY! (100%)');

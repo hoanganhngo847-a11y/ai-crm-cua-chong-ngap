@@ -7,6 +7,7 @@ import type { ActorContext } from '../../shared/contracts/auth';
 import type { Conversation, InboxMessage } from '../../features/inbox/types/inbox.types';
 
 async function runInboxTenantIsolationTests() {
+  process.env.DEMO_MODE = 'true';
   console.log('======================================================================');
   console.log('STARTING P0 TEST SUITE: OMNICHANNEL INBOX ABSOLUTE TENANT ISOLATION');
   console.log('======================================================================');
@@ -373,7 +374,251 @@ async function runInboxTenantIsolationTests() {
     supabaseClient: mockSupabaseCompanyB as any,
   });
   assert.strictEqual(resSupabaseDb.status, 404, 'DB-derived membership of Company B must block Company A conv with 404');
-  console.log('✓ PASS 4d: Database-derived membership correctly enforces tenant isolation');
+  // ============================================================================
+  // SECTION 5: CANONICAL DATABASE PERSISTENCE & SECURITY ISOLATION (NON-DEMO MODE)
+  // ============================================================================
+  console.log('\n--- Section 5: Canonical Database Persistence & Security Isolation ---');
+  delete process.env.DEMO_MODE; // Non-demo mode (Production persistence)
+
+  let queriedPrivateSchema = false;
+  const mockDbCalls: { table?: string; action?: string; company_id?: string; schema?: string; record?: any }[] = [];
+
+  const mockDbClient: any = {
+    simulateAuditError: false,
+    schema: (s: string) => {
+      if (s === 'private') queriedPrivateSchema = true;
+      return {
+        from: (t: string) => ({
+          select: (cols?: string) => ({
+            in: (col: string, vals: any[]) => ({
+              eq: (col2: string, val2: any) => Promise.resolve({
+                data: [{ interaction_id: 'int-1', raw_content: 'Raw phone 0912345678' }],
+                error: null,
+              }),
+            }),
+          }),
+          insert: (record: any) => {
+            mockDbCalls.push({ table: t, action: 'insert_private', schema: s, record });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      };
+    },
+    from: (table: string) => ({
+      select: (cols?: string) => ({
+        eq: (col: string, val: string) => {
+          mockDbCalls.push({ table, action: 'select', company_id: val });
+          return {
+            eq: (col2: string, val2: string) => ({
+              order: () => {
+                const resPromise: any = Promise.resolve({
+                  data: [{
+                    id: 'int-1',
+                    company_id: val,
+                    customer_id: 'cust-1',
+                    conversation_id: 'conv-1',
+                    channel: 'ZALO',
+                    type: 'MESSAGE',
+                    direction: 'INBOUND',
+                    sanitized_content: 'Số đã làm sạch 09******78',
+                    sanitization_status: 'SUCCEEDED',
+                    actor_type: 'CUSTOMER',
+                    created_at: new Date().toISOString(),
+                  }],
+                  error: null,
+                });
+                resPromise.limit = () => resPromise;
+                return resPromise;
+              },
+              maybeSingle: () => {
+                if (table === 'conversations') {
+                  return Promise.resolve({
+                    data: {
+                      id: val2,
+                      company_id: val,
+                      customer_id: 'cust-1',
+                      channel: 'ZALO',
+                      unread_count: 1,
+                      status: 'OPEN',
+                    },
+                    error: null,
+                  });
+                }
+                return Promise.resolve({ data: null, error: null });
+              },
+            }),
+            in: () => ({
+              order: () => Promise.resolve({ data: [], error: null }),
+            }),
+            order: () => Promise.resolve({
+              data: [
+                {
+                  id: 'conv-db-1',
+                  company_id: val,
+                  customer_id: 'cust-1',
+                  channel: 'ZALO',
+                  external_conversation_id: 'ext-1',
+                  last_message_at: new Date().toISOString(),
+                  unread_count: 0,
+                  status: 'OPEN',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                  customers: {
+                    id: 'cust-1',
+                    name: 'Khách hàng DB',
+                    customer_code: 'KH-000001',
+                    stage: 'LEAD_NEW',
+                    source: 'ZALO',
+                  },
+                },
+              ],
+              error: null,
+            }),
+          };
+        },
+      }),
+      insert: (record: any) => {
+        mockDbCalls.push({ table, action: 'insert', record });
+        if (table === 'audit_logs' && mockDbClient.simulateAuditError) {
+          const errObj = { error: new Error('Postgres audit_logs deadlocked (Simulated audit failure)') };
+          return {
+            ...errObj,
+            select: () => ({
+              maybeSingle: () => Promise.resolve({ data: null, error: errObj.error }),
+            }),
+            then: (resolve: any) => resolve(errObj),
+          };
+        }
+        return {
+          error: null,
+          select: () => ({
+            maybeSingle: () => Promise.resolve({
+              data: { id: 'cust-1', name: 'Khách mới', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+              error: null,
+            }),
+          }),
+          then: (resolve: any) => resolve({ error: null }),
+        };
+      },
+      update: (fields: any) => ({
+        eq: (col: string, val: string) => ({
+          eq: (col2: string, val2: string) => {
+            mockDbCalls.push({ table, action: 'update', company_id: val2 });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      }),
+    }),
+  };
+
+  // 5a. getConversations in DB mode filters strictly by companyId
+  const dbConvs = await InboxService.getConversations(companyA, undefined, undefined, mockDbClient);
+  assert.strictEqual(dbConvs.length, 1);
+  assert.strictEqual(dbConvs[0].company_id, companyA);
+  console.log('✓ PASS 5a: getConversations queries DB with strict company_id filter');
+
+  // 5b. getMessagesByConversationId for SALE: queries ONLY public.interactions, never queries private schema, zero audit log
+  queriedPrivateSchema = false;
+  mockDbCalls.length = 0;
+  const dbMsgsSale = await InboxService.getMessagesByConversationId(companyA, 'conv-1', APPLICATION_ROLES.SALE, mockDbClient);
+  assert.strictEqual(dbMsgsSale.length, 1);
+  assert.strictEqual(dbMsgsSale[0].sanitized_content, 'Số đã làm sạch 09******78');
+  assert.strictEqual(dbMsgsSale[0].raw_content, undefined, 'raw_content must be undefined for SALE in DB mode');
+  assert.strictEqual(queriedPrivateSchema, false, 'SALE query must NEVER access private schema');
+  assert(!mockDbCalls.some((c) => c.table === 'audit_logs'), 'SALE query must NEVER trigger audit log insert');
+  console.log('✓ PASS 5b: getMessagesByConversationId for SALE queries only public.interactions without private schema and zero audit log');
+
+  // 5c. getMessagesByConversationId for BOSS_ADMIN: accesses private.interaction_raw_contents and writes audit log
+  queriedPrivateSchema = false;
+  mockDbCalls.length = 0;
+  const dbMsgsBoss = await InboxService.getMessagesByConversationId(companyA, 'conv-1', APPLICATION_ROLES.BOSS_ADMIN, mockDbClient, { userId: 'boss-user-id' });
+  assert.strictEqual(dbMsgsBoss.length, 1);
+  assert.strictEqual(dbMsgsBoss[0].raw_content, 'Raw phone 0912345678');
+  assert.strictEqual(queriedPrivateSchema, true, 'BOSS_ADMIN query must access private.interaction_raw_contents');
+  const auditCall = mockDbCalls.find((c) => c.table === 'audit_logs');
+  assert(auditCall, 'BOSS_ADMIN query must record audit log in public.audit_logs');
+  const auditRecord = Array.isArray(auditCall.record) ? auditCall.record[0] : auditCall.record;
+  assert.strictEqual(auditRecord.action, 'VIEW_RAW_INTERACTION');
+  assert.strictEqual(auditRecord.resource_id, 'int-1');
+  assert.strictEqual(auditRecord.company_id, companyA);
+  console.log('✓ PASS 5c: getMessagesByConversationId for BOSS_ADMIN accesses private schema and successfully writes audit log');
+
+  // 5c-1. Fail-Closed: When audit log write fails, BOSS_ADMIN is BLOCKED (throws 500 AUDIT_WRITE_FAILED)
+  mockDbClient.simulateAuditError = true;
+  let auditWriteError: any = null;
+  try {
+    await InboxService.getMessagesByConversationId(companyA, 'conv-1', APPLICATION_ROLES.BOSS_ADMIN, mockDbClient, { userId: 'boss-user-id' });
+  } catch (err: any) {
+    auditWriteError = err;
+  }
+  assert(auditWriteError, 'Must throw when audit write fails');
+  assert.strictEqual(auditWriteError.status, 500, 'Must throw 500 status on audit failure');
+  assert.strictEqual(auditWriteError.code, 'AUDIT_WRITE_FAILED', 'Must throw AUDIT_WRITE_FAILED code');
+  console.log('✓ PASS 5c-1: Service level Fail-Closed: Audit failure throws 500 AUDIT_WRITE_FAILED and blocks raw_content');
+
+  // 5c-2. Route level Fail-Closed: GET /api/inbox returns 500 AUDIT_WRITE_FAILED when audit insert fails
+  const reqBossAuditFail = new NextRequest('http://localhost:3000/api/inbox?conversation_id=conv-1', { method: 'GET' });
+  const resBossAuditFail = await inboxGetHandler(reqBossAuditFail, {
+    actor: userBossCompanyA,
+    supabaseClient: mockDbClient,
+  });
+  assert.strictEqual(resBossAuditFail.status, 500, 'Route must return 500 on audit failure');
+  const dataBossAuditFail = await resBossAuditFail.json();
+  assert.strictEqual(dataBossAuditFail.success, false);
+  assert.strictEqual(dataBossAuditFail.error, 'AUDIT_WRITE_FAILED');
+  assert.strictEqual(dataBossAuditFail.data, undefined, 'Must NEVER return raw data on audit write failure');
+  console.log('✓ PASS 5c-2: Route level Fail-Closed: GET /api/inbox returns 500 AUDIT_WRITE_FAILED without exposing raw content');
+
+  // 5c-3. Route level Happy Path: GET /api/inbox for BOSS_ADMIN with successful audit log
+  mockDbClient.simulateAuditError = false;
+  mockDbCalls.length = 0;
+  const reqBossAuditSuccess = new NextRequest('http://localhost:3000/api/inbox?conversation_id=conv-1', { method: 'GET' });
+  const resBossAuditSuccess = await inboxGetHandler(reqBossAuditSuccess, {
+    actor: userBossCompanyA,
+    supabaseClient: mockDbClient,
+  });
+  assert.strictEqual(resBossAuditSuccess.status, 200);
+  const dataBossAuditSuccess = await resBossAuditSuccess.json();
+  assert.strictEqual(dataBossAuditSuccess.success, true);
+  assert.strictEqual(dataBossAuditSuccess.data.messages[0].raw_content, 'Raw phone 0912345678');
+  assert(mockDbCalls.some((c) => c.table === 'audit_logs'), 'Must record audit log in route level GET for BOSS_ADMIN');
+  console.log('✓ PASS 5c-3: Route level: BOSS_ADMIN accesses raw_content with audit log recorded');
+
+  // 5c-4. Route level SALE: GET /api/inbox for SALE receives zero raw_content and zero audit log
+  mockDbCalls.length = 0;
+  const reqSaleRoute = new NextRequest('http://localhost:3000/api/inbox?conversation_id=conv-1', { method: 'GET' });
+  const resSaleRoute = await inboxGetHandler(reqSaleRoute, {
+    actor: userSaleCompanyA,
+    supabaseClient: mockDbClient,
+  });
+  assert.strictEqual(resSaleRoute.status, 200);
+  const dataSaleRoute = await resSaleRoute.json();
+  assert.strictEqual(dataSaleRoute.success, true);
+  assert.strictEqual(dataSaleRoute.data.messages[0].raw_content, undefined);
+  assert.strictEqual(dataSaleRoute.data.messages[0].sanitized_content, 'Số đã làm sạch 09******78');
+  assert(!mockDbCalls.some((c) => c.table === 'audit_logs'), 'SALE route request must NEVER record audit log');
+  console.log('✓ PASS 5c-4: Route level: SALE receives only sanitized_content with zero audit trail');
+
+  // 5d. sendMessage in DB mode updates conversations, inserts public.interactions, and inserts private.interaction_raw_contents
+  mockDbCalls.length = 0;
+  const dbSentMsg = await InboxService.sendMessage(
+    {
+      conversation_id: 'conv-1',
+      company_id: companyA,
+      content: 'Tin nhắn gửi khách số 0912345678',
+      sender_type: 'sale',
+    },
+    companyA,
+    mockDbClient
+  );
+  assert.strictEqual(dbSentMsg.sanitized_content, 'Tin nhắn gửi khách số 09******78');
+  assert(mockDbCalls.some((c) => c.table === 'conversations' && c.action === 'update'), 'Must update conversations');
+  assert(mockDbCalls.some((c) => c.table === 'interactions' && c.action === 'insert'), 'Must insert into public.interactions');
+  assert(mockDbCalls.some((c) => c.action === 'insert_private'), 'Must insert into private.interaction_raw_contents');
+  console.log('✓ PASS 5d: sendMessage persists to conversations, interactions, and private.interaction_raw_contents');
+
+  // Restore DEMO_MODE for downstream safety
+  process.env.DEMO_MODE = 'true';
 
   console.log('\n======================================================================');
   console.log('ALL P0 INBOX TENANT ISOLATION TESTS PASSED SUCCESSFULLY! (100%)');

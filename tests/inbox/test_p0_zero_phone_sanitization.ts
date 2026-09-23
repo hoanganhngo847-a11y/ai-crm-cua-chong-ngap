@@ -8,6 +8,7 @@ import type { ActorContext } from '../../shared/contracts/auth';
 import type { Conversation, InboxMessage } from '../../features/inbox/types/inbox.types';
 
 async function runZeroPhoneSanitizationTests() {
+  process.env.DEMO_MODE = 'true';
   console.log('======================================================================');
   console.log('STARTING P0 TEST SUITE: ZERO-PHONE SANITIZATION IN MESSAGES & TIMELINE');
   console.log('======================================================================');
@@ -247,7 +248,101 @@ async function runZeroPhoneSanitizationTests() {
   assert.strictEqual(dataBoss.data.messages[0].content, rawSensitiveMessage);
   assert.strictEqual(dataBoss.data.conversation.last_message, rawSensitiveMessage);
   assert.strictEqual(dataBoss.data.conversation.customer_phone, '0912345678');
-  console.log('✓ PASS 5b: GET /api/inbox returns verbatim raw messages for BOSS_ADMIN');
+  // ============================================================================
+  // SECTION 6: DB PERSISTENCE MODE ZERO-PHONE SANITIZATION
+  // ============================================================================
+  console.log('\n--- Section 6: DB Persistence Mode Zero-Phone Sanitization ---');
+  delete process.env.DEMO_MODE; // Non-demo mode
+
+  let privateQueried = false;
+  const mockDbClient: any = {
+    schema: (s: string) => {
+      if (s === 'private') privateQueried = true;
+      return {
+        from: () => ({
+          select: () => ({
+            in: () => ({
+              eq: () => Promise.resolve({
+                data: [{ interaction_id: 'msg-db-1', raw_content: rawSensitiveMessage }],
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      };
+    },
+    from: (table: string) => ({
+      select: () => ({
+        eq: (col: string, val: string) => ({
+          eq: (col2: string, val2: string) => ({
+            order: () => Promise.resolve({
+              data: [{
+                id: 'msg-db-1',
+                company_id: testCompanyId,
+                customer_id: 'cust-sanitize-1',
+                conversation_id: testConvId,
+                channel: 'FACEBOOK',
+                type: 'MESSAGE',
+                direction: 'INBOUND',
+                sanitized_content: 'Alo số tôi 09******78, liên hệ gấp',
+                sanitization_status: 'SUCCEEDED',
+                actor_type: 'CUSTOMER',
+                created_at: new Date().toISOString(),
+              }],
+              error: null,
+            }),
+            maybeSingle: () => Promise.resolve({
+              data: {
+                id: testConvId,
+                company_id: testCompanyId,
+                customer_id: 'cust-sanitize-1',
+                channel: 'FACEBOOK',
+                unread_count: 0,
+              },
+              error: null,
+            }),
+          }),
+          order: () => Promise.resolve({
+            data: [{
+              id: 'msg-db-1',
+              company_id: testCompanyId,
+              customer_id: 'cust-sanitize-1',
+              channel: 'FACEBOOK',
+              type: 'MESSAGE',
+              direction: 'INBOUND',
+              sanitized_content: 'Alo số tôi 09******78, liên hệ gấp',
+              sanitization_status: 'SUCCEEDED',
+              actor_type: 'CUSTOMER',
+              created_at: new Date().toISOString(),
+            }],
+            error: null,
+          }),
+        }),
+      }),
+      update: () => ({
+        eq: () => ({
+          eq: () => Promise.resolve({ error: null }),
+        }),
+      }),
+    }),
+  };
+
+  // 6a. getMessagesByConversationId in DB mode for SALE: returns sanitized derivative, never queries private schema
+  privateQueried = false;
+  const dbMsgsSale = await InboxService.getMessagesByConversationId(testCompanyId, testConvId, APPLICATION_ROLES.SALE, mockDbClient);
+  assert.strictEqual(dbMsgsSale[0].content, 'Alo số tôi 09******78, liên hệ gấp');
+  assert.strictEqual(dbMsgsSale[0].raw_content, undefined);
+  assert.strictEqual(privateQueried, false, 'SALE must NEVER query private schema');
+  console.log('✓ PASS 6a: getMessagesByConversationId in DB mode sanitizes content for SALE and omits private schema');
+
+  // 6b. getCustomerTimeline in DB mode for SALE: sanitizes descriptions
+  const dbTimelineSale = await InboxService.getCustomerTimeline('cust-sanitize-1', testCompanyId, APPLICATION_ROLES.SALE, mockDbClient);
+  assert.strictEqual(dbTimelineSale[0].description, 'Alo số tôi 09******78, liên hệ gấp');
+  assert(!JSON.stringify(dbTimelineSale).includes('0912345678'), 'Timeline for SALE must not leak phone in DB mode');
+  console.log('✓ PASS 6b: getCustomerTimeline in DB mode sanitizes descriptions for SALE');
+
+  // Restore DEMO_MODE for safety
+  process.env.DEMO_MODE = 'true';
 
   console.log('\n======================================================================');
   console.log('ALL P0 ZERO-PHONE IN-MESSAGE SANITIZATION TESTS PASSED! (100%)');

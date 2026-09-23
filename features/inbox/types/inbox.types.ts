@@ -66,7 +66,7 @@ export interface InboxMessage {
   sender_name?: string;
   content: string; // Mặc định hiển thị sanitized_content (an toàn cho DTO công khai)
   sanitized_content?: string; // Bản làm sạch che số điện thoại (Zero-Phone Security Zone)
-  sanitization_status?: 'CLEAN' | 'SANITIZED' | 'RAW'; // Trạng thái làm sạch dữ liệu
+  sanitization_status?: 'CLEAN' | 'SANITIZED' | 'RAW' | 'SUCCEEDED' | 'PENDING' | 'FAILED' | 'NOT_REQUIRED'; // Trạng thái làm sạch dữ liệu
   raw_content?: string; // Vùng riêng tư (private): chỉ cấp cho BOSS_ADMIN khi có thẩm quyền
   created_at: string;
   direction?: 'inbound' | 'outbound';

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   InboxIngressService,
-  FacebookAdapter,
-  ZaloAdapter,
   SystemAdapter,
   UUID_REGEX,
-} from '../../../../features/inbox/services/inbox-ingress.service';
+} from '@/features/inbox/services/inbox-ingress.service';
+import { FacebookAdapter } from '@/features/inbox/adapters/facebook.adapter';
+import { ZaloAdapter } from '@/features/inbox/adapters/zalo.adapter';
 import type {
   NormalizedIngressEvent,
   IngressProvider,

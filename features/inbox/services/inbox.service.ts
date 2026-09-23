@@ -1,3 +1,6 @@
+import * as crypto from 'crypto';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
   Conversation,
   ConversationFilter,
@@ -5,12 +8,41 @@ import type {
   InboxChannel,
   InboxMessage,
   SendMessageInput,
+  SenderType,
 } from '../types/inbox.types';
 import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
-import { maskPhone } from '../../crm/services/customer.service';
+import { CustomerService, maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Kiểm tra xem chế độ DEMO_MODE server-only có đang kích hoạt hay không.
+ * Cơ chế bảo vệ Production (Lỗi P1 số 7):
+ * - Trả về true NẾU VÀ CHỈ NẾU process.env.DEMO_MODE === 'true' VÀ process.env.NODE_ENV !== 'production'.
+ * - Luôn cưỡng chế trả về false khi process.env.NODE_ENV === 'production' để ngăn ngừa rò rỉ dữ liệu demo hoặc bypass DB.
+ */
+export function isDemoModeActive(): boolean {
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+  return process.env.DEMO_MODE === 'true';
+}
+
+function isDemoMode(): boolean {
+  return isDemoModeActive();
+}
+
+function generateUUID(): string {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 // ============================================================================
 // In-Memory Normalized Mock Store for Phase 2
@@ -279,18 +311,148 @@ const messagesStore: Record<string, InboxMessage[]> = { ...INITIAL_MESSAGES };
 export async function getConversations(
   companyId: string,
   filter?: ConversationFilter,
-  callerRole?: string | null
+  callerRole?: string | null,
+  client?: SupabaseClient
 ): Promise<Conversation[]> {
   if (!companyId) {
     throw new Error('companyId là bắt buộc khi truy vấn danh sách hội thoại.');
   }
 
-  // Tenant Isolation: Lọc nghiêm ngặt chỉ lấy các cuộc hội thoại thuộc companyId của caller
-  let list = conversationsStore.filter((c) => c.company_id === companyId);
+  // 1. Mock store in-memory: chỉ kích hoạt khi có cờ explicit DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    let list = conversationsStore.filter((c) => c.company_id === companyId);
+
+    if (filter?.channel && filter.channel !== 'all') {
+      list = list.filter((c) => c.channel === filter.channel);
+    }
+
+    if (filter?.search && filter.search.trim()) {
+      const term = filter.search.trim().toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.customer_name.toLowerCase().includes(term) ||
+          c.customer_code.toLowerCase().includes(term) ||
+          c.last_message.toLowerCase().includes(term)
+      );
+    }
+
+    if (filter?.unread_only) {
+      list = list.filter((c) => c.unread_count > 0);
+    }
+
+    if (filter?.status && filter.status !== 'all') {
+      list = list.filter((c) => c.status === filter.status);
+    }
+
+    list.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+    if (callerRole === APPLICATION_ROLES.SALE) {
+      list = list.map((c) => ({
+        ...c,
+        customer_phone: maskPhone(c.customer_phone),
+        last_message: sanitizePhoneInText(c.last_message),
+      }));
+    }
+
+    return list;
+  }
+
+  // 2. Canonical Database Persistence: Truy vấn trực tiếp từ public.conversations và public.interactions
+  const adminClient = client || createAdminClient();
+  let query = adminClient
+    .from('conversations')
+    .select(`
+      id,
+      company_id,
+      customer_id,
+      channel,
+      external_conversation_id,
+      last_message_at,
+      unread_count,
+      status,
+      assigned_to,
+      created_at,
+      updated_at,
+      customers (
+        id,
+        name,
+        customer_code,
+        stage,
+        source
+      )
+    `)
+    .eq('company_id', companyId);
 
   if (filter?.channel && filter.channel !== 'all') {
-    list = list.filter((c) => c.channel === filter.channel);
+    query = query.eq('channel', filter.channel.toUpperCase());
   }
+
+  if (filter?.unread_only) {
+    query = query.gt('unread_count', 0);
+  }
+
+  if (filter?.status && filter.status !== 'all') {
+    query = query.eq('status', filter.status);
+  }
+
+  query = query.order('last_message_at', { ascending: false });
+
+  const { data: convRows, error } = await query;
+  if (error || !convRows) {
+    return [];
+  }
+
+  // Lấy tin nhắn cuối cùng (sanitized derivative) cho từng cuộc hội thoại từ public.interactions
+  const convIds = convRows.map((c: any) => c.id);
+  const latestInteractionMap = new Map<string, { content: string; created_at: string }>();
+
+  if (convIds.length > 0) {
+    const { data: interactions } = await adminClient
+      .from('interactions')
+      .select('conversation_id, sanitized_content, created_at')
+      .eq('company_id', companyId)
+      .in('conversation_id', convIds)
+      .order('created_at', { ascending: false });
+
+    if (interactions) {
+      for (const item of interactions) {
+        if (!latestInteractionMap.has(item.conversation_id)) {
+          latestInteractionMap.set(item.conversation_id, {
+            content: item.sanitized_content || '',
+            created_at: item.created_at,
+          });
+        }
+      }
+    }
+  }
+
+  let list: Conversation[] = convRows.map((row: any) => {
+    const cust = Array.isArray(row.customers) ? row.customers[0] : row.customers;
+    const latestMsg = latestInteractionMap.get(row.id);
+    const rawLastMsg = latestMsg?.content || '';
+    const lastMsg =
+      callerRole === APPLICATION_ROLES.SALE
+        ? sanitizePhoneInText(rawLastMsg)
+        : rawLastMsg;
+    const lastMsgAt = latestMsg?.created_at || row.last_message_at || row.updated_at;
+
+    return {
+      id: row.id,
+      company_id: row.company_id,
+      customer_id: row.customer_id,
+      customer_name: cust?.name || 'Khách hàng',
+      customer_code: cust?.customer_code || 'KH-000000',
+      customer_stage: cust?.stage || 'LEAD_NEW',
+      customer_source: cust?.source || row.channel,
+      channel: (row.channel || 'facebook').toLowerCase() as InboxChannel,
+      last_message: lastMsg,
+      last_message_at: lastMsgAt,
+      unread_count: row.unread_count || 0,
+      status: row.status,
+      updated_at: row.updated_at,
+      created_at: row.created_at,
+    };
+  });
 
   if (filter?.search && filter.search.trim()) {
     const term = filter.search.trim().toLowerCase();
@@ -302,26 +464,6 @@ export async function getConversations(
     );
   }
 
-  if (filter?.unread_only) {
-    list = list.filter((c) => c.unread_count > 0);
-  }
-
-  if (filter?.status && filter.status !== 'all') {
-    list = list.filter((c) => c.status === filter.status);
-  }
-
-  // Sắp xếp thời gian tin nhắn mới nhất lên đầu
-  list.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-
-  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại và che số trong last_message
-  if (callerRole === APPLICATION_ROLES.SALE) {
-    list = list.map((c) => ({
-      ...c,
-      customer_phone: maskPhone(c.customer_phone),
-      last_message: sanitizePhoneInText(c.last_message),
-    }));
-  }
-
   return list;
 }
 
@@ -331,27 +473,101 @@ export async function getConversations(
 export async function getConversationById(
   companyId: string,
   id: string,
-  callerRole?: string | null
+  callerRole?: string | null,
+  client?: SupabaseClient
 ): Promise<Conversation | null> {
   if (!companyId || !id) {
     return null;
   }
-  // Resource Authorization: Chỉ trả về nếu cuộc hội thoại khớp companyId
-  const found = conversationsStore.find((c) => c.id === id && c.company_id === companyId);
-  if (!found) {
+
+  // 1. Mock store in-memory: chỉ kích hoạt khi DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    const found = conversationsStore.find((c) => c.id === id && c.company_id === companyId);
+    if (!found) {
+      return null;
+    }
+
+    if (callerRole === APPLICATION_ROLES.SALE) {
+      return {
+        ...found,
+        customer_phone: maskPhone(found.customer_phone),
+        last_message: sanitizePhoneInText(found.last_message),
+      };
+    }
+
+    return { ...found };
+  }
+
+  // 2. Canonical Database Persistence: Truy vấn trực tiếp từ public.conversations
+  const adminClient = client || createAdminClient();
+  const { data: row, error } = await adminClient
+    .from('conversations')
+    .select(`
+      id,
+      company_id,
+      customer_id,
+      channel,
+      external_conversation_id,
+      last_message_at,
+      unread_count,
+      status,
+      assigned_to,
+      created_at,
+      updated_at,
+      customers (
+        id,
+        name,
+        customer_code,
+        stage,
+        source
+      )
+    `)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (error || !row) {
     return null;
   }
 
-  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại và che số trong last_message
-  if (callerRole === APPLICATION_ROLES.SALE) {
-    return {
-      ...found,
-      customer_phone: maskPhone(found.customer_phone),
-      last_message: sanitizePhoneInText(found.last_message),
-    };
-  }
+  // Lấy tin nhắn mới nhất
+  const { data: latestInteractions } = await adminClient
+    .from('interactions')
+    .select('sanitized_content, created_at')
+    .eq('company_id', companyId)
+    .eq('conversation_id', id)
+    .order('created_at', { ascending: false })
+    .limit(1);
 
-  return { ...found };
+  const cust = Array.isArray(row.customers) ? row.customers[0] : row.customers;
+  const rawLastMsg = latestInteractions?.[0]?.sanitized_content || '';
+  const lastMsg =
+    callerRole === APPLICATION_ROLES.SALE
+      ? sanitizePhoneInText(rawLastMsg)
+      : rawLastMsg;
+  const lastMsgAt = latestInteractions?.[0]?.created_at || row.last_message_at || row.updated_at;
+
+  return {
+    id: row.id,
+    company_id: row.company_id,
+    customer_id: row.customer_id,
+    customer_name: cust?.name || 'Khách hàng',
+    customer_code: cust?.customer_code || 'KH-000000',
+    customer_stage: cust?.stage || 'LEAD_NEW',
+    customer_source: cust?.source || row.channel,
+    channel: (row.channel || 'facebook').toLowerCase() as InboxChannel,
+    last_message: lastMsg,
+    last_message_at: lastMsgAt,
+    unread_count: row.unread_count || 0,
+    status: row.status,
+    updated_at: row.updated_at,
+    created_at: row.created_at,
+  };
+}
+
+export interface GetMessagesOptions {
+  userId?: string;
+  actorId?: string;
 }
 
 /**
@@ -360,75 +576,254 @@ export async function getConversationById(
 export async function getMessagesByConversationId(
   companyId: string,
   conversationId: string,
-  callerRole?: string | null
+  callerRole?: string | null,
+  client?: SupabaseClient,
+  options?: GetMessagesOptions
 ): Promise<InboxMessage[]> {
-  if (!companyId) {
+  if (!companyId || !companyId.trim()) {
     const err = new Error('companyId là bắt buộc khi lấy tin nhắn.');
     (err as any).status = 400;
     (err as any).code = 'BAD_REQUEST';
     throw err;
   }
-  if (!conversationId) {
+  if (!conversationId || !conversationId.trim()) {
     const err = new Error('conversationId là bắt buộc khi lấy tin nhắn.');
     (err as any).status = 400;
     (err as any).code = 'BAD_REQUEST';
     throw err;
   }
 
+  // 1. Mock store in-memory: chỉ kích hoạt khi DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    const conv = conversationsStore.find(
+      (c) => c.id === conversationId && c.company_id === companyId
+    );
+    if (!conv) {
+      const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
+      (notFoundErr as any).status = 404;
+      (notFoundErr as any).code = 'NOT_FOUND';
+      throw notFoundErr;
+    }
+
+    const messages = messagesStore[conversationId] || [];
+
+    if (conv.unread_count > 0) {
+      conv.unread_count = 0;
+    }
+
+    const sorted = [...messages].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
+      return sorted.map((m) => {
+        const raw = m.raw_content || m.content;
+        const sanitized = m.sanitized_content || sanitizePhoneInText(raw);
+        const status = m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
+        return {
+          ...m,
+          content: raw,
+          sanitized_content: sanitized,
+          sanitization_status: status,
+          raw_content: raw,
+        };
+      });
+    }
+
+    return sorted.map((m) => {
+      const raw = m.raw_content || m.content;
+      const sanitized = m.sanitized_content || sanitizePhoneInText(m.content);
+      const status = m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
+      const { raw_content, ...rest } = m;
+      return {
+        ...rest,
+        content: sanitized,
+        sanitized_content: sanitized,
+        sanitization_status: status,
+      };
+    });
+  }
+
+  // 2. Canonical Database Persistence: Truy vấn trực tiếp từ public.conversations và public.interactions
+  const adminClient = client || createAdminClient();
+
   // Resource Authorization: Kiểm tra cuộc hội thoại có đúng thuộc companyId của caller hay không
-  const conv = conversationsStore.find(
-    (c) => c.id === conversationId && c.company_id === companyId
-  );
-  if (!conv) {
+  const { data: conv, error: convError } = await adminClient
+    .from('conversations')
+    .select('id, company_id, customer_id, channel, unread_count')
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (convError || !conv) {
     const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
     (notFoundErr as any).status = 404;
     (notFoundErr as any).code = 'NOT_FOUND';
     throw notFoundErr;
   }
 
-  const messages = messagesStore[conversationId] || [];
-
   // Đánh dấu đã đọc khi xem tin nhắn
   if (conv.unread_count > 0) {
-    conv.unread_count = 0;
+    await adminClient
+      .from('conversations')
+      .update({ unread_count: 0 })
+      .eq('id', conversationId)
+      .eq('company_id', companyId);
   }
 
-  // Sắp xếp tăng dần theo thời gian để hiển thị từ cũ đến mới
-  const sorted = [...messages].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  );
+  // ZERO-PHONE INVARIANT & PRIVILEGE BOUNDARY:
+  // - Với vai trò SALE: Chỉ query/trả về dữ liệu từ public.interactions.sanitized_content.
+  //   Tuyệt đối KHÔNG join hay select từ private.interaction_raw_contents.
+  // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc (private.interaction_raw_contents).
+  const { data: interactions, error: msgError } = await adminClient
+    .from('interactions')
+    .select('id, company_id, customer_id, conversation_id, channel, type, direction, sanitized_content, sanitization_status, actor_type, actor_user_id, created_at')
+    .eq('conversation_id', conversationId)
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: true });
 
-  // Zero-Phone Sanitization & Interaction Security Zone (Lỗi P0 số 6):
-  // - Với vai trò SALE: Chỉ được đọc sanitized_content. Đảm bảo DTO không chứa bất kỳ trường nào mang raw phone (loại bỏ raw_content).
-  // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc.
+  if (msgError || !interactions) {
+    return [];
+  }
+
   if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
-    return sorted.map((m) => {
-      const raw = m.raw_content || m.content;
+    if (!companyId || !companyId.trim()) {
+      const authErr = new Error('Ngữ cảnh tổ chức (companyId) là bắt buộc đối với Quản trị viên khi truy cập tin nhắn.');
+      (authErr as any).status = 403;
+      (authErr as any).code = 'FORBIDDEN';
+      throw authErr;
+    }
+
+    const rawMap = new Map<string, string>();
+    const interactionIds = interactions.map((i: any) => i.id);
+
+    if (interactionIds.length > 0) {
+      let rawRows: any[] | null = null;
+      try {
+        const { data, error } = await adminClient
+          .schema('private')
+          .from('interaction_raw_contents')
+          .select('interaction_id, company_id, raw_content')
+          .in('interaction_id', interactionIds)
+          .eq('company_id', companyId);
+
+        if (!error && data) {
+          rawRows = data;
+        }
+      } catch {
+        // Direct private schema access might fail if restricted/not exposed
+      }
+
+      // Hỗ trợ RPC get_interaction_raw_content nếu schema direct query chưa có kết quả
+      if (!rawRows && typeof (adminClient as any).rpc === 'function') {
+        try {
+          const rpcResults: any[] = [];
+          for (const id of interactionIds) {
+            const { data: rpcData, error: rpcErr } = await (adminClient as any).rpc(
+              'get_interaction_raw_content',
+              {
+                p_company_id: companyId,
+                p_interaction_id: id,
+              }
+            );
+            if (!rpcErr && rpcData && rpcData.length > 0) {
+              rpcResults.push(...rpcData);
+            }
+          }
+          if (rpcResults.length > 0) {
+            rawRows = rpcResults;
+          }
+        } catch {
+          // RPC fallback
+        }
+      }
+
+      // FAIL-CLOSED AUDIT TRAIL:
+      // Trước khi trả về raw_content từ private.interaction_raw_contents,
+      // BẮT BUỘC ghi bản ghi audit log vào public.audit_logs.
+      // Nếu thao tác ghi audit log gặp lỗi: Lập tức dừng lại và ném lỗi HTTP 500 AUDIT_WRITE_FAILED,
+      // tuyệt đối KHÔNG trả về raw_content ra ngoài response (Fail-Closed).
+      if (rawRows && rawRows.length > 0) {
+        const actorId = options?.actorId || options?.userId || null;
+        const nowIso = new Date().toISOString();
+
+        const auditRecords = rawRows.map((r: any) => ({
+          company_id: companyId,
+          user_id: actorId,
+          actor_id: actorId,
+          action: 'VIEW_RAW_INTERACTION',
+          resource_type: 'INTERACTION',
+          resource_id: r.interaction_id,
+          result: 'SUCCESS',
+          metadata: {
+            conversation_id: conversationId,
+            interaction_id: r.interaction_id,
+            actor_id: actorId,
+          },
+          created_at: nowIso,
+        }));
+
+        const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
+        const { error: auditErr } = await adminClient
+          .from('audit_logs')
+          .insert(auditPayload);
+
+        if (auditErr) {
+          console.error('Lỗi khi ghi audit log truy cập raw interaction:', auditErr);
+          const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.');
+          (failClosedErr as any).status = 500;
+          (failClosedErr as any).code = 'AUDIT_WRITE_FAILED';
+          throw failClosedErr;
+        }
+
+        for (const r of rawRows) {
+          rawMap.set(r.interaction_id, r.raw_content);
+        }
+      }
+    }
+
+    return interactions.map((m: any) => {
+      const raw = rawMap.get(m.id) || m.sanitized_content || '';
       const sanitized = m.sanitized_content || sanitizePhoneInText(raw);
-      const status: 'CLEAN' | 'SANITIZED' | 'RAW' =
-        m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
+      const status = sanitized !== raw ? 'SANITIZED' : 'CLEAN';
+      const senderType: SenderType =
+        m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
+
       return {
-        ...m,
+        id: m.id,
+        company_id: m.company_id,
+        conversation_id: m.conversation_id,
+        customer_id: m.customer_id,
+        channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
+        sender_type: senderType,
         content: raw, // BOSS_ADMIN nhận nguyên văn bản gốc
         sanitized_content: sanitized,
         sanitization_status: status,
         raw_content: raw,
+        created_at: m.created_at,
+        direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
       };
     });
   }
 
   // Mặc định hoặc SALE: Luôn trả về sanitized derivative, tuyệt đối không lộ raw phone
-  return sorted.map((m) => {
-    const raw = m.raw_content || m.content;
-    const sanitized = m.sanitized_content || sanitizePhoneInText(m.content);
-    const status: 'CLEAN' | 'SANITIZED' | 'RAW' =
-      m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
-    const { raw_content, ...rest } = m;
+  return interactions.map((m: any) => {
+    const sanitized = m.sanitized_content || '';
+    const senderType: SenderType =
+      m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
+
     return {
-      ...rest,
+      id: m.id,
+      company_id: m.company_id,
+      conversation_id: m.conversation_id,
+      customer_id: m.customer_id,
+      channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
+      sender_type: senderType,
       content: sanitized, // Mặc định hiển thị sanitized_content
       sanitized_content: sanitized,
-      sanitization_status: status,
+      sanitization_status: (m.sanitization_status || 'SUCCEEDED') as any,
+      created_at: m.created_at,
+      direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
     };
   });
 }
@@ -438,7 +833,8 @@ export async function getMessagesByConversationId(
  */
 export async function sendMessage(
   input: SendMessageInput,
-  callerCompanyId?: string
+  callerCompanyId?: string,
+  client?: SupabaseClient
 ): Promise<InboxMessage> {
   const companyId = callerCompanyId || input.company_id;
 
@@ -458,11 +854,63 @@ export async function sendMessage(
     throw err;
   }
 
+  // 1. Mock store in-memory: chỉ kích hoạt khi DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    const conv = conversationsStore.find(
+      (c) => c.id === conversation_id && c.company_id === companyId
+    );
+    if (!conv) {
+      const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.');
+      (notFoundErr as any).status = 404;
+      (notFoundErr as any).code = 'NOT_FOUND';
+      throw notFoundErr;
+    }
+
+    const rawContent = content.trim();
+    const sanitizedContent = sanitizePhoneInText(rawContent);
+    const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
+      sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+
+    const newMessage: InboxMessage = {
+      id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      company_id: companyId,
+      conversation_id,
+      customer_id: conv.customer_id,
+      channel: conv.channel,
+      sender_type,
+      sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
+      content: sanitizedContent,
+      sanitized_content: sanitizedContent,
+      sanitization_status: sanitizationStatus,
+      raw_content: rawContent,
+      created_at: new Date().toISOString(),
+      direction: sender_type === 'customer' ? 'inbound' : 'outbound',
+    };
+
+    if (!messagesStore[conversation_id]) {
+      messagesStore[conversation_id] = [];
+    }
+    messagesStore[conversation_id].push(newMessage);
+
+    conv.last_message = rawContent;
+    conv.updated_at = newMessage.created_at;
+    conv.last_message_at = newMessage.created_at;
+
+    return newMessage;
+  }
+
+  // 2. Canonical Database Persistence: Lưu vào public.conversations, public.interactions, và private.interaction_raw_contents
+  const adminClient = client || createAdminClient();
+
   // Resource Authorization: Cuộc hội thoại phải thuộc quyền sở hữu của companyId
-  const conv = conversationsStore.find(
-    (c) => c.id === conversation_id && c.company_id === companyId
-  );
-  if (!conv) {
+  const { data: conv, error: convError } = await adminClient
+    .from('conversations')
+    .select('id, company_id, customer_id, channel')
+    .eq('id', conversation_id)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (convError || !conv) {
     const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.');
     (notFoundErr as any).status = 404;
     (notFoundErr as any).code = 'NOT_FOUND';
@@ -471,37 +919,79 @@ export async function sendMessage(
 
   const rawContent = content.trim();
   const sanitizedContent = sanitizePhoneInText(rawContent);
-  const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
-    sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+  const isSanitized = sanitizedContent !== rawContent;
+  const sanitizationStatus: 'CLEAN' | 'SANITIZED' = isSanitized ? 'SANITIZED' : 'CLEAN';
+  const now = new Date().toISOString();
+  const interactionId = generateUUID();
 
-  const newMessage: InboxMessage = {
-    id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+  // Bước 1: Cập nhật last_message_at trong public.conversations
+  await adminClient
+    .from('conversations')
+    .update({
+      last_message_at: now,
+      updated_at: now,
+    })
+    .eq('id', conversation_id)
+    .eq('company_id', companyId);
+
+  // Bước 2: Lưu bản ghi đã làm sạch vào public.interactions
+  const dbChannel = conv.channel.toUpperCase();
+  const dbActorType = sender_type === 'ai' ? 'AI' : 'SALE';
+
+  const { error: insertInteractionErr } = await adminClient
+    .from('interactions')
+    .insert({
+      id: interactionId,
+      company_id: companyId,
+      customer_id: conv.customer_id,
+      conversation_id: conv.id,
+      channel: dbChannel,
+      type: 'MESSAGE',
+      direction: 'OUTBOUND',
+      sanitized_content: sanitizedContent,
+      sanitization_status: 'SUCCEEDED',
+      sanitized_at: now,
+      sanitizer_version: 'v1',
+      actor_type: dbActorType,
+      created_at: now,
+    });
+
+  if (insertInteractionErr) {
+    throw new Error(`Lỗi lưu tương tác: ${insertInteractionErr.message}`);
+  }
+
+  // Bước 3: Lưu bản nội dung gốc vào private.interaction_raw_contents qua adminClient/trusted context
+  try {
+    await adminClient
+      .schema('private')
+      .from('interaction_raw_contents')
+      .insert({
+        interaction_id: interactionId,
+        company_id: companyId,
+        raw_content: rawContent,
+        raw_payload: { content: rawContent, sender_name, sender_type },
+        source_metadata: { source: 'sale_reply' },
+        created_at: now,
+      });
+  } catch (rawErr) {
+    console.warn('[InboxService] Failed to persist raw content in private schema:', rawErr);
+  }
+
+  return {
+    id: interactionId,
     company_id: companyId,
     conversation_id,
     customer_id: conv.customer_id,
-    channel: conv.channel,
+    channel: conv.channel.toLowerCase() as InboxChannel,
     sender_type,
     sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
-    content: sanitizedContent, // DTO công khai hiển thị sanitized
+    content: sanitizedContent,
     sanitized_content: sanitizedContent,
     sanitization_status: sanitizationStatus,
-    raw_content: rawContent, // Lưu trữ vùng riêng tư (private)
-    created_at: new Date().toISOString(),
-    direction: sender_type === 'customer' ? 'inbound' : 'outbound',
+    raw_content: rawContent,
+    created_at: now,
+    direction: 'outbound',
   };
-
-  // Lưu tin nhắn vào store
-  if (!messagesStore[conversation_id]) {
-    messagesStore[conversation_id] = [];
-  }
-  messagesStore[conversation_id].push(newMessage);
-
-  // Cập nhật thông tin hội thoại
-  conv.last_message = rawContent;
-  conv.updated_at = newMessage.created_at;
-  conv.last_message_at = newMessage.created_at;
-
-  return newMessage;
 }
 
 /**
@@ -510,116 +1000,245 @@ export async function sendMessage(
 export async function getCustomerTimeline(
   customerId: string,
   companyId: string,
-  callerRole?: string | null
+  callerRole?: string | null,
+  client?: SupabaseClient,
+  options?: GetMessagesOptions
 ): Promise<CustomerTimelineEvent[]> {
   if (!companyId) {
     throw new Error('companyId là bắt buộc khi lấy dòng thời gian khách hàng.');
   }
 
-  const events: CustomerTimelineEvent[] = [];
+  // 1. Mock store in-memory: chỉ kích hoạt khi DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    const events: CustomerTimelineEvent[] = [];
 
-  // Lấy các cuộc hội thoại thuộc khách hàng này VÀ thuộc đúng companyId
-  const allowedConvIds = new Set(
-    conversationsStore
-      .filter((c) => c.company_id === companyId && c.customer_id === customerId)
-      .map((c) => c.id)
-  );
+    const allowedConvIds = new Set(
+      conversationsStore
+        .filter((c) => c.company_id === companyId && c.customer_id === customerId)
+        .map((c) => c.id)
+    );
 
-  // Chỉ lấy tin nhắn từ các cuộc hội thoại thuộc companyId này
-  for (const convId of allowedConvIds) {
-    const msgs = messagesStore[convId] || [];
-    for (const m of msgs) {
-      const isBoss = callerRole === APPLICATION_ROLES.BOSS_ADMIN;
-      const desc = isBoss
-        ? (m.raw_content || m.content)
-        : (m.sanitized_content || sanitizePhoneInText(m.content));
+    for (const convId of allowedConvIds) {
+      const msgs = messagesStore[convId] || [];
+      for (const m of msgs) {
+        const isBoss = callerRole === APPLICATION_ROLES.BOSS_ADMIN;
+        const desc = isBoss
+          ? (m.raw_content || m.content)
+          : (m.sanitized_content || sanitizePhoneInText(m.content));
+
+        events.push({
+          id: m.id,
+          company_id: companyId,
+          customer_id: customerId,
+          type: 'MESSAGE',
+          channel: m.channel,
+          title:
+            m.sender_type === 'customer'
+              ? 'Tin nhắn từ khách hàng'
+              : m.sender_type === 'ai'
+                ? 'AI phản hồi tự động'
+                : 'Sale gửi tin nhắn tư vấn',
+          description: desc,
+          timestamp: m.created_at,
+          actor_type: m.sender_type,
+          actor_name: m.sender_name,
+        });
+      }
+    }
+
+    if (companyId === DEFAULT_INBOX_COMPANY_ID) {
+      if (customerId === 'cust-1') {
+        events.push({
+          id: 'evt-call-1',
+          company_id: companyId,
+          customer_id: customerId,
+          type: 'CALL',
+          channel: 'hotline',
+          title: 'Cuộc gọi tư vấn Click-to-Call',
+          description: 'Sale thực hiện cuộc gọi bảo mật qua tổng đài Hotline. Khách đồng ý nhận báo giá qua Zalo/Facebook.',
+          timestamp: '2026-09-17T09:15:00Z',
+          actor_type: 'sale',
+          actor_name: 'Chuyên viên Sale',
+        });
+        events.push({
+          id: 'evt-stage-1',
+          company_id: companyId,
+          customer_id: customerId,
+          type: 'STAGE_CHANGE',
+          title: 'Chuyển giai đoạn: Đã báo giá',
+          description: 'Hệ thống tính giá hoàn tất, chuyển trạng thái từ LEAD_NEW sang PRICE_OFFERED.',
+          timestamp: '2026-09-17T09:20:00Z',
+          actor_type: 'system',
+        });
+      } else if (customerId === 'cust-2') {
+        events.push({
+          id: 'evt-survey-2',
+          company_id: companyId,
+          customer_id: customerId,
+          type: 'SURVEY',
+          title: 'Lên lịch hẹn khảo sát hiện trường',
+          description: 'Đặt lịch khảo sát dốc hầm KĐT Nam An Khánh cho Kỹ thuật viên (assignee_id: TECH-01).',
+          timestamp: '2026-09-17T10:20:00Z',
+          actor_type: 'sale',
+        });
+      } else if (customerId === 'cust-4') {
+        events.push({
+          id: 'evt-order-4',
+          company_id: companyId,
+          customer_id: customerId,
+          type: 'STAGE_CHANGE',
+          title: 'Xác nhận đặt cọc thành công',
+          description: 'Khách hàng chuyển khoản 5.000.000đ qua VietQR. Khớp đơn DH-000004 thành công.',
+          timestamp: '2026-09-16T16:40:00Z',
+          actor_type: 'system',
+        });
+      }
 
       events.push({
-        id: m.id,
+        id: `evt-init-${customerId}`,
         company_id: companyId,
         customer_id: customerId,
-        type: 'MESSAGE',
-        channel: m.channel,
-        title:
-          m.sender_type === 'customer'
-            ? 'Tin nhắn từ khách hàng'
-            : m.sender_type === 'ai'
-              ? 'AI phản hồi tự động'
-              : 'Sale gửi tin nhắn tư vấn',
-        description: desc,
-        timestamp: m.created_at,
-        actor_type: m.sender_type,
-        actor_name: m.sender_name,
+        type: 'STAGE_CHANGE',
+        title: 'Tiếp nhận khách hàng mới',
+        description: 'Hồ sơ được tạo và lưu trữ trên hệ thống AI CRM với số điện thoại chuẩn hóa E.164.',
+        timestamp: '2026-09-16T08:00:00Z',
+        actor_type: 'system',
       });
+    }
+
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    if (callerRole === APPLICATION_ROLES.SALE) {
+      return events.map((e) => ({
+        ...e,
+        title: sanitizePhoneInText(e.title),
+        description: sanitizePhoneInText(e.description),
+      }));
+    }
+
+    return events;
+  }
+
+  // 2. Canonical Database Persistence: Truy vấn trực tiếp từ public.interactions
+  const adminClient = client || createAdminClient();
+
+  const { data: interactions, error } = await adminClient
+    .from('interactions')
+    .select('id, company_id, customer_id, channel, type, direction, sanitized_content, sanitization_status, actor_type, actor_user_id, created_at')
+    .eq('company_id', companyId)
+    .eq('customer_id', customerId)
+    .order('created_at', { ascending: false });
+
+  if (error || !interactions) {
+    return [];
+  }
+
+  let rawMap = new Map<string, string>();
+  if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
+    const ids = interactions.map((i: any) => i.id);
+    if (ids.length > 0) {
+      let rawRows: any[] | null = null;
+      try {
+        const { data, error } = await adminClient
+          .schema('private')
+          .from('interaction_raw_contents')
+          .select('interaction_id, company_id, raw_content')
+          .in('interaction_id', ids)
+          .eq('company_id', companyId);
+
+        if (!error && data) {
+          rawRows = data;
+        }
+      } catch {
+        // Fallback
+      }
+
+      if (rawRows && rawRows.length > 0) {
+        const actorId = options?.actorId || options?.userId || null;
+        const auditRecords = rawRows.map((r: any) => ({
+          company_id: companyId,
+          user_id: actorId,
+          actor_id: actorId,
+          action: 'VIEW_RAW_INTERACTION',
+          resource_type: 'INTERACTION',
+          resource_id: r.interaction_id,
+          customer_id: customerId,
+          result: 'SUCCESS',
+          metadata: {
+            customer_id: customerId,
+            interaction_id: r.interaction_id,
+            actor_id: actorId,
+            purpose: 'TIMELINE_VIEW',
+          },
+          created_at: new Date().toISOString(),
+        }));
+
+        const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
+        const { error: auditErr } = await adminClient
+          .from('audit_logs')
+          .insert(auditPayload);
+
+        if (auditErr) {
+          console.error('Lỗi khi ghi audit log truy cập raw timeline interaction:', auditErr);
+          const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.');
+          (failClosedErr as any).status = 500;
+          (failClosedErr as any).code = 'AUDIT_WRITE_FAILED';
+          throw failClosedErr;
+        }
+
+        for (const r of rawRows) {
+          rawMap.set(r.interaction_id, r.raw_content);
+        }
+      }
     }
   }
 
-  // Bổ sung các sự kiện nghiệp vụ mẫu trong hành trình khách hàng (chỉ khi cùng companyId mặc định)
-  if (companyId === DEFAULT_INBOX_COMPANY_ID) {
-    if (customerId === 'cust-1') {
-      events.push({
-        id: 'evt-call-1',
-        company_id: companyId,
-        customer_id: customerId,
-        type: 'CALL',
-        channel: 'hotline',
-        title: 'Cuộc gọi tư vấn Click-to-Call',
-        description: 'Sale thực hiện cuộc gọi bảo mật qua tổng đài Hotline. Khách đồng ý nhận báo giá qua Zalo/Facebook.',
-        timestamp: '2026-09-17T09:15:00Z',
-        actor_type: 'sale',
-        actor_name: 'Chuyên viên Sale',
-      });
-      events.push({
-        id: 'evt-stage-1',
-        company_id: companyId,
-        customer_id: customerId,
-        type: 'STAGE_CHANGE',
-        title: 'Chuyển giai đoạn: Đã báo giá',
-        description: 'Hệ thống tính giá hoàn tất, chuyển trạng thái từ LEAD_NEW sang PRICE_OFFERED.',
-        timestamp: '2026-09-17T09:20:00Z',
-        actor_type: 'system',
-      });
-    } else if (customerId === 'cust-2') {
-      events.push({
-        id: 'evt-survey-2',
-        company_id: companyId,
-        customer_id: customerId,
-        type: 'SURVEY',
-        title: 'Lên lịch hẹn khảo sát hiện trường',
-        description: 'Đặt lịch khảo sát dốc hầm KĐT Nam An Khánh cho Kỹ thuật viên (assignee_id: TECH-01).',
-        timestamp: '2026-09-17T10:20:00Z',
-        actor_type: 'sale',
-      });
-    } else if (customerId === 'cust-4') {
-      events.push({
-        id: 'evt-order-4',
-        company_id: companyId,
-        customer_id: customerId,
-        type: 'STAGE_CHANGE',
-        title: 'Xác nhận đặt cọc thành công',
-        description: 'Khách hàng chuyển khoản 5.000.000đ qua VietQR. Khớp đơn DH-000004 thành công.',
-        timestamp: '2026-09-16T16:40:00Z',
-        actor_type: 'system',
-      });
+  const events: CustomerTimelineEvent[] = interactions.map((m: any) => {
+    let title = 'Tương tác khách hàng';
+    let eventType: 'MESSAGE' | 'CALL' | 'STAGE_CHANGE' | 'SURVEY' | 'NOTE' = 'MESSAGE';
+
+    if (m.type === 'MESSAGE') {
+      eventType = 'MESSAGE';
+      title =
+        m.direction === 'INBOUND'
+          ? 'Tin nhắn từ khách hàng'
+          : m.actor_type === 'AI'
+            ? 'AI phản hồi tự động'
+            : 'Sale gửi tin nhắn tư vấn';
+    } else if (m.type === 'CALL_EVENT') {
+      eventType = 'CALL';
+      title = 'Cuộc gọi tư vấn Click-to-Call';
+    } else if (m.type === 'NOTE') {
+      eventType = 'NOTE';
+      title = 'Ghi chú nội bộ';
+    } else if (m.type === 'STATUS_EVENT') {
+      eventType = 'STAGE_CHANGE';
+      title = 'Thay đổi trạng thái';
+    } else if (m.type === 'APPOINTMENT_EVENT') {
+      eventType = 'SURVEY';
+      title = 'Lịch hẹn khảo sát';
     }
 
-    // Thêm sự kiện khởi tạo khách hàng ban đầu
-    events.push({
-      id: `evt-init-${customerId}`,
+    const isBoss = callerRole === APPLICATION_ROLES.BOSS_ADMIN;
+    const desc = isBoss
+      ? (rawMap.get(m.id) || m.sanitized_content || '')
+      : (m.sanitized_content || '');
+
+    return {
+      id: m.id,
       company_id: companyId,
       customer_id: customerId,
-      type: 'STAGE_CHANGE',
-      title: 'Tiếp nhận khách hàng mới',
-      description: 'Hồ sơ được tạo và lưu trữ trên hệ thống AI CRM với số điện thoại chuẩn hóa E.164.',
-      timestamp: '2026-09-16T08:00:00Z',
-      actor_type: 'system',
-    });
-  }
+      type: eventType,
+      channel: (m.channel || '').toLowerCase(),
+      title,
+      description: desc,
+      timestamp: m.created_at,
+      actor_type: (m.actor_type?.toLowerCase() || 'system') as any,
+    };
+  });
 
-  // Sắp xếp thời gian giảm dần (mới nhất lên đầu)
   events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-  // Zero-Phone Sanitization: Nếu là SALE, che số điện thoại trong description và title
   if (callerRole === APPLICATION_ROLES.SALE) {
     return events.map((e) => ({
       ...e,
@@ -644,7 +1263,7 @@ export async function addInboundMessage(params: {
   timestamp?: string;
   externalMessageId?: string;
   customerId?: string;
-}): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
+}, client?: SupabaseClient): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
   // Fail-Closed: Bắt buộc phải có company_id hợp lệ, xóa bỏ hoàn toàn fallback DEFAULT_INBOX_COMPANY_ID
   if (
     !params.company_id ||
@@ -656,81 +1275,347 @@ export async function addInboundMessage(params: {
   }
   const companyId = params.company_id.trim();
   const timestamp = params.timestamp || new Date().toISOString();
-  let isNewConversation = false;
 
-  // Tìm cuộc hội thoại tương ứng trong đúng companyId
-  let conversation = conversationsStore.find(
-    (c) =>
-      c.company_id === companyId &&
-      c.channel === params.channel &&
-      (c.customer_id === params.customerId ||
-        c.customer_id === params.senderId ||
-        (params.senderPhone && c.customer_phone === params.senderPhone))
-  );
+  // 1. Mock store in-memory: chỉ kích hoạt khi DEMO_MODE === 'true'
+  if (isDemoMode()) {
+    let isNewConversation = false;
 
-  if (!conversation) {
-    // Tạo mới cuộc hội thoại
-    isNewConversation = true;
-    const newCustId = params.customerId || `cust-${Date.now()}`;
-    const codeNum = conversationsStore.filter((c) => c.company_id === companyId).length + 1;
-    const customerCode = `KH-${String(codeNum).padStart(6, '0')}`;
+    let conversation = conversationsStore.find(
+      (c) =>
+        c.company_id === companyId &&
+        c.channel === params.channel &&
+        (c.customer_id === params.customerId ||
+          c.customer_id === params.senderId ||
+          (params.senderPhone && c.customer_phone === params.senderPhone))
+    );
 
-    conversation = {
-      id: `conv-${Date.now()}`,
+    if (!conversation) {
+      isNewConversation = true;
+      const newCustId = params.customerId || `cust-${Date.now()}`;
+      const codeNum = conversationsStore.filter((c) => c.company_id === companyId).length + 1;
+      const customerCode = `KH-${String(codeNum).padStart(6, '0')}`;
+
+      conversation = {
+        id: `conv-${Date.now()}`,
+        company_id: companyId,
+        customer_id: newCustId,
+        customer_name: params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook'),
+        customer_code: customerCode,
+        customer_phone: params.senderPhone,
+        customer_stage: 'LEAD_NEW',
+        customer_source: params.channel === 'zalo' ? 'ZALO' : 'FACEBOOK',
+        channel: params.channel,
+        last_message: params.content,
+        last_message_at: timestamp,
+        unread_count: 1,
+        status: 'PENDING_SALE',
+        updated_at: timestamp,
+        created_at: timestamp,
+      };
+
+      conversationsStore.unshift(conversation);
+      messagesStore[conversation.id] = [];
+    } else {
+      conversation.last_message = params.content;
+      conversation.last_message_at = timestamp;
+      conversation.unread_count = (conversation.unread_count || 0) + 1;
+      conversation.status = 'PENDING_SALE';
+      conversation.updated_at = timestamp;
+    }
+
+    const rawContent = params.content || '';
+    const sanitizedContent = sanitizePhoneInText(rawContent);
+    const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
+      sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+
+    const newMessage: InboxMessage = {
+      id: params.externalMessageId || `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       company_id: companyId,
-      customer_id: newCustId,
-      customer_name: params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook'),
-      customer_code: customerCode,
-      customer_phone: params.senderPhone,
-      customer_stage: 'LEAD_NEW',
-      customer_source: params.channel === 'zalo' ? 'ZALO' : 'FACEBOOK',
+      conversation_id: conversation.id,
+      customer_id: conversation.customer_id,
       channel: params.channel,
-      last_message: params.content,
-      last_message_at: timestamp,
-      unread_count: 1,
-      status: 'PENDING_SALE',
-      updated_at: timestamp,
+      sender_type: 'customer',
+      sender_name: params.senderName || conversation.customer_name,
+      content: sanitizedContent,
+      sanitized_content: sanitizedContent,
+      sanitization_status: sanitizationStatus,
+      raw_content: rawContent,
       created_at: timestamp,
+      direction: 'inbound',
     };
 
-    conversationsStore.unshift(conversation);
-    messagesStore[conversation.id] = [];
-  } else {
-    // Cập nhật hội thoại đã tồn tại
-    conversation.last_message = params.content;
-    conversation.last_message_at = timestamp;
-    conversation.unread_count = (conversation.unread_count || 0) + 1;
-    conversation.status = 'PENDING_SALE';
-    conversation.updated_at = timestamp;
+    if (!messagesStore[conversation.id]) {
+      messagesStore[conversation.id] = [];
+    }
+    messagesStore[conversation.id].push(newMessage);
+
+    return {
+      conversation,
+      message: newMessage,
+      isNewConversation,
+    };
   }
 
-  // Ingress Sanitization: Làm sạch ngay tại thời điểm tiếp nhận (Zero-Phone Security Zone)
+  // 2. Canonical Database Persistence: Lưu vào public.conversations, public.interactions, và private.interaction_raw_contents
+  const adminClient = client || createAdminClient();
+  const dbChannel = params.channel.toUpperCase();
+  const externalConvId = params.senderId;
+
   const rawContent = params.content || '';
   const sanitizedContent = sanitizePhoneInText(rawContent);
-  const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
-    sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
+  const isSanitized = sanitizedContent !== rawContent;
+  const sanitizationStatus: 'CLEAN' | 'SANITIZED' = isSanitized ? 'SANITIZED' : 'CLEAN';
 
-  // Tạo tin nhắn mới
-  const newMessage: InboxMessage = {
-    id: params.externalMessageId || `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+  let isNewConversation = false;
+  let conversationId: string;
+  let customerId: string;
+  let customerName: string =
+    params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
+  let customerCode: string = 'KH-000001';
+  let customerStage: string = 'LEAD_NEW';
+
+  // Tìm cuộc hội thoại tương ứng theo (company_id, channel, external_conversation_id)
+  let existingConv: any = null;
+  const { data: convByExt } = await adminClient
+    .from('conversations')
+    .select(`
+      id,
+      company_id,
+      customer_id,
+      channel,
+      external_conversation_id,
+      unread_count,
+      status,
+      created_at,
+      updated_at,
+      customers (
+        id,
+        name,
+        customer_code,
+        stage,
+        source
+      )
+    `)
+    .eq('company_id', companyId)
+    .eq('channel', dbChannel)
+    .eq('external_conversation_id', externalConvId)
+    .maybeSingle();
+
+  existingConv = convByExt;
+
+  if (!existingConv && params.customerId && UUID_REGEX.test(params.customerId)) {
+    const { data: convByCust } = await adminClient
+      .from('conversations')
+      .select(`
+        id,
+        company_id,
+        customer_id,
+        channel,
+        external_conversation_id,
+        unread_count,
+        status,
+        created_at,
+        updated_at,
+        customers (
+          id,
+          name,
+          customer_code,
+          stage,
+          source
+        )
+      `)
+      .eq('company_id', companyId)
+      .eq('channel', dbChannel)
+      .eq('customer_id', params.customerId)
+      .maybeSingle();
+
+    existingConv = convByCust;
+  }
+
+  if (existingConv) {
+    conversationId = existingConv.id;
+    customerId = existingConv.customer_id;
+    const cust = Array.isArray(existingConv.customers) ? existingConv.customers[0] : existingConv.customers;
+    if (cust) {
+      customerName = cust.name || customerName;
+      customerCode = cust.customer_code || customerCode;
+      customerStage = cust.stage || customerStage;
+    }
+
+    // Cập nhật hội thoại đã tồn tại
+    await adminClient
+      .from('conversations')
+      .update({
+        last_message_at: timestamp,
+        unread_count: (existingConv.unread_count || 0) + 1,
+        status: 'PENDING_SALE',
+        updated_at: timestamp,
+      })
+      .eq('id', conversationId)
+      .eq('company_id', companyId);
+  } else {
+    // Tạo mới cuộc hội thoại
+    isNewConversation = true;
+    conversationId = generateUUID();
+
+    if (params.customerId && UUID_REGEX.test(params.customerId)) {
+      customerId = params.customerId;
+    } else {
+      // Tìm hoặc tạo khách hàng mới
+      if (params.senderPhone) {
+        try {
+          const custResult = await CustomerService.findOrCreateByPhone(
+            {
+              phone: params.senderPhone,
+              name: customerName,
+              companyId,
+              source: dbChannel as any,
+            },
+            adminClient
+          );
+          if (custResult?.customer) {
+            customerId = custResult.customer.id;
+            customerCode = custResult.customer.customer_code;
+            customerName = custResult.customer.name;
+            customerStage = custResult.customer.stage;
+          }
+        } catch {
+          // Bỏ qua lỗi tìm khách qua phone
+        }
+      }
+
+      if (!customerId! || !UUID_REGEX.test(customerId)) {
+        const newCustId = generateUUID();
+        const { data: createdCust } = await adminClient
+          .from('customers')
+          .insert({
+            id: newCustId,
+            company_id: companyId,
+            name: customerName,
+            source: dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK',
+            stage: 'LEAD_NEW',
+          })
+          .select('id, name, customer_code, stage')
+          .maybeSingle();
+
+        if (createdCust) {
+          customerId = createdCust.id;
+          customerName = createdCust.name || customerName;
+          customerCode = createdCust.customer_code || customerCode;
+          customerStage = createdCust.stage || customerStage;
+        } else {
+          customerId = newCustId;
+        }
+      }
+    }
+
+    const { error: convInsertErr } = await adminClient
+      .from('conversations')
+      .insert({
+        id: conversationId,
+        company_id: companyId,
+        customer_id: customerId,
+        channel: dbChannel,
+        external_conversation_id: externalConvId,
+        last_message_at: timestamp,
+        unread_count: 1,
+        status: 'PENDING_SALE',
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+
+    if (convInsertErr) {
+      throw new Error(`Lỗi khởi tạo cuộc hội thoại: ${convInsertErr.message}`);
+    }
+  }
+
+  // 2. Lưu bản ghi đã làm sạch vào public.interactions
+  const interactionId =
+    params.externalMessageId && UUID_REGEX.test(params.externalMessageId)
+      ? params.externalMessageId
+      : generateUUID();
+
+  const { error: insertInteractionErr } = await adminClient
+    .from('interactions')
+    .insert({
+      id: interactionId,
+      company_id: companyId,
+      customer_id: customerId,
+      conversation_id: conversationId,
+      channel: dbChannel,
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      sanitized_content: sanitizedContent,
+      sanitization_status: 'SUCCEEDED',
+      sanitized_at: timestamp,
+      sanitizer_version: 'v1',
+      external_ref: params.externalMessageId || null,
+      actor_type: 'CUSTOMER',
+      created_at: timestamp,
+    });
+
+  if (insertInteractionErr) {
+    throw new Error(`Lỗi lưu tương tác: ${insertInteractionErr.message}`);
+  }
+
+  // 3. Lưu bản nội dung gốc vào private.interaction_raw_contents qua adminClient/trusted context
+  try {
+    await adminClient
+      .schema('private')
+      .from('interaction_raw_contents')
+      .insert({
+        interaction_id: interactionId,
+        company_id: companyId,
+        raw_content: rawContent,
+        raw_payload: {
+          content: rawContent,
+          sender_id: params.senderId,
+          sender_name: params.senderName,
+          sender_phone: params.senderPhone,
+        },
+        source_metadata: {
+          channel: params.channel,
+          external_message_id: params.externalMessageId,
+        },
+        created_at: timestamp,
+      });
+  } catch (rawErr) {
+    console.warn('[InboxService] Failed to persist raw interaction content in private schema:', rawErr);
+  }
+
+  const conversation: Conversation = {
+    id: conversationId,
     company_id: companyId,
-    conversation_id: conversation.id,
-    customer_id: conversation.customer_id,
+    customer_id: customerId,
+    customer_name: customerName,
+    customer_code: customerCode,
+    customer_phone: params.senderPhone,
+    customer_stage: customerStage,
+    customer_source: dbChannel,
+    channel: params.channel,
+    last_message: rawContent,
+    last_message_at: timestamp,
+    unread_count: isNewConversation ? 1 : (existingConv?.unread_count || 0) + 1,
+    status: 'PENDING_SALE',
+    updated_at: timestamp,
+    created_at: timestamp,
+  };
+
+  const newMessage: InboxMessage = {
+    id: interactionId,
+    company_id: companyId,
+    conversation_id: conversationId,
+    customer_id: customerId,
     channel: params.channel,
     sender_type: 'customer',
-    sender_name: params.senderName || conversation.customer_name,
-    content: sanitizedContent, // DTO công khai mặc định hiển thị nội dung làm sạch
+    sender_name: params.senderName || customerName,
+    content: sanitizedContent,
     sanitized_content: sanitizedContent,
     sanitization_status: sanitizationStatus,
-    raw_content: rawContent, // Lưu trữ an toàn vùng private
+    raw_content: rawContent,
     created_at: timestamp,
     direction: 'inbound',
   };
-
-  if (!messagesStore[conversation.id]) {
-    messagesStore[conversation.id] = [];
-  }
-  messagesStore[conversation.id].push(newMessage);
 
   return {
     conversation,
@@ -777,6 +1662,7 @@ export function resetInboxStore(
 }
 
 export const InboxService = {
+  isDemoModeActive,
   getConversations,
   getConversationById,
   getMessagesByConversationId,

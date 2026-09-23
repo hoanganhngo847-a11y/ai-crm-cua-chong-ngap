@@ -96,15 +96,14 @@ async function runServerAuthorityTests() {
         }
         if (table === 'identities') {
           return {
-            select: () => ({
-              eq: () => ({
-                eq: () => ({
-                  eq: () => ({
-                    maybeSingle: async () => ({ data: null, error: null }),
-                  }),
-                }),
-              }),
-            }),
+            select: () => {
+              const query: any = {
+                eq: () => query,
+                maybeSingle: async () => ({ data: null, error: null }),
+                then: (resolve: any) => resolve({ data: [...insertedRecords.identities], error: null }),
+              };
+              return query;
+            },
             insert: async (row: any) => {
               insertedRecords.identities.push(row);
               return { error: null };
@@ -184,26 +183,21 @@ async function runServerAuthorityTests() {
   );
   console.log('✓ PASS 1b: DB PHONE identity saved with verified = false');
 
-  // 1c. Verify social identity was inserted with verified = false
+  // 1c. Anti-Poison Identity (Lỗi P1 số 6): Server loại bỏ hoàn toàn channel/external_id từ client
   const fbIdentity = insertedRecords.identities.find((i) => i.channel === 'FACEBOOK');
-  assert(fbIdentity, 'FACEBOOK identity was inserted');
   assert.strictEqual(
-    fbIdentity.verified,
-    false,
-    'public.identities (FACEBOOK) verified MUST be false (Server Authority override)'
+    fbIdentity,
+    undefined,
+    'public.identities (FACEBOOK) KHÔNG được tạo từ client POST /api/customers (Anti-Poison Identity)'
   );
-  console.log('✓ PASS 1c: DB FACEBOOK identity saved with verified = false');
+  console.log('✓ PASS 1c: DB FACEBOOK identity NOT created (poison identity blocked)');
 
-  // 1d. Verify response payload identities all have verified = false
+  // 1d. Verify response payload identities has only PHONE with verified = false
   assert(bodyHacked.data.identities, 'Response must contain identities array');
-  for (const ident of bodyHacked.data.identities) {
-    assert.strictEqual(
-      ident.verified,
-      false,
-      `Identity for channel ${ident.channel} must have verified = false in response`
-    );
-  }
-  console.log('✓ PASS 1d: Response payload identities have verified = false');
+  assert.strictEqual(bodyHacked.data.identities.length, 1, 'Only PHONE identity is returned in payload');
+  assert.strictEqual(bodyHacked.data.identities[0].channel, 'PHONE');
+  assert.strictEqual(bodyHacked.data.identities[0].verified, false);
+  console.log('✓ PASS 1d: Response payload identities has only PHONE with verified = false');
 
   // ============================================================================
   // TEST 2: POST /api/customers Client claims verified: true for PHONE only
@@ -263,10 +257,12 @@ async function runServerAuthorityTests() {
 
   assert.strictEqual(resSmuggle.status, 201);
   assert.strictEqual(insertedRecords.privateContacts[0].is_verified, false, 'Smuggled isTrustedProvider MUST be ignored');
-  for (const ident of insertedRecords.identities) {
-    assert.strictEqual(ident.verified, false, `Identity ${ident.channel} must remain verified = false`);
-  }
-  console.log('✓ PASS 3: Server ignores smuggled isTrustedProvider and enforces verified = false');
+  const zaloIdentity = insertedRecords.identities.find((i) => i.channel === 'ZALO');
+  assert.strictEqual(zaloIdentity, undefined, 'ZALO identity must NOT be created from POST /api/customers');
+  assert.strictEqual(insertedRecords.identities.length, 1, 'Only PHONE identity should exist');
+  assert.strictEqual(insertedRecords.identities[0].channel, 'PHONE');
+  assert.strictEqual(insertedRecords.identities[0].verified, false);
+  console.log('✓ PASS 3: Server ignores smuggled isTrustedProvider and blocks poison provider identity');
 
   // ============================================================================
   // TEST 4: Direct CustomerService.findOrCreateByPhone without isTrustedProvider
@@ -291,8 +287,13 @@ async function runServerAuthorityTests() {
 
   assert.strictEqual(resultDirectUntrusted.contact.is_verified, false);
   assert.strictEqual(insertedRecords.privateContacts[0].is_verified, false);
+  const websiteIdentity = insertedRecords.identities.find((i) => i.channel === 'WEBSITE');
+  assert.strictEqual(websiteIdentity, undefined, 'WEBSITE identity must NOT be created without isTrustedProvider: true');
+  assert.strictEqual(insertedRecords.identities.length, 1, 'Only PHONE identity should exist without isTrustedProvider');
+  assert.strictEqual(insertedRecords.identities[0].channel, 'PHONE');
+  assert.strictEqual(insertedRecords.identities[0].verified, false);
   assert(resultDirectUntrusted.identities.every((i) => i.verified === false));
-  console.log('✓ PASS 4: CustomerService defaults verified = false when isTrustedProvider is omitted/false');
+  console.log('✓ PASS 4: CustomerService blocks social identity & defaults verified = false when isTrustedProvider is omitted/false');
 
   // ============================================================================
   // TEST 5: Direct CustomerService.findOrCreateByPhone WITH isTrustedProvider: true
@@ -320,6 +321,8 @@ async function runServerAuthorityTests() {
   assert.strictEqual(insertedRecords.privateContacts[0].is_verified, true);
   const trustedPhone = insertedRecords.identities.find((i) => i.channel === 'PHONE');
   const trustedFb = insertedRecords.identities.find((i) => i.channel === 'FACEBOOK');
+  assert(trustedPhone, 'PHONE identity must be created');
+  assert(trustedFb, 'FACEBOOK identity must be created when isTrustedProvider: true');
   assert.strictEqual(trustedPhone.verified, true);
   assert.strictEqual(trustedFb.verified, true);
   console.log('✓ PASS 5: CustomerService allows verified = true ONLY when isTrustedProvider: true');

@@ -14,6 +14,7 @@ async function runFailClosedAndZeroPhoneTests() {
   console.log('======================================================================');
 
   process.env.PHONE_HASH_SECRET = process.env.PHONE_HASH_SECRET || 'ai-crm-phone-hmac-secret-v1';
+  process.env.DEMO_MODE = 'true';
   process.env.NEXT_PUBLIC_DEMO_MODE = 'true';
 
   const companyA = '11111111-1111-1111-1111-111111111111';
@@ -466,8 +467,9 @@ async function runFailClosedAndZeroPhoneTests() {
   // ============================================================================
   // TEST SECTION 7: ITEM 8 (P1) — ELIMINATION OF MOCK FALLBACKS IN PRODUCTION
   // ============================================================================
-  console.log('\n--- Test 7: Item 8 (P1) - Zero Mock Fallback in Production (NEXT_PUBLIC_DEMO_MODE !== "true") ---');
-  delete process.env.NEXT_PUBLIC_DEMO_MODE; // Non-demo mode (Production)
+  console.log('\n--- Test 7: Item 8 (P1) - Zero Mock Fallback & Zero Random Fallback in Production (DEMO_MODE !== "true") ---');
+  delete process.env.DEMO_MODE; // Non-demo mode (Production)
+  delete process.env.NEXT_PUBLIC_DEMO_MODE;
 
   // 7a. GET /api/customers returns empty list when DB is empty, NOT mock customers
   function createEmptySupabaseForGet() {
@@ -573,7 +575,39 @@ async function runFailClosedAndZeroPhoneTests() {
     mockDbWithEmptyUrgent
   );
   assert.deepStrictEqual(urgentEmpty, [], 'In production, empty DB must return empty list, not mock customers');
-  console.log('✓ PASS: Item 8 (P1) strictly enforced: Zero mock fallbacks in production mode!');
+
+  // 7e. generateCustomerCode in production fails-closed on DB/RPC error (Zero Random Fallback)
+  const mockDbWithRpcError = {
+    rpc: async () => ({ data: null, error: new Error('RPC sequence failed') }),
+  } as any;
+
+  await assert.rejects(
+    async () => CustomerService.generateCustomerCode(mockDbWithRpcError),
+    /Không thể khởi tạo mã khách hàng từ CSDL/,
+    'generateCustomerCode must throw Fail-Closed error in production when RPC fails, NOT fallback to Math.random()'
+  );
+
+  // 7f. generateCustomerCode in DEMO_MODE allows fallback to KH-xxxxxx
+  process.env.DEMO_MODE = 'true';
+  const demoCode = await CustomerService.generateCustomerCode(mockDbWithRpcError);
+  assert(/^KH-\d{6}$/.test(demoCode), 'In DEMO_MODE, generateCustomerCode can fallback to formatted random code');
+  delete process.env.DEMO_MODE;
+
+  // 7g. Production guard: NODE_ENV === "production" forces isDemoModeActive to false even if DEMO_MODE === "true"
+  process.env.DEMO_MODE = 'true';
+  const originalNodeEnv = process.env.NODE_ENV;
+  (process.env as any).NODE_ENV = 'production';
+  assert.strictEqual(CustomerService.isDemoModeActive(), false, 'isDemoModeActive must be false when NODE_ENV is production');
+  await assert.rejects(
+    async () => CustomerService.generateCustomerCode(mockDbWithRpcError),
+    /Không thể khởi tạo mã khách hàng từ CSDL/,
+    'generateCustomerCode must remain Fail-Closed in production even if DEMO_MODE is set'
+  );
+  (process.env as any).NODE_ENV = originalNodeEnv;
+  delete process.env.DEMO_MODE;
+  delete process.env.NEXT_PUBLIC_DEMO_MODE;
+
+  console.log('✓ PASS: Item 8 (P1) strictly enforced: Zero mock fallbacks & zero random fallback in production mode!');
 
   // ============================================================================
   // TEST SECTION 8: ITEM 9 (P1) — DATA INTEGRITY DURING CUSTOMER CREATION
@@ -710,6 +744,7 @@ async function runFailClosedAndZeroPhoneTests() {
   console.log('✓ PASS: Item 9 (P1) strictly enforced: Zero error swallowing, partial state prevented with 500!');
 
   // Reset DEMO_MODE for any downstream tests
+  process.env.DEMO_MODE = 'true';
   process.env.NEXT_PUBLIC_DEMO_MODE = 'true';
 
   console.log('\n======================================================================');
