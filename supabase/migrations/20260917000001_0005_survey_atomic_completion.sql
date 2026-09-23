@@ -1,28 +1,7 @@
 -- Migration 005: Survey Atomic Completion & DB Transaction
 -- Enforces single-shot completion and atomic commitment of survey and appointment status.
 
--- 1. Đảm bảo bảng public.surveys tồn tại trước khi thêm constraint (Idempotent DDL)
-CREATE TABLE IF NOT EXISTS public.surveys (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
-  customer_id uuid NOT NULL,
-  appointment_id uuid NOT NULL,
-  completed_by uuid NOT NULL REFERENCES public.user_profiles(id) ON DELETE RESTRICT,
-  measurements jsonb NOT NULL,
-  photos jsonb NOT NULL DEFAULT '[]'::jsonb,
-  site_condition text NOT NULL,
-  notes text NULL,
-  completed_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT fk_surveys_customer FOREIGN KEY (company_id, customer_id)
-    REFERENCES public.customers(company_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_surveys_appointment FOREIGN KEY (company_id, customer_id, appointment_id)
-    REFERENCES public.appointments(company_id, customer_id, id) ON DELETE RESTRICT,
-  CONSTRAINT uq_surveys_company_customer_id UNIQUE (company_id, customer_id, id)
-);
-
--- 2. Thêm UNIQUE constraint trên bảng surveys để loại bỏ triệt để Race Condition trùng lặp (Idempotent)
+-- 1. Thêm UNIQUE constraint trên bảng surveys để loại bỏ triệt để Race Condition trùng lặp (Idempotent)
 DO $$
 BEGIN
   IF NOT EXISTS (
