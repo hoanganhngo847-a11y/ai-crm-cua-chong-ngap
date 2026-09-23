@@ -144,6 +144,8 @@ function normalizeSafeActionError(
     msg.includes('Lịch hẹn không ở trạng thái') ||
     msg.includes('SURVEY_ALREADY_EXISTS') ||
     msg.includes('APPOINTMENT_ALREADY_TERMINAL') ||
+    msg.includes('INVALID_PREDECESSOR_STATE') ||
+    msg.includes('INVALID_COMPLETED_BY') ||
     msg.includes('APPOINTMENT_NOT_FOUND') ||
     msg.includes('APPOINTMENT_TYPE_NOT_SURVEY')
   ) {
@@ -152,6 +154,12 @@ function normalizeSafeActionError(
     }
     if (msg.includes('APPOINTMENT_ALREADY_TERMINAL:')) {
       return 'Lịch hẹn đã ở trạng thái kết thúc hoặc bị hủy, không thể hoàn tất khảo sát.';
+    }
+    if (msg.includes('INVALID_PREDECESSOR_STATE:')) {
+      return 'Lịch hẹn chưa ở trạng thái đang thực hiện (IN_PROGRESS/ACCEPTED), không thể hoàn tất khảo sát.';
+    }
+    if (msg.includes('INVALID_COMPLETED_BY:')) {
+      return 'Người thực hiện khảo sát không phải là nhân sự hợp lệ của doanh nghiệp.';
     }
     if (msg.includes('APPOINTMENT_NOT_FOUND:')) {
       return 'Không tìm thấy thông tin lịch hẹn khảo sát.';
@@ -167,6 +175,7 @@ function normalizeSafeActionError(
 
 /**
  * Action: Kỹ thuật viên nhận lịch hẹn (ASSIGNED -> ACCEPTED)
+ * Conditional write: Chỉ cập nhật khi status hiện tại là 'ASSIGNED'
  */
 export async function acceptSurveyAppointmentAction(
   appointmentId: string
@@ -185,19 +194,29 @@ export async function acceptSurveyAppointmentAction(
       };
     }
 
-    const { error: updateError } = await adminClient
+    const { data: updatedRow, error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'ACCEPTED',
         updated_at: new Date().toISOString(),
       })
-      .eq('id', appointmentId);
+      .eq('id', appointmentId)
+      .eq('status', 'ASSIGNED')
+      .select('id')
+      .maybeSingle();
 
     if (updateError) {
       console.error('[Action Error - acceptSurveyAppointmentAction]:', updateError);
       return {
         success: false,
         message: 'Không thể cập nhật trạng thái lịch hẹn. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (!updatedRow) {
+      return {
+        success: false,
+        message: 'Không thể nhận việc: Lịch hẹn không còn ở trạng thái chờ nhận việc (ASSIGNED) hoặc đã bị thay đổi.',
       };
     }
 
@@ -218,6 +237,7 @@ export async function acceptSurveyAppointmentAction(
 /**
  * Action: Kỹ thuật viên bắt đầu đến đo (ACCEPTED/ASSIGNED -> IN_PROGRESS)
  * Chuyển hướng tới form nhập số đo tại /surveys/[appointmentId]
+ * Conditional write: Chỉ cập nhật khi status là ASSIGNED hoặc ACCEPTED
  */
 export async function startSurveyAppointmentAction(
   appointmentId: string
@@ -243,19 +263,29 @@ export async function startSurveyAppointmentAction(
       };
     }
 
-    const { error: updateError } = await adminClient
+    const { data: updatedRow, error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'IN_PROGRESS',
         updated_at: new Date().toISOString(),
       })
-      .eq('id', appointmentId);
+      .eq('id', appointmentId)
+      .in('status', ['ASSIGNED', 'ACCEPTED'])
+      .select('id')
+      .maybeSingle();
 
     if (updateError) {
       console.error('[Action Error - startSurveyAppointmentAction]:', updateError);
       return {
         success: false,
         message: 'Không thể cập nhật trạng thái lịch hẹn. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (!updatedRow) {
+      return {
+        success: false,
+        message: 'Không thể bắt đầu đo: Lịch hẹn không ở trạng thái hợp lệ hoặc đã bị thay đổi.',
       };
     }
 
@@ -278,6 +308,7 @@ export async function startSurveyAppointmentAction(
 
 /**
  * Action: Hủy lịch khảo sát (-> CANCELLED)
+ * Conditional write: Chỉ cho phép hủy khi status thuộc ASSIGNED, ACCEPTED, IN_PROGRESS
  */
 export async function cancelSurveyAppointmentAction(
   appointmentId: string
@@ -296,19 +327,29 @@ export async function cancelSurveyAppointmentAction(
       };
     }
 
-    const { error: updateError } = await adminClient
+    const { data: updatedRow, error: updateError } = await adminClient
       .from('appointments')
       .update({
         status: 'CANCELLED',
         updated_at: new Date().toISOString(),
       })
-      .eq('id', appointmentId);
+      .eq('id', appointmentId)
+      .in('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+      .select('id')
+      .maybeSingle();
 
     if (updateError) {
       console.error('[Action Error - cancelSurveyAppointmentAction]:', updateError);
       return {
         success: false,
         message: 'Không thể cập nhật trạng thái lịch hẹn. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (!updatedRow) {
+      return {
+        success: false,
+        message: 'Không thể hủy lịch hẹn: Lịch hẹn đã hoàn thành hoặc trạng thái hiện tại không cho phép hủy.',
       };
     }
 

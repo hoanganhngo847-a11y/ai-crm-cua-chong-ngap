@@ -310,19 +310,20 @@ export async function updateAppointment(
     updates.status = toDbStatus(input.status);
   }
 
-  // 3. Execute update
+  // 3. Execute update (Conditional write: chỉ cho phép cập nhật khi lịch hẹn chưa ở trạng thái terminal)
   const { data: updated, error: updateError } = await supabase
     .from('appointments')
     .update(updates)
     .eq('id', appointmentId)
+    .in('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
     .select(
       'id, company_id, customer_id, assignee_id, type, address, start_time, status, created_at, updated_at'
     )
-    .single();
+    .maybeSingle();
 
   if (updateError || !updated) {
     throw new Error(
-      `Không thể cập nhật lịch hẹn: ${updateError?.message || 'Lỗi không xác định'}`
+      `Không thể cập nhật lịch hẹn: ${updateError?.message || 'Lịch hẹn đã kết thúc hoặc trạng thái không hợp lệ'}`
     );
   }
 
@@ -432,7 +433,7 @@ export async function cancelAppointment(
     );
   }
 
-  // Update status to CANCELLED
+  // Update status to CANCELLED (Conditional write: chỉ cho phép hủy khi status thuộc ASSIGNED, ACCEPTED, IN_PROGRESS)
   const { data: cancelled, error: cancelError } = await supabase
     .from('appointments')
     .update({
@@ -440,14 +441,15 @@ export async function cancelAppointment(
       updated_at: new Date().toISOString(),
     })
     .eq('id', appointmentId)
+    .in('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
     .select(
       'id, company_id, customer_id, assignee_id, type, address, start_time, status, created_at, updated_at'
     )
-    .single();
+    .maybeSingle();
 
   if (cancelError || !cancelled) {
     throw new Error(
-      `Không thể hủy lịch hẹn: ${cancelError?.message || 'Lỗi không xác định'}`
+      `Không thể hủy lịch hẹn: ${cancelError?.message || 'Lịch hẹn đã kết thúc hoặc trạng thái không hợp lệ'}`
     );
   }
 

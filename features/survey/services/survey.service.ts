@@ -183,10 +183,22 @@ export async function completeSurvey(
   );
 
   if (rpcError) {
+    if (rpcError.message?.includes('INVALID_COMPLETED_BY')) {
+      throw new Error(
+        'INVALID_COMPLETED_BY: Người thực hiện khảo sát không phải là nhân sự hợp lệ của doanh nghiệp.'
+      );
+    }
+
+    if (rpcError.message?.includes('INVALID_PREDECESSOR_STATE')) {
+      throw new Error(
+        'INVALID_PREDECESSOR_STATE: Lịch hẹn chưa ở trạng thái đang thực hiện (IN_PROGRESS/ACCEPTED), không thể hoàn tất khảo sát.'
+      );
+    }
+
     if (
       rpcError.message?.includes('APPOINTMENT_ALREADY_TERMINAL') ||
       rpcError.message?.includes('CANCELLED') ||
-      rpcError.message?.includes('COMPLETED')
+      /\bCOMPLETED\b/.test(rpcError.message || '')
     ) {
       throw new Error(
         'APPOINTMENT_ALREADY_TERMINAL: Lịch hẹn đã ở trạng thái kết thúc hoặc bị hủy, không thể hoàn tất khảo sát.'
