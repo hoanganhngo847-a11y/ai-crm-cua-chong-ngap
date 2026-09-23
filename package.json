@@ -9,7 +9,16 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
-    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts"
+    "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
+    "test:ai-analysis": "tsx --conditions=react-server tests/ai-analysis/ai-analysis.test.ts",
+    "test:sales-style": "tsx --conditions=react-server tests/sales-style/sales-style.test.ts",
+    "test:sales-style-activation": "tsx --conditions=react-server tests/sales-style/sales-style-activation.test.ts",
+    "test:response-sla": "tsx --conditions=react-server tests/response-sla/evaluate-response-sla.test.ts",
+    "test:response-sla-db": "tsx --conditions=react-server tests/response-sla/response-sla-db.test.ts",
+    "test:analytics": "tsx --conditions=react-server tests/analytics/analytics.test.ts",
+    "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts",
+    "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
+    "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
