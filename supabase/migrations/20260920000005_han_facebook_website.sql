@@ -1,17 +1,34 @@
 BEGIN;
 
+-- Tenant invariants are enforced even for direct trusted-server writes.
+ALTER TABLE public.conversations ADD CONSTRAINT han_conversations_company_id
+    UNIQUE (company_id, id);
+ALTER TABLE public.interactions ADD CONSTRAINT han_interactions_company_id
+    UNIQUE (company_id, id);
+ALTER TABLE public.interactions ADD CONSTRAINT han_interactions_conversation_id
+    UNIQUE (company_id, conversation_id, id);
+ALTER TABLE public.care_deliveries ADD CONSTRAINT han_deliveries_company_id
+    UNIQUE (company_id, id);
+
+CREATE INDEX han_inbox_activity ON public.conversations
+    (company_id, channel, last_message_at DESC, id DESC);
+
 CREATE TABLE private.han_intake_events (
                                            company_id uuid NOT NULL REFERENCES public.companies(id),
                                            channel text NOT NULL CHECK (channel IN ('FACEBOOK', 'WEBSITE')),
                                            event_key text NOT NULL,
-                                           external_identity text NOT NULL,
+                                           external_identity text,
                                            payload jsonb NOT NULL,
                                            status text NOT NULL CHECK (
                                                status IN ('RECEIVED', 'PROCESSED', 'IDENTITY_REVIEW')
                                                ),
                                            interaction_id uuid REFERENCES public.interactions(id),
                                            created_at timestamptz NOT NULL DEFAULT now(),
-                                           PRIMARY KEY (company_id, channel, event_key)
+                                           PRIMARY KEY (company_id, channel, event_key),
+                                           CHECK ((channel = 'WEBSITE' AND external_identity IS NULL)
+                                               OR (channel = 'FACEBOOK' AND external_identity IS NOT NULL)),
+                                           FOREIGN KEY (company_id, interaction_id)
+                                               REFERENCES public.interactions(company_id, id)
 );
 
 CREATE TABLE private.han_outbox (
@@ -27,7 +44,15 @@ CREATE TABLE private.han_outbox (
                                     provider_mid text,
                                     care_delivery_id uuid REFERENCES public.care_deliveries(id),
                                     created_at timestamptz NOT NULL DEFAULT now(),
-                                    PRIMARY KEY (company_id, request_id)
+                                    PRIMARY KEY (company_id, request_id),
+                                    FOREIGN KEY (company_id, conversation_id)
+                                        REFERENCES public.conversations(company_id, id),
+                                    FOREIGN KEY (company_id, conversation_id, interaction_id)
+                                        REFERENCES public.interactions(company_id, conversation_id, id),
+                                    FOREIGN KEY (company_id, care_delivery_id)
+                                        REFERENCES public.care_deliveries(company_id, id),
+                                    FOREIGN KEY (company_id, actor_id)
+                                        REFERENCES public.company_members(company_id, user_id)
 );
 
 CREATE UNIQUE INDEX han_outbox_delivery_once
@@ -139,14 +164,20 @@ v_customer uuid;
   v_interaction uuid;
   v_existing private.han_intake_events%ROWTYPE;
   v_contact text;
+  v_review boolean := false;
 BEGIN
-  IF p_channel NOT IN ('FACEBOOK', 'WEBSITE')
-    OR p_safe_status NOT IN ('SUCCEEDED', 'PENDING')
+  IF p_channel IS NULL OR p_channel NOT IN ('FACEBOOK', 'WEBSITE')
+    OR p_safe_status IS NULL OR p_safe_status NOT IN ('SUCCEEDED', 'FAILED')
+    OR (p_channel = 'FACEBOOK' AND (p_external IS NULL OR p_external !~ '^[0-9]+:[0-9]+$'))
+    OR (p_channel = 'WEBSITE' AND p_external IS NOT NULL)
+    OR p_key IS NULL OR length(p_key) = 0
+    OR p_content IS NULL OR p_name IS NULL
     OR length(p_external) > 250
     OR length(p_key) > 500
     OR length(p_content) > 10000
     OR length(p_name) > 100
-    OR (p_safe_status = 'PENDING' AND p_safe IS NOT NULL)
+    OR (p_safe_status = 'FAILED' AND p_safe IS NOT NULL)
+    OR (p_safe_status = 'SUCCEEDED' AND p_safe IS NULL)
     OR (
       p_phone IS NOT NULL
       AND p_phone !~ '^\+[1-9][0-9]{7,14}$'
@@ -170,9 +201,11 @@ WHERE company_id = p_company
   AND event_key = p_key;
 
 IF FOUND THEN
-    IF v_existing.external_identity <> p_external
+    IF v_existing.external_identity IS DISTINCT FROM p_external
       OR v_existing.payload->>'content' IS DISTINCT FROM p_content
       OR v_existing.payload->>'phone' IS DISTINCT FROM p_phone
+      OR v_existing.payload->>'name' IS DISTINCT FROM p_name
+      OR (p_channel = 'WEBSITE' AND v_existing.payload->'source' IS DISTINCT FROM p_payload)
     THEN
       RAISE EXCEPTION 'IDEMPOTENCY_CONFLICT';
 END IF;
@@ -193,6 +226,7 @@ VALUES (
                    'source', p_payload,
                    'content', p_content,
                    'phone', p_phone,
+                   'name', p_name,
                    'occurred_at', p_occurred
            ),
            'RECEIVED',
@@ -204,7 +238,8 @@ SELECT customer_id INTO v_customer
 FROM public.identities
 WHERE company_id = p_company
   AND channel = p_channel
-  AND external_id = p_external;
+  AND external_id = p_external
+  AND p_channel = 'FACEBOOK';
 
 IF p_phone IS NOT NULL THEN
 SELECT customer_id INTO v_phone_customer
@@ -222,30 +257,20 @@ END IF;
 
   -- Danh tính mâu thuẫn: giữ tin, không tự gộp/sửa liên hệ.
   IF (
-    v_customer IS NOT NULL
-    AND v_phone_customer IS NOT NULL
-    AND v_customer <> v_phone_customer
+    v_phone_customer IS NOT NULL
+    AND v_customer IS DISTINCT FROM v_phone_customer
   ) OR (
     v_contact IS NOT NULL
     AND p_phone IS NOT NULL
     AND v_contact <> p_phone
   ) THEN
+v_review := true;
 UPDATE private.han_intake_events
 SET status = 'IDENTITY_REVIEW'
 WHERE company_id = p_company
   AND channel = p_channel
   AND event_key = p_key;
 
-INSERT INTO public.audit_logs (
-    company_id, action, resource_type,
-    resource_id, customer_id, result
-)
-VALUES (
-           p_company, 'OMNICHANNEL_IDENTITY_REVIEW',
-           'Customer', v_customer, v_customer, 'SUCCESS'
-       );
-ELSE
-    v_customer := coalesce(v_customer, v_phone_customer);
 END IF;
 
   IF v_customer IS NULL THEN
@@ -267,6 +292,17 @@ VALUES (
        );
 END IF;
 
+-- Website submissions are intake events, not persistent person identities.
+IF v_review THEN
+INSERT INTO public.audit_logs (
+    company_id, action, resource_type, resource_id, customer_id, result
+) VALUES (
+    p_company, 'OMNICHANNEL_IDENTITY_REVIEW', 'Customer',
+    v_customer, v_customer, 'SUCCESS'
+);
+END IF;
+
+IF p_channel = 'FACEBOOK' THEN
 INSERT INTO public.identities (
     company_id, customer_id, channel,
     external_id, verified
@@ -277,6 +313,7 @@ VALUES (
        )
     ON CONFLICT (company_id, channel, external_id)
   DO NOTHING;
+END IF;
 
 IF p_phone IS NOT NULL
     AND v_phone_customer IS NULL
@@ -325,7 +362,7 @@ VALUES (
            p_channel, 'MESSAGE', 'INBOUND',
            p_safe, p_safe_status,
            CASE WHEN p_safe_status = 'SUCCEEDED' THEN now() END,
-           'han-conservative-v1',
+           'han-bounded-v2',
            p_key, 'CUSTOMER', p_occurred
        )
     RETURNING id INTO v_interaction;
@@ -463,15 +500,17 @@ WHERE company_id = p_company
   AND actor_type = 'CUSTOMER';
 
 IF v_latest IS NULL
-    OR v_latest < now() - interval '24 hours'
-    OR v_latest > now() + interval '5 minutes'
+    OR v_latest <= now() - interval '24 hours'
+    OR v_latest > now()
   THEN
     RAISE EXCEPTION 'WINDOW_CLOSED';
 END IF;
 
   IF length(p_content) NOT BETWEEN 1 AND 2000
-    OR p_safe_status NOT IN ('PENDING', 'SUCCEEDED')
-    OR (p_safe_status = 'PENDING' AND p_safe IS NOT NULL)
+    OR p_content IS NULL
+    OR p_safe_status IS NULL OR p_safe_status NOT IN ('FAILED', 'SUCCEEDED')
+    OR (p_safe_status = 'FAILED' AND p_safe IS NOT NULL)
+    OR (p_safe_status = 'SUCCEEDED' AND p_safe IS NULL)
   THEN
     RAISE EXCEPTION 'INVALID_INPUT';
 END IF;
@@ -517,7 +556,7 @@ VALUES (
            p_conversation, 'FACEBOOK', 'MESSAGE', 'OUTBOUND',
            p_safe, p_safe_status,
            CASE WHEN p_safe_status = 'SUCCEEDED' THEN now() END,
-           'han-conservative-v1', 'SALE', p_actor
+           'han-bounded-v2', 'SALE', p_actor
        )
     RETURNING id INTO v_interaction;
 

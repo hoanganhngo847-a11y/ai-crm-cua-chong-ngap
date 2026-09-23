@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
     ChannelError,
     extractPhone,
+    object,
     parseMeta,
     readBody,
     sanitize,
@@ -64,10 +65,24 @@ export async function POST(request: Request) {
             throw new ChannelError('INVALID_SIGNATURE', 403);
         }
 
-        const config = binding();
-        const events = parseMeta(JSON.parse(raw), config.page);
+        const body = object(JSON.parse(raw));
+        if (body.object !== 'page' || !Array.isArray(body.entry) || body.entry.length > 200) {
+            throw new ChannelError('INVALID_WEBHOOK');
+        }
+        // Validate every signed entry before writing any event.
+        const batches = body.entry.map((value) => {
+            const entry = object(value);
+            if (typeof entry.id !== 'string') throw new ChannelError('INVALID_WEBHOOK');
+            const config = binding(entry.id);
+            return { config, events: parseMeta({ object: 'page', entry: [entry] }, config.page) };
+        });
+        if (batches.reduce((count, batch) => count + batch.events.length, 0) > 200) {
+            throw new ChannelError('TOO_MANY_EVENTS', 413);
+        }
 
-        for (const event of events) {
+        for (const { config, event } of batches.flatMap(({ config, events }) =>
+            events.map((event) => ({ config, event })),
+        )) {
             if (event.kind === 'MESSAGE') {
                 const safe = sanitize(event.content);
 
