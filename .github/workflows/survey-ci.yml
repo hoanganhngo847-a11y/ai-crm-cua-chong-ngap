@@ -21,6 +21,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: npx supabase start -x studio,logflare,vector,realtime,storage-api
+      - run: npx supabase db reset
       - run: npm run lint
       - run: npm run build
       - run: npm run typecheck
