@@ -1,3 +1,4 @@
+import './setup';
 import assert from 'node:assert/strict';
 import {
   validateSurveyCompletionGate,
@@ -994,7 +995,7 @@ async function main() {
       },
       rpc: async (
         fnName: string,
-        args: { p_appointment_id: string; p_survey_payload: Record<string, unknown> }
+        args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }
       ) => {
         if (fnName === 'complete_survey_atomic') {
           insertedSurveyRecord = args.p_survey_payload;
@@ -1002,6 +1003,7 @@ async function main() {
             data: {
               id: 'srv-verified-001',
               appointment_id: args.p_appointment_id,
+              completed_by: args.p_completed_by || args.p_survey_payload?.completed_by,
               ...args.p_survey_payload,
             },
             error: null,
@@ -2088,11 +2090,11 @@ async function main() {
   await runAsyncTest('Kịch bản 11.1c: Chỉ service_role (Trusted Server) mới được phép gọi complete_survey_atomic', async () => {
     let calledWithServiceRole = false;
     const mockServiceRoleClient = {
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_survey_payload: Record<string, unknown> }) => {
+      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
         if (fnName === 'complete_survey_atomic') {
           calledWithServiceRole = true;
           return {
-            data: { id: 'srv-service-role-001', appointment_id: args.p_appointment_id },
+            data: { id: 'srv-service-role-001', appointment_id: args.p_appointment_id, completed_by: args.p_completed_by },
             error: null,
           };
         }
@@ -2102,6 +2104,7 @@ async function main() {
 
     const { data, error } = await mockServiceRoleClient.rpc('complete_survey_atomic', {
       p_appointment_id: 'apt-srv-01',
+      p_completed_by: 'tech-01',
       p_survey_payload: { company_id: 'comp-1' },
     });
     assert.equal(calledWithServiceRole, true);
@@ -2112,6 +2115,7 @@ async function main() {
   // --- Kịch bản 11.2: Identity Spoofing Prevention ---
   await runAsyncTest('Kịch bản 11.2a: Chống Identity Spoofing - RPC và Service không tin company_id/customer_id trong payload', async () => {
     let capturedPayload: Record<string, unknown> | null = null;
+    let capturedCompletedBy: string | undefined = undefined;
 
     const mockDbIdentitySpoof = {
       from: (table: string) => {
@@ -2137,9 +2141,10 @@ async function main() {
         };
         return q;
       },
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_survey_payload: Record<string, unknown> }) => {
+      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
         if (fnName === 'complete_survey_atomic') {
           capturedPayload = args.p_survey_payload;
+          capturedCompletedBy = args.p_completed_by;
           // Mô phỏng logic SQL RPC sau khi sửa: v_company_id và v_customer_id được gán từ v_appointment
           return {
             data: {
@@ -2147,7 +2152,7 @@ async function main() {
               company_id: 'comp-CANONICAL-A', // Bắt buộc là của appointment
               customer_id: 'cust-CANONICAL-A',
               appointment_id: args.p_appointment_id,
-              completed_by: args.p_survey_payload.completed_by,
+              completed_by: args.p_completed_by || args.p_survey_payload.completed_by,
             },
             error: null,
           };
@@ -2187,6 +2192,7 @@ async function main() {
     // Khẳng định company_id truyền vào RPC luôn là comp-CANONICAL-A của appointment
     assert.equal((capturedPayload as Record<string, unknown>).company_id, 'comp-CANONICAL-A');
     assert.equal((capturedPayload as Record<string, unknown>).customer_id, 'cust-CANONICAL-A');
+    assert.equal(capturedCompletedBy, 'tech-valid-1');
   });
 
   await runAsyncTest('Kịch bản 11.2b: RPC từ chối khi completed_by không phải thành viên hợp lệ cùng công ty (INVALID_COMPLETED_BY)', async () => {
@@ -2215,7 +2221,7 @@ async function main() {
         return q;
       },
       rpc: async () => {
-        // Mô phỏng kiểm tra v_member_exists trong RPC: user không thuộc công ty -> ném ngoại lệ
+        // Mô phỏng kiểm tra v_member trong RPC: user không thuộc công ty -> ném ngoại lệ
         return {
           data: null,
           error: {
@@ -2257,6 +2263,223 @@ async function main() {
         message: /INVALID_COMPLETED_BY/,
       }
     );
+  });
+
+  await runAsyncTest('Kịch bản 11.2c: RPC từ chối khi TECHNICIAN không phải là assignee_id của lịch hẹn', async () => {
+    let passedCompletedBy: string | undefined;
+    const mockDbNotAssignee = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => {
+            if (table === 'appointments') {
+              return {
+                data: {
+                  id: 'apt-other-assignee',
+                  company_id: 'comp-CANONICAL-A',
+                  customer_id: 'cust-CANONICAL-A',
+                  assignee_id: 'tech-assigned-original',
+                  status: 'IN_PROGRESS',
+                  type: 'SURVEY',
+                },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return q;
+      },
+      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
+        passedCompletedBy = args.p_completed_by;
+        // Mô phỏng ràng buộc: TECHNICIAN phải là assignee_id
+        if (args.p_completed_by !== 'tech-assigned-original') {
+          return {
+            data: null,
+            error: {
+              message: 'INVALID_COMPLETED_BY: TECHNICIAN_NOT_ASSIGNEE: Kỹ thuật viên không được phân công lịch hẹn này.',
+            },
+          };
+        }
+        return { data: { id: 'srv-ok' }, error: null };
+      },
+      storage: {
+        from: () => ({
+          list: async () => ({
+            data: [
+              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
+              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
+              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
+            ],
+            error: null,
+          }),
+        }),
+      },
+    };
+
+    const inputData: CompleteSurveyInput = {
+      appointmentId: 'apt-other-assignee',
+      measurements: VALID_MEASUREMENTS,
+      siteCondition: VALID_SITE_CONDITION,
+      photos: MOCK_PHOTOS,
+    };
+
+    await assert.rejects(
+      async () => {
+        await completeSurvey(
+          inputData,
+          'tech-different-person',
+          'comp-CANONICAL-A',
+          mockDbNotAssignee as unknown as Parameters<typeof completeSurvey>[3]
+        );
+      },
+      {
+        message: /INVALID_COMPLETED_BY/,
+      }
+    );
+    assert.equal(passedCompletedBy, 'tech-different-person');
+  });
+
+  await runAsyncTest('Kịch bản 11.2d: RPC chấp thuận khi TECHNICIAN chính là assignee_id của lịch hẹn', async () => {
+    let passedCompletedBy: string | undefined;
+    const mockDbValidAssignee = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => {
+            if (table === 'appointments') {
+              return {
+                data: {
+                  id: 'apt-matching-assignee',
+                  company_id: 'comp-CANONICAL-A',
+                  customer_id: 'cust-CANONICAL-A',
+                  assignee_id: 'tech-the-assignee',
+                  status: 'IN_PROGRESS',
+                  type: 'SURVEY',
+                },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return q;
+      },
+      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
+        passedCompletedBy = args.p_completed_by;
+        return {
+          data: {
+            id: 'srv-matching-tech',
+            appointment_id: args.p_appointment_id,
+            completed_by: args.p_completed_by,
+          },
+          error: null,
+        };
+      },
+      storage: {
+        from: () => ({
+          list: async () => ({
+            data: [
+              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
+              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
+              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
+            ],
+            error: null,
+          }),
+        }),
+      },
+    };
+
+    const inputData: CompleteSurveyInput = {
+      appointmentId: 'apt-matching-assignee',
+      measurements: VALID_MEASUREMENTS,
+      siteCondition: VALID_SITE_CONDITION,
+      photos: MOCK_PHOTOS,
+    };
+
+    const res = await completeSurvey(
+      inputData,
+      'tech-the-assignee',
+      'comp-CANONICAL-A',
+      mockDbValidAssignee as unknown as Parameters<typeof completeSurvey>[3]
+    );
+
+    assert.equal(res.success, true);
+    assert.equal(res.surveyId, 'srv-matching-tech');
+    assert.equal(passedCompletedBy, 'tech-the-assignee');
+  });
+
+  await runAsyncTest('Kịch bản 11.2e: RPC chấp thuận khi BOSS_ADMIN hoàn tất lịch hẹn (kể cả không phải assignee_id)', async () => {
+    let passedCompletedBy: string | undefined;
+    const mockDbBossAdmin = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => {
+            if (table === 'appointments') {
+              return {
+                data: {
+                  id: 'apt-boss-override',
+                  company_id: 'comp-CANONICAL-A',
+                  customer_id: 'cust-CANONICAL-A',
+                  assignee_id: 'tech-original-assigned',
+                  status: 'IN_PROGRESS',
+                  type: 'SURVEY',
+                },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return q;
+      },
+      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
+        passedCompletedBy = args.p_completed_by;
+        // BOSS_ADMIN được phép dù assignee_id là tech-original-assigned
+        return {
+          data: {
+            id: 'srv-boss-approved',
+            appointment_id: args.p_appointment_id,
+            completed_by: args.p_completed_by,
+          },
+          error: null,
+        };
+      },
+      storage: {
+        from: () => ({
+          list: async () => ({
+            data: [
+              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
+              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
+              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
+            ],
+            error: null,
+          }),
+        }),
+      },
+    };
+
+    const inputData: CompleteSurveyInput = {
+      appointmentId: 'apt-boss-override',
+      measurements: VALID_MEASUREMENTS,
+      siteCondition: VALID_SITE_CONDITION,
+      photos: MOCK_PHOTOS,
+    };
+
+    const res = await completeSurvey(
+      inputData,
+      'boss-admin-user-01',
+      'comp-CANONICAL-A',
+      mockDbBossAdmin as unknown as Parameters<typeof completeSurvey>[3]
+    );
+
+    assert.equal(res.success, true);
+    assert.equal(res.surveyId, 'srv-boss-approved');
+    assert.equal(passedCompletedBy, 'boss-admin-user-01');
   });
 
   // --- Kịch bản 11.3: Predecessor State Check ---
@@ -2419,9 +2642,9 @@ async function main() {
           };
           return q;
         },
-        rpc: async (fnName: string, args: { p_appointment_id: string; p_survey_payload: Record<string, unknown> }) => {
+        rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
           return {
-            data: { id: `srv-${validPredecessor.toLowerCase()}-001`, appointment_id: args.p_appointment_id },
+            data: { id: `srv-${validPredecessor.toLowerCase()}-001`, appointment_id: args.p_appointment_id, completed_by: args.p_completed_by },
             error: null,
           };
         },

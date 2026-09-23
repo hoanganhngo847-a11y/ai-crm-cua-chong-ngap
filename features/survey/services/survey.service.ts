@@ -178,6 +178,7 @@ export async function completeSurvey(
     'complete_survey_atomic',
     {
       p_appointment_id: sanitizedInput.appointmentId,
+      p_completed_by: completedByUserId,
       p_survey_payload: payload,
     }
   );

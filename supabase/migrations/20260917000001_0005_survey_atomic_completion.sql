@@ -14,9 +14,13 @@ EXCEPTION
     NULL;
 END $$;
 
--- 3. Tạo PostgreSQL RPC function complete_survey_atomic
+-- 2. Tạo PostgreSQL RPC function complete_survey_atomic
+-- P1 Hardening: p_completed_by truyền riêng biệt dưới dạng UUID, không parse từ p_survey_payload jsonb
+DROP FUNCTION IF EXISTS public.complete_survey_atomic(uuid, jsonb);
+
 CREATE OR REPLACE FUNCTION public.complete_survey_atomic(
   p_appointment_id uuid,
+  p_completed_by uuid,
   p_survey_payload jsonb
 )
 RETURNS jsonb
@@ -27,35 +31,34 @@ AS $$
 DECLARE
   v_appointment record;
   v_survey record;
+  v_member record;
   v_now timestamptz := clock_timestamp();
   v_company_id uuid;
   v_customer_id uuid;
-  v_completed_by uuid;
   v_measurements jsonb;
   v_photos jsonb;
   v_site_condition text;
   v_notes text;
   v_completed_at timestamptz;
-  v_member_exists boolean;
 BEGIN
-  -- 3.1. Khóa dòng appointment bằng SELECT FOR UPDATE
+  -- 2.1. Khóa dòng appointment bằng SELECT FOR UPDATE
   SELECT id, company_id, customer_id, status, type, assignee_id
   INTO v_appointment
   FROM public.appointments
   WHERE id = p_appointment_id
   FOR UPDATE;
 
-  -- 3.2. Kiểm tra tồn tại
+  -- 2.2. Kiểm tra tồn tại
   IF NOT FOUND THEN
     RAISE EXCEPTION 'APPOINTMENT_NOT_FOUND';
   END IF;
 
-  -- 3.3. Kiểm tra type
+  -- 2.3. Kiểm tra type
   IF v_appointment.type <> 'SURVEY' THEN
     RAISE EXCEPTION 'APPOINTMENT_TYPE_NOT_SURVEY';
   END IF;
 
-  -- 3.4. Kiểm tra trạng thái terminal & tiền đề (P0: Predecessor State Check)
+  -- 2.4. Kiểm tra trạng thái terminal & tiền đề (P0: Predecessor State Check)
   IF v_appointment.status IN ('COMPLETED', 'CANCELLED') THEN
     RAISE EXCEPTION 'APPOINTMENT_ALREADY_TERMINAL';
   END IF;
@@ -64,27 +67,37 @@ BEGIN
     RAISE EXCEPTION 'INVALID_PREDECESSOR_STATE: APPOINTMENT_STATE_INVALID';
   END IF;
 
-  -- 3.5. Trích xuất an toàn & chống giả mạo danh tính (P0: Identity Spoofing Prevention)
+  -- 2.5. Trích xuất an toàn & chống giả mạo danh tính (P0: Identity Spoofing Prevention)
   -- BẮT BUỘC gán company_id và customer_id từ chính bản ghi appointment đã khóa, tuyệt đối không tin payload
   v_company_id := v_appointment.company_id;
   v_customer_id := v_appointment.customer_id;
 
-  -- completed_by: Ưu tiên payload nếu được truyền, fallback về assignee_id
-  v_completed_by := COALESCE(
-    (p_survey_payload->>'completed_by')::uuid,
-    (p_survey_payload->>'completedBy')::uuid,
-    v_appointment.assignee_id
-  );
+  -- 2.5.1. P1 Hardening: Xác thực p_completed_by (truyền riêng biệt, không parse từ JSON payload)
+  IF p_completed_by IS NULL THEN
+    RAISE EXCEPTION 'INVALID_COMPLETED_BY';
+  END IF;
 
-  -- Xác minh completed_by bắt buộc là thành viên ACTIVE thuộc cùng company_id
-  SELECT EXISTS (
-    SELECT 1 FROM public.company_members
-    WHERE user_id = v_completed_by
-      AND company_id = v_company_id
-      AND status = 'ACTIVE'
-  ) INTO v_member_exists;
+  -- Xác minh p_completed_by bắt buộc là thành viên ACTIVE thuộc cùng company_id
+  SELECT role, status
+  INTO v_member
+  FROM public.company_members
+  WHERE user_id = p_completed_by
+    AND company_id = v_company_id
+    AND status = 'ACTIVE';
 
-  IF NOT v_member_exists THEN
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'INVALID_COMPLETED_BY';
+  END IF;
+
+  -- Kiểm tra phân quyền: TECHNICIAN phải là assignee_id của lịch hẹn; BOSS_ADMIN được phép
+  IF v_member.role = 'TECHNICIAN' THEN
+    IF v_appointment.assignee_id IS NULL OR v_appointment.assignee_id <> p_completed_by THEN
+      RAISE EXCEPTION 'INVALID_COMPLETED_BY: TECHNICIAN_NOT_ASSIGNEE';
+    END IF;
+  ELSIF v_member.role = 'BOSS_ADMIN' THEN
+    -- BOSS_ADMIN được phép hoàn tất khảo sát
+    NULL;
+  ELSE
     RAISE EXCEPTION 'INVALID_COMPLETED_BY';
   END IF;
 
@@ -94,14 +107,14 @@ BEGIN
   v_notes := p_survey_payload->>'notes';
   v_completed_at := COALESCE((p_survey_payload->>'completed_at')::timestamptz, v_now);
 
-  -- 3.6. Atomic Step A: Cập nhật appointment sang COMPLETED (có ràng buộc trạng thái tiền đề)
+  -- 2.6. Atomic Step A: Cập nhật appointment sang COMPLETED (có ràng buộc trạng thái tiền đề)
   UPDATE public.appointments
   SET status = 'COMPLETED',
       updated_at = v_now
   WHERE id = p_appointment_id
     AND status IN ('IN_PROGRESS', 'ACCEPTED');
 
-  -- 3.7. Atomic Step B: Insert survey
+  -- 2.7. Atomic Step B: Insert survey
   INSERT INTO public.surveys (
     company_id,
     customer_id,
@@ -118,7 +131,7 @@ BEGIN
     v_company_id,
     v_customer_id,
     p_appointment_id,
-    v_completed_by,
+    p_completed_by,
     v_measurements,
     v_photos,
     v_site_condition,
@@ -129,18 +142,18 @@ BEGIN
   )
   RETURNING * INTO v_survey;
 
-  -- 3.8. Trả về bản ghi survey vừa tạo dạng JSON
+  -- 2.8. Trả về bản ghi survey vừa tạo dạng JSON
   RETURN to_jsonb(v_survey);
 END;
 $$;
 
-COMMENT ON FUNCTION public.complete_survey_atomic(uuid, jsonb)
+COMMENT ON FUNCTION public.complete_survey_atomic(uuid, uuid, jsonb)
   IS 'Single-shot atomic survey completion function: locks appointment, updates status to COMPLETED, inserts survey, rolls back automatically on error.';
 
--- 4. Cấu hình quyền truy cập RPC (P0: Security Boundary RPC)
+-- 3. Cấu hình quyền truy cập RPC (P0: Security Boundary RPC)
 -- Hàm nghiệp vụ nhạy cảm Trusted-Server: Chỉ cấp quyền EXECUTE cho service_role
 -- Thu hồi toàn bộ quyền từ PUBLIC, anon, VÀ authenticated để ngăn chặn direct-RPC abuse
-REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, jsonb) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, jsonb) FROM anon;
-REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, jsonb) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.complete_survey_atomic(uuid, jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, uuid, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, uuid, jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.complete_survey_atomic(uuid, uuid, jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_survey_atomic(uuid, uuid, jsonb) TO service_role;
