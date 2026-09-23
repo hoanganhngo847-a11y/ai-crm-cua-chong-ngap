@@ -1,3 +1,4 @@
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 
 /**
@@ -6,23 +7,15 @@ import { createClient } from '@/lib/supabase/server';
  * Tuyệt đối không cho phép AI tự động giảm giá, tự tạo cam kết, hay thay đổi điều khoản.
  */
 export async function generateContractForOrder(orderId: string, customerId: string) {
-  const supabase = await createClient();
+  // Use Service Role to act as Trusted Server
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const adminSupabase = createSupabaseClient(supabaseUrl, supabaseServiceKey);
 
-  // 1. Kiểm tra xem hợp đồng đã tồn tại cho đơn này chưa để tránh tạo trùng
-  const { data: existingContract } = await supabase
-    .from('contracts')
-    .select('id')
-    .eq('order_id', orderId)
-    .single();
-
-  if (existingContract) {
-    return existingContract;
-  }
-  
-  // Lấy thông tin công ty và giá trị đơn hàng
-  const { data: orderData } = await supabase
+  // Lấy thông tin công ty và trạng thái đơn hàng
+  const { data: orderData } = await adminSupabase
     .from('orders')
-    .select('company_id, final_amount')
+    .select('company_id, final_amount, deposit_status')
     .eq('id', orderId)
     .single();
 
@@ -30,19 +23,24 @@ export async function generateContractForOrder(orderId: string, customerId: stri
     throw new Error('Không tìm thấy thông tin đơn hàng để tạo hợp đồng');
   }
 
+  if (orderData.deposit_status !== 'DEPOSIT_CONFIRMED') {
+    throw new Error('Chỉ được tạo hợp đồng khi đơn hàng đã xác nhận cọc');
+  }
+
   // 2. Tạo bản ghi Hợp đồng (Contract) liên kết chặt chẽ với Order
-  const { data: newContract, error } = await supabase
+  // Sử dụng upsert (có thể dựa trên unique constraint của order_id) để tránh race condition
+  const { data: newContract, error } = await adminSupabase
     .from('contracts')
-    .insert({
+    .upsert({
       company_id: orderData.company_id,
       order_id: orderId,
-      status: 'GENERATED', // Trạng thái ban đầu chuẩn theo Foundation là GENERATED
+      status: 'GENERATED',
       revision_no: 1,
       template_version: 'v1',
-      generated_file_ref: '/docs/placeholder.pdf',
+      generated_file_ref: `contracts/${orderId}/contract_v1.pdf`, // Real storage path pattern
       contract_value: orderData.final_amount,
       signed_file_ref: null
-    })
+    }, { onConflict: 'order_id', ignoreDuplicates: true })
     .select()
     .single();
 

@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { generateContractForOrder } from '@/features/contract/services';
+import crypto from 'crypto';
 
 /**
  * Tính toán công nợ và cập nhật trạng thái đơn hàng
@@ -9,9 +10,12 @@ export async function updateOrderDepositAndDebt(orderId: string, depositAmount: 
   const supabase = await createClient();
   
   // 1. Gọi RPC để cập nhật tiền cọc và ghi nhận công nợ (finance_summaries) trong một transaction atomic
+  const idempotencyKey = crypto.randomUUID(); // Generate unique key for this manual deposit action
+  
   const { data, error } = await supabase.rpc('update_order_deposit_rpc', {
     p_order_id: orderId,
-    p_deposit_amount: depositAmount
+    p_deposit_amount: depositAmount,
+    p_idempotency_key: idempotencyKey
   });
 
   if (error || !data?.success) {
