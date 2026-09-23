@@ -16,7 +16,9 @@
     "test:response-sla": "tsx --conditions=react-server tests/response-sla/evaluate-response-sla.test.ts",
     "test:response-sla-db": "tsx --conditions=react-server tests/response-sla/response-sla-db.test.ts",
     "test:analytics": "tsx --conditions=react-server tests/analytics/analytics.test.ts",
-    "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts"
+    "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts",
+    "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
+    "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
