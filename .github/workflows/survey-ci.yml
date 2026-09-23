@@ -22,9 +22,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run build
       - run: npm run typecheck
       - run: npm run test:auth
       - run: npm run test:security
       - run: npm run test:survey
-      - run: npm run build
       - run: git diff --check
