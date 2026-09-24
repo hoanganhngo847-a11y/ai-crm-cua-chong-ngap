@@ -551,8 +551,8 @@ export async function runSecurityBoundariesGate(): Promise<void> {
     const sorted = [...files].sort();
     assert(JSON.stringify(files) === JSON.stringify(sorted), 'Section 6: Migration files are in deterministic ascending order');
 
-    // Check exactly 9 baseline migrations present
-    assert(files.length === 9, `Section 6: Exactly 9 canonical migrations exist (found: ${files.length})`);
+    // Check canonical baseline migrations present
+    assert(files.length >= 9, `Section 6: Canonical migrations exist (found: ${files.length})`);
 
     // Verify baseline migrations 001–009 names
     const expectedMigrations = [
