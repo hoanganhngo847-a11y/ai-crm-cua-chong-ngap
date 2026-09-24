@@ -17,6 +17,7 @@ import {
   CARE_AUDIENCE_GROUPS,
 } from '../../features/care/zalo';
 import { createMockDatabase, createMockSupabase } from './mock_supabase';
+import { runRemediationP0P1TestSuite } from './remediation_p0_p1.test';
 
 const DIVIDER = '═'.repeat(70);
 
@@ -290,14 +291,19 @@ async function runAllZaloModulesQuickTest() {
     zaloClient: mockZaloClient,
   });
 
-  const replyRes = await inboxService.sendZaloReply({
-    companyId: companyAId,
-    customerId: syncRes.customerId!,
-    conversationId: syncRes.conversationId!,
-    content: 'Dạ chào anh, em gửi bảng giá cửa chống ngập qua đây ạ!',
-    recipientZaloId: 'zalo_user_789',
-    saleUserId: 'sale_user_001',
-  });
+  const replyRes = await inboxService.sendZaloReply(
+    {
+      conversationId: syncRes.conversationId!,
+      content: 'Dạ chào anh, em gửi bảng giá cửa chống ngập qua đây ạ!',
+    },
+    {
+      actor: {
+        userId: 'sale_user_001',
+        companyId: companyAId,
+        role: 'SALE',
+      },
+    }
+  );
 
   assert.strictEqual(replyRes.success, true);
   assert.ok(replyRes.interactionId);
@@ -446,8 +452,13 @@ async function runAllZaloModulesQuickTest() {
   console.log('  ✓ 7.1: Tự động refresh token khi sắp hết hạn (dưới 5 phút).');
   console.log('  ✓ 7.2: Fail-closed và không để lộ token/secret trong log lỗi.');
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST SUITE 8: COMPREHENSIVE P0 & P1 REMEDIATION GATES
+  // ──────────────────────────────────────────────────────────────────────────
+  await runRemediationP0P1TestSuite();
+
   console.log('\n' + DIVIDER);
-  console.log('🎉 TẤT CẢ 7 PHẦN TEST SUITE THÀNH VIÊN 3 ĐỀU VƯỢT QUA 100% XUẤT SẮC!');
+  console.log('🎉 TẤT CẢ 8 PHẦN TEST SUITE THÀNH VIÊN 3 ĐỀU VƯỢT QUA 100% XUẤT SẮC!');
   console.log(DIVIDER + '\n');
 }
 

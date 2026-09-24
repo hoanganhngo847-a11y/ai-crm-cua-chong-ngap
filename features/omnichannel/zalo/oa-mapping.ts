@@ -1,3 +1,30 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Custom Error for Tenant Resolution Failures.
+ * Fails closed with standard HTTP-compatible status codes.
+ */
+export class TenantResolutionError extends Error {
+  readonly code = 'TENANT_NOT_FOUND';
+  readonly httpStatus: number;
+
+  constructor(message: string, httpStatus = 403) {
+    super(message);
+    this.name = 'TenantResolutionError';
+    this.httpStatus = httpStatus;
+  }
+}
+
+export interface IZaloOAMappingResolver {
+  resolveCompanyId(oaId: string | undefined | null): Promise<string>;
+}
+
+export interface ZaloOAMappingServiceOptions {
+  customMapping?: Record<string, string>;
+  supabase?: SupabaseClient;
+  allowTestMockFallback?: boolean;
+}
+
 /**
  * Zalo OA to Company Mapping Service.
  *
@@ -6,36 +33,35 @@
  *   query parameters, or headers.
  * - Multi-tenant isolation is enforced server-side by mapping the verified Zalo Official Account ID (OA ID)
  *   to the corresponding tenant (company_id).
- * - If an event arrives with an unmapped, unknown, or empty OA ID, the system MUST FAIL CLOSED (reject).
+ * - If an event arrives with an unmapped, unknown, or empty OA ID, the system MUST FAIL CLOSED (throw TenantResolutionError).
+ * - No DEFAULT_COMPANY_ID fallback in production flows.
  */
-
-export interface IZaloOAMappingResolver {
-  resolveCompanyId(oaId: string | undefined | null): Promise<string>;
-}
-
 export class ZaloOAMappingService implements IZaloOAMappingResolver {
   private readonly mapping: Map<string, string>;
-  private readonly defaultCompanyId?: string;
+  private readonly supabase?: SupabaseClient;
+  private readonly allowTestMockFallback: boolean;
 
-  constructor(customMapping?: Record<string, string>, defaultCompanyId?: string) {
-    this.mapping = new Map(Object.entries(customMapping || {}));
-    this.defaultCompanyId = defaultCompanyId || process.env.DEFAULT_COMPANY_ID;
-
-    // Auto-configure from environment variables if present
-    const envOaId = process.env.ZALO_OA_ID?.trim();
-    const envCompanyId = this.defaultCompanyId?.trim();
-
-    if (envOaId && envCompanyId && !this.mapping.has(envOaId)) {
-      this.mapping.set(envOaId, envCompanyId);
+  constructor(options: ZaloOAMappingServiceOptions | Record<string, string> = {}) {
+    if ('customMapping' in options || 'supabase' in options || 'allowTestMockFallback' in options) {
+      const opts = options as ZaloOAMappingServiceOptions;
+      this.mapping = new Map(Object.entries(opts.customMapping || {}));
+      this.supabase = opts.supabase;
+      this.allowTestMockFallback = opts.allowTestMockFallback ?? false;
+    } else {
+      this.mapping = new Map(Object.entries(options));
+      this.allowTestMockFallback = false;
     }
   }
 
   /**
-   * Registers or updates an OA ID to Company mapping.
+   * Registers or updates an OA ID to Company mapping in memory.
    */
   registerMapping(oaId: string, companyId: string): void {
-    if (!oaId || !companyId) {
-      throw new Error('OA ID and companyId are required to register mapping');
+    if (!oaId || !oaId.trim()) {
+      throw new TenantResolutionError('OA ID is required to register mapping', 400);
+    }
+    if (!companyId || !companyId.trim()) {
+      throw new TenantResolutionError('companyId is required to register mapping', 400);
     }
     this.mapping.set(oaId.trim(), companyId.trim());
   }
@@ -45,25 +71,52 @@ export class ZaloOAMappingService implements IZaloOAMappingResolver {
    * Fails closed if the OA ID is not recognized or not associated with any active company.
    */
   async resolveCompanyId(oaId: string | undefined | null): Promise<string> {
-    if (!oaId || !oaId.trim()) {
-      throw new Error('Tenant isolation error: Missing Zalo OA ID in webhook event');
+    if (!oaId || typeof oaId !== 'string' || !oaId.trim()) {
+      throw new TenantResolutionError(
+        'Tenant isolation error: Missing or empty Zalo OA ID in webhook event',
+        400
+      );
     }
 
     const cleanOaId = oaId.trim();
-    const mappedCompanyId = this.mapping.get(cleanOaId);
 
+    // 1. Check in-memory registered mapping
+    const mappedCompanyId = this.mapping.get(cleanOaId);
     if (mappedCompanyId) {
       return mappedCompanyId;
     }
 
-    // Fallback if a default company was explicitly provided in single-tenant environment / test setup
-    if (this.defaultCompanyId) {
-      return this.defaultCompanyId;
+    // 2. Query persistent database table (zalo_oa_configs) if Supabase client is available
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('zalo_oa_configs')
+          .select('company_id')
+          .eq('oa_id', cleanOaId)
+          .eq('status', 'ACTIVE')
+          .maybeSingle();
+
+        if (!error && data?.company_id) {
+          this.mapping.set(cleanOaId, data.company_id);
+          return data.company_id;
+        }
+      } catch {
+        // DB query error falls through to fail-closed check
+      }
     }
 
-    // FAIL-CLOSED: Reject unknown OA to prevent cross-tenant leakage or spoofing
-    throw new Error(
-      `Tenant isolation violation: Zalo OA ID "${cleanOaId}" is not associated with any active company`
+    // 3. ONLY allow test fallback if explicitly configured in an automated test container
+    const isTestRuntime =
+      process.env.NODE_ENV === 'test' && process.env.IS_TEST_SUITE === 'true';
+
+    if (isTestRuntime && this.allowTestMockFallback && this.mapping.has('__test_fallback__')) {
+      return this.mapping.get('__test_fallback__')!;
+    }
+
+    // FAIL-CLOSED: Reject unknown or unmapped OA to prevent cross-tenant leakage or spoofing
+    throw new TenantResolutionError(
+      `Tenant isolation violation: Zalo OA ID "${cleanOaId}" is not associated with any active company`,
+      403
     );
   }
 }

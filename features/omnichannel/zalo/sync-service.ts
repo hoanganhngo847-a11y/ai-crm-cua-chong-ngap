@@ -42,14 +42,15 @@ const OPT_OUT_KEYWORDS = [
  * Security & Data Invariants:
  * 1. Provider Verification & Tenant Isolation:
  *    Maps company_id server-side via verified OA ID. Fails closed if OA ID is unmapped.
- * 2. Durable Idempotency:
- *    Namespaced key: company_id + provider/channel + oa_id + message_id.
- * 3. Ingress & Security Zones:
- *    - Sanitizes text content before storing in public.interactions (Zero-Phone invariant).
- *    - Sets sanitization_status = 'SUCCEEDED' so role SALE can safely access the interaction.
- *    - Preserves raw content and full webhook payload in private.interaction_raw_contents.
- * 4. Evidence Contract:
- *    Links identity strictly by external_id (Zalo UID). Never merges by unverified chat text.
+ * 2. Durable Idempotency Claim Invariant:
+ *    Uses zalo_ingress_events table with UNIQUE(company_id, oa_id, external_ref).
+ *    Claims via INSERT ... ON CONFLICT DO NOTHING (or unique constraint rejection).
+ * 3. Atomic Ingress Pipeline:
+ *    Pipeline: Ingress Claim -> Customer -> Identity -> Conversation -> Interaction -> Private Raw Data.
+ *    Fail-closed: Absolutely NEVER catch and swallow private raw payload storage errors.
+ *    Rolls back on failure to prevent orphan records.
+ * 4. Zero-Phone Sanitization:
+ *    Sanitizes public text before recording; sets sanitization_status = 'SUCCEEDED' for SALE.
  */
 export class ZaloSyncService {
   private readonly supabase: SupabaseClient;
@@ -62,7 +63,18 @@ export class ZaloSyncService {
     if (options.oaMappingResolver) {
       this.oaMappingResolver = options.oaMappingResolver;
     } else {
-      this.oaMappingResolver = new ZaloOAMappingService(undefined, options.defaultCompanyId);
+      const customMapping: Record<string, string> = {};
+      if (options.defaultCompanyId) {
+        customMapping['__test_fallback__'] = options.defaultCompanyId;
+        if (this.zaloClient.oaId) {
+          customMapping[this.zaloClient.oaId] = options.defaultCompanyId;
+        }
+      }
+      this.oaMappingResolver = new ZaloOAMappingService({
+        customMapping,
+        supabase: options.supabase,
+        allowTestMockFallback: Boolean(options.defaultCompanyId),
+      });
     }
 
     if (options.supabase) {
@@ -74,6 +86,7 @@ export class ZaloSyncService {
 
   /**
    * Main webhook event ingestion pipeline.
+   * Atomically claims event, processes data entities, and records private raw payload.
    */
   async handleWebhookEvent(event: ZaloWebhookPayload): Promise<SyncResult> {
     const eventName = event.event_name;
@@ -88,7 +101,6 @@ export class ZaloSyncService {
     const oaId =
       event.oa_id ||
       (isUserMessage ? event.recipient?.id : event.sender?.id) ||
-      process.env.ZALO_OA_ID ||
       '';
 
     const companyId = await this.oaMappingResolver.resolveCompanyId(oaId);
@@ -101,7 +113,6 @@ export class ZaloSyncService {
       return { status: 'error', message: 'Missing sender ID in webhook payload' };
     }
 
-    // Determine direction and Zalo user UID
     const isInbound = isUserMessage;
     const zaloUserUid = isInbound ? senderId : recipientId;
 
@@ -119,222 +130,291 @@ export class ZaloSyncService {
       rawContent = `[Tin nhắn ${eventName}]`;
     }
 
-    // 2. IDEMPOTENCY CHECK: Namespaced key = company_id + channel + oa_id + message_id
-    const idempotencyKey = `${companyId}:ZALO:${oaId}:${rawMsgId}`;
+    // 2. DURABLE IDEMPOTENCY CLAIM INVARIANT:
+    // Namespaced idempotency key: zalo:companyId:oaId:rawMsgId
+    const namespacedExternalRef = `zalo:${companyId}:${oaId}:${rawMsgId}`;
 
-    // Check by namespaced key or rawMsgId
-    const { data: existingInteraction } = await this.supabase
-      .from('interactions')
-      .select('id, conversation_id, customer_id')
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .in('external_ref', [idempotencyKey, rawMsgId])
-      .maybeSingle();
-
-    if (existingInteraction) {
-      return {
-        status: 'duplicate',
-        interactionId: existingInteraction.id,
-        conversationId: existingInteraction.conversation_id,
-        customerId: existingInteraction.customer_id,
-        message: 'Duplicate event skipped by idempotency check',
-      };
-    }
-
-    // 3. EVIDENCE CONTRACT: IDENTITY & CUSTOMER LOOKUP OR CREATION
-    let customerId: string;
-    let isNewCustomer = false;
-
-    const { data: existingIdentity } = await this.supabase
-      .from('identities')
-      .select('customer_id')
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .eq('external_id', zaloUserUid)
-      .maybeSingle();
-
-    if (existingIdentity?.customer_id) {
-      customerId = existingIdentity.customer_id;
-    } else {
-      // Create new customer and map identity strictly without merging
-      isNewCustomer = true;
-      let customerName = `Khách Zalo ${zaloUserUid.slice(-4)}`;
-
-      // Attempt to query user display name from Zalo OA API
-      try {
-        const profile = await this.zaloClient.getUserProfile(zaloUserUid);
-        if (profile.user_name) {
-          customerName = profile.user_name;
-        }
-      } catch {
-        // Fallback to default name if profile query is unavailable
-      }
-
-      const { data: newCustomer, error: custError } = await this.supabase
-        .from('customers')
-        .insert({
-          company_id: companyId,
-          name: customerName,
-          source: 'ZALO_OA',
-          stage: 'LEAD_NEW',
-        })
-        .select('id')
-        .single();
-
-      if (custError || !newCustomer) {
-        throw new Error(
-          `Failed to create customer for Zalo UID ${zaloUserUid}: ${custError?.message}`
-        );
-      }
-
-      customerId = newCustomer.id;
-
-      // Link Identity: strictly external_id, no phone numbers in metadata
-      const { error: identError } = await this.supabase.from('identities').insert({
+    // Atomically claim the ingress event via DB invariant (UNIQUE constraint on company_id, oa_id, external_ref)
+    const { error: claimError } = await this.supabase
+      .from('zalo_ingress_events')
+      .insert({
         company_id: companyId,
-        customer_id: customerId,
-        channel: 'ZALO',
-        external_id: zaloUserUid,
-        verified: false,
-        metadata: { zalo_uid: zaloUserUid },
+        oa_id: oaId,
+        external_ref: namespacedExternalRef,
+        event_name: eventName,
+        sender_id: senderId,
+        recipient_id: recipientId,
+        status: 'CLAIMED',
       });
 
-      if (identError) {
-        throw new Error(
-          `Failed to create identity for Zalo UID ${zaloUserUid}: ${identError?.message}`
-        );
+    if (claimError) {
+      // 23505 is PostgreSQL unique_violation error code
+      const isUniqueViolation =
+        claimError.code === '23505' ||
+        claimError.message?.toLowerCase().includes('unique') ||
+        claimError.message?.toLowerCase().includes('duplicate');
+
+      if (isUniqueViolation) {
+        // Query existing interaction to return consistent idempotent acknowledgment
+        const { data: existingInteraction } = await this.supabase
+          .from('interactions')
+          .select('id, conversation_id, customer_id')
+          .eq('company_id', companyId)
+          .eq('channel', 'ZALO')
+          .in('external_ref', [rawMsgId, namespacedExternalRef])
+          .maybeSingle();
+
+        return {
+          status: 'duplicate',
+          interactionId: existingInteraction?.id,
+          conversationId: existingInteraction?.conversation_id,
+          customerId: existingInteraction?.customer_id,
+          message: 'Duplicate event skipped by idempotency claim invariant',
+        };
       }
+
+      throw new Error(`Failed to claim webhook ingress event: ${claimError.message}`);
     }
 
-    // 4. CONVERSATION MANAGEMENT
-    let conversationId: string;
-    const nowIso = new Date().toISOString();
+    // Pipeline tracking for safe atomic rollback on downstream failure
+    let createdCustomerId: string | null = null;
+    let createdIdentityId: string | null = null;
+    let createdConversationId: string | null = null;
+    let createdInteractionId: string | null = null;
 
-    const { data: existingConversation } = await this.supabase
-      .from('conversations')
-      .select('id, unread_count')
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .eq('external_conversation_id', zaloUserUid)
-      .maybeSingle();
+    try {
+      // 3. EVIDENCE CONTRACT: IDENTITY & CUSTOMER RESOLUTION
+      let customerId: string;
+      let isNewCustomer = false;
 
-    if (existingConversation) {
-      conversationId = existingConversation.id;
-      const newUnread = isInbound
-        ? existingConversation.unread_count + 1
-        : existingConversation.unread_count;
+      const { data: existingIdentity } = await this.supabase
+        .from('identities')
+        .select('id, customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', 'ZALO')
+        .eq('external_id', zaloUserUid)
+        .maybeSingle();
 
-      await this.supabase
+      if (existingIdentity?.customer_id) {
+        customerId = existingIdentity.customer_id;
+      } else {
+        isNewCustomer = true;
+        let customerName = `Khách Zalo ${zaloUserUid.slice(-4)}`;
+
+        try {
+          const profile = await this.zaloClient.getUserProfile(zaloUserUid);
+          if (profile.user_name) {
+            customerName = profile.user_name;
+          }
+        } catch {
+          // Fallback to placeholder name
+        }
+
+        const { data: newCustomer, error: custError } = await this.supabase
+          .from('customers')
+          .insert({
+            company_id: companyId,
+            name: customerName,
+            source: 'ZALO_OA',
+            stage: 'LEAD_NEW',
+          })
+          .select('id')
+          .single();
+
+        if (custError || !newCustomer) {
+          throw new Error(`Failed to create customer for Zalo UID ${zaloUserUid}: ${custError?.message}`);
+        }
+
+        customerId = newCustomer.id;
+        createdCustomerId = newCustomer.id;
+
+        // Link identity strictly by external_id
+        const { data: newIdent, error: identError } = await this.supabase
+          .from('identities')
+          .insert({
+            company_id: companyId,
+            customer_id: customerId,
+            channel: 'ZALO',
+            external_id: zaloUserUid,
+            verified: false,
+            metadata: { zalo_uid: zaloUserUid },
+          })
+          .select('id')
+          .maybeSingle();
+
+        if (identError) {
+          throw new Error(`Failed to create identity for Zalo UID ${zaloUserUid}: ${identError.message}`);
+        }
+
+        if (newIdent) {
+          createdIdentityId = newIdent.id;
+        }
+      }
+
+      // 4. CONVERSATION MANAGEMENT
+      let conversationId: string;
+      const nowIso = new Date().toISOString();
+
+      const { data: existingConversation } = await this.supabase
         .from('conversations')
-        .update({
-          last_message_at: nowIso,
-          unread_count: newUnread,
-          status: 'OPEN',
-          updated_at: nowIso,
-        })
-        .eq('id', conversationId);
-    } else {
-      const { data: newConv, error: convError } = await this.supabase
-        .from('conversations')
+        .select('id, unread_count')
+        .eq('company_id', companyId)
+        .eq('channel', 'ZALO')
+        .eq('external_conversation_id', zaloUserUid)
+        .maybeSingle();
+
+      if (existingConversation) {
+        conversationId = existingConversation.id;
+        const newUnread = isInbound
+          ? existingConversation.unread_count + 1
+          : existingConversation.unread_count;
+
+        await this.supabase
+          .from('conversations')
+          .update({
+            last_message_at: nowIso,
+            unread_count: newUnread,
+            status: 'OPEN',
+            updated_at: nowIso,
+          })
+          .eq('id', conversationId);
+      } else {
+        const { data: newConv, error: convError } = await this.supabase
+          .from('conversations')
+          .insert({
+            company_id: companyId,
+            customer_id: customerId,
+            channel: 'ZALO',
+            external_conversation_id: zaloUserUid,
+            last_message_at: nowIso,
+            unread_count: isInbound ? 1 : 0,
+            status: 'OPEN',
+          })
+          .select('id')
+          .single();
+
+        if (convError || !newConv) {
+          throw new Error(`Failed to create conversation for Zalo UID ${zaloUserUid}: ${convError?.message}`);
+        }
+
+        conversationId = newConv.id;
+        createdConversationId = newConv.id;
+      }
+
+      // 5. SECURITY ZONE INGRESS: SANITIZE CONTENT & RECORD INTERACTION
+      const { sanitizedText } = sanitizeMessageContent(rawContent);
+
+      const { data: newInteraction, error: intError } = await this.supabase
+        .from('interactions')
         .insert({
           company_id: companyId,
           customer_id: customerId,
+          conversation_id: conversationId,
           channel: 'ZALO',
-          external_conversation_id: zaloUserUid,
-          last_message_at: nowIso,
-          unread_count: isInbound ? 1 : 0,
-          status: 'OPEN',
+          type: 'MESSAGE',
+          direction: isInbound ? 'INBOUND' : 'OUTBOUND',
+          sanitized_content: sanitizedText,
+          sanitization_status: 'SUCCEEDED',
+          sanitized_at: nowIso,
+          sanitizer_version: 'v1.0',
+          external_ref: rawMsgId,
+          actor_type: isInbound ? 'CUSTOMER' : 'SALE',
+          actor_user_id: null,
+          created_at: nowIso,
         })
         .select('id')
         .single();
 
-      if (convError || !newConv) {
-        throw new Error(
-          `Failed to create conversation for Zalo UID ${zaloUserUid}: ${convError?.message}`
-        );
+      if (intError || !newInteraction) {
+        throw new Error(`Failed to insert interaction: ${intError?.message}`);
       }
 
-      conversationId = newConv.id;
-    }
+      createdInteractionId = newInteraction.id;
 
-    // 5. SECURITY ZONE INGRESS: SANITIZE CONTENT & RECORD INTERACTION
-    // Zero-Phone Invariant: Mask any raw phone numbers in the message content
-    const { sanitizedText } = sanitizeMessageContent(rawContent);
-
-    const { data: newInteraction, error: intError } = await this.supabase
-      .from('interactions')
-      .insert({
+      // 6. PRIVATE SECURITY ZONE: RECORD RAW PAYLOAD & RAW CONTENT
+      // CRITICAL: NEVER swallow or ignore errors here. Fail closed and rollback on failure.
+      const rawRecord = {
+        interaction_id: newInteraction.id,
         company_id: companyId,
-        customer_id: customerId,
-        conversation_id: conversationId,
-        channel: 'ZALO',
-        type: 'MESSAGE',
-        direction: isInbound ? 'INBOUND' : 'OUTBOUND',
-        sanitized_content: sanitizedText,
-        sanitization_status: 'SUCCEEDED', // Marks as legitimately sanitized so SALE can read it
-        sanitized_at: nowIso,
-        sanitizer_version: 'v1.0',
-        external_ref: rawMsgId,
-        actor_type: isInbound ? 'CUSTOMER' : 'SALE',
-        actor_user_id: null,
+        raw_content: rawContent,
+        raw_payload: event as unknown as Record<string, unknown>,
+        source_metadata: {
+          oa_id: oaId,
+          sender_id: senderId,
+          recipient_id: recipientId,
+          timestamp: event.timestamp,
+          event_name: event.event_name,
+        },
         created_at: nowIso,
-      })
-      .select('id')
-      .single();
+      };
 
-    if (intError || !newInteraction) {
-      throw new Error(`Failed to insert interaction: ${intError?.message}`);
-    }
-
-    // 6. PRIVATE SECURITY ZONE: STORE RAW PAYLOAD & RAW CONTENT
-    const rawRecord = {
-      interaction_id: newInteraction.id,
-      company_id: companyId,
-      raw_content: rawContent,
-      raw_payload: event as unknown as Record<string, unknown>,
-      source_metadata: {
-        oa_id: oaId,
-        sender_id: senderId,
-        recipient_id: recipientId,
-        timestamp: event.timestamp,
-        event_name: event.event_name,
-      },
-      created_at: nowIso,
-    };
-
-    try {
       type SupabaseWithSchema = SupabaseClient & {
         schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
       };
       const clientWithSchema = this.supabase as SupabaseWithSchema;
 
+      let rawInsertError: { message?: string } | null = null;
       if (typeof clientWithSchema.schema === 'function') {
-        await clientWithSchema.schema('private').from('interaction_raw_contents').insert(rawRecord);
+        const res = await clientWithSchema.schema('private').from('interaction_raw_contents').insert(rawRecord);
+        rawInsertError = res.error;
       } else {
-        await this.supabase.from('interaction_raw_contents').insert(rawRecord);
+        const res = await this.supabase.from('interaction_raw_contents').insert(rawRecord);
+        rawInsertError = res.error;
       }
-    } catch {
-      // Fallback if PostgREST direct private schema routing differs
-      try {
-        await this.supabase.from('interaction_raw_contents').insert(rawRecord);
-      } catch {
-        // Schema fallback caught
+
+      if (rawInsertError) {
+        throw new Error(
+          `Security Zone Ingress Violation: Failed to persist raw interaction content in private zone: ${rawInsertError.message}`
+        );
       }
-    }
 
-    // 7. POST-INGESTION CARE ACTIONS (Opt-out check & Delivery response update)
-    if (isInbound) {
-      await this.handlePostMessageCareActions(companyId, customerId, rawContent);
-    }
+      // Mark ingress event as PROCESSED
+      await this.supabase
+        .from('zalo_ingress_events')
+        .update({ status: 'PROCESSED' })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId)
+        .eq('external_ref', namespacedExternalRef);
 
-    return {
-      status: 'synced',
-      interactionId: newInteraction.id,
-      conversationId,
-      customerId,
-      isNewCustomer,
-      message: 'Message processed and recorded successfully',
-    };
+      // 7. POST-INGESTION CARE ACTIONS
+      if (isInbound) {
+        await this.handlePostMessageCareActions(companyId, customerId, rawContent);
+      }
+
+      return {
+        status: 'synced',
+        interactionId: newInteraction.id,
+        conversationId,
+        customerId,
+        isNewCustomer,
+        message: 'Message processed and recorded successfully',
+      };
+    } catch (pipelineError: unknown) {
+      // ATOMIC INGRESS ROLLBACK: Cleanup created entities to prevent orphan data
+      if (createdInteractionId) {
+        await this.supabase.from('interactions').delete().eq('id', createdInteractionId);
+      }
+      if (createdConversationId) {
+        await this.supabase.from('conversations').delete().eq('id', createdConversationId);
+      }
+      if (createdIdentityId) {
+        await this.supabase.from('identities').delete().eq('id', createdIdentityId);
+      }
+      if (createdCustomerId) {
+        await this.supabase.from('customers').delete().eq('id', createdCustomerId);
+      }
+
+      // Mark ingress event as FAILED
+      const errorMsg = pipelineError instanceof Error ? pipelineError.message : 'Pipeline error';
+      await this.supabase
+        .from('zalo_ingress_events')
+        .update({ status: 'FAILED', error_message: errorMsg })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId)
+        .eq('external_ref', namespacedExternalRef);
+
+      throw pipelineError;
+    }
   }
 
   /**

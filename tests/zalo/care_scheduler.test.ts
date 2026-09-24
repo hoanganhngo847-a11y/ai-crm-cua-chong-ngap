@@ -134,6 +134,69 @@ async function runCareSchedulerTests() {
 
   console.log('✓ Test 3.3 Passed: Disabled schedule was safely skipped.');
 
+  // -------------------------------------------------------------
+  // Test 3.4: Provider error when sending -> FAILED status and next_send_at NOT advanced (P0 #8)
+  // -------------------------------------------------------------
+  console.log('Test 3.4: Gặp lỗi gửi tin -> care_deliveries ghi nhận FAILED và next_send_at KHÔNG bị dịch chuyển sai');
+
+  const failingClientId = 'cust_fail_002';
+  const failingDate = new Date('2026-09-01T08:00:00.000Z');
+
+  mockDb.customers.push({ id: failingClientId, company_id: companyId, name: 'Khách Lỗi Mạng', stage: 'CARE_NURTURING' });
+  mockDb.identities.push({ id: 'ident_fail', company_id: companyId, customer_id: failingClientId, channel: 'ZALO', external_id: 'zalo_fail_uid', verified: true });
+  mockDb.care_schedules.push({
+    id: 'sched_fail_002',
+    company_id: companyId,
+    customer_id: failingClientId,
+    channel: 'ZALO',
+    frequency_months: 1,
+    next_send_at: failingDate.toISOString(),
+    enabled: true,
+    stop_reason: null,
+  });
+
+  // Client that fails sending
+  const failingZaloClient = new ZaloClient({
+    accessToken: 'test_sched_access_token',
+    fetchFn: (async () => {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          error: -999,
+          message: 'Zalo Gateway Timeout / Provider Error',
+        }),
+      } as unknown as Response;
+    }) as typeof fetch,
+  });
+
+  const failingSchedulerService = new ZaloCareSchedulerService({
+    supabase: supabase as unknown as import('@supabase/supabase-js').SupabaseClient,
+    zaloClient: failingZaloClient,
+  });
+
+  const failResult = await failingSchedulerService.processDueSchedules({
+    companyId,
+    asOfDate: new Date('2026-09-02T00:00:00.000Z'),
+  });
+
+  assert.strictEqual(failResult.processed, 1, 'Should process 1 failing due schedule');
+  assert.strictEqual(failResult.advanced, 0, 'Must NOT advance schedule on failure');
+  assert.strictEqual(failResult.failed, 1, 'Must record 1 failure');
+
+  const failScheduleInDb = mockDb.care_schedules.find((s) => s.id === 'sched_fail_002');
+  assert.strictEqual(
+    failScheduleInDb?.next_send_at,
+    failingDate.toISOString(),
+    'next_send_at must remain UNCHANGED on provider failure'
+  );
+
+  const failDeliveryInDb = mockDb.care_deliveries.find((d) => d.customer_id === failingClientId);
+  assert.strictEqual(failDeliveryInDb?.status, 'FAILED', 'Delivery record must be FAILED');
+
+  console.log('✓ Test 3.4 Passed: Care schedule preserved next_send_at and logged FAILED delivery.');
+
   console.log('\nALL TESTS IN SUITE 3 PASSED SUCCESSFULLY! ✓\n');
 }
 

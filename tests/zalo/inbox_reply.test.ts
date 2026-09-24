@@ -1,6 +1,7 @@
 import assert from 'assert';
 import { ZaloInboxService } from '../../features/omnichannel/zalo/inbox-service';
 import { ZaloClient } from '../../features/omnichannel/zalo/zalo-client';
+import { ServerAuthError } from '../../lib/server-auth/errors';
 import { createMockSupabase, createMockDatabase } from './mock_supabase';
 
 async function runInboxReplyTests() {
@@ -124,14 +125,19 @@ async function runInboxReplyTests() {
   console.log('Test 2.3: sendZaloReply() gửi tin thành công và ghi nhận Interaction (direction: OUTBOUND, actor_type: SALE)');
 
   const replyContent = 'Chào anh, cửa kích thước 2m x 0.6m bên em dùng bản inox 304 tiêu chuẩn, bảo hành 5 năm ạ.';
-  const sendResult = await inboxService.sendZaloReply({
-    companyId,
-    customerId,
-    conversationId,
-    content: replyContent,
-    recipientZaloId,
-    saleUserId,
-  });
+  const sendResult = await inboxService.sendZaloReply(
+    {
+      conversationId,
+      content: replyContent,
+    },
+    {
+      actor: {
+        userId: saleUserId,
+        companyId,
+        role: 'SALE',
+      },
+    }
+  );
 
   assert.strictEqual(sendResult.success, true, 'sendZaloReply must succeed');
   assert.strictEqual(sendResult.externalMessageId, 'zalo_msg_out_8888', 'Must capture Zalo OpenAPI message ID');
@@ -142,6 +148,11 @@ async function runInboxReplyTests() {
   assert.ok(callRecord, 'Zalo API must have been invoked');
   assert.strictEqual(callRecord.body.recipient.user_id, recipientZaloId);
   assert.strictEqual(callRecord.body.message.text, replyContent);
+
+  // Verify DB Outbound Delivery Record in outbox
+  assert.strictEqual(mockDb.zalo_outbound_deliveries.length, 1, 'Should create 1 outbound delivery record');
+  assert.strictEqual(mockDb.zalo_outbound_deliveries[0].status, 'SENT', 'Outbox delivery status must be SENT');
+  assert.strictEqual(mockDb.zalo_outbound_deliveries[0].provider_msg_id, 'zalo_msg_out_8888');
 
   // Verify DB Interaction record
   assert.strictEqual(mockDb.interactions.length, 2, 'Should now have 2 interactions');
@@ -157,7 +168,39 @@ async function runInboxReplyTests() {
   const updatedConv = mockDb.conversations[0];
   assert.notStrictEqual(updatedConv.last_message_at, '2026-09-18T10:00:00Z', 'last_message_at should be updated to now');
 
-  console.log('✓ Test 2.3 Passed: Outbound sale reply sent and recorded correctly.');
+  console.log('✓ Test 2.3 Passed: Outbound sale reply sent and recorded correctly via durable outbox.');
+
+  // -------------------------------------------------------------
+  // Test 2.4: Cross-Tenant Protection (P0 #4)
+  // -------------------------------------------------------------
+  console.log('Test 2.4: Chặn gửi tin nhắn vào conversation của tenant khác (403 Forbidden)');
+
+  let crossTenantBlocked = false;
+  try {
+    await inboxService.sendZaloReply(
+      {
+        conversationId,
+        content: 'Nỗ lực tấn công IDOR xuyên tenant',
+      },
+      {
+        actor: {
+          userId: 'attacker_sale_user',
+          companyId: 'different-company-uuid-9999',
+          role: 'SALE',
+        },
+      }
+    );
+  } catch (err: unknown) {
+    if (
+      err instanceof ServerAuthError ||
+      (err instanceof Error && err.message.includes('forbidden'))
+    ) {
+      crossTenantBlocked = true;
+    }
+  }
+
+  assert.strictEqual(crossTenantBlocked, true, 'Cross-tenant reply must be blocked with 403 Forbidden');
+  console.log('✓ Test 2.4 Passed: Cross-tenant IDOR attack blocked successfully.');
 
   console.log('\nALL TESTS IN SUITE 2 PASSED SUCCESSFULLY! ✓\n');
 }

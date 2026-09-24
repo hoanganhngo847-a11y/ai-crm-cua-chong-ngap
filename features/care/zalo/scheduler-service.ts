@@ -15,6 +15,13 @@ export interface CreateScheduleParams {
   nextSendAt?: string;
 }
 
+export interface ProcessDueSchedulesResult {
+  processed: number;
+  advanced: number;
+  failed: number;
+  skipped: number;
+}
+
 const OPT_OUT_KEYWORDS = [
   'dung lam phien',
   'dừng làm phiền',
@@ -46,10 +53,13 @@ export function addMonths(date: Date, months: number): Date {
 
 /**
  * Service managing periodic Care Schedules (1 month / cycle) for Zalo.
- * Handles:
+ *
+ * Invariants & Reliability:
  * - Schedule creation and updating.
- * - Due schedule processing & advancing next_send_at.
- * - Automatic stop on customer opt-out or system stop flags.
+ * - Due schedule processing via care_deliveries state management.
+ * - next_send_at is ONLY advanced when delivery is successfully SENT.
+ * - On failure or network error: next_send_at remains unchanged for safe worker retry.
+ * - Automatic stop on customer opt-out.
  */
 export class ZaloCareSchedulerService {
   private readonly supabase: SupabaseClient;
@@ -71,10 +81,9 @@ export class ZaloCareSchedulerService {
   async createOrUpdateSchedule(params: CreateScheduleParams): Promise<CareScheduleDTO> {
     const { companyId, customerId, frequencyMonths = 1 } = params;
 
-    // Default next_send_at is 1 month from now if not specified
     const nextSendAt = params.nextSendAt || addMonths(new Date(), frequencyMonths).toISOString();
 
-    const { data: existing } = await this.supabase!
+    const { data: existing } = await this.supabase
       .from('care_schedules')
       .select('id')
       .eq('company_id', companyId)
@@ -85,7 +94,7 @@ export class ZaloCareSchedulerService {
     let record: Record<string, unknown>;
 
     if (existing) {
-      const { data, error } = await this.supabase!
+      const { data, error } = await this.supabase
         .from('care_schedules')
         .update({
           frequency_months: frequencyMonths,
@@ -151,14 +160,16 @@ export class ZaloCareSchedulerService {
   }
 
   /**
-   * Processes all active due schedules (next_send_at <= asOfDate),
-   * sends periodic check-in message, and increments next_send_at by frequency_months.
+   * Processes all active due schedules (next_send_at <= asOfDate).
+   * Manages lifecycle via care_deliveries (PENDING -> SENDING -> SENT / FAILED).
+   * CRITICAL: next_send_at is ONLY incremented when status is SENT.
+   * On failure: schedule is NOT advanced, allowing subsequent worker ticks to retry.
    */
   async processDueSchedules(options: {
     companyId: string;
     asOfDate?: Date;
     defaultMessage?: string;
-  }): Promise<{ processed: number; advanced: number; skipped: number }> {
+  }): Promise<ProcessDueSchedulesResult> {
     const asOfIso = (options.asOfDate || new Date()).toISOString();
     const defaultTemplate =
       options.defaultMessage ||
@@ -178,14 +189,15 @@ export class ZaloCareSchedulerService {
     }
 
     if (!dueSchedules || dueSchedules.length === 0) {
-      return { processed: 0, advanced: 0, skipped: 0 };
+      return { processed: 0, advanced: 0, failed: 0, skipped: 0 };
     }
 
     let advanced = 0;
+    let failed = 0;
     let skipped = 0;
 
     for (const schedule of dueSchedules) {
-      // Fetch customer's Zalo identity
+      // 1. Fetch customer's Zalo identity
       const { data: identity } = await this.supabase
         .from('identities')
         .select('external_id')
@@ -199,31 +211,99 @@ export class ZaloCareSchedulerService {
         continue;
       }
 
-      // Send periodic message
+      const nowIso = new Date().toISOString();
+      const idempotencyKey = `care_sched:${schedule.id}:${schedule.next_send_at}:ZALO`;
+
+      // 2. Pre-record delivery in care_deliveries as PENDING
+      const { data: deliveryRecord } = await this.supabase
+        .from('care_deliveries')
+        .insert({
+          company_id: schedule.company_id,
+          customer_id: schedule.customer_id,
+          campaign_id: null,
+          channel: 'ZALO',
+          idempotency_key: idempotencyKey,
+          status: 'PENDING',
+          message_content: defaultTemplate,
+          metadata: { schedule_id: schedule.id, due_at: schedule.next_send_at },
+          created_at: nowIso,
+          updated_at: nowIso,
+        })
+        .select('id')
+        .maybeSingle();
+
+      const deliveryId = deliveryRecord?.id;
+
+      // 3. Send message via ZaloClient with explicit error handling (NO empty catch)
+      let sendSuccess = false;
+      let providerMessageId: string | null = null;
+      let failureError = '';
+
       try {
-        await this.zaloClient.sendTextMessage(identity.external_id, defaultTemplate);
-      } catch {
-        // Even if sending fails, we can either retry or advance according to business policy
+        const sendRes = await this.zaloClient.sendTextMessage(identity.external_id, defaultTemplate);
+        if (sendRes.error === 0) {
+          sendSuccess = true;
+          providerMessageId = sendRes.data?.message_id || `msg_care_${Date.now()}`;
+        } else {
+          failureError = `Zalo API error [${sendRes.error}]: ${sendRes.message}`;
+        }
+      } catch (err: unknown) {
+        failureError = err instanceof Error ? err.message : 'Network/Provider error during care send';
       }
 
-      // Calculate next send date: exactly 1 month (or frequency_months) after the schedule date
-      const currentNextSend = new Date(schedule.next_send_at);
-      const newNextSend = addMonths(currentNextSend, schedule.frequency_months || 1);
+      // 4. Update delivery record & conditionally advance schedule
+      if (sendSuccess) {
+        if (deliveryId) {
+          await this.supabase
+            .from('care_deliveries')
+            .update({
+              status: 'SENT',
+              sent_at: new Date().toISOString(),
+              provider_msg_id: providerMessageId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', deliveryId);
+        }
 
-      await this.supabase
-        .from('care_schedules')
-        .update({
-          next_send_at: newNextSend.toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', schedule.id);
+        // Advance next_send_at to next cycle
+        const currentNextSend = new Date(schedule.next_send_at);
+        const newNextSend = addMonths(currentNextSend, schedule.frequency_months || 1);
 
-      advanced++;
+        await this.supabase
+          .from('care_schedules')
+          .update({
+            next_send_at: newNextSend.toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', schedule.id);
+
+        advanced++;
+      } else {
+        // Record FAILED status in care_deliveries
+        if (deliveryId) {
+          await this.supabase
+            .from('care_deliveries')
+            .update({
+              status: 'FAILED',
+              error_code: 'PROVIDER_ERROR',
+              error_message: failureError,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', deliveryId);
+        }
+
+        // LOG ALERT: Do NOT advance next_send_at. Schedule remains due for next retry tick.
+        console.warn(
+          `[CareScheduler Warning] Failed to send care check-in for schedule ${schedule.id}: ${failureError}. Schedule next_send_at preserved.`
+        );
+        failed++;
+      }
     }
 
     return {
       processed: dueSchedules.length,
       advanced,
+      failed,
       skipped,
     };
   }

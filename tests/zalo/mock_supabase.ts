@@ -2,6 +2,7 @@
 /**
  * In-Memory Mock Supabase Client for Testing Zalo Omnichannel & Care Modules.
  * Allows pure, isolated unit and integration testing without a running Postgres instance.
+ * Supports unique constraint enforcement for idempotency claims and outbox delivery.
  */
 
 export interface MockDatabase {
@@ -14,6 +15,9 @@ export interface MockDatabase {
   care_campaigns: any[];
   care_deliveries: any[];
   care_schedules: any[];
+  zalo_oa_configs: any[];
+  zalo_ingress_events: any[];
+  zalo_outbound_deliveries: any[];
   [table: string]: any[];
 }
 
@@ -21,6 +25,7 @@ export function createMockDatabase(seed: Partial<MockDatabase> = {}): MockDataba
   return {
     companies: seed.companies || [
       { id: '11111111-1111-1111-1111-111111111111', name: 'Công ty Cửa Chống Ngập', status: 'ACTIVE' },
+      { id: '22222222-2222-2222-2222-222222222222', name: 'Công ty Cửa Chống Ngập Chi Nhánh 2', status: 'ACTIVE' },
     ],
     customers: seed.customers || [],
     identities: seed.identities || [],
@@ -30,6 +35,9 @@ export function createMockDatabase(seed: Partial<MockDatabase> = {}): MockDataba
     care_campaigns: seed.care_campaigns || [],
     care_deliveries: seed.care_deliveries || [],
     care_schedules: seed.care_schedules || [],
+    zalo_oa_configs: seed.zalo_oa_configs || [],
+    zalo_ingress_events: seed.zalo_ingress_events || [],
+    zalo_outbound_deliveries: seed.zalo_outbound_deliveries || [],
     ...seed,
   };
 }
@@ -71,7 +79,6 @@ class MockQueryBuilder {
 
   delete() {
     this.operation = 'DELETE';
-    this.delete() ;
     return this;
   }
 
@@ -118,6 +125,39 @@ class MockQueryBuilder {
       const inserted: any[] = [];
 
       for (const row of rows) {
+        // Enforce UNIQUE(company_id, oa_id, external_ref) on zalo_ingress_events
+        if (this.table === 'zalo_ingress_events') {
+          const duplicate = list.find(
+            (e) =>
+              e.company_id === row.company_id &&
+              e.oa_id === row.oa_id &&
+              e.external_ref === row.external_ref
+          );
+          if (duplicate) {
+            return {
+              data: null,
+              error: {
+                message: 'duplicate key value violates unique constraint "uq_zalo_ingress_events_claim"',
+                code: '23505',
+              },
+            };
+          }
+        }
+
+        // Enforce UNIQUE(idempotency_key) on zalo_outbound_deliveries
+        if (this.table === 'zalo_outbound_deliveries' && row.idempotency_key) {
+          const duplicate = list.find((e) => e.idempotency_key === row.idempotency_key);
+          if (duplicate) {
+            return {
+              data: null,
+              error: {
+                message: 'duplicate key value violates unique constraint "uq_zalo_outbound_deliveries_idempotency"',
+                code: '23505',
+              },
+            };
+          }
+        }
+
         const item = {
           id: row.id || `mock_${this.table}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           created_at: row.created_at || new Date().toISOString(),

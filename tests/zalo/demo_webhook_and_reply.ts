@@ -208,14 +208,19 @@ async function runDemoWebhookAndReply() {
   console.log(`     • Khách nhận (Zalo UID): ${customerZaloId}`);
   console.log(`     • Nội dung gửi         : "${replyText}"`);
 
-  const replyResult = await inboxService.sendZaloReply({
-    companyId,
-    customerId: syncResult.customerId!,
-    conversationId: syncResult.conversationId!,
-    content: replyText,
-    recipientZaloId: customerZaloId,
-    saleUserId,
-  });
+  const replyResult = await inboxService.sendZaloReply(
+    {
+      conversationId: syncResult.conversationId!,
+      content: replyText,
+    },
+    {
+      actor: {
+        userId: saleUserId,
+        companyId,
+        role: 'SALE',
+      },
+    }
+  );
 
   console.log('\n  ▶ 2.4. Kết quả từ hàm sendZaloReply:');
   console.log('     • Thành công (success)            : ' + (replyResult.success ? '✅ TRUE' : '❌ FALSE'));

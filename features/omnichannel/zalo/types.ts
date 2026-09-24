@@ -126,12 +126,8 @@ export interface ZaloMessageItem {
 }
 
 export interface SendZaloReplyParams {
-  companyId: string;
-  customerId: string;
   conversationId: string;
   content: string;
-  recipientZaloId: string;
-  saleUserId?: string | null;
 }
 
 export interface SendZaloReplyResult {

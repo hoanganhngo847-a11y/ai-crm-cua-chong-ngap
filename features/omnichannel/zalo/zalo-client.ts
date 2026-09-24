@@ -1,12 +1,19 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   ZaloSendResponse,
   ZaloTokenInfo,
   ZaloTokenResponse,
   ZaloUserProfile,
 } from './types';
-import { IZaloTokenStore, InMemoryZaloTokenStore } from './token-store';
+import {
+  IZaloTokenStore,
+  DatabaseZaloTokenStore,
+  MockZaloTokenStore,
+  ZaloOACredentials,
+} from './token-store';
 
 export interface ZaloClientOptions {
+  companyId?: string;
   oaId?: string;
   appId?: string;
   appSecret?: string;
@@ -22,10 +29,12 @@ export interface ZaloClientOptions {
  *
  * Security Invariants:
  * - Credentials and tokens are accessed exclusively server-side.
- * - Never logs or leaks secrets (ZALO_APP_SECRET, ZALO_ACCESS_TOKEN, ZALO_REFRESH_TOKEN).
+ * - Never logs or leaks secrets (appSecret, accessToken, refreshToken).
  * - Fails closed on token expiration or refresh failure.
+ * - Multi-tenant isolation: tokens and secrets belong strictly to (companyId, oaId).
  */
 export class ZaloClient {
+  readonly companyId: string;
   readonly oaId: string;
   readonly appId: string;
   readonly appSecret: string;
@@ -33,16 +42,26 @@ export class ZaloClient {
   private readonly fetchFn: typeof fetch;
 
   constructor(options: ZaloClientOptions = {}) {
-    this.oaId = options.oaId || process.env.ZALO_OA_ID || '';
-    this.appId = options.appId || process.env.ZALO_APP_ID || '';
-    this.appSecret = options.appSecret || process.env.ZALO_APP_SECRET || '';
-    this.tokenStore =
-      options.tokenStore ||
-      new InMemoryZaloTokenStore({
+    this.companyId = options.companyId || '';
+    this.oaId = options.oaId || '';
+    this.appId = options.appId || '';
+    this.appSecret = options.appSecret || '';
+    this.fetchFn = options.fetchFn || fetch;
+
+    if (options.tokenStore) {
+      this.tokenStore = options.tokenStore;
+    } else {
+      // Create isolated in-memory token store for this specific client
+      const initialCred: ZaloOACredentials = {
+        companyId: this.companyId,
+        oaId: this.oaId,
+        appId: this.appId,
+        appSecret: this.appSecret,
         accessToken: options.accessToken,
         refreshToken: options.refreshToken,
-      });
-    this.fetchFn = options.fetchFn || fetch;
+      };
+      this.tokenStore = new MockZaloTokenStore([initialCred]);
+    }
   }
 
   /**
@@ -50,13 +69,15 @@ export class ZaloClient {
    * Auto-refreshes token if it's within 5 minutes of expiring.
    */
   async getValidAccessToken(): Promise<string> {
-    const tokenInfo = await this.tokenStore.getToken();
+    const tokenInfo = await this.tokenStore.getToken(this.companyId, this.oaId);
 
-    if (!tokenInfo) {
-      const directToken = await this.tokenStore.getAccessToken();
-      if (directToken) return directToken;
+    if (!tokenInfo || !tokenInfo.accessToken) {
+      const creds = await this.tokenStore.getCredentials(this.companyId, this.oaId);
+      if (creds?.accessToken) {
+        return creds.accessToken;
+      }
       throw new Error(
-        'Authentication failure: No Zalo access token available. Please configure ZALO_ACCESS_TOKEN or refresh token.'
+        `Authentication failure: No Zalo access token available for company "${this.companyId}", OA "${this.oaId}". Fail-closed.`
       );
     }
 
@@ -76,52 +97,73 @@ export class ZaloClient {
    * Calls Zalo OAuth v4 endpoint securely.
    */
   async refreshAccessToken(): Promise<ZaloTokenInfo> {
-    const refreshToken = await this.tokenStore.getRefreshToken();
-    if (!refreshToken) {
-      throw new Error('Authentication failure: ZALO_REFRESH_TOKEN is not configured.');
-    }
+    const creds = await this.tokenStore.getCredentials(this.companyId, this.oaId);
+    const appId = creds?.appId || this.appId;
+    const appSecret = creds?.appSecret || this.appSecret;
+    const refreshToken = creds?.refreshToken;
 
-    if (!this.appId || !this.appSecret) {
-      throw new Error('Authentication failure: ZALO_APP_ID or ZALO_APP_SECRET is missing.');
-    }
-
-    const url = 'https://oauth.zaloapp.com/v4/oa/access_token';
-    const params = new URLSearchParams({
-      app_id: this.appId,
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    });
-
-    const response = await this.fetchFn(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        secret_key: this.appSecret,
-      },
-      body: params.toString(),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Zalo OAuth request failed with HTTP status ${response.status}`);
-    }
-
-    const data = (await response.json()) as ZaloTokenResponse;
-
-    if (data.error || !data.access_token || !data.refresh_token) {
+    if (!appId || !appSecret) {
       throw new Error(
-        `Failed to refresh Zalo access token: [${data.error || 'AUTH_ERR'}] ${data.message || 'OAuth error'}`
+        `Authentication failure: Missing appId or appSecret for OA "${this.oaId}". Fail-closed.`
       );
     }
 
-    const expiresInSeconds = Number(data.expires_in) || 90000; // Default 25h in Zalo
-    const newTokenInfo: ZaloTokenInfo = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: Date.now() + expiresInSeconds * 1000,
+    if (!refreshToken) {
+      console.error(`[SECURITY ALERT] Zalo OA Token Refresh Failed: No refresh token for OA "${this.oaId}"`);
+      throw new Error(
+        `Authentication failure: No refresh token found for OA "${this.oaId}". Re-authentication required.`
+      );
+    }
+
+    const fetchTokenFromZalo = async (
+      credentials: ZaloOACredentials,
+      tokenToUse: string
+    ): Promise<ZaloTokenInfo> => {
+      const url = 'https://oauth.zaloapp.com/v4/oa/access_token';
+      const params = new URLSearchParams({
+        app_id: credentials.appId,
+        grant_type: 'refresh_token',
+        refresh_token: tokenToUse,
+      });
+
+      const response = await this.fetchFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          secret_key: credentials.appSecret,
+        },
+        body: params.toString(),
+      });
+
+      if (!response.ok) {
+        console.error(`[SECURITY ALERT] Zalo OAuth endpoint returned HTTP ${response.status} for OA "${credentials.oaId}"`);
+        throw new Error(`Zalo OAuth request failed with HTTP status ${response.status}`);
+      }
+
+      const data = (await response.json()) as ZaloTokenResponse;
+
+      if (data.error || !data.access_token || !data.refresh_token) {
+        console.error(
+          `[SECURITY ALERT] Zalo OAuth token refresh rejected for OA "${credentials.oaId}": error code ${data.error}`
+        );
+        throw new Error(
+          `Failed to refresh Zalo access token: [${data.error || 'AUTH_ERR'}] ${data.message || 'OAuth error'}`
+        );
+      }
+
+      const expiresInSeconds = Number(data.expires_in) || 90000;
+      return {
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: Date.now() + expiresInSeconds * 1000,
+      };
     };
 
-    await this.tokenStore.setToken(newTokenInfo);
-    return newTokenInfo;
+    return await this.tokenStore.rotateToken(
+      this.companyId,
+      this.oaId,
+      (c, r) => fetchTokenFromZalo(c, r)
+    );
   }
 
   /**
@@ -196,5 +238,59 @@ export class ZaloClient {
     }
 
     return resJson.data;
+  }
+}
+
+/**
+ * Factory for creating ZaloClient scoped to a specific (companyId, oaId) tenant pair.
+ * Eliminates global process.env credentials leakage between tenants.
+ */
+export class ZaloClientFactory {
+  private static readonly clientCache = new Map<string, ZaloClient>();
+
+  static async getClientForOa(
+    companyId: string,
+    oaId: string,
+    options: {
+      supabase?: SupabaseClient;
+      tokenStore?: IZaloTokenStore;
+      fetchFn?: typeof fetch;
+    } = {}
+  ): Promise<ZaloClient> {
+    if (!companyId || !oaId) {
+      throw new Error('companyId and oaId are required to retrieve ZaloClient');
+    }
+
+    const cacheKey = `${companyId}:${oaId}`;
+    const cached = this.clientCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const tokenStore =
+      options.tokenStore ||
+      (options.supabase ? new DatabaseZaloTokenStore(options.supabase) : undefined);
+
+    const creds = tokenStore
+      ? await tokenStore.getCredentials(companyId, oaId)
+      : null;
+
+    const client = new ZaloClient({
+      companyId,
+      oaId,
+      appId: creds?.appId || '',
+      appSecret: creds?.appSecret || '',
+      accessToken: creds?.accessToken || undefined,
+      refreshToken: creds?.refreshToken || undefined,
+      tokenStore,
+      fetchFn: options.fetchFn,
+    });
+
+    this.clientCache.set(cacheKey, client);
+    return client;
+  }
+
+  static clearCache(): void {
+    this.clientCache.clear();
   }
 }
