@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import type {
   SurveyPhotoSlot,
-  SurveyPhotoItem,
+  SurveyPhotoPreview,
 } from '../types/survey';
 import {
   uploadSurveyPhotoAction,
@@ -13,8 +13,8 @@ import {
 
 interface PhotoCaptureGridProps {
   appointmentId: string;
-  photos: Record<string, SurveyPhotoItem>;
-  onChange: (photos: Record<string, SurveyPhotoItem>) => void;
+  photos: Record<string, SurveyPhotoPreview>;
+  onChange: (photos: Record<string, SurveyPhotoPreview>) => void;
   disabled?: boolean;
 }
 
@@ -153,14 +153,13 @@ export default function PhotoCaptureGrid({
       // 3. Invoke Server Action
       const res = await uploadSurveyPhotoAction(formData);
 
-      if (!res.success || !res.objectPath) {
+      if (!res.success || !res.signedUrl) {
         throw new Error(res.message || 'Không thể tải ảnh lên hệ thống.');
       }
 
       // 4. Update photos dictionary
-      const updatedItem: SurveyPhotoItem = {
+      const updatedItem: SurveyPhotoPreview = {
         slot: slotDef.slot,
-        objectPath: res.objectPath,
         signedUrl: res.signedUrl,
         uploadedAt: new Date().toLocaleTimeString('vi-VN', {
           hour: '2-digit',
@@ -214,7 +213,7 @@ export default function PhotoCaptureGrid({
   // Count progress
   const mandatoryCount = PHOTO_SLOT_DEFINITIONS.filter((s) => s.isMandatory).length;
   const mandatoryCompleted = PHOTO_SLOT_DEFINITIONS.filter(
-    (s) => s.isMandatory && photos[s.slot]?.objectPath
+    (s) => s.isMandatory && photos[s.slot]?.slot
   ).length;
 
   return (

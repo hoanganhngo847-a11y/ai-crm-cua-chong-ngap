@@ -19,8 +19,8 @@ export default function MeasurementForm({
   const floodHeight = values.anticipated_flood_height_mm ?? '';
   const widthTop = values.width_top_mm ?? '';
   const widthBottom = values.width_bottom_mm ?? '';
-  const gateType = values.gate_type || 'REMOVABLE_PANEL';
-  const mountingMethod = values.mounting_method || 'INSIDE_JAMB';
+  const gateType = values.gate_type;
+  const mountingMethod = values.mounting_method;
 
   // Helper to adjust number field with step
   const handleStep = (field: keyof MeasurementData, step: number, min = 0) => {
@@ -45,6 +45,7 @@ export default function MeasurementForm({
 
   return (
     <div className="space-y-6">
+      {(!gateType || !mountingMethod) && <p className="text-xs text-amber-300">Chưa chọn: hãy xác nhận loại cửa và vị trí gắn ray.</p>}
       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400 font-bold text-sm">
@@ -96,7 +97,7 @@ export default function MeasurementForm({
             placeholder="Ví dụ: 1200"
             value={clearWidth}
             onChange={(e) => {
-              const val = e.target.value === '' ? '' : Number(e.target.value);
+              const val = e.target.value === '' ? undefined : Number(e.target.value);
               onChange({ ...values, clear_width_mm: val as number });
             }}
             className={`flex-1 h-12 text-center text-lg font-bold font-mono bg-slate-950 border rounded-xl text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition ${
@@ -174,7 +175,7 @@ export default function MeasurementForm({
             placeholder="Ví dụ: 600"
             value={barrierHeight}
             onChange={(e) => {
-              const val = e.target.value === '' ? '' : Number(e.target.value);
+              const val = e.target.value === '' ? undefined : Number(e.target.value);
               onChange({ ...values, barrier_height_mm: val as number });
             }}
             className={`flex-1 h-12 text-center text-lg font-bold font-mono bg-slate-950 border rounded-xl text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 transition ${
@@ -223,7 +224,7 @@ export default function MeasurementForm({
             placeholder="Mức nước dâng tính từ nền (mm)"
             value={floodHeight}
             onChange={(e) => {
-              const val = e.target.value === '' ? '' : Number(e.target.value);
+              const val = e.target.value === '' ? undefined : Number(e.target.value);
               onChange({ ...values, anticipated_flood_height_mm: val as number });
             }}
             className={`flex-1 h-12 text-center text-lg font-bold font-mono bg-slate-950 border rounded-xl text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition ${
@@ -279,7 +280,7 @@ export default function MeasurementForm({
               placeholder="VD: 1205 mm"
               value={widthTop}
               onChange={(e) => {
-                const val = e.target.value === '' ? '' : Number(e.target.value);
+                const val = e.target.value === '' ? undefined : Number(e.target.value);
                 onChange({ ...values, width_top_mm: val as number });
               }}
               className="w-full h-12 text-center text-sm font-bold font-mono bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
@@ -297,7 +298,7 @@ export default function MeasurementForm({
               placeholder="VD: 1200 mm"
               value={widthBottom}
               onChange={(e) => {
-                const val = e.target.value === '' ? '' : Number(e.target.value);
+                const val = e.target.value === '' ? undefined : Number(e.target.value);
                 onChange({ ...values, width_bottom_mm: val as number });
               }}
               className="w-full h-12 text-center text-sm font-bold font-mono bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
@@ -341,6 +342,7 @@ export default function MeasurementForm({
             ).map((gate) => (
               <button
                 key={gate.id}
+                aria-pressed={gateType === gate.id}
                 type="button"
                 onClick={() => onChange({ ...values, gate_type: gate.id as GateType })}
                 className={`p-3 rounded-xl text-xs font-semibold text-left transition border ${
@@ -353,6 +355,7 @@ export default function MeasurementForm({
               </button>
             ))}
           </div>
+          {errors.gate_type && <p className="text-xs text-rose-400">{errors.gate_type}</p>}
         </div>
 
         <div>
@@ -367,6 +370,7 @@ export default function MeasurementForm({
             ).map((mount) => (
               <button
                 key={mount.id}
+                aria-pressed={mountingMethod === mount.id}
                 type="button"
                 onClick={() => onChange({ ...values, mounting_method: mount.id as MountingMethod })}
                 className={`p-2.5 rounded-xl text-xs font-semibold text-center transition border ${

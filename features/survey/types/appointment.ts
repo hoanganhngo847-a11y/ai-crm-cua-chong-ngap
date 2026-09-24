@@ -101,7 +101,7 @@ export interface UpdateAppointmentInput {
   assignee_id?: string;
   address?: string;
   appointment_date?: string;
-  status?: AppointmentStatus;
+  status?: Exclude<AppointmentStatus, 'COMPLETED'>;
 }
 
 /**

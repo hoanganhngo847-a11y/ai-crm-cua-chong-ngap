@@ -49,25 +49,13 @@ export async function completeSurvey(
   companyId: string,
   client?: import('@supabase/supabase-js').SupabaseClient
 ): Promise<CompleteSurveyResult> {
-  // 1. Enforce Validation Gate & Text Sanitization
-  const validation = validateSurveyCompletionGate(input);
-  if (!validation.isValid) {
-    return {
-      success: false,
-      message: 'Không thể hoàn tất khảo sát: Còn thiếu thông tin kỹ thuật hoặc ảnh bắt buộc.',
-      missingFields: validation.missingFields,
-      errors: validation.errors,
-    };
-  }
-
-  const sanitizedInput = sanitizeSurveyInput(input);
   const adminClient = client || createAdminClient();
 
   // 2. Fetch and verify appointment
   const { data: appointment, error: aptError } = await adminClient
     .from('appointments')
     .select('id, company_id, customer_id, assignee_id, status, type')
-    .eq('id', sanitizedInput.appointmentId)
+    .eq('id', input.appointmentId)
     .maybeSingle();
 
   if (aptError || !appointment) {
@@ -89,20 +77,31 @@ export async function completeSurvey(
     throw new Error('Lịch hẹn không phải loại SURVEY.');
   }
 
-  // Kiểm tra trạng thái hiện tại của appointment
-  if (appointment.status === 'CANCELLED') {
-    return {
-      success: false,
-      message: 'Lịch hẹn đã bị hủy, không thể hoàn tất khảo sát.',
-    };
+  if (appointment.assignee_id !== completedByUserId) {
+    return { success: false, message: 'Bạn không có quyền hoàn tất khảo sát này.' };
   }
 
-  if (appointment.status !== 'IN_PROGRESS' && appointment.status !== 'ACCEPTED') {
-    return {
-      success: false,
-      message: `Lịch hẹn đang ở trạng thái ${appointment.status}, không thể hoàn tất khảo sát. Chỉ chấp nhận trạng thái IN_PROGRESS hoặc ACCEPTED.`,
-    };
+  // Re-authorized by the RPC against active profile/member and original completed_by.
+  // Return only a receipt; no survey data or storage reference is exposed on retry.
+  if (appointment.status === 'COMPLETED') {
+    const { data, error } = await adminClient.rpc('complete_survey_atomic', {
+      p_appointment_id: appointment.id, p_completed_by: completedByUserId, p_survey_payload: {},
+    });
+    if (error || !data?.id || data.isExisting !== true) {
+      console.error('[Survey completion reconciliation]', { appointmentId: appointment.id, code: error?.code });
+      return { success: false, message: 'Không thể xác nhận khảo sát đã hoàn tất. Cần kiểm tra lại dữ liệu.' };
+    }
+    return { success: true, surveyId: data.id, isExisting: true };
   }
+  if (!['ACCEPTED', 'IN_PROGRESS'].includes(appointment.status)) {
+    return { success: false, message: 'Lịch hẹn không ở trạng thái ACCEPTED hoặc IN_PROGRESS.' };
+  }
+  const validation = validateSurveyCompletionGate(input);
+  if (!validation.isValid) return {
+    success: false, message: 'Dữ liệu khảo sát chưa đạt yêu cầu kỹ thuật.',
+    missingFields: validation.missingFields, errors: validation.errors,
+  };
+  const sanitizedInput = sanitizeSurveyInput(input);
 
   // 3. Xác thực ảnh thực tế từ Server Storage - KHÔNG tin mảng photos do browser tự gửi
   const storageVerification = await verifyMandatoryPhotosInStorage(
@@ -131,9 +130,7 @@ export async function completeSurvey(
     barrier_height_mm: Number(rawM.barrier_height_mm ?? rawM.waterHeightMm ?? rawM.barrierHeightMm),
     anticipated_flood_height_mm: Number(
       rawM.anticipated_flood_height_mm ??
-        rawM.anticipatedFloodHeightMm ??
-        rawM.barrier_height_mm ??
-        rawM.waterHeightMm
+        rawM.anticipatedFloodHeightMm
     ),
     step_height_mm:
       rawM.step_height_mm !== undefined
@@ -159,19 +156,14 @@ export async function completeSurvey(
   });
 
   const notes = sanitizedInput.notes || rawS.notes || null;
-  const completedAt = new Date().toISOString();
 
   // 4. Atomic Single-Shot Survey Completion qua PostgreSQL RPC function
   // Đảm bảo lock dòng appointment FOR UPDATE, update status sang COMPLETED và insert survey trong duy nhất 1 transaction
   const payload = {
-    company_id: companyId,
-    customer_id: appointment.customer_id,
-    completed_by: completedByUserId,
     measurements: measurementsPayload,
     photos: sanitizedPhotosArray,
     site_condition: siteConditionText,
     notes,
-    completed_at: completedAt,
   };
 
   const { data: rpcData, error: rpcError } = await adminClient.rpc(
@@ -232,11 +224,13 @@ export async function completeSurvey(
     };
   }
 
-  const createdSurvey = rpcData as { id?: string } | null;
+  const createdSurvey = rpcData as { id?: string; isExisting?: boolean } | null;
 
+  if (!createdSurvey?.id) return { success: false, message: 'Không thể xác nhận kết quả khảo sát.' };
   return {
     success: true,
-    surveyId: createdSurvey?.id,
+    isExisting: createdSurvey.isExisting === true,
+    surveyId: createdSurvey.id,
     message: 'Khảo sát đã được hoàn tất và chuyển giao dữ liệu kỹ thuật thành công.',
   };
 }
@@ -247,3 +241,37 @@ export {
   getSurveyForPricing,
 } from '../adapters/pricing.adapter';
 
+/**
+ * Authorizes actor and executes atomic survey completion.
+ * Encapsulates createAdminClient call inside domain service layer.
+ */
+export async function executeSurveyCompletion(
+  input: CompleteSurveyInput
+): Promise<CompleteSurveyResult> {
+  const { getActorContext } = await import('../../../lib/auth/context');
+  const adminClient = createAdminClient();
+  const { data: appointment, error } = await adminClient
+    .from('appointments')
+    .select('id, company_id, assignee_id, type, status')
+    .eq('id', input.appointmentId)
+    .maybeSingle();
+
+  if (error || !appointment) {
+    throw new Error('Không tìm thấy lịch hẹn khảo sát.');
+  }
+
+  const actor = await getActorContext(appointment.company_id);
+  if (
+    !actor ||
+    actor.profileStatus !== 'ACTIVE' ||
+    actor.membershipStatus !== 'ACTIVE' ||
+    actor.role !== 'TECHNICIAN' ||
+    actor.companyId !== appointment.company_id ||
+    actor.userId !== appointment.assignee_id ||
+    appointment.type !== 'SURVEY'
+  ) {
+    throw new Error('Bạn không có quyền hoàn tất khảo sát này.');
+  }
+
+  return completeSurvey(input, actor.userId, actor.companyId!);
+}

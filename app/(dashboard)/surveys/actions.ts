@@ -1,14 +1,12 @@
 'use server';
 
+import { authorizeSurveyAppointment } from '../../../features/survey/services/access.service';
+import { ACTIVE_SURVEY_ASSIGNMENT_STATUSES } from '../../../features/survey/constants/access';
 import { revalidatePath } from 'next/cache';
-import { getActorContext } from '../../../lib/auth/context';
-import { createAdminClient } from '../../../lib/supabase/admin';
 import {
   uploadSurveyPhotoToStorage,
   deleteSurveyPhotosForSlot,
-  findSurveyPhotoPathForSlot,
   getSurveyPhotoSignedUrl,
-  sanitizePhotoSlot,
 } from '../../../features/survey/services/storage-upload.service';
 
 export interface ActionResponse {
@@ -19,84 +17,15 @@ export interface ActionResponse {
 
 export interface UploadPhotoActionResponse {
   success: boolean;
-  objectPath?: string;
   signedUrl?: string;
   message?: string;
 }
 
-export interface VerifyAppointmentPermissionOptions {
-  isMutation?: boolean;
-}
-
-/**
- * Validates technician / actor permissions on target appointment with a fail-closed strategy.
- * When isMutation === true, blocks any mutation on terminal statuses (COMPLETED, CANCELLED) for all roles.
- * When isMutation === false, allows read access for assigned technician and BOSS_ADMIN.
- */
 async function verifyAppointmentPermission(
   appointmentId: string,
-  allowedRoles: string[] = ['BOSS_ADMIN', 'TECHNICIAN'],
-  options: VerifyAppointmentPermissionOptions = {}
+  options: { isMutation?: boolean } = {},
 ) {
-  const { isMutation = false } = options;
-
-  const actor = await getActorContext();
-  if (
-    !actor ||
-    !actor.userId ||
-    !actor.companyId ||
-    actor.profileStatus !== 'ACTIVE' ||
-    actor.membershipStatus !== 'ACTIVE'
-  ) {
-    throw new Error('Bạn chưa đăng nhập hoặc tài khoản/thành viên không hoạt động.');
-  }
-
-  if (!actor.role || !allowedRoles.includes(actor.role)) {
-    throw new Error('Bạn không có quyền thực hiện thao tác này.');
-  }
-
-  const adminClient = createAdminClient();
-  const { data: appointment, error } = await adminClient
-    .from('appointments')
-    .select('id, company_id, customer_id, assignee_id, status, type')
-    .eq('id', appointmentId)
-    .maybeSingle();
-
-  if (error || !appointment) {
-    throw new Error('Không tìm thấy lịch hẹn khảo sát.');
-  }
-
-  if (appointment.company_id !== actor.companyId) {
-    throw new Error('Lịch hẹn không thuộc doanh nghiệp của bạn.');
-  }
-
-  if (appointment.type !== 'SURVEY') {
-    throw new Error('Lịch hẹn không phải là lịch khảo sát hợp lệ.');
-  }
-
-  // Khóa mutation đối với trạng thái terminal (COMPLETED, CANCELLED)
-  // Áp dụng fail-closed cho TẤT CẢ các vai trò (kể cả BOSS_ADMIN và TECHNICIAN)
-  if (isMutation) {
-    if (appointment.status === 'COMPLETED' || appointment.status === 'CANCELLED') {
-      throw new Error('Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.');
-    }
-  }
-
-  // Technicians can only operate on their own appointments
-  if (actor.role === 'TECHNICIAN') {
-    if (appointment.assignee_id !== actor.userId) {
-      throw new Error('Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.');
-    }
-
-    if (isMutation) {
-      const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
-      if (!validStatuses.includes(appointment.status)) {
-        throw new Error('Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.');
-      }
-    }
-  }
-
-  return { actor, appointment, adminClient };
+  return authorizeSurveyAppointment(appointmentId, options.isMutation);
 }
 
 /**
@@ -183,7 +112,6 @@ export async function acceptSurveyAppointmentAction(
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
       { isMutation: true }
     );
 
@@ -201,6 +129,8 @@ export async function acceptSurveyAppointmentAction(
         updated_at: new Date().toISOString(),
       })
       .eq('id', appointmentId)
+      .eq('company_id', appointment.company_id)
+      .eq('assignee_id', appointment.assignee_id)
       .eq('status', 'ASSIGNED')
       .select('id')
       .maybeSingle();
@@ -245,7 +175,6 @@ export async function startSurveyAppointmentAction(
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
       { isMutation: true }
     );
 
@@ -270,6 +199,8 @@ export async function startSurveyAppointmentAction(
         updated_at: new Date().toISOString(),
       })
       .eq('id', appointmentId)
+      .eq('company_id', appointment.company_id)
+      .eq('assignee_id', appointment.assignee_id)
       .in('status', ['ASSIGNED', 'ACCEPTED'])
       .select('id')
       .maybeSingle();
@@ -316,7 +247,6 @@ export async function cancelSurveyAppointmentAction(
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
       { isMutation: true }
     );
 
@@ -334,7 +264,9 @@ export async function cancelSurveyAppointmentAction(
         updated_at: new Date().toISOString(),
       })
       .eq('id', appointmentId)
-      .in('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+      .eq('company_id', appointment.company_id)
+      .eq('assignee_id', appointment.assignee_id)
+      .in('status', [...ACTIVE_SURVEY_ASSIGNMENT_STATUSES])
       .select('id')
       .maybeSingle();
 
@@ -391,39 +323,13 @@ export async function uploadSurveyPhotoAction(
       return { success: false, message: 'Dung lượng ảnh không được vượt quá 10MB.' };
     }
 
-    const { appointment } = await verifyAppointmentPermission(
-      appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
-      { isMutation: true }
-    );
-
-    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
-
-    // Dọn dẹp ảnh cũ trong slot trước khi tải ảnh mới
-    try {
-      await deleteSurveyPhotosForSlot({
-        companyId: appointment.company_id,
-        customerId: appointment.customer_id,
-        appointmentId: appointment.id,
-        photoSlot: sanitizedSlot,
-      });
-    } catch {
-      // Non-blocking cleanup
-    }
-
     const arrayBuffer = await file.arrayBuffer();
     const result = await uploadSurveyPhotoToStorage({
-      fileBuffer: Buffer.from(arrayBuffer),
-      companyId: appointment.company_id,
-      customerId: appointment.customer_id,
-      appointmentId: appointment.id,
-      photoSlot: sanitizedSlot,
-      contentType: file.type || 'image/jpeg',
+      fileBuffer: Buffer.from(arrayBuffer), appointmentId, photoSlot,
     });
 
     return {
       success: true,
-      objectPath: result.objectPath,
       signedUrl: result.signedUrl,
       message: 'Tải ảnh thành công.',
     };
@@ -448,20 +354,7 @@ export async function deleteSurveyPhotoAction(
   photoSlot: string
 ): Promise<ActionResponse> {
   try {
-    const { appointment } = await verifyAppointmentPermission(
-      appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
-      { isMutation: true }
-    );
-
-    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
-
-    await deleteSurveyPhotosForSlot({
-      companyId: appointment.company_id,
-      customerId: appointment.customer_id,
-      appointmentId: appointment.id,
-      photoSlot: sanitizedSlot,
-    });
+    await deleteSurveyPhotosForSlot(appointmentId, photoSlot);
 
     return { success: true, message: 'Đã xóa ảnh.' };
   } catch (err) {
@@ -485,26 +378,7 @@ export async function refreshPhotoSignedUrlAction(
   photoSlot: string
 ): Promise<{ success: boolean; signedUrl?: string; message?: string }> {
   try {
-    const { appointment } = await verifyAppointmentPermission(
-      appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
-      { isMutation: false }
-    );
-
-    const sanitizedSlot = sanitizePhotoSlot(photoSlot);
-
-    const objectPath = await findSurveyPhotoPathForSlot({
-      companyId: appointment.company_id,
-      customerId: appointment.customer_id,
-      appointmentId: appointment.id,
-      photoSlot: sanitizedSlot,
-    });
-
-    if (!objectPath) {
-      return { success: false, message: 'Không tìm thấy ảnh của vị trí này.' };
-    }
-
-    const signedUrl = await getSurveyPhotoSignedUrl(objectPath, 3600);
+    const signedUrl = await getSurveyPhotoSignedUrl(appointmentId, photoSlot);
     return {
       success: !!signedUrl,
       signedUrl: signedUrl || undefined,
@@ -539,27 +413,10 @@ export async function completeSurveyAction(
   input: import('../../../features/survey/types/survey').CompleteSurveyInput
 ): Promise<CompleteSurveyActionResponse> {
   try {
-    const { actor } = await verifyAppointmentPermission(
-      input.appointmentId,
-      ['BOSS_ADMIN', 'TECHNICIAN'],
-      { isMutation: true }
-    );
-
-    const { completeSurvey, validateSurveyCompletionGate } = await import(
+    const { executeSurveyCompletion } = await import(
       '../../../features/survey/services/survey.service'
     );
-
-    const validation = validateSurveyCompletionGate(input);
-    if (!validation.isValid) {
-      return {
-        success: false,
-        message: 'Dữ liệu khảo sát chưa đạt yêu cầu kỹ thuật.',
-        missingFields: validation.missingFields,
-        errors: validation.errors,
-      };
-    }
-
-    const result = await completeSurvey(input, actor.userId, actor.companyId!);
+    const result = await executeSurveyCompletion(input);
 
     if (!result.success) {
       return {

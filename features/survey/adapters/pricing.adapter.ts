@@ -1,4 +1,5 @@
 import 'server-only';
+import { SurveyMeasurementSchema, SurveySiteConditionSchema } from '../validations/survey.schema';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
   SurveyRecord,
@@ -100,6 +101,17 @@ export function formatSurveyForPricing(survey: SurveyRecord): SurveyPricingData 
   }
   if (!bottomRightPhoto?.objectPath) {
     missingTechnicalFields.push('photos.BOTTOM_RIGHT');
+  }
+
+  const measurementCheck = SurveyMeasurementSchema.safeParse(m);
+  const siteCheck = SurveySiteConditionSchema.safeParse(parsedSiteCondition);
+  if (!measurementCheck.success) for (const issue of measurementCheck.error.issues) {
+    const field = `measurements.${issue.path.join('.')}`;
+    if (!missingTechnicalFields.includes(field)) missingTechnicalFields.push(field);
+  }
+  if (!siteCheck.success) for (const issue of siteCheck.error.issues) {
+    const field = `siteCondition.${issue.path.join('.')}`;
+    if (!missingTechnicalFields.includes(field)) missingTechnicalFields.push(field);
   }
 
   const isPricingReady = missingTechnicalFields.length === 0;

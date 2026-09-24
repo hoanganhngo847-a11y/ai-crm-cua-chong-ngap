@@ -6,13 +6,47 @@ import { useRouter } from 'next/navigation';
 import MeasurementForm from '../../../../features/survey/components/MeasurementForm';
 import SiteConditionSelector from '../../../../features/survey/components/SiteConditionSelector';
 import PhotoCaptureGrid from '../../../../features/survey/components/PhotoCaptureGrid';
-import { completeSurveyAction } from '../actions';
+import { validateSurveyInput } from '../../../../features/survey/validations/survey.schema';
+import { completeSurveyAction, refreshPhotoSignedUrlAction } from '../actions';
 import type {
   MeasurementData,
   SiteConditionData,
   SurveyDraft,
-  SurveyPhotoItem,
+  SurveyPhotoDraftItem,
+  SurveyPhotoPreview,
 } from '../../../../features/survey/types/survey';
+
+/**
+ * Serializes Survey Draft for safe local browser storage.
+ * Strictly guarantees that no sensitive fields (e.g. storage paths, buckets, signed URLs)
+ * are ever persisted to localStorage. Only non-sensitive UI selectors and timestamps are preserved.
+ */
+export function serializeSurveyDraft(
+  appointmentId: string,
+  measurements: Partial<MeasurementData>,
+  siteCondition: Partial<SiteConditionData>,
+  photos: Record<string, SurveyPhotoPreview>,
+  updatedAt: string
+): SurveyDraft {
+  const safePhotos: Record<string, SurveyPhotoDraftItem> = {};
+  for (const [slot, photo] of Object.entries(photos || {})) {
+    if (photo && photo.slot) {
+      safePhotos[slot] = {
+        slot: photo.slot,
+        uploadedAt: photo.uploadedAt,
+        slotLabel: photo.slotLabel,
+        isMandatory: photo.isMandatory,
+      };
+    }
+  }
+  return {
+    appointmentId,
+    measurements,
+    siteCondition,
+    photos: safePhotos,
+    updatedAt,
+  };
+}
 
 interface Props {
   appointment: {
@@ -36,28 +70,28 @@ export default function SurveyMeasurementDetailClient({
   customer,
 }: Props) {
   const router = useRouter();
-  const storageKey = `survey_draft_${appointment.id}`;
+  const storageKey = `survey_draft_v2_${appointment.id}`;
 
   // Form states
   const [measurements, setMeasurements] = useState<Partial<MeasurementData>>({
     clear_width_mm: undefined,
-    barrier_height_mm: 600,
+    barrier_height_mm: undefined,
     anticipated_flood_height_mm: undefined,
     width_top_mm: undefined,
     width_bottom_mm: undefined,
-    gate_type: 'REMOVABLE_PANEL',
-    mounting_method: 'INSIDE_JAMB',
+    gate_type: undefined,
+    mounting_method: undefined,
   });
 
   const [siteCondition, setSiteCondition] = useState<Partial<SiteConditionData>>({
-    wall_material: 'SOLID_BRICK',
-    floor_material: 'CONCRETE_SMOOTH',
-    floor_evenness: 'FLAT',
-    slope_grade: 'SLOPING_OUT',
+    wall_material: undefined,
+    floor_material: undefined,
+    floor_evenness: undefined,
+    slope_grade: undefined,
     notes: '',
   });
 
-  const [photos, setPhotos] = useState<Record<string, SurveyPhotoItem>>({});
+  const [photos, setPhotos] = useState<Record<string, SurveyPhotoPreview>>({});
 
   const [activeTab, setActiveTab] = useState<'MEASURE' | 'SITE' | 'PHOTOS' | 'SUMMARY'>('MEASURE');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -86,7 +120,44 @@ export default function SurveyMeasurementDetailClient({
             setSiteCondition(parsed.siteCondition);
           }
           if (parsed.photos) {
-            setPhotos(parsed.photos);
+            const restoredPhotos: Record<string, SurveyPhotoPreview> = {};
+            const slotsToRefresh: string[] = [];
+
+            for (const [slot, item] of Object.entries(parsed.photos)) {
+              if (item && item.slot) {
+                restoredPhotos[slot] = {
+                  slot: item.slot,
+                  uploadedAt: item.uploadedAt,
+                  slotLabel: item.slotLabel,
+                  isMandatory: item.isMandatory,
+                  signedUrl: undefined,
+                };
+                slotsToRefresh.push(slot);
+              }
+            }
+            setPhotos(restoredPhotos);
+
+            // Re-fetch fresh signed preview URLs from authorized Server Action
+            slotsToRefresh.forEach(async (slot) => {
+              try {
+                const res = await refreshPhotoSignedUrlAction(appointment.id, slot);
+                if (res.success && res.signedUrl) {
+                  setPhotos((prev) => {
+                    const current = prev[slot];
+                    if (!current) return prev;
+                    return {
+                      ...prev,
+                      [slot]: {
+                        ...current,
+                        signedUrl: res.signedUrl,
+                      },
+                    };
+                  });
+                }
+              } catch {
+                // Background refresh error is non-fatal; preview fallback button allows re-fetch
+              }
+            });
           }
           if (parsed.updatedAt) {
             setLastSaved(parsed.updatedAt);
@@ -100,14 +171,14 @@ export default function SurveyMeasurementDetailClient({
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [storageKey]);
+  }, [appointment.id, storageKey]);
 
   // 2. Auto-save to localStorage on change
   const saveDraft = useCallback(
     (
       m: Partial<MeasurementData>,
       s: Partial<SiteConditionData>,
-      p: Record<string, SurveyPhotoItem>
+      p: Record<string, SurveyPhotoPreview>
     ) => {
       try {
         const now = new Date();
@@ -116,13 +187,7 @@ export default function SurveyMeasurementDetailClient({
           minute: '2-digit',
           second: '2-digit',
         });
-        const draft: SurveyDraft = {
-          appointmentId: appointment.id,
-          measurements: m,
-          siteCondition: s,
-          photos: p,
-          updatedAt: timeStr,
-        };
+        const draft = serializeSurveyDraft(appointment.id, m, s, p, timeStr);
         localStorage.setItem(storageKey, JSON.stringify(draft));
         setLastSaved(timeStr);
       } catch (e) {
@@ -156,7 +221,7 @@ export default function SurveyMeasurementDetailClient({
     saveDraft(measurements, updated, photos);
   };
 
-  const handlePhotosChange = (updatedPhotos: Record<string, SurveyPhotoItem>) => {
+  const handlePhotosChange = (updatedPhotos: Record<string, SurveyPhotoPreview>) => {
     setPhotos(updatedPhotos);
     saveDraft(measurements, siteCondition, updatedPhotos);
     if (errors.photos) {
@@ -171,18 +236,18 @@ export default function SurveyMeasurementDetailClient({
       localStorage.removeItem(storageKey);
       setMeasurements({
         clear_width_mm: undefined,
-        barrier_height_mm: 600,
+        barrier_height_mm: undefined,
         anticipated_flood_height_mm: undefined,
         width_top_mm: undefined,
         width_bottom_mm: undefined,
-        gate_type: 'REMOVABLE_PANEL',
-        mounting_method: 'INSIDE_JAMB',
+        gate_type: undefined,
+        mounting_method: undefined,
       });
       setSiteCondition({
-        wall_material: 'SOLID_BRICK',
-        floor_material: 'CONCRETE_SMOOTH',
-        floor_evenness: 'FLAT',
-        slope_grade: 'SLOPING_OUT',
+        wall_material: undefined,
+        floor_material: undefined,
+        floor_evenness: undefined,
+        slope_grade: undefined,
         notes: '',
       });
       setPhotos({});
@@ -193,40 +258,16 @@ export default function SurveyMeasurementDetailClient({
   };
 
   // Count mandatory photos
-  const hasOverviewPhoto = !!photos['OVERVIEW']?.objectPath;
-  const hasBottomLeftPhoto = !!photos['BOTTOM_LEFT']?.objectPath;
-  const hasBottomRightPhoto = !!photos['BOTTOM_RIGHT']?.objectPath;
+  const hasOverviewPhoto = !!photos['OVERVIEW']?.slot;
+  const hasBottomLeftPhoto = !!photos['BOTTOM_LEFT']?.slot;
+  const hasBottomRightPhoto = !!photos['BOTTOM_RIGHT']?.slot;
   const mandatoryPhotoCount =
     (hasOverviewPhoto ? 1 : 0) + (hasBottomLeftPhoto ? 1 : 0) + (hasBottomRightPhoto ? 1 : 0);
   const isPhotosValid = mandatoryPhotoCount === 3;
 
   // Validate form
   const validate = () => {
-    const errs: Record<string, string> = {};
-    if (!measurements.clear_width_mm || measurements.clear_width_mm <= 0) {
-      errs.clear_width_mm = 'Chiều rộng lọt lòng cửa bắt buộc phải lớn hơn 0 mm.';
-    }
-    if (!measurements.barrier_height_mm || measurements.barrier_height_mm <= 0) {
-      errs.barrier_height_mm = 'Chiều cao chắn đề xuất bắt buộc phải lớn hơn 0 mm.';
-    }
-    if (
-      measurements.anticipated_flood_height_mm === undefined ||
-      measurements.anticipated_flood_height_mm < 0
-    ) {
-      errs.anticipated_flood_height_mm = 'Cao độ ngập dự kiến không được để trống.';
-    }
-    if (!siteCondition.wall_material) {
-      errs.wall_material = 'Vui lòng chọn vật liệu tường.';
-    }
-    if (!siteCondition.floor_material) {
-      errs.floor_material = 'Vui lòng chọn vật liệu sàn.';
-    }
-    if (!siteCondition.floor_evenness) {
-      errs.floor_evenness = 'Vui lòng chọn độ phẳng sàn.';
-    }
-    if (!siteCondition.slope_grade) {
-      errs.slope_grade = 'Vui lòng chọn hướng dốc thoát nước.';
-    }
+    const errs = validateSurveyInput({ appointmentId: appointment.id, measurements, siteCondition }).errors;
     if (!isPhotosValid) {
       errs.photos = 'Vui lòng chụp đủ 3 ảnh bắt buộc (Toàn cảnh, Chân trái, Chân phải).';
     }
@@ -270,7 +311,6 @@ export default function SurveyMeasurementDetailClient({
         appointmentId: appointment.id,
         measurements,
         siteCondition,
-        photos,
         notes: siteCondition.notes,
       });
 

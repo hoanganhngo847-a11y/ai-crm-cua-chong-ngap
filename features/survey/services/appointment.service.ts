@@ -107,7 +107,7 @@ export async function verifyActiveCompanyTechnician(
     throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
   }
 
-  if (profile.status && profile.status !== 'ACTIVE') {
+  if (profile.status !== 'ACTIVE') {
     throw new Error('Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.');
   }
 
@@ -199,6 +199,7 @@ export async function createAppointment(
   }
 
   const dbStatus = toDbStatus(input.status || 'SCHEDULED');
+  if (dbStatus !== 'ASSIGNED') throw new Error('Lịch khảo sát mới phải ở trạng thái ASSIGNED.');
 
   // 4. Insert into appointments table (luôn gán cứng type: 'SURVEY')
   const { data: newAppointment, error: insertError } = await supabase
@@ -307,7 +308,11 @@ export async function updateAppointment(
   }
 
   if (input.status !== undefined) {
-    updates.status = toDbStatus(input.status);
+    const status = toDbStatus(input.status);
+    if (!['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'REJECTED'].includes(status)) {
+      throw new Error('COMPLETED chỉ được ghi qua complete_survey_atomic.');
+    }
+    updates.status = status;
   }
 
   // 3. Execute update (Conditional write: chỉ cho phép cập nhật khi lịch hẹn chưa ở trạng thái terminal)

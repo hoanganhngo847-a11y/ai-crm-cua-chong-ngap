@@ -54,13 +54,17 @@ export type SurveyPhotoSlot = MandatoryPhotoSlot | OptionalPhotoSlot;
 /**
  * Metadata representation of an uploaded survey photo
  */
-export interface SurveyPhotoItem {
+export interface SurveyPhotoPreview {
   slot: SurveyPhotoSlot;
-  objectPath: string; // The canonical object key saved in bucket 'survey-photos'
   signedUrl?: string; // Signed preview URL
   uploadedAt: string;
   slotLabel: string;
   isMandatory: boolean;
+}
+
+// Server-side persisted evidence; never used as browser input.
+export interface SurveyPhotoItem extends SurveyPhotoPreview {
+  objectPath: string;
 }
 
 /**
@@ -104,13 +108,24 @@ export interface SiteConditionData {
 }
 
 /**
+ * Non-sensitive photo descriptor persisted in browser localStorage draft.
+ * Never contains objectPath, bucket, canonical file ref, or signedUrl.
+ */
+export interface SurveyPhotoDraftItem {
+  slot: SurveyPhotoSlot;
+  uploadedAt: string;
+  slotLabel: string;
+  isMandatory: boolean;
+}
+
+/**
  * Offline-ready draft stored in device localStorage
  */
 export interface SurveyDraft {
   appointmentId: string;
   measurements: Partial<MeasurementData>;
   siteCondition: Partial<SiteConditionData>;
-  photos?: Record<string, SurveyPhotoItem>;
+  photos?: Record<string, SurveyPhotoDraftItem>;
   updatedAt: string;
 }
 
@@ -162,7 +177,7 @@ export interface CompleteSurveyInput {
     slopeGrade?: SlopeGrade;
     specialRequirements?: string;
   };
-  photos: Record<string, SurveyPhotoItem> | SurveyPhotoItem[];
+  photos?: Record<string, SurveyPhotoPreview> | SurveyPhotoPreview[];
   notes?: string;
 }
 

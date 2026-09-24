@@ -1,7 +1,8 @@
 import React from 'react';
+import { canAccessSurvey } from '../../../../features/survey/constants/access';
 import { redirect, notFound } from 'next/navigation';
 import { getActorContext } from '../../../../lib/auth/context';
-import { createAdminClient } from '../../../../lib/supabase/admin';
+import { fetchSurveyDetailPageData } from '../../../../features/survey/services/survey-data.service';
 import SurveyMeasurementDetailClient from './SurveyMeasurementDetailClient';
 
 interface Props {
@@ -17,53 +18,20 @@ export const metadata = {
 
 export default async function SurveyMeasurementDetailPage({ params }: Props) {
   const { appointmentId } = await params;
-  const actor = await getActorContext();
 
-  if (!actor || actor.profileStatus !== 'ACTIVE') {
-    redirect('/login');
-  }
-
-  const adminClient = createAdminClient();
-
-  // 1. Fetch appointment
-  const { data: appointment, error } = await adminClient
-    .from('appointments')
-    .select('id, company_id, customer_id, assignee_id, type, address, start_time, status')
-    .eq('id', appointmentId)
-    .maybeSingle();
-
-  if (error || !appointment) {
+  const data = await fetchSurveyDetailPageData(appointmentId);
+  if (!data || !data.appointment) {
     notFound();
   }
 
-  // 2. Enforce company boundary
-  if (appointment.company_id !== actor.companyId) {
-    redirect('/surveys');
-  }
-
-  // 3. Enforce technician assignment
-  if (actor.role === 'TECHNICIAN' && appointment.assignee_id !== actor.userId) {
-    redirect('/surveys');
-  }
-
-  // 4. Fetch customer details (STRICT PII: Name + Code ONLY, Zero Phone)
-  const { data: customer } = await adminClient
-    .from('customers')
-    .select('id, customer_code, name')
-    .eq('id', appointment.customer_id)
-    .maybeSingle();
-
-  const safeCustomer = {
-    id: appointment.customer_id,
-    customer_code: customer?.customer_code || 'KH-UNKNOWN',
-    name: customer?.name || 'Khách hàng',
-  };
+  const actor = await getActorContext(data.appointment.company_id);
+  if (!canAccessSurvey(actor, data.appointment)) redirect('/surveys');
 
   return (
     <div className="w-full">
       <SurveyMeasurementDetailClient
-        appointment={appointment}
-        customer={safeCustomer}
+        appointment={data.appointment}
+        customer={data.customer}
       />
     </div>
   );

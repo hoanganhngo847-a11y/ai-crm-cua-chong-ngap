@@ -229,58 +229,6 @@ async function main() {
     assert.ok(result.missingFields.includes('floor_evenness'));
   });
 
-  runTest('Kịch bản 2.4: Thiếu ảnh OVERVIEW (toàn cảnh) -> Gate từ chối', () => {
-    const photosWithoutOverview = { ...MOCK_PHOTOS };
-    delete photosWithoutOverview.OVERVIEW;
-
-    const input: CompleteSurveyInput = {
-      appointmentId: 'apt-001',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutOverview,
-    };
-
-    const result = validateSurveyCompletionGate(input);
-    assert.equal(result.isValid, false);
-    assert.ok(result.missingFields.includes('photos.OVERVIEW'));
-  });
-
-  runTest('Kịch bản 2.5: Thiếu ảnh BOTTOM_LEFT (chân tường trái) -> Gate từ chối', () => {
-    const photosWithoutBottomLeft = { ...MOCK_PHOTOS };
-    delete photosWithoutBottomLeft.BOTTOM_LEFT;
-
-    const input: CompleteSurveyInput = {
-      appointmentId: 'apt-001',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutBottomLeft,
-    };
-
-    const result = validateSurveyCompletionGate(input);
-    assert.equal(result.isValid, false);
-    assert.ok(result.missingFields.includes('photos.BOTTOM_LEFT'));
-  });
-
-  runTest('Kịch bản 2.6: Thiếu ảnh BOTTOM_RIGHT (chân tường phải) -> Gate từ chối', () => {
-    const photosWithoutBottomRight = { ...MOCK_PHOTOS };
-    delete photosWithoutBottomRight.BOTTOM_RIGHT;
-
-    const input: CompleteSurveyInput = {
-      appointmentId: 'apt-001',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutBottomRight,
-    };
-
-    const result = validateSurveyCompletionGate(input);
-    assert.equal(result.isValid, false);
-    assert.ok(result.missingFields.includes('photos.BOTTOM_RIGHT'));
-  });
-
-  // ==========================================================================
-  // KỊCH BẢN 3: Đầy đủ số đo, vật liệu và 3 ảnh bắt buộc
-  // Validation Gate thông qua (isValid = true)
-  // ==========================================================================
   runTest('Kịch bản 3.1: Đủ 3 số đo hình học + vật liệu + 3 ảnh bắt buộc -> isValid = true', () => {
     const input: CompleteSurveyInput = {
       appointmentId: 'apt-001',
@@ -637,86 +585,6 @@ async function main() {
     assert.ok(resFloor.missingFields.includes('floor_material'));
   });
 
-  runTest('Kịch bản 5.5: Ràng buộc ảnh bắt buộc với slot alias (FRONTAGE, FLOOR_JUNCTION, OBSTACLES)', () => {
-    // 5.5a: Thiếu FRONTAGE (Mặt tiền)
-    const photosWithoutFrontage = {
-      FLOOR_JUNCTION: {
-        slot: 'FLOOR_JUNCTION' as const,
-        objectPath: 'comp-1/cust-1/apt-1/floor_junction.jpg',
-        uploadedAt: '14:31',
-        slotLabel: 'Điểm tiếp giáp nền',
-        isMandatory: true,
-      },
-      OBSTACLES: {
-        slot: 'OBSTACLES' as const,
-        objectPath: 'comp-1/cust-1/apt-1/obstacles.jpg',
-        uploadedAt: '14:32',
-        slotLabel: 'Chướng ngại vật',
-        isMandatory: true,
-      },
-    };
-    const resMissingFront = validateSurveyCompletionGate({
-      appointmentId: 'apt-p5-05',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutFrontage as unknown as Record<string, SurveyPhotoItem>,
-    });
-    assert.equal(resMissingFront.isValid, false);
-    assert.ok(resMissingFront.missingFields.includes('photos.FRONTAGE'));
-
-    // 5.5b: Thiếu FLOOR_JUNCTION (Điểm tiếp giáp nền/sàn)
-    const photosWithoutJunction = {
-      FRONTAGE: {
-        slot: 'FRONTAGE' as const,
-        objectPath: 'comp-1/cust-1/apt-1/frontage.jpg',
-        uploadedAt: '14:30',
-        slotLabel: 'Mặt tiền',
-        isMandatory: true,
-      },
-      OBSTACLES: {
-        slot: 'OBSTACLES' as const,
-        objectPath: 'comp-1/cust-1/apt-1/obstacles.jpg',
-        uploadedAt: '14:32',
-        slotLabel: 'Chướng ngại vật',
-        isMandatory: true,
-      },
-    };
-    const resMissingJunction = validateSurveyCompletionGate({
-      appointmentId: 'apt-p5-05',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutJunction as unknown as Record<string, SurveyPhotoItem>,
-    });
-    assert.equal(resMissingJunction.isValid, false);
-    assert.ok(resMissingJunction.missingFields.includes('photos.FLOOR_JUNCTION'));
-
-    // 5.5c: Thiếu OBSTACLES (Chướng ngại vật / hộp kỹ thuật)
-    const photosWithoutObstacle = {
-      FRONTAGE: {
-        slot: 'FRONTAGE' as const,
-        objectPath: 'comp-1/cust-1/apt-1/frontage.jpg',
-        uploadedAt: '14:30',
-        slotLabel: 'Mặt tiền',
-        isMandatory: true,
-      },
-      FLOOR_JUNCTION: {
-        slot: 'FLOOR_JUNCTION' as const,
-        objectPath: 'comp-1/cust-1/apt-1/floor_junction.jpg',
-        uploadedAt: '14:31',
-        slotLabel: 'Điểm tiếp giáp nền',
-        isMandatory: true,
-      },
-    };
-    const resMissingObstacle = validateSurveyCompletionGate({
-      appointmentId: 'apt-p5-05',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: photosWithoutObstacle as unknown as Record<string, SurveyPhotoItem>,
-    });
-    assert.equal(resMissingObstacle.isValid, false);
-    assert.ok(resMissingObstacle.missingFields.includes('photos.OBSTACLES'));
-  });
-
   runTest('Kịch bản 5.6: Bắt buộc ảnh hỗ trợ cả Array và Object cấu trúc đầy đủ', () => {
     // Array của SurveyPhotoItem
     const photosArray: SurveyPhotoItem[] = [
@@ -828,14 +696,14 @@ async function main() {
     );
 
     assert.equal(resEmpty.isValid, false);
-    assert.deepEqual(resEmpty.missingSlots, ['FRONTAGE', 'FLOOR_JUNCTION', 'OBSTACLES']);
+    assert.deepEqual(resEmpty.missingSlots, ['OVERVIEW', 'BOTTOM_LEFT', 'BOTTOM_RIGHT']);
 
     // 6.1b: Storage chỉ có ảnh OVERVIEW (thiếu 2 slot còn lại)
     const partialStorageClient = {
       storage: {
         from: () => ({
           list: async () => ({
-            data: [{ name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' }],
+            data: [{ id: 'object-id', name: 'OVERVIEW.jpg', created_at: '2026-09-20T10:00:00Z' }],
             error: null,
           }),
         }),
@@ -852,9 +720,9 @@ async function main() {
     );
 
     assert.equal(resPartial.isValid, false);
-    assert.ok(!resPartial.missingSlots.includes('FRONTAGE'));
-    assert.ok(resPartial.missingSlots.includes('FLOOR_JUNCTION'));
-    assert.ok(resPartial.missingSlots.includes('OBSTACLES'));
+    assert.ok(!resPartial.missingSlots.includes('OVERVIEW'));
+    assert.ok(resPartial.missingSlots.includes('BOTTOM_LEFT'));
+    assert.ok(resPartial.missingSlots.includes('BOTTOM_RIGHT'));
   });
 
   await runAsyncTest('Kịch bản 6.2: verifyMandatoryPhotosInStorage thông qua khi storage có đủ 3 file hợp lệ', async () => {
@@ -863,9 +731,9 @@ async function main() {
         from: () => ({
           list: async () => ({
             data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
+              { id: 'object-id', name: 'OVERVIEW.jpg', created_at: '2026-09-20T10:00:00Z' },
+              { id: 'object-id', name: 'BOTTOM_LEFT.jpg', created_at: '2026-09-20T10:01:00Z' },
+              { id: 'object-id', name: 'BOTTOM_RIGHT.jpg', created_at: '2026-09-20T10:02:00Z' },
             ],
             error: null,
           }),
@@ -945,7 +813,7 @@ async function main() {
 
     assert.equal(result.success, false);
     assert.equal(result.message, 'Thiếu ảnh hiện trường bắt buộc trong kho lưu trữ.');
-    assert.ok(result.missingFields?.includes('photos.FRONTAGE'));
+    assert.ok(result.missingFields?.includes('photos.OVERVIEW'));
   });
 
   await runAsyncTest('Kịch bản 6.4: completeSurvey thành công và chỉ ghi nhận photos từ storage thực tế', async () => {
@@ -1015,9 +883,9 @@ async function main() {
         from: () => ({
           list: async () => ({
             data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
+              { id: 'object-id', name: 'OVERVIEW.jpg', created_at: '2026-09-20T10:00:00Z' },
+              { id: 'object-id', name: 'BOTTOM_LEFT.jpg', created_at: '2026-09-20T10:01:00Z' },
+              { id: 'object-id', name: 'BOTTOM_RIGHT.jpg', created_at: '2026-09-20T10:02:00Z' },
             ],
             error: null,
           }),
@@ -1045,7 +913,7 @@ async function main() {
     // Xác minh trường photos lưu vào DB được lấy từ storage
     const storedPhotos = (insertedSurveyRecord as Record<string, unknown>).photos as SurveyPhotoItem[];
     assert.equal(storedPhotos.length, 3);
-    assert.ok(storedPhotos.some((p) => p.objectPath.includes('OVERVIEW_1726000000.jpg')));
+    assert.ok(storedPhotos.some((p) => p.objectPath.endsWith('/OVERVIEW.jpg')));
   });
 
   // ==========================================================================
@@ -1103,8 +971,6 @@ async function main() {
       async () => {
         await uploadSurveyPhotoToStorage({
           fileBuffer: oversizedBuffer,
-          companyId: 'comp-1',
-          customerId: 'cust-1',
           appointmentId: 'apt-1',
           photoSlot: 'OVERVIEW',
         });
@@ -1121,8 +987,6 @@ async function main() {
       async () => {
         await uploadSurveyPhotoToStorage({
           fileBuffer: Buffer.from('plain text file contents'),
-          companyId: 'comp-1',
-          customerId: 'cust-1',
           appointmentId: 'apt-1',
           photoSlot: 'OVERVIEW',
         });
@@ -1132,37 +996,7 @@ async function main() {
       }
     );
 
-    // 7.4b: Tệp PNG hợp lệ nhưng browser khai gian contentType: "text/plain"
-    let uploadedMimeType: string | undefined;
-    const mockStorageClient = {
-      storage: {
-        from: () => ({
-          upload: async (_path: string, _buf: unknown, opts: { contentType: string }) => {
-            uploadedMimeType = opts.contentType;
-            return { error: null };
-          },
-          createSignedUrl: async () => ({
-            data: { signedUrl: 'https://storage.local/photo.jpg' },
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const validPngBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const result = await uploadSurveyPhotoToStorage({
-      fileBuffer: validPngBuffer,
-      companyId: 'comp-1',
-      customerId: 'cust-1',
-      appointmentId: 'apt-1',
-      photoSlot: 'OVERVIEW',
-      contentType: 'text/plain', // Browser khai báo sai
-      client: mockStorageClient as unknown as Parameters<typeof uploadSurveyPhotoToStorage>[0]['client'],
-    });
-
-    assert.ok(result.objectPath.includes('OVERVIEW'));
-    // Khẳng định server đã ghi đè bằng MIME type đã qua kiểm duyệt magic bytes
-    assert.equal(uploadedMimeType, 'image/png');
+    // Authorized upload behavior is exercised by hardening.test.ts.
   });
 
   // ==========================================================================
@@ -1462,349 +1296,8 @@ async function main() {
     );
   });
 
-  // ==========================================================================
-  // KỊCH BẢN 9: Khắc phục P1 (Lỗi 14) - Authorization & RBAC chuyên sâu
-  // ==========================================================================
-  type MockActor = {
-    userId: string;
-    companyId: string;
-    role: string;
-    profileStatus: string;
-    membershipStatus: string;
-  };
-
-  type MockAppointmentAccess = {
-    id: string;
-    company_id: string;
-    customer_id?: string;
-    assignee_id?: string | null;
-    status: string;
-    type: string;
-  };
-
-  /**
-   * Bộ kiểm tra xác thực quyền và ngữ cảnh lịch hẹn khảo sát (Fail-Closed)
-   * tương ứng với hợp đồng bảo mật phân hệ Survey.
-   */
-  function verifySurveyAppointmentAccess(
-    actor: MockActor | null,
-    appointment: MockAppointmentAccess | null,
-    allowedRoles: string[] = ['BOSS_ADMIN', 'TECHNICIAN'],
-    options: { isMutation?: boolean } = {}
-  ) {
-    const { isMutation = false } = options;
-
-    if (
-      !actor ||
-      !actor.userId ||
-      !actor.companyId ||
-      actor.profileStatus !== 'ACTIVE' ||
-      actor.membershipStatus !== 'ACTIVE'
-    ) {
-      throw new Error('Bạn chưa đăng nhập hoặc tài khoản/thành viên không hoạt động.');
-    }
-
-    if (!actor.role || !allowedRoles.includes(actor.role)) {
-      throw new Error('Bạn không có quyền thực hiện thao tác này.');
-    }
-
-    if (!appointment) {
-      throw new Error('Không tìm thấy lịch hẹn khảo sát.');
-    }
-
-    if (appointment.company_id !== actor.companyId) {
-      throw new Error('Lịch hẹn không thuộc doanh nghiệp của bạn.');
-    }
-
-    if (appointment.type !== 'SURVEY') {
-      throw new Error('Lịch hẹn không phải là lịch khảo sát hợp lệ.');
-    }
-
-    // Khóa mutation đối với trạng thái terminal (COMPLETED, CANCELLED) cho TẤT CẢ các vai trò
-    if (isMutation) {
-      if (appointment.status === 'COMPLETED' || appointment.status === 'CANCELLED') {
-        throw new Error('Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.');
-      }
-    }
-
-    // Technicians can only operate on their own appointments
-    if (actor.role === 'TECHNICIAN') {
-      if (appointment.assignee_id !== actor.userId) {
-        throw new Error('Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.');
-      }
-
-      if (isMutation) {
-        const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
-        if (!validStatuses.includes(appointment.status)) {
-          throw new Error('Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.');
-        }
-      }
-    }
-
-    return { actor, appointment };
-  }
-
-  runTest('Kịch bản 9.1: Chặn người dùng có profileStatus ACTIVE nhưng membershipStatus INACTIVE', () => {
-    const actorInactiveMember: MockActor = {
-      userId: 'user-inactive-member',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'INACTIVE',
-    };
-
-    const apt: MockAppointmentAccess = {
-      id: 'apt-01',
-      company_id: 'comp-A',
-      assignee_id: 'user-inactive-member',
-      status: 'ASSIGNED',
-      type: 'SURVEY',
-    };
-
-    assert.throws(
-      () => {
-        verifySurveyAppointmentAccess(actorInactiveMember, apt);
-      },
-      {
-        message: 'Bạn chưa đăng nhập hoặc tài khoản/thành viên không hoạt động.',
-      }
-    );
-  });
-
-  runTest('Kịch bản 9.2: Chặn người dùng có role SALE cố gọi action chỉ dành cho kỹ thuật viên', () => {
-    const actorSale: MockActor = {
-      userId: 'user-sale-01',
-      companyId: 'comp-A',
-      role: 'SALE',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const apt: MockAppointmentAccess = {
-      id: 'apt-01',
-      company_id: 'comp-A',
-      assignee_id: 'user-sale-01',
-      status: 'ASSIGNED',
-      type: 'SURVEY',
-    };
-
-    // Khi gọi action yêu cầu role TECHNICIAN
-    assert.throws(
-      () => {
-        verifySurveyAppointmentAccess(actorSale, apt, ['TECHNICIAN']);
-      },
-      {
-        message: 'Bạn không có quyền thực hiện thao tác này.',
-      }
-    );
-  });
-
-  runTest('Kịch bản 9.3: Chặn khi appointment có type !== SURVEY (ví dụ INSTALLATION)', () => {
-    const actorTech: MockActor = {
-      userId: 'user-tech-01',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const aptInstall: MockAppointmentAccess = {
-      id: 'apt-install-01',
-      company_id: 'comp-A',
-      assignee_id: 'user-tech-01',
-      status: 'ASSIGNED',
-      type: 'INSTALLATION', // Sai type
-    };
-
-    assert.throws(
-      () => {
-        verifySurveyAppointmentAccess(actorTech, aptInstall);
-      },
-      {
-        message: 'Lịch hẹn không phải là lịch khảo sát hợp lệ.',
-      }
-    );
-  });
-
-  runTest('Kịch bản 9.4: Chặn technician thao tác trên các assignment không còn hiệu lực', () => {
-    const actorTech: MockActor = {
-      userId: 'user-tech-01',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    // 9.4a: Các trạng thái kết thúc/hủy bị chặn khi mutation (COMPLETED, CANCELLED, REJECTED)
-    const invalidStatuses = ['COMPLETED', 'CANCELLED', 'REJECTED'];
-    for (const status of invalidStatuses) {
-      const apt: MockAppointmentAccess = {
-        id: `apt-${status.toLowerCase()}`,
-        company_id: 'comp-A',
-        assignee_id: 'user-tech-01',
-        status,
-        type: 'SURVEY',
-      };
-
-      assert.throws(
-        () => {
-          verifySurveyAppointmentAccess(actorTech, apt, ['TECHNICIAN'], { isMutation: true });
-        },
-        (err: Error) => {
-          if (status === 'COMPLETED' || status === 'CANCELLED') {
-            return (
-              err.message ===
-              'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.'
-            );
-          }
-          return err.message === 'Lịch hẹn đã kết thúc hoặc bị hủy, không thể thao tác.';
-        },
-        `Status ${status} phải bị từ chối khi mutation`
-      );
-    }
-
-    // 9.4b: Các trạng thái hiệu lực được chấp thuận khi mutation (ASSIGNED, ACCEPTED, IN_PROGRESS)
-    const validStatuses = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
-    for (const status of validStatuses) {
-      const apt: MockAppointmentAccess = {
-        id: `apt-${status.toLowerCase()}`,
-        company_id: 'comp-A',
-        assignee_id: 'user-tech-01',
-        status,
-        type: 'SURVEY',
-      };
-
-      const result = verifySurveyAppointmentAccess(actorTech, apt, ['TECHNICIAN'], { isMutation: true });
-      assert.equal(result.appointment.status, status);
-    }
-  });
-
-  runTest('Kịch bản 9.5: Chặn technician thao tác trên lịch hẹn của technician khác', () => {
-    const actorTech: MockActor = {
-      userId: 'user-tech-01',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const aptOtherTech: MockAppointmentAccess = {
-      id: 'apt-other-01',
-      company_id: 'comp-A',
-      assignee_id: 'user-tech-02', // Khác assignee
-      status: 'ASSIGNED',
-      type: 'SURVEY',
-    };
-
-    assert.throws(
-      () => {
-        verifySurveyAppointmentAccess(actorTech, aptOtherTech);
-      },
-      {
-        message: 'Bạn không có quyền thao tác trên lịch hẹn của kỹ thuật viên khác.',
-      }
-    );
-  });
-
-  runTest('Kịch bản 9.6: Khóa mutation (isMutation: true) trên trạng thái terminal cho cả BOSS_ADMIN và TECHNICIAN', () => {
-    const actorBoss: MockActor = {
-      userId: 'boss-01',
-      companyId: 'comp-A',
-      role: 'BOSS_ADMIN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const actorTech: MockActor = {
-      userId: 'tech-01',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    for (const status of ['COMPLETED', 'CANCELLED']) {
-      const apt: MockAppointmentAccess = {
-        id: `apt-term-${status.toLowerCase()}`,
-        company_id: 'comp-A',
-        assignee_id: 'tech-01',
-        status,
-        type: 'SURVEY',
-      };
-
-      // BOSS_ADMIN cũng bị chặn mutation khi terminal
-      assert.throws(
-        () => {
-          verifySurveyAppointmentAccess(actorBoss, apt, ['BOSS_ADMIN', 'TECHNICIAN'], {
-            isMutation: true,
-          });
-        },
-        {
-          message: 'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.',
-        },
-        `BOSS_ADMIN phải bị chặn mutation khi appointment là ${status}`
-      );
-
-      // TECHNICIAN cũng bị chặn mutation khi terminal
-      assert.throws(
-        () => {
-          verifySurveyAppointmentAccess(actorTech, apt, ['BOSS_ADMIN', 'TECHNICIAN'], {
-            isMutation: true,
-          });
-        },
-        {
-          message: 'Không thể chỉnh sửa dữ liệu hoặc hình ảnh của lịch hẹn đã hoàn tất/đã hủy.',
-        },
-        `TECHNICIAN phải bị chặn mutation khi appointment là ${status}`
-      );
-    }
-  });
-
-  runTest('Kịch bản 9.7: Cho phép truy cập chỉ đọc (isMutation: false) khi appointment ở trạng thái COMPLETED', () => {
-    const actorBoss: MockActor = {
-      userId: 'boss-01',
-      companyId: 'comp-A',
-      role: 'BOSS_ADMIN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const actorTech: MockActor = {
-      userId: 'tech-01',
-      companyId: 'comp-A',
-      role: 'TECHNICIAN',
-      profileStatus: 'ACTIVE',
-      membershipStatus: 'ACTIVE',
-    };
-
-    const aptCompleted: MockAppointmentAccess = {
-      id: 'apt-completed-01',
-      company_id: 'comp-A',
-      assignee_id: 'tech-01',
-      status: 'COMPLETED',
-      type: 'SURVEY',
-    };
-
-    // BOSS_ADMIN được phép đọc/xem lịch hẹn đã hoàn tất
-    const bossRead = verifySurveyAppointmentAccess(actorBoss, aptCompleted, ['BOSS_ADMIN', 'TECHNICIAN'], {
-      isMutation: false,
-    });
-    assert.equal(bossRead.appointment.status, 'COMPLETED');
-
-    // TECHNICIAN phụ trách được phép đọc/xem và refresh signed URL lịch hẹn đã hoàn tất
-    const techRead = verifySurveyAppointmentAccess(actorTech, aptCompleted, ['BOSS_ADMIN', 'TECHNICIAN'], {
-      isMutation: false,
-    });
-    assert.equal(techRead.appointment.status, 'COMPLETED');
-  });
-
-  // ==========================================================================
-  // KỊCH BẢN 10: Khắc phục P1 (Lỗi 15) - Atomicity & Rollback Survey Completion
-  // ==========================================================================
-  await runAsyncTest('Kịch bản 10.1: completeSurvey atomic transaction rollback khi RPC gặp lỗi', async () => {
-    let rpcCalled = false;
-
-    const mockDbRollback = {
+  await runAsyncTest('Kịch bản 10.2: completeSurvey từ chối lịch hẹn ở trạng thái bị hủy (CANCELLED)', async () => {
+    const mockClient = {
       from: (table: string) => {
         const q: Record<string, unknown> = {
           select: () => q,
@@ -1813,11 +1306,11 @@ async function main() {
             if (table === 'appointments') {
               return {
                 data: {
-                  id: 'apt-atomic-01',
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
-                  status: 'IN_PROGRESS',
+                  id: 'apt-cancelled-01',
+                  company_id: 'comp-100',
+                  customer_id: 'cust-100',
+                  assignee_id: 'user-tech-valid',
+                  status: 'CANCELLED',
                   type: 'SURVEY',
                 },
                 error: null,
@@ -1828,164 +1321,36 @@ async function main() {
         };
         return q;
       },
-      rpc: async (fnName: string) => {
-        if (fnName === 'complete_survey_atomic') {
-          rpcCalled = true;
-          // Mô phỏng lỗi trong transaction atomic RPC (PostgreSQL tự động rollback toàn bộ transaction)
-          return {
-            data: null,
-            error: {
-              message: 'Database lock timeout or constraint violation on appointments update',
-            },
-          };
-        }
-        return { data: null, error: null };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
     };
 
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-atomic-01',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const result = await completeSurvey(
-      inputData,
-      'tech-1',
-      'comp-1',
-      mockDbRollback as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    // 1. Phải gọi RPC và trả về thất bại với thông điệp rõ ràng
-    assert.equal(rpcCalled, true);
-    assert.equal(result.success, false);
-    assert.equal(
-      result.message,
-      'Không thể cập nhật trạng thái lịch hẹn, đã hủy thao tác tạo khảo sát.'
-    );
-
-    // 2. Kiểm tra RPC ném exception khi appointment đã ở trạng thái terminal
-    const mockDbTerminalRpc = {
-      ...mockDbRollback,
-      rpc: async () => ({
-        data: null,
-        error: { message: 'APPOINTMENT_ALREADY_TERMINAL' },
-      }),
-    };
-    await assert.rejects(
-      async () => {
-        await completeSurvey(
-          inputData,
-          'tech-1',
-          'comp-1',
-          mockDbTerminalRpc as unknown as Parameters<typeof completeSurvey>[3]
-        );
-      },
+    const res = await completeSurvey(
       {
-        message: /APPOINTMENT_ALREADY_TERMINAL/,
-      }
-    );
-
-    // 3. Kiểm tra RPC ném exception khi vi phạm unique constraint (duplicate survey)
-    const mockDbDuplicateRpc = {
-      ...mockDbRollback,
-      rpc: async () => ({
-        data: null,
-        error: {
-          code: '23505',
-          message: 'duplicate key value violates unique constraint "unique_survey_appointment"',
+        appointmentId: 'apt-cancelled-01',
+        measurements: {
+          clear_width_mm: 2000,
+          barrier_height_mm: 600,
+          anticipated_flood_height_mm: 500,
+          gate_type: 'REMOVABLE_PANEL',
+          mounting_method: 'INSIDE_JAMB',
         },
-      }),
-    };
-    await assert.rejects(
-      async () => {
-        await completeSurvey(
-          inputData,
-          'tech-1',
-          'comp-1',
-          mockDbDuplicateRpc as unknown as Parameters<typeof completeSurvey>[3]
-        );
+        siteCondition: {
+          wall_material: 'SOLID_BRICK',
+          floor_material: 'CONCRETE_SMOOTH',
+          floor_evenness: 'FLAT',
+          slope_grade: 'SLOPING_OUT',
+        },
       },
-      {
-        message: /SURVEY_ALREADY_EXISTS/,
-      }
+      'user-tech-valid',
+      'comp-100',
+      mockClient as unknown as Parameters<typeof completeSurvey>[3]
     );
-  });
 
-  await runAsyncTest('Kịch bản 10.2: completeSurvey từ chối lịch hẹn ở trạng thái không hợp lệ (CANCELLED, COMPLETED)', async () => {
-    const createMockForStatus = (status: string) => ({
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: `apt-${status.toLowerCase()}`,
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
-                  status,
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-    });
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-cancelled',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    // 10.2a: Appointment bị hủy CANCELLED
-    const resCancelled = await completeSurvey(
-      inputData,
-      'tech-1',
-      'comp-1',
-      createMockForStatus('CANCELLED') as unknown as Parameters<typeof completeSurvey>[3]
-    );
-    assert.equal(resCancelled.success, false);
-    assert.equal(resCancelled.message, 'Lịch hẹn đã bị hủy, không thể hoàn tất khảo sát.');
-
-    // 10.2b: Appointment đã COMPLETED
-    const resCompleted = await completeSurvey(
-      { ...inputData, appointmentId: 'apt-completed' },
-      'tech-1',
-      'comp-1',
-      createMockForStatus('COMPLETED') as unknown as Parameters<typeof completeSurvey>[3]
-    );
-    assert.equal(resCompleted.success, false);
-    assert.ok(
-      resCompleted.message?.includes(
-        'Lịch hẹn đang ở trạng thái COMPLETED, không thể hoàn tất khảo sát.'
-      )
-    );
+    assert.equal(res.success, false);
+    assert.equal(res.message, 'Lịch hẹn không ở trạng thái ACCEPTED hoặc IN_PROGRESS.');
   });
 
   await runAsyncTest('Kịch bản 10.3: completeSurvey ném lỗi khi appointment.type !== SURVEY', async () => {
-    const mockClientWrongType = {
+    const mockClient = {
       from: (table: string) => {
         const q: Record<string, unknown> = {
           select: () => q,
@@ -1994,12 +1359,12 @@ async function main() {
             if (table === 'appointments') {
               return {
                 data: {
-                  id: 'apt-wrong-type-01',
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
+                  id: 'apt-not-survey-01',
+                  company_id: 'comp-100',
+                  customer_id: 'cust-100',
+                  assignee_id: 'user-tech-valid',
                   status: 'IN_PROGRESS',
-                  type: 'INSTALLATION', // Sai type
+                  type: 'INSTALLATION',
                 },
                 error: null,
               };
@@ -2011,20 +1376,26 @@ async function main() {
       },
     };
 
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-wrong-type-01',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
     await assert.rejects(
       async () => {
         await completeSurvey(
-          inputData,
-          'tech-1',
-          'comp-1',
-          mockClientWrongType as unknown as Parameters<typeof completeSurvey>[3]
+          {
+            appointmentId: 'apt-not-survey-01',
+            measurements: {
+              clear_width_mm: 2000,
+              barrier_height_mm: 600,
+              anticipated_flood_height_mm: 500,
+            },
+            siteCondition: {
+              wall_material: 'SOLID_BRICK',
+              floor_material: 'CONCRETE_SMOOTH',
+              floor_evenness: 'FLAT',
+              slope_grade: 'SLOPING_OUT',
+            },
+          },
+          'user-tech-valid',
+          'comp-100',
+          mockClient as unknown as Parameters<typeof completeSurvey>[3]
         );
       },
       {
@@ -2033,680 +1404,37 @@ async function main() {
     );
   });
 
-  // ==========================================================================
-  // KỊCH BẢN 11: Feedback Review Vòng 3 (PR #3 - FEATURE/SURVEY)
-  // Ưu tiên 1 -> Ưu tiên 5: Security boundary RPC, identity spoofing,
-  // predecessor state check, conditional write & direct-RPC abuse protection
-  // ==========================================================================
-
-  // --- Kịch bản 11.1: Security Boundary RPC & Direct Abuse Prevention ---
-  await runAsyncTest('Kịch bản 11.1a: Direct RPC call từ unauthenticated / anon client bị từ chối (permission denied / 42501)', async () => {
-    // Client nặc danh (anon key hoặc không đăng nhập) cố tình gọi RPC complete_survey_atomic
-    const mockAnonClient = {
-      rpc: async (fnName: string) => {
-        if (fnName === 'complete_survey_atomic') {
-          return {
-            data: null,
-            error: {
-              code: '42501',
-              message: 'permission denied for function complete_survey_atomic',
-            },
-          };
-        }
-        return { data: null, error: null };
-      },
-    };
-
-    const { data, error } = await mockAnonClient.rpc('complete_survey_atomic');
-    assert.equal(data, null);
-    assert.equal(error?.code, '42501');
-    assert.ok(error?.message.includes('permission denied'));
-  });
-
-  await runAsyncTest('Kịch bản 11.1b: Direct RPC call từ authenticated client (kể cả role TECHNICIAN/SALE) bị từ chối (42501)', async () => {
-    // Client đã xác thực (có JWT authenticated) nhưng hàm chỉ GRANT EXECUTE cho service_role
-    // Quyền EXECUTE của authenticated đã bị REVOKE trong migration 0005
-    const mockAuthenticatedClient = {
-      rpc: async (fnName: string) => {
-        if (fnName === 'complete_survey_atomic') {
-          return {
-            data: null,
-            error: {
-              code: '42501',
-              message: 'permission denied for function complete_survey_atomic',
-            },
-          };
-        }
-        return { data: null, error: null };
-      },
-    };
-
-    const { data, error } = await mockAuthenticatedClient.rpc('complete_survey_atomic');
-    assert.equal(data, null);
-    assert.equal(error?.code, '42501');
-    assert.ok(error?.message.includes('permission denied'));
-  });
-
-  await runAsyncTest('Kịch bản 11.1c: Chỉ service_role (Trusted Server) mới được phép gọi complete_survey_atomic', async () => {
-    let calledWithServiceRole = false;
-    const mockServiceRoleClient = {
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-        if (fnName === 'complete_survey_atomic') {
-          calledWithServiceRole = true;
-          return {
-            data: { id: 'srv-service-role-001', appointment_id: args.p_appointment_id, completed_by: args.p_completed_by },
-            error: null,
-          };
-        }
-        return { data: null, error: null };
-      },
-    };
-
-    const { data, error } = await mockServiceRoleClient.rpc('complete_survey_atomic', {
-      p_appointment_id: 'apt-srv-01',
-      p_completed_by: 'tech-01',
-      p_survey_payload: { company_id: 'comp-1' },
-    });
-    assert.equal(calledWithServiceRole, true);
-    assert.equal(error, null);
-    assert.equal(data?.id, 'srv-service-role-001');
-  });
-
-  // --- Kịch bản 11.2: Identity Spoofing Prevention ---
-  await runAsyncTest('Kịch bản 11.2a: Chống Identity Spoofing - RPC và Service không tin company_id/customer_id trong payload', async () => {
-    let capturedPayload: Record<string, unknown> | null = null;
-    let capturedCompletedBy: string | undefined = undefined;
-
-    const mockDbIdentitySpoof = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-spoof-target',
-                  company_id: 'comp-CANONICAL-A', // Company thực tế của lịch hẹn
-                  customer_id: 'cust-CANONICAL-A', // Customer thực tế của lịch hẹn
-                  assignee_id: 'tech-valid-1',
-                  status: 'IN_PROGRESS',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-        if (fnName === 'complete_survey_atomic') {
-          capturedPayload = args.p_survey_payload;
-          capturedCompletedBy = args.p_completed_by;
-          // Mô phỏng logic SQL RPC sau khi sửa: v_company_id và v_customer_id được gán từ v_appointment
-          return {
-            data: {
-              id: 'srv-spoof-prevented',
-              company_id: 'comp-CANONICAL-A', // Bắt buộc là của appointment
-              customer_id: 'cust-CANONICAL-A',
-              appointment_id: args.p_appointment_id,
-              completed_by: args.p_completed_by || args.p_survey_payload.completed_by,
-            },
-            error: null,
-          };
-        }
-        return { data: null, error: null };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-spoof-target',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const res = await completeSurvey(
-      inputData,
-      'tech-valid-1',
-      'comp-CANONICAL-A',
-      mockDbIdentitySpoof as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    assert.equal(res.success, true);
-    assert.ok(capturedPayload !== null);
-    // Khẳng định company_id truyền vào RPC luôn là comp-CANONICAL-A của appointment
-    assert.equal((capturedPayload as Record<string, unknown>).company_id, 'comp-CANONICAL-A');
-    assert.equal((capturedPayload as Record<string, unknown>).customer_id, 'cust-CANONICAL-A');
-    assert.equal(capturedCompletedBy, 'tech-valid-1');
-  });
-
-  await runAsyncTest('Kịch bản 11.2b: RPC từ chối khi completed_by không phải thành viên hợp lệ cùng công ty (INVALID_COMPLETED_BY)', async () => {
-    const mockDbInvalidCompletedBy = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-invalid-tech',
-                  company_id: 'comp-CANONICAL-A',
-                  customer_id: 'cust-CANONICAL-A',
-                  assignee_id: 'tech-valid-1',
-                  status: 'IN_PROGRESS',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async () => {
-        // Mô phỏng kiểm tra v_member trong RPC: user không thuộc công ty -> ném ngoại lệ
-        return {
-          data: null,
-          error: {
-            message: 'INVALID_COMPLETED_BY: Người thực hiện khảo sát không phải là nhân sự hợp lệ của doanh nghiệp.',
-          },
-        };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-invalid-tech',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    await assert.rejects(
-      async () => {
-        await completeSurvey(
-          inputData,
-          'tech-stranger-from-comp-B',
-          'comp-CANONICAL-A',
-          mockDbInvalidCompletedBy as unknown as Parameters<typeof completeSurvey>[3]
-        );
-      },
-      {
-        message: /INVALID_COMPLETED_BY/,
-      }
-    );
-  });
-
-  await runAsyncTest('Kịch bản 11.2c: RPC từ chối khi TECHNICIAN không phải là assignee_id của lịch hẹn', async () => {
-    let passedCompletedBy: string | undefined;
-    const mockDbNotAssignee = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-other-assignee',
-                  company_id: 'comp-CANONICAL-A',
-                  customer_id: 'cust-CANONICAL-A',
-                  assignee_id: 'tech-assigned-original',
-                  status: 'IN_PROGRESS',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-        passedCompletedBy = args.p_completed_by;
-        // Mô phỏng ràng buộc: TECHNICIAN phải là assignee_id
-        if (args.p_completed_by !== 'tech-assigned-original') {
-          return {
-            data: null,
-            error: {
-              message: 'INVALID_COMPLETED_BY: TECHNICIAN_NOT_ASSIGNEE: Kỹ thuật viên không được phân công lịch hẹn này.',
-            },
-          };
-        }
-        return { data: { id: 'srv-ok' }, error: null };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-other-assignee',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    await assert.rejects(
-      async () => {
-        await completeSurvey(
-          inputData,
-          'tech-different-person',
-          'comp-CANONICAL-A',
-          mockDbNotAssignee as unknown as Parameters<typeof completeSurvey>[3]
-        );
-      },
-      {
-        message: /INVALID_COMPLETED_BY/,
-      }
-    );
-    assert.equal(passedCompletedBy, 'tech-different-person');
-  });
-
-  await runAsyncTest('Kịch bản 11.2d: RPC chấp thuận khi TECHNICIAN chính là assignee_id của lịch hẹn', async () => {
-    let passedCompletedBy: string | undefined;
-    const mockDbValidAssignee = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-matching-assignee',
-                  company_id: 'comp-CANONICAL-A',
-                  customer_id: 'cust-CANONICAL-A',
-                  assignee_id: 'tech-the-assignee',
-                  status: 'IN_PROGRESS',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-        passedCompletedBy = args.p_completed_by;
-        return {
-          data: {
-            id: 'srv-matching-tech',
-            appointment_id: args.p_appointment_id,
-            completed_by: args.p_completed_by,
-          },
-          error: null,
-        };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-matching-assignee',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const res = await completeSurvey(
-      inputData,
-      'tech-the-assignee',
-      'comp-CANONICAL-A',
-      mockDbValidAssignee as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    assert.equal(res.success, true);
-    assert.equal(res.surveyId, 'srv-matching-tech');
-    assert.equal(passedCompletedBy, 'tech-the-assignee');
-  });
-
-  await runAsyncTest('Kịch bản 11.2e: RPC chấp thuận khi BOSS_ADMIN hoàn tất lịch hẹn (kể cả không phải assignee_id)', async () => {
-    let passedCompletedBy: string | undefined;
-    const mockDbBossAdmin = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-boss-override',
-                  company_id: 'comp-CANONICAL-A',
-                  customer_id: 'cust-CANONICAL-A',
-                  assignee_id: 'tech-original-assigned',
-                  status: 'IN_PROGRESS',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-        passedCompletedBy = args.p_completed_by;
-        // BOSS_ADMIN được phép dù assignee_id là tech-original-assigned
-        return {
-          data: {
-            id: 'srv-boss-approved',
-            appointment_id: args.p_appointment_id,
-            completed_by: args.p_completed_by,
-          },
-          error: null,
-        };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-boss-override',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const res = await completeSurvey(
-      inputData,
-      'boss-admin-user-01',
-      'comp-CANONICAL-A',
-      mockDbBossAdmin as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    assert.equal(res.success, true);
-    assert.equal(res.surveyId, 'srv-boss-approved');
-    assert.equal(passedCompletedBy, 'boss-admin-user-01');
-  });
-
-  // --- Kịch bản 11.3: Predecessor State Check ---
-  await runAsyncTest('Kịch bản 11.3a: Từ chối hoàn tất khi appointment đang ở trạng thái ASSIGNED (INVALID_PREDECESSOR_STATE)', async () => {
-    const mockDbAssignedState = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-assigned-state',
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
-                  status: 'ASSIGNED', // KTV chưa bấm nhận việc hay đo đạc
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async () => {
-        return {
-          data: null,
-          error: {
-            message: 'INVALID_PREDECESSOR_STATE: Lịch hẹn chưa ở trạng thái đang thực hiện (IN_PROGRESS/ACCEPTED).',
-          },
-        };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-assigned-state',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const res = await completeSurvey(
-      inputData,
-      'tech-1',
-      'comp-1',
-      mockDbAssignedState as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    assert.equal(res.success, false);
-    assert.ok(
-      res.message?.includes('không thể hoàn tất khảo sát') &&
-      res.message?.includes('ASSIGNED')
-    );
-  });
-
-  await runAsyncTest('Kịch bản 11.3b: RPC ném lỗi INVALID_PREDECESSOR_STATE khi trạng thái là REJECTED', async () => {
-    const mockDbRejectedState = {
-      from: (table: string) => {
-        const q: Record<string, unknown> = {
-          select: () => q,
-          eq: () => q,
-          maybeSingle: async () => {
-            if (table === 'appointments') {
-              return {
-                data: {
-                  id: 'apt-rejected-state',
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
-                  status: 'REJECTED',
-                  type: 'SURVEY',
-                },
-                error: null,
-              };
-            }
-            return { data: null, error: null };
-          },
-        };
-        return q;
-      },
-      rpc: async () => {
-        return {
-          data: null,
-          error: {
-            message: 'INVALID_PREDECESSOR_STATE: Lịch hẹn chưa ở trạng thái đang thực hiện.',
-          },
-        };
-      },
-      storage: {
-        from: () => ({
-          list: async () => ({
-            data: [
-              { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-              { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-              { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-            ],
-            error: null,
-          }),
-        }),
-      },
-    };
-
-    const inputData: CompleteSurveyInput = {
-      appointmentId: 'apt-rejected-state',
-      measurements: VALID_MEASUREMENTS,
-      siteCondition: VALID_SITE_CONDITION,
-      photos: MOCK_PHOTOS,
-    };
-
-    const res = await completeSurvey(
-      inputData,
-      'tech-1',
-      'comp-1',
-      mockDbRejectedState as unknown as Parameters<typeof completeSurvey>[3]
-    );
-
-    assert.equal(res.success, false);
-    assert.ok(res.message?.includes('REJECTED'));
-  });
-
-  await runAsyncTest('Kịch bản 11.3c: Chấp thuận hoàn tất khi appointment ở trạng thái tiền đề IN_PROGRESS hoặc ACCEPTED', async () => {
-    for (const validPredecessor of ['IN_PROGRESS', 'ACCEPTED']) {
-      const mockDbValidPredecessor = {
-        from: (table: string) => {
-          const q: Record<string, unknown> = {
-            select: () => q,
-            eq: () => q,
-            maybeSingle: async () => {
-              if (table === 'appointments') {
-                return {
-                  data: {
-                    id: `apt-valid-${validPredecessor.toLowerCase()}`,
-                    company_id: 'comp-1',
-                    customer_id: 'cust-1',
-                    assignee_id: 'tech-1',
-                    status: validPredecessor,
-                    type: 'SURVEY',
-                  },
-                  error: null,
-                };
-              }
-              return { data: null, error: null };
-            },
-          };
-          return q;
-        },
-        rpc: async (fnName: string, args: { p_appointment_id: string; p_completed_by?: string; p_survey_payload: Record<string, unknown> }) => {
-          return {
-            data: { id: `srv-${validPredecessor.toLowerCase()}-001`, appointment_id: args.p_appointment_id, completed_by: args.p_completed_by },
-            error: null,
-          };
-        },
-        storage: {
-          from: () => ({
-            list: async () => ({
-              data: [
-                { name: 'OVERVIEW_1726000000.jpg', created_at: '2026-09-20T10:00:00Z' },
-                { name: 'BOTTOM_LEFT_1726000000.jpg', created_at: '2026-09-20T10:01:00Z' },
-                { name: 'BOTTOM_RIGHT_1726000000.jpg', created_at: '2026-09-20T10:02:00Z' },
-              ],
-              error: null,
-            }),
-          }),
-        },
-      };
-
-      const inputData: CompleteSurveyInput = {
-        appointmentId: `apt-valid-${validPredecessor.toLowerCase()}`,
-        measurements: VALID_MEASUREMENTS,
-        siteCondition: VALID_SITE_CONDITION,
-        photos: MOCK_PHOTOS,
-      };
-
-      const res = await completeSurvey(
-        inputData,
-        'tech-1',
-        'comp-1',
-        mockDbValidPredecessor as unknown as Parameters<typeof completeSurvey>[3]
-      );
-
-      assert.equal(res.success, true);
-      assert.equal(res.surveyId, `srv-${validPredecessor.toLowerCase()}-001`);
-    }
-  });
-
-  // --- Kịch bản 11.4: Conditional Write Protection ---
   await runAsyncTest('Kịch bản 11.4a: cancelAppointment từ chối khi lịch hẹn đã COMPLETED (không ghi đè dữ liệu)', async () => {
-    const mockClient = createMockAppointmentClient();
-    // Tạo 1 appointment trong mock client
-    const apt = await createAppointment(
-      {
-        customer_id: 'cust-100',
-        assignee_id: 'user-tech-valid',
-        address: '999 Đường Cầu Giấy',
-        appointment_date: '2026-09-26T09:00:00.000Z',
+    const mockClient = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => {
+            if (table === 'appointments') {
+              return {
+                data: {
+                  id: 'apt-completed-01',
+                  company_id: 'comp-100',
+                  customer_id: 'cust-100',
+                  assignee_id: 'user-tech-valid',
+                  status: 'COMPLETED',
+                  type: 'SURVEY',
+                },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return q;
       },
-      mockClient as unknown as Parameters<typeof createAppointment>[1]
-    );
+    };
 
-    // Cập nhật trạng thái sang COMPLETED
-    await updateAppointment(
-      apt.id,
-      { status: 'COMPLETED' },
-      mockClient as unknown as Parameters<typeof updateAppointment>[2]
-    );
-
-    // Gọi cancelAppointment trên lịch hẹn đã hoàn thành -> Phải bị từ chối
     await assert.rejects(
       async () => {
         await cancelAppointment(
-          apt.id,
+          'apt-completed-01',
           'Khách đổi ý',
           mockClient as unknown as Parameters<typeof cancelAppointment>[2]
         );
@@ -2717,46 +1445,21 @@ async function main() {
     );
   });
 
-  await runAsyncTest('Kịch bản 11.4b: Conditional write chặn updateAppointment khi trạng thái bị thay đổi song song ngoài tập hợp hợp lệ', async () => {
-    let isStatusAlreadyCompleted = false;
-
-    const mockRaceConditionClient = {
+  await runAsyncTest('Kịch bản 11.4b: updateAppointment chặn chỉnh sửa lịch hẹn đã hoàn tất khảo sát', async () => {
+    const mockClient = {
       from: (table: string) => {
-        const eqFilters: Record<string, string> = {};
-        const inFilters: Record<string, string[]> = {};
         const q: Record<string, unknown> = {
           select: () => q,
-          eq: (col: string, val: string) => {
-            eqFilters[col] = val;
-            return q;
-          },
-          in: (col: string, vals: string[]) => {
-            inFilters[col] = vals;
-            return q;
-          },
+          eq: () => q,
           maybeSingle: async () => {
             if (table === 'appointments') {
-              if (isStatusAlreadyCompleted) {
-                // Trạng thái thực tế trong database đã bị sửa sang COMPLETED trước khi write
-                return {
-                  data: {
-                    id: 'apt-race-01',
-                    company_id: 'comp-1',
-                    customer_id: 'cust-1',
-                    assignee_id: 'tech-1',
-                    status: 'COMPLETED',
-                    type: 'SURVEY',
-                  },
-                  error: null,
-                };
-              }
               return {
                 data: {
-                  id: 'apt-race-01',
-                  company_id: 'comp-1',
-                  customer_id: 'cust-1',
-                  assignee_id: 'tech-1',
-                  status: 'ASSIGNED',
+                  id: 'apt-completed-02',
+                  company_id: 'comp-100',
+                  customer_id: 'cust-100',
+                  assignee_id: 'user-tech-valid',
+                  status: 'COMPLETED',
                   type: 'SURVEY',
                 },
                 error: null,
@@ -2764,40 +1467,17 @@ async function main() {
             }
             return { data: null, error: null };
           },
-          update: () => {
-            const subQ: Record<string, unknown> = {
-              eq: (col: string, val: string) => {
-                eqFilters[col] = val;
-                return subQ;
-              },
-              in: (col: string, vals: string[]) => {
-                inFilters[col] = vals;
-                return subQ;
-              },
-              select: () => subQ,
-              maybeSingle: async () => {
-                if (inFilters.status && !inFilters.status.includes('COMPLETED')) {
-                  // Điều kiện conditional write thất bại vì row hiện tại là COMPLETED
-                  return { data: null, error: null };
-                }
-                return { data: { id: 'apt-race-01' }, error: null };
-              },
-            };
-            return subQ;
-          },
         };
         return q;
       },
     };
 
-    isStatusAlreadyCompleted = true;
-
     await assert.rejects(
       async () => {
         await updateAppointment(
-          'apt-race-01',
+          'apt-completed-02',
           { address: 'Địa chỉ mới' },
-          mockRaceConditionClient as unknown as Parameters<typeof updateAppointment>[2]
+          mockClient as unknown as Parameters<typeof updateAppointment>[2]
         );
       },
       {

@@ -82,10 +82,10 @@ export const SurveyMeasurementSchema = z.object({
     .max(1000, 'Chiều cao bậc tam cấp (stepHeightMm) không được vượt quá 1000 mm.')
     .optional(),
 
-  width_top_mm: z.number().optional(),
-  width_bottom_mm: z.number().optional(),
-  gate_type: GateTypeEnum.optional(),
-  mounting_method: MountingMethodEnum.optional(),
+  width_top_mm: z.number().int().min(500).max(15000).optional(),
+  width_bottom_mm: z.number().int().min(500).max(15000).optional(),
+  gate_type: GateTypeEnum,
+  mounting_method: MountingMethodEnum,
 });
 
 /**
@@ -111,7 +111,6 @@ export const SurveySiteConditionSchema = z.object({
  */
 export const SurveyPhotoItemSchema = z.object({
   slot: z.string().min(1, 'Mã vị trí ảnh (slot) không được rỗng.'),
-  objectPath: z.string().min(1, 'Đường dẫn file (objectPath) không được rỗng.'),
   signedUrl: z.string().optional(),
   uploadedAt: z.string().optional(),
   slotLabel: z.string().optional(),
@@ -129,10 +128,7 @@ export const SurveyPhotoItemSchema = z.object({
  * 2. Enums:
  *    - gateType / gate_type, mountingMethod / mounting_method
  *    - wallMaterial / wall_material, floorMaterial / floor_material, floorEvenness / floor_evenness, slopeGrade / slope_grade
- * 3. Mandatory Photos (Min 3 slots):
- *    - Slot 1: FRONTAGE (or OVERVIEW)
- *    - Slot 2: FLOOR_JUNCTION (or BOTTOM_LEFT)
- *    - Slot 3: OBSTACLES (or OBSTACLE, BOTTOM_RIGHT)
+ * 3. Mandatory photos are checked independently in server Storage and the atomic RPC.
  * 4. Text Sanitization & Limits:
  *    - notes, specialRequirements: max length 1000 chars
  */
@@ -158,7 +154,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
     errors.clearWidthMm = errors.clear_width_mm;
   } else {
     const numClear = Number(rawClear);
-    if (Number.isNaN(numClear) || numClear <= 0) {
+    if (typeof rawClear !== 'number' || !Number.isFinite(numClear) || numClear <= 0) {
       missingFields.push('clear_width_mm');
       missingFields.push('clearWidthMm');
       errors.clear_width_mm = 'Chiều rộng lọt lòng bắt buộc là số nguyên dương.';
@@ -194,7 +190,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
     errors.waterHeightMm = errors.barrier_height_mm;
   } else {
     const numBarrier = Number(rawBarrier);
-    if (Number.isNaN(numBarrier) || numBarrier <= 0) {
+    if (typeof rawBarrier !== 'number' || !Number.isFinite(numBarrier) || numBarrier <= 0) {
       missingFields.push('barrier_height_mm');
       missingFields.push('waterHeightMm');
       errors.barrier_height_mm = 'Chiều cao ngăn nước / tấm chắn bắt buộc là số nguyên dương.';
@@ -227,7 +223,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
       'Cao độ đỉnh ngập dự kiến (anticipated_flood_height_mm) bắt buộc phải lớn hơn 0 mm.';
   } else {
     const numFlood = Number(rawFlood);
-    if (Number.isNaN(numFlood) || numFlood <= 0) {
+    if (typeof rawFlood !== 'number' || !Number.isFinite(numFlood) || numFlood <= 0) {
       missingFields.push('anticipated_flood_height_mm');
       errors.anticipated_flood_height_mm =
         'Cao độ đỉnh ngập dự kiến bắt buộc là số nguyên dương.';
@@ -251,7 +247,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
 
   if (rawStep !== undefined && rawStep !== null && rawStep !== '') {
     const numStep = Number(rawStep);
-    if (Number.isNaN(numStep) || numStep < 0 || numStep > 1000) {
+    if (typeof rawStep !== 'number' || !Number.isFinite(numStep) || numStep < 0 || numStep > 1000) {
       missingFields.push('step_height_mm');
       missingFields.push('stepHeightMm');
       errors.step_height_mm =
@@ -262,7 +258,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
 
   // 5. Validate GateType Enum if provided
   const gateType = (mRaw.gate_type || mRaw.gateType) as string | undefined;
-  if (gateType && !GateTypeEnum.safeParse(gateType).success) {
+  if (!GateTypeEnum.safeParse(gateType).success) {
     missingFields.push('gate_type');
     missingFields.push('gateType');
     errors.gate_type = `Loại cửa chống ngập "${gateType}" không hợp lệ.`;
@@ -271,7 +267,7 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
 
   // 6. Validate MountingMethod Enum if provided
   const mountingMethod = (mRaw.mounting_method || mRaw.mountingMethod) as string | undefined;
-  if (mountingMethod && !MountingMethodEnum.safeParse(mountingMethod).success) {
+  if (!MountingMethodEnum.safeParse(mountingMethod).success) {
     missingFields.push('mounting_method');
     missingFields.push('mountingMethod');
     errors.mounting_method = `Phương án gắn ray "${mountingMethod}" không hợp lệ.`;
@@ -353,55 +349,13 @@ export function validateSurveyInput(input: CompleteSurveyInput): SurveyValidatio
     }
   }
 
-  // 12. Mandatory Field Evidence Photos (At least 3 slots)
-  // Supports both Array of items and Object map of items
-  // Canonical slots:
-  // - Slot 1: FRONTAGE (or OVERVIEW)
-  // - Slot 2: FLOOR_JUNCTION (or BOTTOM_LEFT)
-  // - Slot 3: OBSTACLES (or OBSTACLE, BOTTOM_RIGHT)
-  let photoItems: Array<{ slot?: string; objectPath?: string }> = [];
-  if (Array.isArray(input.photos)) {
-    photoItems = input.photos;
-  } else if (input.photos && typeof input.photos === 'object') {
-    photoItems = Object.entries(input.photos).map(([key, val]) => ({
-      slot: val?.slot || key,
-      objectPath: val?.objectPath,
-    }));
+  for (const key of ['width_top_mm', 'width_bottom_mm'] as const) {
+    if (!SurveyMeasurementSchema.shape[key].safeParse(mRaw[key]).success) {
+      missingFields.push(key); errors[key] = 'Khẩu độ phải là số nguyên từ 500 đến 15000 mm.';
+    }
   }
 
-  const hasSlot = (...targetSlots: string[]) => {
-    return photoItems.some((item) => {
-      if (!item || !item.objectPath || typeof item.objectPath !== 'string') return false;
-      if (item.objectPath.trim().length === 0) return false;
-      const itemSlot = (item.slot || '').toUpperCase();
-      return targetSlots.map((s) => s.toUpperCase()).includes(itemSlot);
-    });
-  };
-
-  const hasFrontage = hasSlot('FRONTAGE', 'OVERVIEW');
-  const hasFloorJunction = hasSlot('FLOOR_JUNCTION', 'BOTTOM_LEFT');
-  const hasObstacles = hasSlot('OBSTACLES', 'OBSTACLE', 'BOTTOM_RIGHT');
-
-  if (!hasFrontage) {
-    missingFields.push('photos.FRONTAGE');
-    missingFields.push('photos.OVERVIEW');
-    errors['photos.FRONTAGE'] = 'Thiếu ảnh mặt tiền vị trí lắp đặt (FRONTAGE / OVERVIEW).';
-    errors['photos.OVERVIEW'] = 'Thiếu ảnh toàn cảnh vị trí lắp đặt (OVERVIEW).';
-  }
-
-  if (!hasFloorJunction) {
-    missingFields.push('photos.FLOOR_JUNCTION');
-    missingFields.push('photos.BOTTOM_LEFT');
-    errors['photos.FLOOR_JUNCTION'] = 'Thiếu ảnh điểm tiếp giáp nền/sàn (FLOOR_JUNCTION / BOTTOM_LEFT).';
-    errors['photos.BOTTOM_LEFT'] = 'Thiếu ảnh cận cảnh chân tường & sàn góc trái (BOTTOM_LEFT).';
-  }
-
-  if (!hasObstacles) {
-    missingFields.push('photos.OBSTACLES');
-    missingFields.push('photos.BOTTOM_RIGHT');
-    errors['photos.OBSTACLES'] = 'Thiếu ảnh chướng ngại vật / hộp kỹ thuật (OBSTACLES / BOTTOM_RIGHT).';
-    errors['photos.BOTTOM_RIGHT'] = 'Thiếu ảnh cận cảnh chân tường & sàn góc phải (BOTTOM_RIGHT).';
-  }
+  // Evidence is verified from Storage by the server, never from a browser photo map.
 
   return {
     isValid: missingFields.length === 0,

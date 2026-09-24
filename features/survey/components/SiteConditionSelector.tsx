@@ -20,10 +20,10 @@ export default function SiteConditionSelector({
   onChange,
   errors = {},
 }: SiteConditionSelectorProps) {
-  const selectedWall = values.wall_material || 'SOLID_BRICK';
-  const selectedFloor = values.floor_material || 'CONCRETE_SMOOTH';
-  const selectedEvenness = values.floor_evenness || 'FLAT';
-  const selectedSlope = values.slope_grade || 'SLOPING_OUT';
+  const selectedWall = values.wall_material;
+  const selectedFloor = values.floor_material;
+  const selectedEvenness = values.floor_evenness;
+  const selectedSlope = values.slope_grade;
   const notes = values.notes || '';
 
   const wallOptions: Array<{ id: WallMaterial; label: string; desc: string; icon: string }> = [
@@ -122,6 +122,7 @@ export default function SiteConditionSelector({
 
   return (
     <div className="space-y-6">
+      {(!selectedWall || !selectedFloor || !selectedEvenness || !selectedSlope) && <p className="text-xs text-amber-300">Chưa chọn: hãy xác nhận từng thông số theo hiện trường.</p>}
       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-sm">
@@ -150,6 +151,7 @@ export default function SiteConditionSelector({
             return (
               <button
                 key={opt.id}
+                aria-pressed={isSelected}
                 type="button"
                 onClick={() => onChange({ ...values, wall_material: opt.id })}
                 className={`p-3 rounded-2xl text-left transition-all border flex flex-col justify-between gap-1.5 ${
@@ -204,6 +206,7 @@ export default function SiteConditionSelector({
             return (
               <button
                 key={opt.id}
+                aria-pressed={isSelected}
                 type="button"
                 onClick={() => onChange({ ...values, floor_material: opt.id })}
                 className={`p-3 rounded-xl text-xs font-semibold text-left transition border flex items-center gap-2 ${
@@ -237,6 +240,7 @@ export default function SiteConditionSelector({
             return (
               <button
                 key={opt.id}
+                aria-pressed={isSelected}
                 type="button"
                 onClick={() => onChange({ ...values, floor_evenness: opt.id })}
                 className={`p-3 rounded-xl text-left transition border ${
@@ -280,6 +284,7 @@ export default function SiteConditionSelector({
             return (
               <button
                 key={opt.id}
+                aria-pressed={isSelected}
                 type="button"
                 onClick={() => onChange({ ...values, slope_grade: opt.id })}
                 className={`p-3 rounded-xl text-center transition border flex flex-col items-center gap-1 ${
