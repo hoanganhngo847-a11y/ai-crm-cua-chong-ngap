@@ -17,6 +17,9 @@ ALTER TABLE public.company_bank_accounts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view their company bank accounts" ON public.company_bank_accounts FOR SELECT USING (true); -- simplify for now
 
 -- 1. RPC for Payment Webhook (Security + Idempotency + Strict Logic)
+DROP FUNCTION IF EXISTS public.process_payment_webhook_rpc(text, text, text, numeric, timestamptz, text, text);
+DROP FUNCTION IF EXISTS public.process_payment_webhook_rpc(text, text, numeric, timestamptz, text, text);
+
 CREATE OR REPLACE FUNCTION public.process_payment_webhook_rpc(
     p_provider text,
     p_provider_account text,
@@ -29,6 +32,7 @@ CREATE OR REPLACE FUNCTION public.process_payment_webhook_rpc(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = ''
 AS $$
 DECLARE
     v_order_id uuid;
@@ -36,7 +40,12 @@ DECLARE
     v_order_final_amount numeric;
     v_tx_id uuid;
     v_collected_amount numeric;
+    v_required_deposit numeric;
 BEGIN
+    IF p_amount <= 0 THEN
+        RAISE EXCEPTION 'Amount must be greater than 0';
+    END IF;
+
     -- Idempotency Check: Bắt buộc
     IF EXISTS (SELECT 1 FROM public.payment_transactions WHERE provider_ref = p_provider_ref AND provider = p_provider) THEN
         RETURN jsonb_build_object('status', 'ALREADY_PROCESSED', 'provider_ref', p_provider_ref);
@@ -84,8 +93,17 @@ BEGIN
             SELECT collected_amount INTO v_collected_amount 
             FROM public.finance_summaries WHERE order_id = v_order_id;
 
-            -- Nếu tổng tiền thu >= 30% giá trị hợp đồng (deposit threshold), set confirmed
-            IF v_collected_amount >= (v_order_final_amount * 0.3) THEN
+            -- Lấy yêu cầu tiền cọc từ chính sách giá
+            SELECT COALESCE(
+                (SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order_final_amount
+                 FROM public.price_calculations pc
+                 JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id
+                 WHERE pc.id = (SELECT price_calculation_id FROM public.orders WHERE id = v_order_id)),
+                0
+            ) INTO v_required_deposit;
+
+            -- Nếu tổng tiền thu >= yêu cầu cọc (deposit threshold), set confirmed
+            IF v_collected_amount >= v_required_deposit THEN
                 UPDATE public.orders
                 SET 
                     deposit_status = 'DEPOSIT_CONFIRMED',
@@ -121,6 +139,9 @@ GRANT EXECUTE ON FUNCTION public.process_payment_webhook_rpc TO service_role;
 
 
 -- 2. RPC Cập nhật Cọc Thủ Công (Security + Lock Down)
+DROP FUNCTION IF EXISTS public.update_order_deposit_rpc(uuid, numeric, text);
+DROP FUNCTION IF EXISTS public.update_order_deposit_rpc(uuid, numeric);
+
 CREATE OR REPLACE FUNCTION public.update_order_deposit_rpc(
     p_order_id uuid,
     p_deposit_amount numeric,
@@ -129,11 +150,13 @@ CREATE OR REPLACE FUNCTION public.update_order_deposit_rpc(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = ''
 AS $$
 DECLARE
     v_order public.orders%ROWTYPE;
     v_tx_id uuid;
     v_collected_amount numeric;
+    v_required_deposit numeric;
 BEGIN
     IF p_deposit_amount <= 0 THEN
         RAISE EXCEPTION 'Deposit amount must be greater than 0';
@@ -172,8 +195,17 @@ BEGIN
     SELECT collected_amount INTO v_collected_amount 
     FROM public.finance_summaries WHERE order_id = v_order.id;
 
+    -- Lấy yêu cầu tiền cọc từ chính sách giá
+    SELECT COALESCE(
+        (SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount
+         FROM public.price_calculations pc
+         JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id
+         WHERE pc.id = v_order.price_calculation_id),
+        0
+    ) INTO v_required_deposit;
+
     -- Cập nhật order
-    IF v_collected_amount >= (v_order.final_amount * 0.3) THEN
+    IF v_collected_amount >= v_required_deposit THEN
         UPDATE public.orders
         SET 
             deposit_status = 'DEPOSIT_CONFIRMED',

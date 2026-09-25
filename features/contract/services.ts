@@ -27,7 +27,25 @@ export async function generateContractForOrder(orderId: string, customerId: stri
     throw new Error('Chỉ được tạo hợp đồng khi đơn hàng đã xác nhận cọc');
   }
 
-  // 2. Tạo bản ghi Hợp đồng (Contract) liên kết chặt chẽ với Order
+  // 2. Mô phỏng Document Generator & Upload lên Storage (Trusted Server)
+  const pdfContent = `%PDF-1.4\n1 0 obj\n<< /Title (Hợp đồng cho Đơn hàng ${orderId}) >>\nendobj\n`;
+  const pdfBuffer = Buffer.from(pdfContent, 'utf-8');
+  const filePath = `contracts/${orderId}/contract_v1_${Date.now()}.pdf`;
+
+  const { error: uploadError } = await adminSupabase.storage
+    .from('secure-documents')
+    .upload(filePath, pdfBuffer, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+  if (uploadError) {
+    console.error('Lỗi khi upload file hợp đồng:', uploadError);
+    // Vẫn tiếp tục hoặc throw? Hợp đồng BẮT BUỘC lưu storage thành công
+    throw new Error('Không thể tạo file hợp đồng');
+  }
+
+  // 3. Tạo bản ghi Hợp đồng (Contract) liên kết chặt chẽ với Order
   // Sử dụng upsert (có thể dựa trên unique constraint của order_id) để tránh race condition
   const { data: newContract, error } = await adminSupabase
     .from('contracts')
@@ -37,7 +55,7 @@ export async function generateContractForOrder(orderId: string, customerId: stri
       status: 'GENERATED',
       revision_no: 1,
       template_version: 'v1',
-      generated_file_ref: `contracts/${orderId}/contract_v1.pdf`, // Real storage path pattern
+      generated_file_ref: filePath, // Dùng đường dẫn thực tế từ upload thành công
       contract_value: orderData.final_amount,
       signed_file_ref: null
     }, { onConflict: 'order_id', ignoreDuplicates: true })

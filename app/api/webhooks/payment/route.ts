@@ -12,7 +12,11 @@ export async function POST(request: Request) {
     const rawBody = await request.text();
     
     // Robust HMAC verification
-    const secret = process.env.WEBHOOK_SECRET || '';
+    const secret = process.env.WEBHOOK_SECRET;
+    if (!secret || typeof secret !== 'string' || secret.trim() === '') {
+      console.error('CRITICAL: WEBHOOK_SECRET is not configured or invalid.');
+      return NextResponse.json({ error: 'CONFIGURATION_ERROR' }, { status: 500 });
+    }
     const expectedSignature = crypto
       .createHmac('sha256', secret)
       .update(rawBody)

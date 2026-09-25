@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function processPaymentWebhook(payload: {
   provider: string;
@@ -8,7 +8,7 @@ export async function processPaymentWebhook(payload: {
   occurred_at: string;
   transfer_content: string;
 }) {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { provider, provider_account, provider_ref, amount, occurred_at, transfer_content } = payload;
 
   // 1. Trích xuất mã đối soát (payment_reference) từ nội dung chuyển khoản
