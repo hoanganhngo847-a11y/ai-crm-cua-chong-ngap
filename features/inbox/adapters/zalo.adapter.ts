@@ -1,16 +1,16 @@
 /**
  * ZALO OFFICIAL ACCOUNT (OA) REFERENCE ADAPTER PORT
- * 
+ *
  * ============================================================================
  * ARCHITECTURAL OWNERSHIP & CONTRACT BOUNDARY
  * ============================================================================
  * - Member 2: Sở hữu Ingress Engine, Webhook Gateway Dispatcher và ProviderAdapterPort Interface.
  * - Member 3: Sở hữu Zalo OA Integration và cài đặt chính thức của ZaloAdapter.
- * 
+ *
  * File này định nghĩa Reference Adapter Port cho Zalo OA Ingress,
  * đóng vai trò contract stub để compile và test ở TV2; implementation chính thức
  * thuộc quyền sở hữu của Member 3 khi tích hợp vào nhánh main.
- * 
+ *
  * Thực thi nghiêm ngặt theo đúng ProviderAdapterPort<ZaloWebhookEnvelope>.
  */
 
