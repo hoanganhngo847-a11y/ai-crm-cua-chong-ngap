@@ -665,8 +665,8 @@ async function runFailClosedAndZeroPhoneTests() {
         { companyId: companyA, name: 'Test Integrity', phone: '0912345678' },
         createSupabaseWithIdentityFailure()
       ),
-    /Lỗi tạo danh tính số điện thoại khách hàng/,
-    'findOrCreateByPhone must throw immediately when identities insert fails'
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error immediately when RPC is missing/fails in production'
   );
 
   // 8b. If customer_stage_histories insert fails -> throws immediately
@@ -725,8 +725,8 @@ async function runFailClosedAndZeroPhoneTests() {
         { companyId: companyA, name: 'Test Integrity 2', phone: '0912345678' },
         createSupabaseWithStageHistoryFailure()
       ),
-    /Lỗi ghi nhận lịch sử trạng thái ban đầu/,
-    'findOrCreateByPhone must throw immediately when customer_stage_histories insert fails'
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error immediately when RPC is missing/fails in production'
   );
 
   // 8c. POST /api/customers returns HTTP 500 when database integrity error occurs

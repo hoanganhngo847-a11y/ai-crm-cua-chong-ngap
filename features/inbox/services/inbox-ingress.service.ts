@@ -10,7 +10,6 @@ import type {
   ProviderWebhookAdapter,
 } from '../types/webhook.types';
 import { InboxService } from './inbox.service';
-import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
 
 declare module '../types/webhook.types' {
   interface IngressProcessResult {
@@ -67,27 +66,46 @@ export function verifySystemSignature(
   return { valid: isValid, reason: isValid ? undefined : 'Xác thực hệ thống thất bại' };
 }
 
+export interface SystemWebhookPayload {
+  provider?: 'SYSTEM' | 'FACEBOOK' | 'ZALO';
+  company_id?: string;
+  external_user_id?: string;
+  sender_name?: string;
+  sender_phone?: string;
+  sender?: { id?: string; name?: string; phone?: string };
+  message_id?: string;
+  content?: string;
+  message?: { id?: string; text?: string };
+  timestamp?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export function parseSystemWebhookToNormalized(
-  body: any,
+  body: Record<string, unknown>,
   resolvedCompanyId: string
 ): NormalizedIngressEvent {
+  const payload = body as unknown as SystemWebhookPayload;
   return {
-    provider: body.provider || 'SYSTEM',
+    provider: payload.provider || 'SYSTEM',
     company_id: resolvedCompanyId.trim(),
-    external_user_id: body.external_user_id || body.sender?.id || 'system_user',
-    sender_name: body.sender_name || body.sender?.name,
-    sender_phone: body.sender_phone || body.sender?.phone,
-    message_id: body.message_id || body.message?.id || `sys-${Date.now()}`,
-    content: (body.content || body.message?.text || '').trim(),
-    timestamp: body.timestamp || new Date().toISOString(),
-    metadata: body.metadata,
+    external_user_id: payload.external_user_id || payload.sender?.id || 'system_user',
+    sender_name: payload.sender_name || payload.sender?.name,
+    sender_phone: payload.sender_phone || payload.sender?.phone,
+    message_id: payload.message_id || payload.message?.id || `sys-${Date.now()}`,
+    content: (payload.content || payload.message?.text || '').trim(),
+    timestamp: payload.timestamp || new Date().toISOString(),
+    metadata: payload.metadata,
   };
 }
 
-export const SystemAdapter: ProviderWebhookAdapter = {
+export const SystemAdapter: ProviderWebhookAdapter<Record<string, unknown>> = {
   provider: 'SYSTEM',
   verifySignature: verifySystemSignature,
-  deriveTenant: (body: any) => body.company_id || null,
+  deriveTenant: (body: Record<string, unknown> | string) =>
+    typeof body === 'object' && body !== null && typeof body.company_id === 'string'
+      ? body.company_id
+      : null,
   parseToNormalized: parseSystemWebhookToNormalized,
 };
 
@@ -284,7 +302,24 @@ export async function ingestNormalizedEvent(
       ? (optionsOrClient as SupabaseClient)
       : (optionsOrClient as IngressOptions)?.client;
 
-  // Bắt buộc kiểm tra tenant isolation và định dạng UUID an toàn từ tầng adapter mapping (Fail-Closed)
+  // Kiểm tra cụ thể cho kênh FACEBOOK và ZALO (Lỗi P0 số 3: Tenant Authority)
+  const eventRecord = event as unknown as Record<string, unknown>;
+  const eventChannel = (
+    (typeof eventRecord.channel === 'string' ? eventRecord.channel : '') ||
+    event.provider ||
+    ''
+  ).toUpperCase();
+  if (eventChannel === 'FACEBOOK' || eventChannel === 'ZALO') {
+    if (!event.company_id || typeof event.company_id !== 'string' || !event.company_id.trim()) {
+      return {
+        success: false,
+        error: 'MISSING_COMPANY_ID',
+      };
+    }
+  }
+
+  // Khẳng định company_id không được phép để trống và phải là UUID hợp lệ (Fail-Closed)
+  // Tuyệt đối không tự suy đoán hoặc fallback về DEFAULT_COMPANY_ID
   if (!event.company_id || typeof event.company_id !== 'string' || !event.company_id.trim()) {
     return {
       success: false,
@@ -400,7 +435,6 @@ export async function ingestNormalizedEvent(
   try {
     // Ingress Sanitization: Làm sạch ngay tại thời điểm tiếp nhận (Zero-Phone Security Zone)
     const rawContent = event.content.trim();
-    const sanitizedContent = sanitizePhoneInText(rawContent);
 
     // Thêm tin nhắn và cập nhật/tạo mới cuộc hội thoại với đúng company_id (tự động phân tách raw/sanitized)
     // Lưu externalMessageId vào CSDL (external_ref và source_metadata) để phục vụ L2 Durable Idempotency
@@ -416,14 +450,15 @@ export async function ingestNormalizedEvent(
         timestamp: event.timestamp || new Date().toISOString(),
         externalMessageId: event.message_id,
       }, passedClient);
-    } catch (insertErr: any) {
+    } catch (insertErr: unknown) {
       // Xử lý xung đột ghi đồng thời (Concurrent Race Condition) vi phạm UNIQUE index uq_interactions_company_channel_ext_ref
-      const errMsg = String(insertErr?.message || '');
+      const errObj = insertErr as { message?: string; code?: string } | undefined;
+      const errMsg = String(errObj?.message || '');
       if (
         errMsg.includes('uq_interactions_company_channel_ext_ref') ||
         errMsg.includes('duplicate key') ||
         errMsg.includes('unique constraint') ||
-        insertErr?.code === '23505'
+        errObj?.code === '23505'
       ) {
         const concurrentMatch = await findExistingInteractionDurable(
           cleanCompanyId,

@@ -2,8 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import type { CustomerResponse, CustomerSource, CustomerStage } from '../types/customer.types';
-import { CUSTOMER_SOURCES, CUSTOMER_STAGES } from '../types/customer.types';
+import type { CustomerResponse } from '../types/customer.types';
 
 interface CustomerListProps {
   userRole?: string | null;
@@ -45,7 +44,7 @@ const STAGE_LABELS: Record<string, { label: string; color: string; border: strin
   CARE_NURTURING: { label: 'Chăm sóc định kỳ', color: 'text-pink-300', border: 'border-pink-700/40', bg: 'bg-pink-900/30' },
 };
 
-export default function CustomerList({ userRole, userFullName }: CustomerListProps) {
+export default function CustomerList({ userRole }: CustomerListProps) {
   const [customers, setCustomers] = useState<CustomerResponse[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +117,14 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
   }, [search, selectedSource, selectedStage, page, activeTab]);
 
   useEffect(() => {
-    fetchCustomers();
+    let isMounted = true;
+    const load = async () => {
+      if (isMounted) await fetchCustomers();
+    };
+    void load();
+    return () => {
+      isMounted = false;
+    };
   }, [fetchCustomers]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -161,7 +167,7 @@ export default function CustomerList({ userRole, userFullName }: CustomerListPro
       setCustomers((prev) =>
         prev.map((c) =>
           c.id === selectedCustomerForStage.id
-            ? { ...c, stage: targetStage as any }
+            ? { ...c, stage: targetStage as CustomerResponse['stage'] }
             : c
         )
       );

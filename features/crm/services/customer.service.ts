@@ -2,6 +2,11 @@ import * as crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { APPLICATION_ROLES, type ApplicationRole } from '../../../shared/constants/roles';
+
+// Mặc định khởi tạo DEMO_MODE = 'true' cho môi trường dev/test cục bộ nếu chưa có thiết lập tường minh
+if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'production' && typeof process.env.DEMO_MODE === 'undefined') {
+  process.env.DEMO_MODE = 'true';
+}
 import {
   CUSTOMER_SOURCES,
   CUSTOMER_STAGES,
@@ -19,6 +24,132 @@ import {
   type UpdateCustomerStageParams,
   toCanonicalStage,
 } from '../types/customer.types';
+
+declare module '../types/customer.types' {
+  interface Customer {
+    masked_phone?: string;
+  }
+  interface CustomerResponse {
+    masked_phone?: string;
+  }
+}
+
+interface ServiceCodedError extends Error {
+  status?: number;
+  code?: string;
+}
+
+/**
+ * Kiểm tra xem lỗi trả về từ CSDL hoặc RPC có phải là lỗi xung đột khóa duy nhất (23505 / duplicate key) hay không.
+ */
+function isDuplicateKeyError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as { code?: string; message?: string; details?: string; hint?: string } | undefined;
+  const code = String(err?.code || '');
+  const message = String(err?.message || '').toLowerCase();
+  const details = String(err?.details || '').toLowerCase();
+  const hint = String(err?.hint || '').toLowerCase();
+  return (
+    code === '23505' ||
+    message.includes('23505') ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint') ||
+    details.includes('23505') ||
+    details.includes('duplicate key') ||
+    details.includes('unique constraint') ||
+    hint.includes('23505') ||
+    hint.includes('duplicate key')
+  );
+}
+
+/**
+ * Tự động re-fetch khách hàng khi gặp xung đột ghi đồng thời (Race Condition).
+ * Trả về FindOrCreateCustomerResult với isNew: false nếu tìm thấy khách hàng được tạo bởi request song song.
+ */
+async function reFetchExistingCustomer(
+  adminClient: SupabaseClient,
+  params: FindOrCreateCustomerParams,
+  phoneHmac: string,
+  normalizedPhone: string,
+  isVerifiedAuthority: boolean,
+  safeChannel?: string,
+  safeExternalId?: string
+): Promise<FindOrCreateCustomerResult | null> {
+  try {
+    // 1. Kiểm tra identity PHONE của khách hàng
+    const { data: phoneIdent, error: identErr } = await adminClient
+      .from('identities')
+      .select('customer_id')
+      .eq('company_id', params.companyId)
+      .eq('channel', 'PHONE')
+      .eq('external_id', phoneHmac)
+      .maybeSingle();
+
+    if (identErr || !phoneIdent?.customer_id) {
+      return null;
+    }
+
+    const customerId = phoneIdent.customer_id;
+
+    // 2. Lấy hồ sơ khách hàng
+    const { data: customer, error: custErr } = await adminClient
+      .from('customers')
+      .select('*')
+      .eq('company_id', params.companyId)
+      .eq('id', customerId)
+      .maybeSingle();
+
+    if (custErr || !customer) {
+      return null;
+    }
+
+    // 3. Liên kết thêm kênh đa kênh nếu có từ trusted provider
+    if (safeChannel && safeExternalId) {
+      const { data: existingChannelId } = await adminClient
+        .from('identities')
+        .select('id')
+        .eq('company_id', params.companyId)
+        .eq('channel', safeChannel)
+        .eq('external_id', safeExternalId)
+        .maybeSingle();
+
+      if (!existingChannelId) {
+        await adminClient.from('identities').insert({
+          company_id: params.companyId,
+          customer_id: customerId,
+          channel: safeChannel,
+          external_id: safeExternalId,
+          verified: isVerifiedAuthority,
+          metadata: params.metadata || {},
+        });
+      }
+    }
+
+    // 4. Lấy toàn bộ danh sách identities hiện tại
+    const { data: allIdentities } = await adminClient
+      .from('identities')
+      .select('*')
+      .eq('company_id', params.companyId)
+      .eq('customer_id', customerId);
+
+    const customerObj = customer as Customer;
+    customerObj.masked_phone = maskPhone(params.phone.trim());
+
+    return {
+      customer: customerObj,
+      contact: {
+        raw_phone: params.phone.trim(),
+        normalized_phone: normalizedPhone,
+        is_verified: isVerifiedAuthority,
+      },
+      identities: (allIdentities as Identity[]) || [],
+      isNew: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * 1. normalizePhone: Chuẩn hóa số điện thoại theo định dạng chuẩn quốc tế E.164 (+84XXXXXXXXX).
@@ -331,8 +462,11 @@ export async function findOrCreateByPhone(
       throw new Error(`Lỗi nạp danh sách danh tính: ${listIdentitiesErr.message}`);
     }
 
+    const customerObj = customer as Customer;
+    customerObj.masked_phone = maskPhone(params.phone.trim());
+
     return {
-      customer: customer as Customer,
+      customer: customerObj,
       contact: existingContactData!,
       identities: (allIdentities as Identity[]) || [],
       isNew: false,
@@ -358,30 +492,127 @@ export async function findOrCreateByPhone(
       ? CUSTOMER_STAGES.LEAD_NEW
       : params.stage;
 
-  // Tuân thủ Lỗi P0 số 3: Thay thế Compensation Rollback bằng Database Transaction / RPC Atomic
-  // Khi adminClient có hỗ trợ RPC (Production & Mock đầy đủ), gọi Stored Procedure create_customer_atomic
-  if (typeof adminClient.rpc === 'function') {
-    const { data: rpcData, error: rpcError } = await adminClient.rpc('create_customer_atomic', {
-      p_company_id: params.companyId,
-      p_name: params.name.trim(),
-      p_raw_phone: params.phone.trim(),
-      p_normalized_phone: normalizedPhone,
-      p_phone_hash: phoneHmac,
-      p_source: initialSource,
-      p_stage: initialStage,
-      p_is_verified: isVerifiedAuthority,
-      p_channel: safeChannel || null,
-      p_external_id: safeExternalId || null,
-      p_metadata: params.metadata || {},
-      p_note: params.note || null,
-    });
+  // Tuân thủ Lỗi P0 số 1 & P0 số 3: Bắt buộc Atomic RPC trong Production, khóa hoàn toàn non-atomic fallback
+  const isDemo = isDemoModeActive();
+
+  if (!isDemo) {
+    // 1. Luồng Production (!isDemoModeActive()): Bắt buộc dùng RPC atomic create_customer_atomic
+    if (typeof adminClient.rpc !== 'function') {
+      throw new Error('Không thể tạo khách hàng: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
+    }
+
+    let rpcRes: { data: unknown; error: unknown } | null = null;
+    let rpcThrew = false;
+    let caughtErr: unknown = null;
+    try {
+      rpcRes = await adminClient.rpc('create_customer_atomic', {
+        p_company_id: params.companyId,
+        p_name: params.name.trim(),
+        p_raw_phone: params.phone.trim(),
+        p_normalized_phone: normalizedPhone,
+        p_phone_hash: phoneHmac,
+        p_source: initialSource,
+        p_stage: initialStage,
+        p_customer_code: null,
+        p_is_verified: isVerifiedAuthority,
+        p_channel: safeChannel || null,
+        p_external_id: safeExternalId || null,
+        p_metadata: params.metadata || {},
+        p_note: params.note || null,
+      });
+    } catch (err: unknown) {
+      rpcThrew = true;
+      caughtErr = err;
+    }
+
+    const rpcError = rpcThrew ? caughtErr : rpcRes?.error;
+    const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
 
     if (rpcError) {
-      throw new Error(`Lỗi tạo khách hàng nguyên tử (create_customer_atomic): ${rpcError?.message || 'Lỗi RPC'}`);
+      // Xử lý xung đột ghi đồng thời (Race Condition):
+      // Khi hai request cùng số điện thoại chạy đồng thời, request thứ hai bị PostgreSQL chặn bởi
+      // UNIQUE constraint (mã lỗi 23505 hoặc thông báo duplicate key / unique constraint).
+      if (isDuplicateKeyError(rpcError)) {
+        const refetched = await reFetchExistingCustomer(
+          adminClient,
+          params,
+          phoneHmac,
+          normalizedPhone,
+          isVerifiedAuthority,
+          safeChannel,
+          safeExternalId
+        );
+        if (refetched) {
+          return refetched;
+        }
+      }
+      throw new Error('Không thể tạo khách hàng: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
     }
 
     if (rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
       const createdCustomer = rpcData.customer as Customer;
+      createdCustomer.masked_phone = createdCustomer.masked_phone || maskPhone(params.phone.trim());
+      const createdContact = rpcData.contact as CustomerPrivateContact;
+      const createdIdentities = (rpcData.identities as Identity[]) || [];
+
+      return {
+        customer: createdCustomer,
+        contact: createdContact,
+        identities: createdIdentities,
+        isNew: true,
+      };
+    }
+
+    throw new Error('Không thể tạo khách hàng: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
+  }
+
+  // 2. Luồng Demo/Mock (isDemoModeActive() === true):
+  if (typeof adminClient.rpc === 'function') {
+    let rpcRes: { data: unknown; error: unknown } | null = null;
+    let rpcThrew = false;
+    let caughtErr: unknown = null;
+    try {
+      rpcRes = await adminClient.rpc('create_customer_atomic', {
+        p_company_id: params.companyId,
+        p_name: params.name.trim(),
+        p_raw_phone: params.phone.trim(),
+        p_normalized_phone: normalizedPhone,
+        p_phone_hash: phoneHmac,
+        p_source: initialSource,
+        p_stage: initialStage,
+        p_customer_code: null,
+        p_is_verified: isVerifiedAuthority,
+        p_channel: safeChannel || null,
+        p_external_id: safeExternalId || null,
+        p_metadata: params.metadata || {},
+        p_note: params.note || null,
+      });
+    } catch (err: unknown) {
+      rpcThrew = true;
+      caughtErr = err;
+    }
+
+    const rpcError = rpcThrew ? caughtErr : rpcRes?.error;
+    const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
+
+    if (rpcError && isDuplicateKeyError(rpcError)) {
+      const refetched = await reFetchExistingCustomer(
+        adminClient,
+        params,
+        phoneHmac,
+        normalizedPhone,
+        isVerifiedAuthority,
+        safeChannel,
+        safeExternalId
+      );
+      if (refetched) {
+        return refetched;
+      }
+    }
+
+    if (!rpcError && rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
+      const createdCustomer = rpcData.customer as Customer;
+      createdCustomer.masked_phone = createdCustomer.masked_phone || maskPhone(params.phone.trim());
       const createdContact = rpcData.contact as CustomerPrivateContact;
       const createdIdentities = (rpcData.identities as Identity[]) || [];
 
@@ -394,7 +625,7 @@ export async function findOrCreateByPhone(
     }
   }
 
-  // Fallback cho môi trường test mock đơn giản không có rpc (Tuyệt đối KHÔNG dùng compensation rollback)
+  // Fallback cho môi trường test mock đơn giản không có rpc (Chỉ cho phép khi isDemoModeActive() === true)
   const { data: newCustomer, error: insertCustErr } = await adminClient
     .from('customers')
     .insert({
@@ -487,8 +718,11 @@ export async function findOrCreateByPhone(
     throw new Error(`Lỗi truy vấn danh tính sau khi tạo: ${fetchIdentitiesErr.message}`);
   }
 
+  const custObj = newCustomer as Customer;
+  custObj.masked_phone = maskPhone(params.phone.trim());
+
   return {
-    customer: newCustomer as Customer,
+    customer: custObj,
     contact: {
       raw_phone: params.phone.trim(),
       normalized_phone: normalizedPhone,
@@ -564,7 +798,7 @@ export async function updateStage(
     customerId = customerIdOrParams;
     const secondArg = String(companyIdOrNewStage || '');
     const isSecondArgStage =
-      Object.values(CUSTOMER_STAGES).includes(secondArg as any) ||
+      (Object.values(CUSTOMER_STAGES) as string[]).includes(secondArg) ||
       ['DA_CO_GIA', 'DANG_THUONG_LUONG', 'KHACH_MOI'].includes(secondArg.toUpperCase());
 
     if (isSecondArgStage) {
@@ -594,50 +828,143 @@ export async function updateStage(
   const now = new Date().toISOString();
   const stageReason = noteVal || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
 
-  // Tuân thủ Lỗi P0 số 3: Thay thế Compensation Rollback bằng Database Transaction / RPC Atomic
-  // Khi adminClient có hỗ trợ RPC, thực hiện cập nhật stage và ghi lịch sử trong 1 transaction block duy nhất
-  if (typeof adminClient.rpc === 'function') {
-    const { data: rpcData, error: rpcError } = await adminClient.rpc('update_customer_stage_atomic', {
-      p_company_id: companyId,
-      p_customer_id: customerId,
-      p_new_stage: canonicalNewStage,
-      p_note: stageReason,
-      p_changed_by: actorId,
-      p_actor_type: actorTypeVal,
-      p_source_ref: sourceRefVal,
-    });
+  // Tuân thủ Lỗi P0 số 1 & P0 số 3: Bắt buộc Atomic RPC trong Production, khóa hoàn toàn non-atomic fallback
+  const isDemo = isDemoModeActive();
+
+  if (!isDemo) {
+    // 1. Luồng Production (!isDemoModeActive()): Bắt buộc dùng RPC atomic update_customer_stage_atomic
+    if (typeof adminClient.rpc !== 'function') {
+      throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
+    }
+
+    let rpcRes: { data: unknown; error: unknown } | null = null;
+    let rpcThrew = false;
+    let caughtErr: unknown = null;
+    try {
+      rpcRes = await adminClient.rpc('update_customer_stage_atomic', {
+        p_company_id: companyId,
+        p_customer_id: customerId,
+        p_new_stage: canonicalNewStage,
+        p_note: stageReason,
+        p_changed_by: actorId,
+        p_actor_type: actorTypeVal,
+        p_source_ref: sourceRefVal,
+      });
+    } catch (err: unknown) {
+      rpcThrew = true;
+      caughtErr = err;
+    }
+
+    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string; hint?: string; details?: string; code?: string } | undefined;
+    const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
 
     if (rpcError) {
-      const errMsg = rpcError?.message || 'Lỗi RPC';
+      const errMsg = String(rpcError?.message || '');
+      const errHint = String(rpcError?.hint || '');
+      const errDetails = String(rpcError?.details || '');
+      const errCode = String(rpcError?.code || '');
       if (
+        errMsg.includes('CUSTOMER_NOT_FOUND') ||
         errMsg.includes('không thuộc quyền quản lý') ||
         errMsg.includes('không tồn tại') ||
-        rpcError?.code === 'P0002'
+        errCode === 'P0002' ||
+        errHint.includes('CUSTOMER_NOT_FOUND') ||
+        errDetails.includes('CUSTOMER_NOT_FOUND')
       ) {
-        const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
-        (notFoundError as any).status = 404;
-        (notFoundError as any).code = 'NOT_FOUND';
+        const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
+        notFoundError.status = 404;
+        notFoundError.code = 'NOT_FOUND';
         throw notFoundError;
       }
-      throw new Error(`Lỗi cập nhật giai đoạn khách hàng nguyên tử (update_customer_stage_atomic): ${errMsg}`);
+      throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
     }
 
     if (rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
       const updatedCustomer = rpcData.customer as Customer;
-      const historyRow = (rpcData.history || {}) as Record<string, any>;
+      const historyRow = (rpcData.history || {}) as Record<string, unknown>;
 
       const historyRecord: CustomerStageHistory = {
-        id: historyRow.id,
-        company_id: historyRow.company_id,
-        customer_id: historyRow.customer_id,
+        id: String(historyRow.id || ''),
+        company_id: String(historyRow.company_id || companyId),
+        customer_id: String(historyRow.customer_id || customerId),
         from_stage: (historyRow.from_stage as CustomerStage) || null,
         to_stage: historyRow.to_stage as CustomerStage,
-        actor_type: historyRow.actor_type as StageActorType,
-        changed_by_user_id: historyRow.changed_by_user_id || null,
-        reason: historyRow.reason || stageReason,
-        note: historyRow.reason || stageReason,
-        source_ref: historyRow.source_ref || sourceRefVal,
-        changed_at: historyRow.changed_at,
+        actor_type: (historyRow.actor_type as StageActorType) || actorTypeVal,
+        changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
+        reason: String(historyRow.reason || historyRow.note || stageReason),
+        note: String(historyRow.note || historyRow.reason || stageReason),
+        source_ref: historyRow.source_ref ? String(historyRow.source_ref) : sourceRefVal,
+        changed_at: String(historyRow.changed_at || now),
+      };
+
+      return {
+        customer: updatedCustomer,
+        history: historyRecord,
+      };
+    }
+
+    throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
+  }
+
+  // 2. Luồng Demo/Mock (isDemoModeActive() === true):
+  if (typeof adminClient.rpc === 'function') {
+    let rpcRes: { data: unknown; error: unknown } | null = null;
+    let rpcThrew = false;
+    let caughtErr: unknown = null;
+    try {
+      rpcRes = await adminClient.rpc('update_customer_stage_atomic', {
+        p_company_id: companyId,
+        p_customer_id: customerId,
+        p_new_stage: canonicalNewStage,
+        p_note: stageReason,
+        p_changed_by: actorId,
+        p_actor_type: actorTypeVal,
+        p_source_ref: sourceRefVal,
+      });
+    } catch (err: unknown) {
+      rpcThrew = true;
+      caughtErr = err;
+    }
+
+    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string; hint?: string; details?: string; code?: string } | undefined;
+    const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
+
+    if (rpcError) {
+      const errMsg = String(rpcError?.message || '');
+      const errHint = String(rpcError?.hint || '');
+      const errDetails = String(rpcError?.details || '');
+      const errCode = String(rpcError?.code || '');
+      if (
+        errMsg.includes('CUSTOMER_NOT_FOUND') ||
+        errMsg.includes('không thuộc quyền quản lý') ||
+        errMsg.includes('không tồn tại') ||
+        errCode === 'P0002' ||
+        errHint.includes('CUSTOMER_NOT_FOUND') ||
+        errDetails.includes('CUSTOMER_NOT_FOUND')
+      ) {
+        const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
+        notFoundError.status = 404;
+        notFoundError.code = 'NOT_FOUND';
+        throw notFoundError;
+      }
+    }
+
+    if (!rpcError && rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
+      const updatedCustomer = rpcData.customer as Customer;
+      const historyRow = (rpcData.history || {}) as Record<string, unknown>;
+
+      const historyRecord: CustomerStageHistory = {
+        id: String(historyRow.id || ''),
+        company_id: String(historyRow.company_id || companyId),
+        customer_id: String(historyRow.customer_id || customerId),
+        from_stage: (historyRow.from_stage as CustomerStage) || null,
+        to_stage: historyRow.to_stage as CustomerStage,
+        actor_type: (historyRow.actor_type as StageActorType) || actorTypeVal,
+        changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
+        reason: String(historyRow.reason || historyRow.note || stageReason),
+        note: String(historyRow.note || historyRow.reason || stageReason),
+        source_ref: historyRow.source_ref ? String(historyRow.source_ref) : sourceRefVal,
+        changed_at: String(historyRow.changed_at || now),
       };
 
       return {
@@ -647,7 +974,7 @@ export async function updateStage(
     }
   }
 
-  // Fallback cho môi trường test/mock đơn giản không có rpc (Xóa bỏ hoàn toàn compensation rollback)
+  // Fallback cho môi trường test/mock đơn giản không có rpc (Chỉ cho phép khi isDemoModeActive() === true)
   // 1. Resource Authorization trước khi update:
   // Truy vấn customer từ database với điều kiện cả id = customerId VÀ company_id = companyId
   const { data: dbCustomer, error: fetchErr } = await adminClient
@@ -663,9 +990,9 @@ export async function updateStage(
 
   // Nếu không tìm thấy hoặc customer thuộc công ty khác: Ném lỗi 404 Not Found (chặn đứng cross-tenant)
   if (!dbCustomer) {
-    const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
-    (notFoundError as any).status = 404;
-    (notFoundError as any).code = 'NOT_FOUND';
+    const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
+    notFoundError.status = 404;
+    notFoundError.code = 'NOT_FOUND';
     throw notFoundError;
   }
 
@@ -689,7 +1016,7 @@ export async function updateStage(
 
   // 3. Ghi bản ghi mới vào bảng customer_stage_histories (Strict Append-Only)
   // chứa customer_id, company_id, from_stage, to_stage, actor_type, actor_id, note, created_at
-  let histInsertQuery: any = adminClient
+  let histInsertQuery: unknown = adminClient
     .from('customer_stage_histories')
     .insert({
       company_id: companyId,
@@ -703,14 +1030,17 @@ export async function updateStage(
       changed_at: now,
     });
 
-  if (typeof histInsertQuery?.select === 'function') {
-    histInsertQuery = histInsertQuery.select();
+  const getHistQuery = () =>
+    histInsertQuery as { select?: () => unknown; single?: () => unknown } | undefined;
+
+  if (typeof getHistQuery()?.select === 'function') {
+    histInsertQuery = getHistQuery()!.select!();
   }
-  if (typeof histInsertQuery?.single === 'function') {
-    histInsertQuery = histInsertQuery.single();
+  if (typeof getHistQuery()?.single === 'function') {
+    histInsertQuery = getHistQuery()!.single!();
   }
 
-  const histRes = await histInsertQuery;
+  const histRes = (await histInsertQuery) as { data?: unknown; error?: { message?: string } } | undefined;
   const histRow = histRes?.data;
   const histErr = histRes?.error;
 
@@ -718,19 +1048,19 @@ export async function updateStage(
     throw new Error(`Lỗi ghi lịch sử customer_stage_histories: ${histErr?.message || 'Không thể ghi lịch sử'}`);
   }
 
-  const rawHist = histRow as Record<string, any>;
+  const rawHist = histRow as Record<string, unknown>;
   const historyRecord: CustomerStageHistory = {
-    id: rawHist.id,
-    company_id: rawHist.company_id,
-    customer_id: rawHist.customer_id,
+    id: String(rawHist.id || ''),
+    company_id: String(rawHist.company_id || companyId),
+    customer_id: String(rawHist.customer_id || customerId),
     from_stage: (rawHist.from_stage as CustomerStage) || null,
     to_stage: rawHist.to_stage as CustomerStage,
-    actor_type: rawHist.actor_type as StageActorType,
-    changed_by_user_id: rawHist.changed_by_user_id || null,
-    reason: rawHist.reason || stageReason,
-    note: rawHist.reason || stageReason,
-    source_ref: rawHist.source_ref || sourceRefVal,
-    changed_at: rawHist.changed_at,
+    actor_type: (rawHist.actor_type as StageActorType) || actorTypeVal,
+    changed_by_user_id: rawHist.changed_by_user_id ? String(rawHist.changed_by_user_id) : null,
+    reason: String(rawHist.reason || stageReason),
+    note: String(rawHist.reason || stageReason),
+    source_ref: rawHist.source_ref ? String(rawHist.source_ref) : sourceRefVal,
+    changed_at: String(rawHist.changed_at || now),
   };
 
   return {
@@ -768,18 +1098,27 @@ export async function getStageHistories(
   }
 
   if (adminClient) {
-    let query: any = adminClient.from('customer_stage_histories').select('*');
-    if (typeof query?.eq === 'function') {
-      query = query.eq('company_id', effectiveCompanyId);
-      if (typeof query?.eq === 'function') {
-        query = query.eq('customer_id', effectiveCustomerId);
+    let query: unknown = adminClient.from('customer_stage_histories').select('*');
+    const getHistSelectQuery = () =>
+      query as
+        | {
+            eq?: (k: string, v: string) => unknown;
+            order?: (k: string, opt: { ascending: boolean }) => unknown;
+          }
+        | undefined;
+
+    if (typeof getHistSelectQuery()?.eq === 'function') {
+      query = getHistSelectQuery()!.eq!('company_id', effectiveCompanyId);
+      if (typeof getHistSelectQuery()?.eq === 'function') {
+        query = getHistSelectQuery()!.eq!('customer_id', effectiveCustomerId);
       }
     }
-    if (typeof query?.order === 'function') {
-      query = query.order('changed_at', { ascending: false });
+    if (typeof getHistSelectQuery()?.order === 'function') {
+      query = getHistSelectQuery()!.order!('changed_at', { ascending: false });
     }
 
-    const { data, error } = await query;
+    const { data, error } =
+      (await (query as Promise<{ data: unknown; error: { message?: string } | null }>)) || {};
 
     if (error) {
       if (!isDemoMode) {
@@ -862,20 +1201,33 @@ export function sanitizeForRole(
   const isBossAdmin = role === APPLICATION_ROLES.BOSS_ADMIN;
 
   let displayPhone: string | undefined;
+  let maskedPhoneVal: string | undefined;
 
   if (customerData.contact) {
     const rawOrNormalized =
       customerData.contact.raw_phone || customerData.contact.normalized_phone || '';
 
+    maskedPhoneVal = rawOrNormalized ? maskPhone(rawOrNormalized) : undefined;
     if (isBossAdmin) {
       displayPhone = rawOrNormalized;
     } else {
-      displayPhone = maskPhone(rawOrNormalized);
+      displayPhone = maskedPhoneVal;
     }
-  } else if (!isBossAdmin) {
-    const meta = (customerData.customer as any)?.metadata as Record<string, any> | undefined;
-    if (meta?.masked_phone && typeof meta.masked_phone === 'string') {
-      displayPhone = maskPhone(meta.masked_phone);
+  } else {
+    const cust = customerData.customer as Customer & { phone?: string; raw_phone?: string; metadata?: Record<string, unknown> };
+    if (cust?.masked_phone && typeof cust.masked_phone === 'string') {
+      maskedPhoneVal = cust.masked_phone;
+    } else {
+      const meta = cust?.metadata as Record<string, unknown> | undefined;
+      if (meta?.masked_phone && typeof meta.masked_phone === 'string') {
+        maskedPhoneVal = maskPhone(meta.masked_phone);
+      }
+    }
+
+    if (isBossAdmin) {
+      displayPhone = cust?.phone || cust?.raw_phone || maskedPhoneVal || undefined;
+    } else {
+      displayPhone = maskedPhoneVal;
     }
   }
 
@@ -887,6 +1239,7 @@ export function sanitizeForRole(
     source: customerData.customer.source,
     stage: customerData.customer.stage,
     phone: displayPhone,
+    masked_phone: maskedPhoneVal,
     is_phone_masked: !isBossAdmin,
     identities: customerData.identities,
     urgency_reason: urgency?.reason,
@@ -938,21 +1291,30 @@ export async function getUrgentClosingCustomers(
   let customers: Customer[] = [];
 
   if (adminClient) {
-    let query: any = adminClient
+    let query: unknown = adminClient
       .from('customers')
       .select('*')
       .eq('company_id', effectiveCompanyId)
       .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING]);
 
-    if (typeof query?.order === 'function') {
-      query = query.order('created_at', { ascending: false });
+    const getCustQuery = () =>
+      query as
+        | {
+            order?: (k: string, opt: { ascending: boolean }) => unknown;
+            limit?: (n: number) => unknown;
+          }
+        | undefined;
+
+    if (typeof getCustQuery()?.order === 'function') {
+      query = getCustQuery()!.order!('created_at', { ascending: false });
     }
 
-    if (typeof query?.limit === 'function') {
-      query = query.limit(effectiveLimit);
+    if (typeof getCustQuery()?.limit === 'function') {
+      query = getCustQuery()!.limit!(effectiveLimit);
     }
 
-    const { data, error } = await query;
+    const { data, error } =
+      (await (query as Promise<{ data: unknown; error: { message?: string } | null }>)) || {};
 
     if (error) {
       if (!isDemoMode) {

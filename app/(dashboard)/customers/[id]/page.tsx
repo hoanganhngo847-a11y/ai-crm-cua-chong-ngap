@@ -231,8 +231,8 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         displayPhone = rawPhone;
       } else {
         // SALE: Tuân thủ Zero-Phone, chỉ hiển thị masked_phone từ metadata (nếu có), không bao giờ resolve contact
-        const meta = dbCustomer.metadata as Record<string, any> | undefined;
-        displayPhone = meta?.masked_phone ? maskPhone(meta.masked_phone) : '';
+        const meta = dbCustomer.metadata as Record<string, unknown> | undefined;
+        displayPhone = typeof meta?.masked_phone === 'string' ? maskPhone(meta.masked_phone) : '';
       }
 
       const { data: identities, error: identitiesErr } = await adminClient

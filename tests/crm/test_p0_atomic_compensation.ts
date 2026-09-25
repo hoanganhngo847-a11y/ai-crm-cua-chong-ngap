@@ -7,12 +7,14 @@ async function runAtomicCompensationTests() {
   console.log('STARTING P0 TEST SUITE: ATOMIC DATABASE TRANSACTIONS & RPC ROLLBACK');
   console.log('======================================================================');
 
+  delete process.env.DEMO_MODE; // Non-demo mode (Production)
+  delete process.env.NEXT_PUBLIC_DEMO_MODE;
   process.env.PHONE_HASH_SECRET = process.env.PHONE_HASH_SECRET || 'ai-crm-phone-hmac-secret-v1';
   const companyId = '11111111-1111-1111-1111-111111111111';
 
   // ============================================================================
   // TEST SECTION 1: updateStage ATOMIC TRANSACTION & DATABASE ROLLBACK
-  // Tuân thủ Lỗi P0 số 3: RPC update_customer_stage_atomic thay thế rollback thủ công
+  // Tuân thủ Lỗi P0 số 3 & P0 số 1: RPC update_customer_stage_atomic thay thế rollback thủ công
   // ============================================================================
   console.log('\n--- Test 1: updateStage Atomic Transaction on update_customer_stage_atomic RPC ---');
 
@@ -127,8 +129,8 @@ async function runAtomicCompensationTests() {
         },
         mockClientWithFailure
       ),
-    /update_customer_stage_atomic/,
-    'updateStage must re-throw error when update_customer_stage_atomic RPC fails'
+    /Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'updateStage must throw Fail-Closed error when update_customer_stage_atomic RPC fails'
   );
 
   assert(mockClientWithFailure.wasRpcCalled(), 'update_customer_stage_atomic RPC must be invoked on failure');
@@ -149,6 +151,65 @@ async function runAtomicCompensationTests() {
     'customer_stage_histories must remain empty (zero partial records committed in DB)'
   );
   console.log('✓ 1b. PASS: When RPC fails, database transaction rolls back and customers.stage remains at oldStage (LEAD_NEW)!');
+
+  // 1c. Missing RPC method on adminClient -> Fail-Closed immediately in production (DEMO_MODE !== 'true')
+  const mockClientWithoutRpc = {
+    from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ single: async () => ({}) }) }) }) }),
+  } as any;
+
+  await assert.rejects(
+    async () =>
+      CustomerService.updateStage(
+        {
+          customerId: 'cust-atomic-001',
+          companyId: companyId,
+          newStage: CUSTOMER_STAGES.CONTRACT_SIGNED,
+        },
+        mockClientWithoutRpc
+      ),
+    /Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'updateStage must throw Fail-Closed error immediately when RPC method is missing in production'
+  );
+  assert.strictEqual(
+    dbState.customers[0].stage,
+    CUSTOMER_STAGES.LEAD_NEW,
+    'Missing RPC must not mutate customer.stage'
+  );
+  console.log('✓ 1c. PASS: When RPC method is missing in production, updateStage throws Fail-Closed immediately!');
+
+  // 1d. Error Mapping: Customer not found / cross-tenant in RPC -> throws 404 NOT_FOUND
+  const mockClientNotFound = {
+    rpc: async (fnName: string) => {
+      assert.strictEqual(fnName, 'update_customer_stage_atomic');
+      return {
+        data: null,
+        error: {
+          message: 'CUSTOMER_NOT_FOUND: Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.',
+          code: 'P0002',
+          hint: 'CUSTOMER_NOT_FOUND',
+        },
+      };
+    },
+  } as any;
+
+  await assert.rejects(
+    async () =>
+      CustomerService.updateStage(
+        {
+          customerId: 'cust-cross-tenant-999',
+          companyId: companyId,
+          newStage: CUSTOMER_STAGES.PRICE_OFFERED,
+        },
+        mockClientNotFound
+      ),
+    (err: any) => {
+      assert.strictEqual(err.status, 404, 'Must map CUSTOMER_NOT_FOUND to HTTP 404');
+      assert.strictEqual(err.code, 'NOT_FOUND', 'Must have error code NOT_FOUND');
+      return true;
+    },
+    'updateStage must throw 404 NOT_FOUND when customer does not exist or is cross-tenant'
+  );
+  console.log('✓ 1d. PASS: updateStage accurately maps RPC CUSTOMER_NOT_FOUND to 404 NOT_FOUND!');
 
   // ============================================================================
   // TEST SECTION 2: findOrCreateByPhone ATOMIC TRANSACTION & DATABASE ROLLBACK
@@ -291,8 +352,8 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailIdentity as any
       ),
-    /create_customer_atomic/,
-    'findOrCreateByPhone must throw error when identities step fails in RPC'
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error when identities step fails in RPC'
   );
 
   assert(mockCreationFailIdentity.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
@@ -325,8 +386,8 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailStage as any
       ),
-    /create_customer_atomic/,
-    'findOrCreateByPhone must throw error when stage history step fails in RPC'
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error when stage history step fails in RPC'
   );
 
   assert(mockCreationFailStage.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
@@ -350,8 +411,8 @@ async function runAtomicCompensationTests() {
         },
         mockCreationFailPrivate as any
       ),
-    /create_customer_atomic/,
-    'findOrCreateByPhone must throw error when private contact step fails in RPC'
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error when private contact step fails in RPC'
   );
 
   assert(mockCreationFailPrivate.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
@@ -380,11 +441,173 @@ async function runAtomicCompensationTests() {
   assert(mockCreationSuccess.wasRpcCalled(), 'create_customer_atomic RPC must be invoked');
   assert.strictEqual(createResult.isNew, true);
   assert.strictEqual(createResult.customer.name, 'Khách Hàng Thành Công');
+  assert(createResult.customer.masked_phone, 'customer.masked_phone must be populated in createResult');
+  assert.strictEqual(createResult.customer.masked_phone, '09******52', 'customer.masked_phone must be formatted');
   assert.strictEqual(mockCreationSuccess.memory.customers.length, 1);
   assert.strictEqual(mockCreationSuccess.memory.customer_private_contacts.length, 1);
   assert.strictEqual(mockCreationSuccess.memory.identities.length, 1);
   assert.strictEqual(mockCreationSuccess.memory.customer_stage_histories.length, 1);
   console.log('✓ 2d. PASS: Happy path create_customer_atomic RPC creates all entities in single atomic transaction!');
+
+  // 2e. Missing RPC method on adminClient in production (DEMO_MODE !== 'true') -> Fail-Closed immediately
+  const mockCreationNoRpc = {
+    from: () => ({
+      select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) }),
+    }),
+  } as any;
+
+  await assert.rejects(
+    async () =>
+      CustomerService.findOrCreateByPhone(
+        {
+          companyId,
+          name: 'Khách Không RPC',
+          phone: '0988776651',
+        },
+        mockCreationNoRpc
+      ),
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'findOrCreateByPhone must throw Fail-Closed error immediately when RPC method is missing in production'
+  );
+  console.log('✓ 2e. PASS: When RPC method is missing in production, findOrCreateByPhone throws Fail-Closed immediately (Zero non-atomic fallback)!');
+
+  // 2f. Race condition handling in findOrCreateByPhone:
+  // Khi hai request cùng số điện thoại chạy đồng thời, request thứ hai gặp lỗi UNIQUE constraint (23505).
+  // Hệ thống tự động re-fetch khách hàng được tạo bởi request song song đó, trả về isNew: false và đầy đủ masked_phone.
+  console.log('\n--- Test 2f: Concurrent Race Condition (23505 Duplicate Key) Auto Re-Fetch ---');
+
+  const parallelExistingCustomer = {
+    id: 'cust-parallel-race-888',
+    company_id: companyId,
+    customer_code: 'KH-888888',
+    name: 'Khách Hàng Song Song',
+    source: 'FACEBOOK',
+    stage: CUSTOMER_STAGES.LEAD_NEW,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const parallelIdentities = [
+    {
+      id: 'ident-parallel-phone',
+      company_id: companyId,
+      customer_id: 'cust-parallel-race-888',
+      channel: 'PHONE',
+      external_id: 'any-hash',
+      verified: false,
+      metadata: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+  ];
+
+  let initialCheckDone = false;
+  const mockRaceConditionClient = {
+    from: (table: string) => {
+      if (table === 'identities') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => {
+                    // Check ban đầu: chưa có (mô phỏng race condition: 2 request cùng vào tại thời điểm 0)
+                    if (!initialCheckDone) {
+                      initialCheckDone = true;
+                      return { data: null, error: null };
+                    }
+                    // Re-fetch sau khi RPC bị chặn bởi UNIQUE constraint: đã có customer_id do request 1 tạo
+                    return { data: { customer_id: parallelExistingCustomer.id }, error: null };
+                  },
+                }),
+              }),
+            }),
+            in: () => ({ data: parallelIdentities, error: null }),
+          }),
+        };
+      }
+      if (table === 'customers') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: { ...parallelExistingCustomer }, error: null }),
+              }),
+            }),
+          }),
+        };
+      }
+      return {};
+    },
+    rpc: async (fnName: string) => {
+      assert.strictEqual(fnName, 'create_customer_atomic', 'Must invoke create_customer_atomic RPC');
+      // Mô phỏng PostgreSQL UNIQUE constraint violation (23505) do request song song đã chèn trước đó
+      return {
+        data: null,
+        error: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "identities_company_id_channel_external_id_key"',
+          details: 'Key (company_id, channel, external_id)=(...) already exists.',
+        },
+      };
+    },
+  } as any;
+
+  const raceResult = await CustomerService.findOrCreateByPhone(
+    {
+      companyId,
+      name: 'Khách Hàng Song Song',
+      phone: '0977665544',
+      source: 'FACEBOOK',
+    },
+    mockRaceConditionClient
+  );
+
+  assert.strictEqual(raceResult.isNew, false, 'Race condition re-fetch must return isNew = false');
+  assert.strictEqual(raceResult.customer.id, 'cust-parallel-race-888', 'Must resolve to existing customer from parallel request');
+  assert.strictEqual(raceResult.customer.name, 'Khách Hàng Song Song');
+  assert(raceResult.customer.masked_phone, 'customer.masked_phone must be populated in race condition re-fetch');
+  assert.strictEqual(raceResult.customer.masked_phone, '09******44', 'customer.masked_phone must be properly masked');
+  assert.strictEqual(raceResult.contact.raw_phone, '0977665544');
+  console.log('✓ 2f. PASS: Concurrent 23505 duplicate key error automatically re-fetches parallel customer with isNew: false and masked_phone!');
+
+  // 2g. Non-23505 error in RPC still Fails-Closed
+  console.log('\n--- Test 2g: Non-Duplicate RPC Error Fails-Closed ---');
+  const mockSystemErrorClient = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: null, error: null }),
+            }),
+          }),
+        }),
+      }),
+    }),
+    rpc: async () => ({
+      data: null,
+      error: {
+        code: '58030',
+        message: 'io_error: could not write to file "base/...": No space left on device',
+      },
+    }),
+  } as any;
+
+  await assert.rejects(
+    async () =>
+      CustomerService.findOrCreateByPhone(
+        {
+          companyId,
+          name: 'Khách Disk Full',
+          phone: '0977665543',
+        },
+        mockSystemErrorClient
+      ),
+    /Không thể tạo khách hàng: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'Non-23505 error must fail-closed'
+  );
+  console.log('✓ 2g. PASS: System error (non-duplicate) in RPC strictly throws Fail-Closed (Zero data leakage)!');
 
   console.log('\n======================================================================');
   console.log('>>> ALL P0 ATOMIC DATABASE TRANSACTIONS & RPC TESTS PASSED (100%) <<<');

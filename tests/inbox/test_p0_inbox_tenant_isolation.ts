@@ -266,6 +266,13 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(dataPostOwn.success, true);
   assert.strictEqual(dataPostOwn.data.company_id, companyA);
   assert.strictEqual(dataPostOwn.data.conversation_id, 'conv-a-1');
+  assert.strictEqual(dataPostOwn.data.delivery_status, 'PENDING_DISPATCH', 'delivery_status must be PENDING_DISPATCH');
+  assert.strictEqual(dataPostOwn.data.raw_content, undefined, 'raw_content must NOT be present in response DTO');
+  assert.strictEqual(
+    dataPostOwn.message,
+    'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
+    'Response message must reflect outbound dispatch queue status'
+  );
   console.log('✓ PASS 3a: Valid tenant POST sends message successfully (201)');
 
   // 3b. Company B user attempting to send message to Company A conversation: 404 NOT_FOUND
@@ -381,7 +388,7 @@ async function runInboxTenantIsolationTests() {
   delete process.env.DEMO_MODE; // Non-demo mode (Production persistence)
 
   let queriedPrivateSchema = false;
-  const mockDbCalls: { table?: string; action?: string; company_id?: string; schema?: string; record?: any }[] = [];
+  const mockDbCalls: { table?: string; action?: string; company_id?: string; schema?: string; record?: any; fnName?: string; params?: any }[] = [];
 
   const mockDbClient: any = {
     simulateAuditError: false,
@@ -509,6 +516,37 @@ async function runInboxTenantIsolationTests() {
         }),
       }),
     }),
+    rpc: async (fnName: string, params: any) => {
+      mockDbCalls.push({ action: 'rpc', fnName, params });
+      if (fnName === 'get_interaction_raw_content') {
+        return {
+          data: [{
+            interaction_id: params.p_interaction_id,
+            company_id: params.p_company_id,
+            raw_content: 'Raw phone 0912345678',
+          }],
+          error: null,
+        };
+      }
+      if (fnName === 'record_outbound_interaction_atomic') {
+        if ((mockDbClient as any).simulateOutboundError) {
+          return { data: null, error: new Error('Postgres disk error on raw_contents insert (Database Rollback)') };
+        }
+        if (params.p_conversation_id === 'conv-cross-tenant') {
+          return { data: null, error: { message: 'CONVERSATION_NOT_FOUND', code: 'P0002' } };
+        }
+        return {
+          data: {
+            interaction_id: 'int-rpc-outbound-1',
+            conversation_id: params.p_conversation_id,
+            customer_id: 'cust-1',
+            channel: 'ZALO',
+          },
+          error: null,
+        };
+      }
+      return { data: null, error: null };
+    },
   };
 
   // 5a. getConversations in DB mode filters strictly by companyId
@@ -525,23 +563,28 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(dbMsgsSale[0].sanitized_content, 'Số đã làm sạch 09******78');
   assert.strictEqual(dbMsgsSale[0].raw_content, undefined, 'raw_content must be undefined for SALE in DB mode');
   assert.strictEqual(queriedPrivateSchema, false, 'SALE query must NEVER access private schema');
+  assert(!mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'get_interaction_raw_content'), 'SALE query must NEVER call get_interaction_raw_content RPC');
   assert(!mockDbCalls.some((c) => c.table === 'audit_logs'), 'SALE query must NEVER trigger audit log insert');
   console.log('✓ PASS 5b: getMessagesByConversationId for SALE queries only public.interactions without private schema and zero audit log');
 
-  // 5c. getMessagesByConversationId for BOSS_ADMIN: accesses private.interaction_raw_contents and writes audit log
+  // 5c. getMessagesByConversationId for BOSS_ADMIN: calls canonical RPC get_interaction_raw_content and writes audit log
   queriedPrivateSchema = false;
   mockDbCalls.length = 0;
   const dbMsgsBoss = await InboxService.getMessagesByConversationId(companyA, 'conv-1', APPLICATION_ROLES.BOSS_ADMIN, mockDbClient, { userId: 'boss-user-id' });
   assert.strictEqual(dbMsgsBoss.length, 1);
   assert.strictEqual(dbMsgsBoss[0].raw_content, 'Raw phone 0912345678');
-  assert.strictEqual(queriedPrivateSchema, true, 'BOSS_ADMIN query must access private.interaction_raw_contents');
+  assert.strictEqual(queriedPrivateSchema, false, 'BOSS_ADMIN query must NEVER directly access private schema');
+  const rpcCall = mockDbCalls.find((c) => c.action === 'rpc' && c.fnName === 'get_interaction_raw_content');
+  assert(rpcCall, 'BOSS_ADMIN query must call canonical RPC get_interaction_raw_content');
+  assert.strictEqual(rpcCall.params.p_company_id, companyA);
+  assert.strictEqual(rpcCall.params.p_interaction_id, 'int-1');
   const auditCall = mockDbCalls.find((c) => c.table === 'audit_logs');
   assert(auditCall, 'BOSS_ADMIN query must record audit log in public.audit_logs');
   const auditRecord = Array.isArray(auditCall.record) ? auditCall.record[0] : auditCall.record;
   assert.strictEqual(auditRecord.action, 'VIEW_RAW_INTERACTION');
   assert.strictEqual(auditRecord.resource_id, 'int-1');
   assert.strictEqual(auditRecord.company_id, companyA);
-  console.log('✓ PASS 5c: getMessagesByConversationId for BOSS_ADMIN accesses private schema and successfully writes audit log');
+  console.log('✓ PASS 5c: getMessagesByConversationId for BOSS_ADMIN calls canonical RPC and successfully writes audit log with ZERO private schema access');
 
   // 5c-1. Fail-Closed: When audit log write fails, BOSS_ADMIN is BLOCKED (throws 500 AUDIT_WRITE_FAILED)
   mockDbClient.simulateAuditError = true;
@@ -572,6 +615,7 @@ async function runInboxTenantIsolationTests() {
   // 5c-3. Route level Happy Path: GET /api/inbox for BOSS_ADMIN with successful audit log
   mockDbClient.simulateAuditError = false;
   mockDbCalls.length = 0;
+  queriedPrivateSchema = false;
   const reqBossAuditSuccess = new NextRequest('http://localhost:3000/api/inbox?conversation_id=conv-1', { method: 'GET' });
   const resBossAuditSuccess = await inboxGetHandler(reqBossAuditSuccess, {
     actor: userBossCompanyA,
@@ -581,11 +625,14 @@ async function runInboxTenantIsolationTests() {
   const dataBossAuditSuccess = await resBossAuditSuccess.json();
   assert.strictEqual(dataBossAuditSuccess.success, true);
   assert.strictEqual(dataBossAuditSuccess.data.messages[0].raw_content, 'Raw phone 0912345678');
+  assert.strictEqual(queriedPrivateSchema, false, 'Route level GET for BOSS_ADMIN must NEVER query private schema');
+  assert(mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'get_interaction_raw_content'), 'Must call RPC get_interaction_raw_content');
   assert(mockDbCalls.some((c) => c.table === 'audit_logs'), 'Must record audit log in route level GET for BOSS_ADMIN');
-  console.log('✓ PASS 5c-3: Route level: BOSS_ADMIN accesses raw_content with audit log recorded');
+  console.log('✓ PASS 5c-3: Route level: BOSS_ADMIN accesses raw_content via canonical RPC with audit log recorded');
 
   // 5c-4. Route level SALE: GET /api/inbox for SALE receives zero raw_content and zero audit log
   mockDbCalls.length = 0;
+  queriedPrivateSchema = false;
   const reqSaleRoute = new NextRequest('http://localhost:3000/api/inbox?conversation_id=conv-1', { method: 'GET' });
   const resSaleRoute = await inboxGetHandler(reqSaleRoute, {
     actor: userSaleCompanyA,
@@ -596,10 +643,12 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(dataSaleRoute.success, true);
   assert.strictEqual(dataSaleRoute.data.messages[0].raw_content, undefined);
   assert.strictEqual(dataSaleRoute.data.messages[0].sanitized_content, 'Số đã làm sạch 09******78');
+  assert.strictEqual(queriedPrivateSchema, false, 'SALE query must NEVER query private schema');
+  assert(!mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'get_interaction_raw_content'), 'SALE route request must NEVER call get_interaction_raw_content RPC');
   assert(!mockDbCalls.some((c) => c.table === 'audit_logs'), 'SALE route request must NEVER record audit log');
   console.log('✓ PASS 5c-4: Route level: SALE receives only sanitized_content with zero audit trail');
 
-  // 5d. sendMessage in DB mode updates conversations, inserts public.interactions, and inserts private.interaction_raw_contents
+  // 5d. sendMessage in DB mode calls RPC record_outbound_interaction_atomic
   mockDbCalls.length = 0;
   const dbSentMsg = await InboxService.sendMessage(
     {
@@ -612,10 +661,31 @@ async function runInboxTenantIsolationTests() {
     mockDbClient
   );
   assert.strictEqual(dbSentMsg.sanitized_content, 'Tin nhắn gửi khách số 09******78');
-  assert(mockDbCalls.some((c) => c.table === 'conversations' && c.action === 'update'), 'Must update conversations');
-  assert(mockDbCalls.some((c) => c.table === 'interactions' && c.action === 'insert'), 'Must insert into public.interactions');
-  assert(mockDbCalls.some((c) => c.action === 'insert_private'), 'Must insert into private.interaction_raw_contents');
-  console.log('✓ PASS 5d: sendMessage persists to conversations, interactions, and private.interaction_raw_contents');
+  assert.strictEqual(dbSentMsg.delivery_status, 'PENDING_DISPATCH', 'delivery_status must be PENDING_DISPATCH');
+  assert.strictEqual(dbSentMsg.raw_content, undefined, 'raw_content must NOT be present in dbSentMsg DTO');
+  assert(mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'record_outbound_interaction_atomic'), 'Must call RPC record_outbound_interaction_atomic');
+  console.log('✓ PASS 5d: sendMessage persists to conversations, interactions, and private.interaction_raw_contents via atomic RPC');
+
+  // 5e. sendMessage Fail-Closed on RPC error (Raw content failure rolls back entire transaction)
+  (mockDbClient as any).simulateOutboundError = true;
+  await assert.rejects(
+    async () => {
+      await InboxService.sendMessage(
+        {
+          conversation_id: 'conv-1',
+          company_id: companyA,
+          content: 'Tin nhắn rollback test',
+          sender_type: 'sale',
+        },
+        companyA,
+        mockDbClient
+      );
+    },
+    /Không thể gửi tin nhắn: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'Must fail closed when RPC fails'
+  );
+  (mockDbClient as any).simulateOutboundError = false;
+  console.log('✓ PASS 5e: Outbound atomic persistence fails closed and rolls back on failure');
 
   // Restore DEMO_MODE for downstream safety
   process.env.DEMO_MODE = 'true';

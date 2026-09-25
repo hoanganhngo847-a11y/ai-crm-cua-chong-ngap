@@ -40,25 +40,6 @@ export default async function AdminDashboardPage() {
           </p>
         </div>
       </div>
-
-      {/* Analytics Dashboard Direct Navigation Card */}
-      <div className="p-6 bg-gradient-to-r from-blue-950/40 via-slate-900 to-indigo-950/40 border border-blue-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white">Analytics doanh nghiệp (Báo cáo & Thống kê)</h2>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">M9.5</span>
-          </div>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">
-            Theo dõi toàn diện các chỉ số kinh doanh, phễu khách hàng, thời gian phản hồi SLA 5 phút, hoạt động khảo sát, và ảnh chụp tình hình tài chính doanh nghiệp.
-          </p>
-        </div>
-        <a
-          href="/admin/analytics"
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center"
-        >
-          Mở Dashboard →
-        </a>
-      </div>
     </div>
   );
 }

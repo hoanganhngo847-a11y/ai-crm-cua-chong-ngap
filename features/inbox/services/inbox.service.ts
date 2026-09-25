@@ -4,6 +4,7 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
   Conversation,
   ConversationFilter,
+  ConversationStatus,
   CustomerTimelineEvent,
   InboxChannel,
   InboxMessage,
@@ -13,6 +14,49 @@ import type {
 import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
 import { CustomerService, maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
+import type { CustomerSource } from '../../crm/types/customer.types';
+
+interface ServiceError extends Error {
+  status?: number;
+  code?: string;
+}
+
+interface InteractionRow {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  conversation_id: string;
+  channel: InboxChannel;
+  type: string;
+  direction: 'INBOUND' | 'OUTBOUND';
+  sanitized_content: string;
+  sanitization_status: 'CLEAN' | 'SANITIZED';
+  actor_type: string;
+  actor_user_id?: string;
+  created_at: string;
+}
+
+interface ConversationCustomerJoin {
+  name?: string;
+  customer_code?: string;
+  stage?: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface ConversationRow {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  channel: InboxChannel;
+  status: ConversationStatus;
+  unread_count: number;
+  last_message_at?: string;
+  created_at: string;
+  updated_at: string;
+  customers?: ConversationCustomerJoin | ConversationCustomerJoin[];
+  [key: string]: unknown;
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -403,7 +447,7 @@ export async function getConversations(
   }
 
   // Lấy tin nhắn cuối cùng (sanitized derivative) cho từng cuộc hội thoại từ public.interactions
-  const convIds = convRows.map((c: any) => c.id);
+  const convIds = (convRows as Array<{ id: string }>).map((c) => c.id);
   const latestInteractionMap = new Map<string, { content: string; created_at: string }>();
 
   if (convIds.length > 0) {
@@ -426,7 +470,7 @@ export async function getConversations(
     }
   }
 
-  let list: Conversation[] = convRows.map((row: any) => {
+  let list: Conversation[] = (convRows as unknown as ConversationRow[]).map((row) => {
     const cust = Array.isArray(row.customers) ? row.customers[0] : row.customers;
     const latestMsg = latestInteractionMap.get(row.id);
     const rawLastMsg = latestMsg?.content || '';
@@ -581,15 +625,15 @@ export async function getMessagesByConversationId(
   options?: GetMessagesOptions
 ): Promise<InboxMessage[]> {
   if (!companyId || !companyId.trim()) {
-    const err = new Error('companyId là bắt buộc khi lấy tin nhắn.');
-    (err as any).status = 400;
-    (err as any).code = 'BAD_REQUEST';
+    const err = new Error('companyId là bắt buộc khi lấy tin nhắn.') as ServiceError;
+    err.status = 400;
+    err.code = 'BAD_REQUEST';
     throw err;
   }
   if (!conversationId || !conversationId.trim()) {
-    const err = new Error('conversationId là bắt buộc khi lấy tin nhắn.');
-    (err as any).status = 400;
-    (err as any).code = 'BAD_REQUEST';
+    const err = new Error('conversationId là bắt buộc khi lấy tin nhắn.') as ServiceError;
+    err.status = 400;
+    err.code = 'BAD_REQUEST';
     throw err;
   }
 
@@ -599,9 +643,9 @@ export async function getMessagesByConversationId(
       (c) => c.id === conversationId && c.company_id === companyId
     );
     if (!conv) {
-      const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
-      (notFoundErr as any).status = 404;
-      (notFoundErr as any).code = 'NOT_FOUND';
+      const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceError;
+      notFoundErr.status = 404;
+      notFoundErr.code = 'NOT_FOUND';
       throw notFoundErr;
     }
 
@@ -634,7 +678,7 @@ export async function getMessagesByConversationId(
       const raw = m.raw_content || m.content;
       const sanitized = m.sanitized_content || sanitizePhoneInText(m.content);
       const status = m.sanitization_status || (sanitized !== raw ? 'SANITIZED' : 'CLEAN');
-      const { raw_content, ...rest } = m;
+      const { raw_content: _raw_content, ...rest } = m;
       return {
         ...rest,
         content: sanitized,
@@ -656,9 +700,9 @@ export async function getMessagesByConversationId(
     .maybeSingle();
 
   if (convError || !conv) {
-    const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.');
-    (notFoundErr as any).status = 404;
-    (notFoundErr as any).code = 'NOT_FOUND';
+    const notFoundErr = new Error('Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceError;
+    notFoundErr.status = 404;
+    notFoundErr.code = 'NOT_FOUND';
     throw notFoundErr;
   }
 
@@ -688,101 +732,79 @@ export async function getMessagesByConversationId(
 
   if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
     if (!companyId || !companyId.trim()) {
-      const authErr = new Error('Ngữ cảnh tổ chức (companyId) là bắt buộc đối với Quản trị viên khi truy cập tin nhắn.');
-      (authErr as any).status = 403;
-      (authErr as any).code = 'FORBIDDEN';
+      const authErr = new Error('Ngữ cảnh tổ chức (companyId) là bắt buộc đối với Quản trị viên khi truy cập tin nhắn.') as ServiceError;
+      authErr.status = 403;
+      authErr.code = 'FORBIDDEN';
       throw authErr;
     }
 
     const rawMap = new Map<string, string>();
-    const interactionIds = interactions.map((i: any) => i.id);
+    const interactionIds = (interactions as Array<{ id: string }>).map((i) => i.id);
 
     if (interactionIds.length > 0) {
-      let rawRows: any[] | null = null;
-      try {
-        const { data, error } = await adminClient
-          .schema('private')
-          .from('interaction_raw_contents')
-          .select('interaction_id, company_id, raw_content')
-          .in('interaction_id', interactionIds)
-          .eq('company_id', companyId);
+      // 1. FAIL-CLOSED AUDIT TRAIL:
+      // BẮT BUỘC ghi bản ghi audit log vào public.audit_logs TRƯỚC KHI truy cập raw_content.
+      // Nếu thao tác ghi audit log gặp lỗi: Lập tức dừng lại và ném lỗi HTTP 500 AUDIT_WRITE_FAILED,
+      // tuyệt đối KHÔNG trả về raw_content ra ngoài response (Fail-Closed).
+      const actorId = options?.actorId || options?.userId || null;
+      const nowIso = new Date().toISOString();
 
-        if (!error && data) {
-          rawRows = data;
-        }
-      } catch {
-        // Direct private schema access might fail if restricted/not exposed
+      const auditRecords = interactionIds.map((id: string) => ({
+        company_id: companyId,
+        user_id: actorId,
+        actor_id: actorId,
+        action: 'VIEW_RAW_INTERACTION',
+        resource_type: 'INTERACTION',
+        resource_id: id,
+        result: 'SUCCESS',
+        metadata: {
+          conversation_id: conversationId,
+          interaction_id: id,
+          actor_id: actorId,
+        },
+        created_at: nowIso,
+      }));
+
+      const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
+      const { error: auditErr } = await adminClient
+        .from('audit_logs')
+        .insert(auditPayload);
+
+      if (auditErr) {
+        console.error('Lỗi khi ghi audit log truy cập raw interaction:', auditErr);
+        const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.') as ServiceError;
+        failClosedErr.status = 500;
+        failClosedErr.code = 'AUDIT_WRITE_FAILED';
+        throw failClosedErr;
       }
 
-      // Hỗ trợ RPC get_interaction_raw_content nếu schema direct query chưa có kết quả
-      if (!rawRows && typeof (adminClient as any).rpc === 'function') {
-        try {
-          const rpcResults: any[] = [];
-          for (const id of interactionIds) {
-            const { data: rpcData, error: rpcErr } = await (adminClient as any).rpc(
+      // 2. CANONICAL FOUNDATION RPC:
+      // Chỉ sau khi audit log thành công mới gọi RPC get_interaction_raw_content của Foundation.
+      // Tuyệt đối KHÔNG query trực tiếp private schema.
+      if (typeof adminClient.rpc === 'function') {
+        for (const id of interactionIds) {
+          try {
+            const { data: rpcData, error: rpcErr } = await adminClient.rpc(
               'get_interaction_raw_content',
               {
                 p_company_id: companyId,
                 p_interaction_id: id,
               }
             );
-            if (!rpcErr && rpcData && rpcData.length > 0) {
-              rpcResults.push(...rpcData);
+            if (!rpcErr && rpcData) {
+              const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+              if (row && typeof (row as { raw_content?: string }).raw_content === 'string') {
+                rawMap.set(id, (row as { raw_content: string }).raw_content);
+              }
             }
+          } catch (rpcCallErr: unknown) {
+            console.error(`Lỗi khi gọi RPC get_interaction_raw_content cho interaction ${id}:`, rpcCallErr);
           }
-          if (rpcResults.length > 0) {
-            rawRows = rpcResults;
-          }
-        } catch {
-          // RPC fallback
-        }
-      }
-
-      // FAIL-CLOSED AUDIT TRAIL:
-      // Trước khi trả về raw_content từ private.interaction_raw_contents,
-      // BẮT BUỘC ghi bản ghi audit log vào public.audit_logs.
-      // Nếu thao tác ghi audit log gặp lỗi: Lập tức dừng lại và ném lỗi HTTP 500 AUDIT_WRITE_FAILED,
-      // tuyệt đối KHÔNG trả về raw_content ra ngoài response (Fail-Closed).
-      if (rawRows && rawRows.length > 0) {
-        const actorId = options?.actorId || options?.userId || null;
-        const nowIso = new Date().toISOString();
-
-        const auditRecords = rawRows.map((r: any) => ({
-          company_id: companyId,
-          user_id: actorId,
-          actor_id: actorId,
-          action: 'VIEW_RAW_INTERACTION',
-          resource_type: 'INTERACTION',
-          resource_id: r.interaction_id,
-          result: 'SUCCESS',
-          metadata: {
-            conversation_id: conversationId,
-            interaction_id: r.interaction_id,
-            actor_id: actorId,
-          },
-          created_at: nowIso,
-        }));
-
-        const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
-        const { error: auditErr } = await adminClient
-          .from('audit_logs')
-          .insert(auditPayload);
-
-        if (auditErr) {
-          console.error('Lỗi khi ghi audit log truy cập raw interaction:', auditErr);
-          const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.');
-          (failClosedErr as any).status = 500;
-          (failClosedErr as any).code = 'AUDIT_WRITE_FAILED';
-          throw failClosedErr;
-        }
-
-        for (const r of rawRows) {
-          rawMap.set(r.interaction_id, r.raw_content);
         }
       }
     }
 
-    return interactions.map((m: any) => {
+    return (interactions as unknown as InteractionRow[]).map((m) => {
       const raw = rawMap.get(m.id) || m.sanitized_content || '';
       const sanitized = m.sanitized_content || sanitizePhoneInText(raw);
       const status = sanitized !== raw ? 'SANITIZED' : 'CLEAN';
@@ -807,7 +829,7 @@ export async function getMessagesByConversationId(
   }
 
   // Mặc định hoặc SALE: Luôn trả về sanitized derivative, tuyệt đối không lộ raw phone
-  return interactions.map((m: any) => {
+  return (interactions as unknown as InteractionRow[]).map((m) => {
     const sanitized = m.sanitized_content || '';
     const senderType: SenderType =
       m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
@@ -821,7 +843,7 @@ export async function getMessagesByConversationId(
       sender_type: senderType,
       content: sanitized, // Mặc định hiển thị sanitized_content
       sanitized_content: sanitized,
-      sanitization_status: (m.sanitization_status || 'SUCCEEDED') as any,
+      sanitization_status: (m.sanitization_status || 'SUCCEEDED') as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
       created_at: m.created_at,
       direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
     };
@@ -839,18 +861,18 @@ export async function sendMessage(
   const companyId = callerCompanyId || input.company_id;
 
   if (!companyId) {
-    const err = new Error('company_id là bắt buộc khi gửi tin nhắn.');
-    (err as any).status = 400;
-    (err as any).code = 'BAD_REQUEST';
+    const err = new Error('company_id là bắt buộc khi gửi tin nhắn.') as ServiceError;
+    err.status = 400;
+    err.code = 'BAD_REQUEST';
     throw err;
   }
 
   const { conversation_id, content, sender_type = 'sale', sender_name } = input;
 
   if (!conversation_id || !content.trim()) {
-    const err = new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.');
-    (err as any).status = 400;
-    (err as any).code = 'BAD_REQUEST';
+    const err = new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.') as ServiceError;
+    err.status = 400;
+    err.code = 'BAD_REQUEST';
     throw err;
   }
 
@@ -860,15 +882,15 @@ export async function sendMessage(
       (c) => c.id === conversation_id && c.company_id === companyId
     );
     if (!conv) {
-      const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.');
-      (notFoundErr as any).status = 404;
-      (notFoundErr as any).code = 'NOT_FOUND';
+      const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceError;
+      notFoundErr.status = 404;
+      notFoundErr.code = 'NOT_FOUND';
       throw notFoundErr;
     }
 
     const rawContent = content.trim();
     const sanitizedContent = sanitizePhoneInText(rawContent);
-    const sanitizationStatus: 'CLEAN' | 'SANITIZED' =
+    const _sanitizationStatus: 'CLEAN' | 'SANITIZED' =
       sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
 
     const newMessage: InboxMessage = {
@@ -881,10 +903,10 @@ export async function sendMessage(
       sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
       content: sanitizedContent,
       sanitized_content: sanitizedContent,
-      sanitization_status: sanitizationStatus,
-      raw_content: rawContent,
+      sanitization_status: 'SUCCEEDED',
       created_at: new Date().toISOString(),
       direction: sender_type === 'customer' ? 'inbound' : 'outbound',
+      delivery_status: 'PENDING_DISPATCH',
     };
 
     if (!messagesStore[conversation_id]) {
@@ -899,22 +921,11 @@ export async function sendMessage(
     return newMessage;
   }
 
-  // 2. Canonical Database Persistence: Lưu vào public.conversations, public.interactions, và private.interaction_raw_contents
+  // 2. Canonical Database Persistence: Bắt buộc dùng RPC atomic record_outbound_interaction_atomic
   const adminClient = client || createAdminClient();
 
-  // Resource Authorization: Cuộc hội thoại phải thuộc quyền sở hữu của companyId
-  const { data: conv, error: convError } = await adminClient
-    .from('conversations')
-    .select('id, company_id, customer_id, channel')
-    .eq('id', conversation_id)
-    .eq('company_id', companyId)
-    .maybeSingle();
-
-  if (convError || !conv) {
-    const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.');
-    (notFoundErr as any).status = 404;
-    (notFoundErr as any).code = 'NOT_FOUND';
-    throw notFoundErr;
+  if (typeof adminClient.rpc !== 'function') {
+    throw new Error('Không thể gửi tin nhắn: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
   }
 
   const rawContent = content.trim();
@@ -922,75 +933,73 @@ export async function sendMessage(
   const isSanitized = sanitizedContent !== rawContent;
   const sanitizationStatus: 'CLEAN' | 'SANITIZED' = isSanitized ? 'SANITIZED' : 'CLEAN';
   const now = new Date().toISOString();
-  const interactionId = generateUUID();
 
-  // Bước 1: Cập nhật last_message_at trong public.conversations
-  await adminClient
-    .from('conversations')
-    .update({
-      last_message_at: now,
-      updated_at: now,
-    })
-    .eq('id', conversation_id)
-    .eq('company_id', companyId);
-
-  // Bước 2: Lưu bản ghi đã làm sạch vào public.interactions
-  const dbChannel = conv.channel.toUpperCase();
-  const dbActorType = sender_type === 'ai' ? 'AI' : 'SALE';
-
-  const { error: insertInteractionErr } = await adminClient
-    .from('interactions')
-    .insert({
-      id: interactionId,
-      company_id: companyId,
-      customer_id: conv.customer_id,
-      conversation_id: conv.id,
-      channel: dbChannel,
-      type: 'MESSAGE',
-      direction: 'OUTBOUND',
-      sanitized_content: sanitizedContent,
-      sanitization_status: 'SUCCEEDED',
-      sanitized_at: now,
-      sanitizer_version: 'v1',
-      actor_type: dbActorType,
-      created_at: now,
-    });
-
-  if (insertInteractionErr) {
-    throw new Error(`Lỗi lưu tương tác: ${insertInteractionErr.message}`);
-  }
-
-  // Bước 3: Lưu bản nội dung gốc vào private.interaction_raw_contents qua adminClient/trusted context
+  let rpcRes: { data: unknown; error: unknown } | null = null;
+  let rpcThrew = false;
+  let caughtErr: unknown = null;
   try {
-    await adminClient
-      .schema('private')
-      .from('interaction_raw_contents')
-      .insert({
-        interaction_id: interactionId,
-        company_id: companyId,
-        raw_content: rawContent,
-        raw_payload: { content: rawContent, sender_name, sender_type },
-        source_metadata: { source: 'sale_reply' },
-        created_at: now,
-      });
-  } catch (rawErr) {
-    console.warn('[InboxService] Failed to persist raw content in private schema:', rawErr);
+    rpcRes = await adminClient.rpc('record_outbound_interaction_atomic', {
+      p_company_id: companyId,
+      p_conversation_id: conversation_id,
+      p_customer_id: null,
+      p_channel: null,
+      p_sanitized_content: sanitizedContent,
+      p_raw_content: rawContent,
+      p_sanitization_status: sanitizationStatus,
+      p_source_metadata: {
+        source: 'sale_reply',
+        sender_name,
+        sender_type,
+      },
+    });
+  } catch (err: unknown) {
+    rpcThrew = true;
+    caughtErr = err;
   }
+
+  const rpcError = rpcThrew ? caughtErr : rpcRes?.error;
+  const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
+
+  if (rpcError) {
+    const errObj = rpcError as { message?: string; code?: string } | undefined;
+    const errMsg = String(errObj?.message || '');
+    const errCode = String(errObj?.code || '');
+    if (
+      errMsg.includes('CONVERSATION_NOT_FOUND') ||
+      errMsg.includes('không tồn tại') ||
+      errMsg.includes('không thuộc quyền quản lý') ||
+      errCode === 'P0002'
+    ) {
+      const notFoundErr = new Error('Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceError;
+      notFoundErr.status = 404;
+      notFoundErr.code = 'NOT_FOUND';
+      throw notFoundErr;
+    }
+    throw new Error(`Không thể gửi tin nhắn: Thao tác Atomic RPC thất bại (Fail-Closed). ${errMsg}`);
+  }
+
+  if (!rpcData || typeof rpcData !== 'object' || !rpcData.interaction_id) {
+    throw new Error('Không thể gửi tin nhắn: Dữ liệu phản hồi từ Atomic RPC không hợp lệ (Fail-Closed).');
+  }
+
+  const interactionId = rpcData.interaction_id as string;
+  const customerId = (rpcData.customer_id as string) || '';
+  const channel = ((rpcData.channel as string) || 'facebook').toLowerCase() as InboxChannel;
 
   return {
     id: interactionId,
     company_id: companyId,
     conversation_id,
-    customer_id: conv.customer_id,
-    channel: conv.channel.toLowerCase() as InboxChannel,
+    customer_id: customerId,
+    channel,
     sender_type,
     sender_name: sender_name || (sender_type === 'sale' ? 'Chuyên viên Sale' : 'Khách hàng'),
     content: sanitizedContent,
     sanitized_content: sanitizedContent,
-    sanitization_status: sanitizationStatus,
-    raw_content: rawContent,
+    sanitization_status: 'SUCCEEDED',
     created_at: now,
     direction: 'outbound',
+    delivery_status: 'PENDING_DISPATCH',
   };
 }
 
@@ -1133,67 +1142,74 @@ export async function getCustomerTimeline(
     return [];
   }
 
-  let rawMap = new Map<string, string>();
+  const rawMap = new Map<string, string>();
   if (callerRole === APPLICATION_ROLES.BOSS_ADMIN) {
-    const ids = interactions.map((i: any) => i.id);
+    const ids = (interactions as Array<{ id: string }>).map((i) => i.id);
     if (ids.length > 0) {
-      let rawRows: any[] | null = null;
-      try {
-        const { data, error } = await adminClient
-          .schema('private')
-          .from('interaction_raw_contents')
-          .select('interaction_id, company_id, raw_content')
-          .in('interaction_id', ids)
-          .eq('company_id', companyId);
+      // 1. FAIL-CLOSED AUDIT TRAIL:
+      // BẮT BUỘC ghi bản ghi audit log vào public.audit_logs TRƯỚC KHI truy cập raw_content.
+      const actorId = options?.actorId || options?.userId || null;
+      const nowIso = new Date().toISOString();
 
-        if (!error && data) {
-          rawRows = data;
-        }
-      } catch {
-        // Fallback
+      const auditRecords = ids.map((id: string) => ({
+        company_id: companyId,
+        user_id: actorId,
+        actor_id: actorId,
+        action: 'VIEW_RAW_INTERACTION',
+        resource_type: 'INTERACTION',
+        resource_id: id,
+        customer_id: customerId,
+        result: 'SUCCESS',
+        metadata: {
+          customer_id: customerId,
+          interaction_id: id,
+          actor_id: actorId,
+          purpose: 'TIMELINE_VIEW',
+        },
+        created_at: nowIso,
+      }));
+
+      const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
+      const { error: auditErr } = await adminClient
+        .from('audit_logs')
+        .insert(auditPayload);
+
+      if (auditErr) {
+        console.error('Lỗi khi ghi audit log truy cập raw timeline interaction:', auditErr);
+        const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.') as ServiceError;
+        failClosedErr.status = 500;
+        failClosedErr.code = 'AUDIT_WRITE_FAILED';
+        throw failClosedErr;
       }
 
-      if (rawRows && rawRows.length > 0) {
-        const actorId = options?.actorId || options?.userId || null;
-        const auditRecords = rawRows.map((r: any) => ({
-          company_id: companyId,
-          user_id: actorId,
-          actor_id: actorId,
-          action: 'VIEW_RAW_INTERACTION',
-          resource_type: 'INTERACTION',
-          resource_id: r.interaction_id,
-          customer_id: customerId,
-          result: 'SUCCESS',
-          metadata: {
-            customer_id: customerId,
-            interaction_id: r.interaction_id,
-            actor_id: actorId,
-            purpose: 'TIMELINE_VIEW',
-          },
-          created_at: new Date().toISOString(),
-        }));
-
-        const auditPayload = auditRecords.length === 1 ? auditRecords[0] : auditRecords;
-        const { error: auditErr } = await adminClient
-          .from('audit_logs')
-          .insert(auditPayload);
-
-        if (auditErr) {
-          console.error('Lỗi khi ghi audit log truy cập raw timeline interaction:', auditErr);
-          const failClosedErr = new Error('Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.');
-          (failClosedErr as any).status = 500;
-          (failClosedErr as any).code = 'AUDIT_WRITE_FAILED';
-          throw failClosedErr;
-        }
-
-        for (const r of rawRows) {
-          rawMap.set(r.interaction_id, r.raw_content);
+      // 2. CANONICAL FOUNDATION RPC:
+      // Chỉ sau khi audit log thành công mới gọi RPC get_interaction_raw_content để lấy nội dung gốc.
+      // Tuyệt đối KHÔNG query trực tiếp private schema.
+      if (typeof adminClient.rpc === 'function') {
+        for (const id of ids) {
+          try {
+            const { data: rpcData, error: rpcErr } = await adminClient.rpc(
+              'get_interaction_raw_content',
+              {
+                p_company_id: companyId,
+                p_interaction_id: id,
+              }
+            );
+            if (!rpcErr && rpcData) {
+              const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+              if (row && typeof (row as { raw_content?: string }).raw_content === 'string') {
+                rawMap.set(id, (row as { raw_content: string }).raw_content);
+              }
+            }
+          } catch (rpcCallErr: unknown) {
+            console.error(`Lỗi khi gọi RPC get_interaction_raw_content cho timeline interaction ${id}:`, rpcCallErr);
+          }
         }
       }
     }
   }
 
-  const events: CustomerTimelineEvent[] = interactions.map((m: any) => {
+  const events: CustomerTimelineEvent[] = (interactions as unknown as InteractionRow[]).map((m) => {
     let title = 'Tương tác khách hàng';
     let eventType: 'MESSAGE' | 'CALL' | 'STAGE_CHANGE' | 'SURVEY' | 'NOTE' = 'MESSAGE';
 
@@ -1233,7 +1249,7 @@ export async function getCustomerTimeline(
       title,
       description: desc,
       timestamp: m.created_at,
-      actor_type: (m.actor_type?.toLowerCase() || 'system') as any,
+      actor_type: (m.actor_type?.toLowerCase() || 'system') as CustomerTimelineEvent['actor_type'],
     };
   });
 
@@ -1356,8 +1372,13 @@ export async function addInboundMessage(params: {
     };
   }
 
-  // 2. Canonical Database Persistence: Lưu vào public.conversations, public.interactions, và private.interaction_raw_contents
+  // 2. Canonical Database Persistence: Bắt buộc dùng RPC atomic record_inbound_interaction_atomic
   const adminClient = client || createAdminClient();
+
+  if (typeof adminClient.rpc !== 'function') {
+    throw new Error('Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
+  }
+
   const dbChannel = params.channel.toUpperCase();
   const externalConvId = params.senderId;
 
@@ -1366,227 +1387,110 @@ export async function addInboundMessage(params: {
   const isSanitized = sanitizedContent !== rawContent;
   const sanitizationStatus: 'CLEAN' | 'SANITIZED' = isSanitized ? 'SANITIZED' : 'CLEAN';
 
-  let isNewConversation = false;
-  let conversationId: string;
-  let customerId: string;
   let customerName: string =
     params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
   let customerCode: string = 'KH-000001';
   let customerStage: string = 'LEAD_NEW';
+  let resolvedCustomerId: string | null = null;
 
-  // Tìm cuộc hội thoại tương ứng theo (company_id, channel, external_conversation_id)
-  let existingConv: any = null;
-  const { data: convByExt } = await adminClient
-    .from('conversations')
-    .select(`
-      id,
-      company_id,
-      customer_id,
-      channel,
-      external_conversation_id,
-      unread_count,
-      status,
-      created_at,
-      updated_at,
-      customers (
-        id,
-        name,
-        customer_code,
-        stage,
-        source
-      )
-    `)
-    .eq('company_id', companyId)
-    .eq('channel', dbChannel)
-    .eq('external_conversation_id', externalConvId)
-    .maybeSingle();
-
-  existingConv = convByExt;
-
-  if (!existingConv && params.customerId && UUID_REGEX.test(params.customerId)) {
-    const { data: convByCust } = await adminClient
-      .from('conversations')
-      .select(`
-        id,
-        company_id,
-        customer_id,
-        channel,
-        external_conversation_id,
-        unread_count,
-        status,
-        created_at,
-        updated_at,
-        customers (
-          id,
-          name,
-          customer_code,
-          stage,
-          source
-        )
-      `)
-      .eq('company_id', companyId)
-      .eq('channel', dbChannel)
-      .eq('customer_id', params.customerId)
-      .maybeSingle();
-
-    existingConv = convByCust;
-  }
-
-  if (existingConv) {
-    conversationId = existingConv.id;
-    customerId = existingConv.customer_id;
-    const cust = Array.isArray(existingConv.customers) ? existingConv.customers[0] : existingConv.customers;
-    if (cust) {
-      customerName = cust.name || customerName;
-      customerCode = cust.customer_code || customerCode;
-      customerStage = cust.stage || customerStage;
-    }
-
-    // Cập nhật hội thoại đã tồn tại
-    await adminClient
-      .from('conversations')
-      .update({
-        last_message_at: timestamp,
-        unread_count: (existingConv.unread_count || 0) + 1,
-        status: 'PENDING_SALE',
-        updated_at: timestamp,
-      })
-      .eq('id', conversationId)
-      .eq('company_id', companyId);
+  if (params.customerId && UUID_REGEX.test(params.customerId)) {
+    resolvedCustomerId = params.customerId;
   } else {
-    // Tạo mới cuộc hội thoại
-    isNewConversation = true;
-    conversationId = generateUUID();
-
-    if (params.customerId && UUID_REGEX.test(params.customerId)) {
-      customerId = params.customerId;
-    } else {
-      // Tìm hoặc tạo khách hàng mới
-      if (params.senderPhone) {
-        try {
-          const custResult = await CustomerService.findOrCreateByPhone(
-            {
-              phone: params.senderPhone,
-              name: customerName,
-              companyId,
-              source: dbChannel as any,
-            },
-            adminClient
-          );
-          if (custResult?.customer) {
-            customerId = custResult.customer.id;
-            customerCode = custResult.customer.customer_code;
-            customerName = custResult.customer.name;
-            customerStage = custResult.customer.stage;
-          }
-        } catch {
-          // Bỏ qua lỗi tìm khách qua phone
-        }
-      }
-
-      if (!customerId! || !UUID_REGEX.test(customerId)) {
-        const newCustId = generateUUID();
-        const { data: createdCust } = await adminClient
-          .from('customers')
-          .insert({
-            id: newCustId,
-            company_id: companyId,
+    // Tìm hoặc tạo khách hàng mới nếu có senderPhone
+    if (params.senderPhone) {
+      try {
+        const custResult = await CustomerService.findOrCreateByPhone(
+          {
+            phone: params.senderPhone,
             name: customerName,
-            source: dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK',
-            stage: 'LEAD_NEW',
-          })
-          .select('id, name, customer_code, stage')
-          .maybeSingle();
-
-        if (createdCust) {
-          customerId = createdCust.id;
-          customerName = createdCust.name || customerName;
-          customerCode = createdCust.customer_code || customerCode;
-          customerStage = createdCust.stage || customerStage;
-        } else {
-          customerId = newCustId;
+            companyId,
+            source: (dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
+          },
+          adminClient
+        );
+        if (custResult?.customer) {
+          resolvedCustomerId = custResult.customer.id;
+          customerCode = custResult.customer.customer_code;
+          customerName = custResult.customer.name;
+          customerStage = custResult.customer.stage;
         }
+      } catch {
+        // Bỏ qua lỗi tìm khách qua phone
       }
     }
 
-    const { error: convInsertErr } = await adminClient
-      .from('conversations')
-      .insert({
-        id: conversationId,
-        company_id: companyId,
-        customer_id: customerId,
-        channel: dbChannel,
-        external_conversation_id: externalConvId,
-        last_message_at: timestamp,
-        unread_count: 1,
-        status: 'PENDING_SALE',
-        created_at: timestamp,
-        updated_at: timestamp,
-      });
+    if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+      const newCustId = generateUUID();
+      const { data: createdCust } = await adminClient
+        .from('customers')
+        .insert({
+          id: newCustId,
+          company_id: companyId,
+          name: customerName,
+          source: dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK',
+          stage: 'LEAD_NEW',
+        })
+        .select('id, name, customer_code, stage')
+        .maybeSingle();
 
-    if (convInsertErr) {
-      throw new Error(`Lỗi khởi tạo cuộc hội thoại: ${convInsertErr.message}`);
+      if (createdCust) {
+        resolvedCustomerId = createdCust.id;
+        customerName = createdCust.name || customerName;
+        customerCode = createdCust.customer_code || customerCode;
+        customerStage = createdCust.stage || customerStage;
+      } else {
+        resolvedCustomerId = newCustId;
+      }
     }
   }
 
-  // 2. Lưu bản ghi đã làm sạch vào public.interactions
-  const interactionId =
-    params.externalMessageId && UUID_REGEX.test(params.externalMessageId)
-      ? params.externalMessageId
-      : generateUUID();
-
-  const { error: insertInteractionErr } = await adminClient
-    .from('interactions')
-    .insert({
-      id: interactionId,
-      company_id: companyId,
-      customer_id: customerId,
-      conversation_id: conversationId,
-      channel: dbChannel,
-      type: 'MESSAGE',
-      direction: 'INBOUND',
-      sanitized_content: sanitizedContent,
-      sanitization_status: 'SUCCEEDED',
-      sanitized_at: timestamp,
-      sanitizer_version: 'v1',
-      external_ref: params.externalMessageId || null,
-      actor_type: 'CUSTOMER',
-      created_at: timestamp,
-    });
-
-  if (insertInteractionErr) {
-    throw new Error(`Lỗi lưu tương tác: ${insertInteractionErr.message}`);
-  }
-
-  // 3. Lưu bản nội dung gốc vào private.interaction_raw_contents qua adminClient/trusted context
+  let rpcRes: { data: unknown; error: unknown } | null = null;
+  let rpcThrew = false;
+  let caughtErr: unknown = null;
   try {
-    await adminClient
-      .schema('private')
-      .from('interaction_raw_contents')
-      .insert({
-        interaction_id: interactionId,
-        company_id: companyId,
-        raw_content: rawContent,
-        raw_payload: {
-          content: rawContent,
-          sender_id: params.senderId,
-          sender_name: params.senderName,
-          sender_phone: params.senderPhone,
-        },
-        source_metadata: {
-          channel: params.channel,
-          external_message_id: params.externalMessageId,
-        },
-        created_at: timestamp,
-      });
-  } catch (rawErr) {
-    console.warn('[InboxService] Failed to persist raw interaction content in private schema:', rawErr);
+    rpcRes = await adminClient.rpc('record_inbound_interaction_atomic', {
+      p_company_id: companyId,
+      p_customer_id: resolvedCustomerId,
+      p_channel: dbChannel,
+      p_external_conversation_id: externalConvId,
+      p_external_ref: params.externalMessageId || null,
+      p_sanitized_content: sanitizedContent,
+      p_raw_content: rawContent,
+      p_source_metadata: {
+        channel: params.channel,
+        external_message_id: params.externalMessageId,
+        sender_id: params.senderId,
+        sender_name: params.senderName,
+        sender_phone: params.senderPhone,
+      },
+      p_sanitization_status: sanitizationStatus,
+    });
+  } catch (err: unknown) {
+    rpcThrew = true;
+    caughtErr = err;
   }
+
+  const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string } | undefined;
+  const rpcData = rpcRes?.data as { conversation_id?: string; interaction_id?: string; customer_id?: string; is_duplicate?: boolean } | null | undefined;
+
+  if (rpcError) {
+    const errMsg = String(rpcError?.message || '');
+    throw new Error(`Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại (Fail-Closed). ${errMsg}`);
+  }
+
+  if (!rpcData || typeof rpcData !== 'object' || !rpcData.conversation_id || !rpcData.interaction_id) {
+    throw new Error('Không thể tiếp nhận tin nhắn inbound: Dữ liệu phản hồi từ Atomic RPC không hợp lệ (Fail-Closed).');
+  }
+
+  const conversationId = String(rpcData.conversation_id || '');
+  const interactionId = String(rpcData.interaction_id || '');
+  const finalCustomerId = String(rpcData.customer_id || resolvedCustomerId || '');
+  const isDuplicate = Boolean(rpcData.is_duplicate);
 
   const conversation: Conversation = {
     id: conversationId,
     company_id: companyId,
-    customer_id: customerId,
+    customer_id: finalCustomerId,
     customer_name: customerName,
     customer_code: customerCode,
     customer_phone: params.senderPhone,
@@ -1595,8 +1499,8 @@ export async function addInboundMessage(params: {
     channel: params.channel,
     last_message: rawContent,
     last_message_at: timestamp,
-    unread_count: isNewConversation ? 1 : (existingConv?.unread_count || 0) + 1,
-    status: 'PENDING_SALE',
+    unread_count: isDuplicate ? 0 : 1,
+    status: 'OPEN',
     updated_at: timestamp,
     created_at: timestamp,
   };
@@ -1605,7 +1509,7 @@ export async function addInboundMessage(params: {
     id: interactionId,
     company_id: companyId,
     conversation_id: conversationId,
-    customer_id: customerId,
+    customer_id: finalCustomerId,
     channel: params.channel,
     sender_type: 'customer',
     sender_name: params.senderName || customerName,
@@ -1620,7 +1524,7 @@ export async function addInboundMessage(params: {
   return {
     conversation,
     message: newMessage,
-    isNewConversation,
+    isNewConversation: !isDuplicate,
   };
 }
 

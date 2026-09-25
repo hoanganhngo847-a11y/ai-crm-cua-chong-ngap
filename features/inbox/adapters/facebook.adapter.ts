@@ -1,16 +1,16 @@
 /**
  * FACEBOOK MESSENGER REFERENCE ADAPTER PORT
- *
+ * 
  * ============================================================================
  * ARCHITECTURAL OWNERSHIP & CONTRACT BOUNDARY
  * ============================================================================
  * - Member 2: Sở hữu Ingress Engine, Webhook Gateway Dispatcher và ProviderAdapterPort Interface.
  * - Member 4: Sở hữu Facebook Messenger Integration và cài đặt chính thức của FacebookAdapter.
- *
+ * 
  * File này định nghĩa Reference Adapter Port cho Facebook Messenger Ingress,
  * đóng vai trò contract stub để compile và test ở TV2; implementation chính thức
  * thuộc quyền sở hữu của Member 4 khi tích hợp vào nhánh main.
- *
+ * 
  * Thực thi nghiêm ngặt theo đúng ProviderAdapterPort<FacebookWebhookEnvelope>.
  */
 
@@ -112,31 +112,58 @@ export function deriveFacebookTenant(pageIdOrEnvelope: string | FacebookWebhookE
   return null;
 }
 
+interface AdapterError extends Error {
+  code: string;
+  status: number;
+}
+
+function createAdapterError(message: string, code: string, status: number): AdapterError {
+  const err = new Error(message) as AdapterError;
+  err.code = code;
+  err.status = status;
+  return err;
+}
+
 /**
  * Trích xuất và chuyển đổi Facebook Webhook Envelope sang NormalizedIngressEvent
  */
 export function parseFacebookWebhookToNormalized(
-  body: any,
+  body: Record<string, unknown>,
   resolvedCompanyId: string
 ): NormalizedIngressEvent {
-  const entry = body.entry?.[0];
+  const fb = body as FacebookWebhookEnvelope;
+  const entry = fb.entry?.[0];
   const messaging = entry?.messaging?.[0];
 
   const externalUserId =
-    messaging?.sender?.id || body.external_user_id || body.sender?.id || 'fb-anon-user';
+    messaging?.sender?.id ||
+    (typeof fb.external_user_id === 'string' ? fb.external_user_id : undefined) ||
+    (fb.sender as { id?: string } | undefined)?.id ||
+    'fb-anon-user';
   const messageId =
-    messaging?.message?.mid || body.message_id || body.message?.id || `fb-msg-${Date.now()}`;
+    messaging?.message?.mid ||
+    (typeof fb.message_id === 'string' ? fb.message_id : undefined) ||
+    (fb.message as { id?: string } | undefined)?.id ||
+    `fb-msg-${Date.now()}`;
   const content =
-    messaging?.message?.text || body.content || body.message?.text || '(Tin nhắn hình ảnh/tệp)';
+    messaging?.message?.text ||
+    (typeof fb.content === 'string' ? fb.content : undefined) ||
+    (fb.message as { text?: string } | undefined)?.text ||
+    '(Tin nhắn hình ảnh/tệp)';
   const senderName =
-    body.sender_name || body.sender?.name || messaging?.sender?.name || 'Khách hàng Facebook';
-  const senderPhone = body.sender_phone || body.sender?.phone;
+    (typeof fb.sender_name === 'string' ? fb.sender_name : undefined) ||
+    (fb.sender as { name?: string } | undefined)?.name ||
+    messaging?.sender?.name ||
+    'Khách hàng Facebook';
+  const senderPhone =
+    (typeof fb.sender_phone === 'string' ? fb.sender_phone : undefined) ||
+    (fb.sender as { phone?: string } | undefined)?.phone;
 
   let timestamp = new Date().toISOString();
   if (messaging?.timestamp) {
     timestamp = new Date(messaging.timestamp).toISOString();
-  } else if (body.timestamp) {
-    timestamp = new Date(body.timestamp).toISOString();
+  } else if (typeof fb.timestamp === 'string' || typeof fb.timestamp === 'number') {
+    timestamp = new Date(fb.timestamp).toISOString();
   }
 
   return {
@@ -148,7 +175,7 @@ export function parseFacebookWebhookToNormalized(
     message_id: messageId,
     content: content.trim(),
     timestamp,
-    metadata: body.metadata || { entry_id: entry?.id },
+    metadata: (fb.metadata as Record<string, unknown> | undefined) || { entry_id: entry?.id },
   };
 }
 
@@ -171,42 +198,46 @@ export const FacebookAdapter: ProviderAdapterPort<FacebookWebhookEnvelope> = {
     if (typeof envelope === 'string') {
       cleanId = envelope.trim();
     } else if (envelope && typeof envelope === 'object') {
+      const fb = envelope as FacebookWebhookEnvelope;
       cleanId =
-        envelope.page_id ||
-        envelope.recipient?.id ||
-        envelope.entry?.[0]?.messaging?.[0]?.recipient?.id ||
-        envelope.entry?.[0]?.id ||
-        envelope.metadata?.page_id ||
-        envelope.metadata?.entry_id ||
-        envelope.external_id ||
+        fb.page_id ||
+        fb.recipient?.id ||
+        fb.entry?.[0]?.messaging?.[0]?.recipient?.id ||
+        fb.entry?.[0]?.id ||
+        (fb.metadata as { page_id?: string; entry_id?: string } | undefined)?.page_id ||
+        (fb.metadata as { page_id?: string; entry_id?: string } | undefined)?.entry_id ||
+        (typeof fb.external_id === 'string' ? fb.external_id : null) ||
         null;
       if (cleanId) cleanId = String(cleanId).trim();
     }
 
     if (!cleanId) {
-      const err = new Error('Không tìm thấy Facebook Page ID hợp lệ trong payload webhook (Fail-Closed).');
-      (err as any).code = 'INVALID_TENANT_DERIVATION';
-      (err as any).status = 400;
-      throw err;
+      throw createAdapterError(
+        'Không tìm thấy Facebook Page ID hợp lệ trong payload webhook (Fail-Closed).',
+        'INVALID_TENANT_DERIVATION',
+        400
+      );
     }
 
     const companyId = deriveFacebookTenant(cleanId);
     if (!companyId) {
-      const err = new Error(`Facebook Page ID "${cleanId}" chưa được cấu hình liên kết với bất kỳ tổ chức (tenant) nào trên hệ thống (Fail-Closed).`);
-      (err as any).code = 'TENANT_NOT_CONFIGURED';
-      (err as any).status = 403;
-      throw err;
+      throw createAdapterError(
+        `Facebook Page ID "${cleanId}" chưa được cấu hình liên kết với bất kỳ tổ chức (tenant) nào trên hệ thống (Fail-Closed).`,
+        'TENANT_NOT_CONFIGURED',
+        403
+      );
     }
 
     return companyId;
   },
   parseToNormalized: async (
-    envelope: FacebookWebhookEnvelope | any,
+    envelope: FacebookWebhookEnvelope | Record<string, unknown>,
     companyId: string
   ): Promise<NormalizedIngressEvent[]> => {
-    if (Array.isArray(envelope.entry)) {
+    const fb = envelope as FacebookWebhookEnvelope;
+    if (Array.isArray(fb.entry)) {
       const events: NormalizedIngressEvent[] = [];
-      for (const entry of envelope.entry) {
+      for (const entry of fb.entry) {
         if (Array.isArray(entry.messaging) && entry.messaging.length > 0) {
           for (const msg of entry.messaging) {
             events.push(parseFacebookWebhookToNormalized({ entry: [{ ...entry, messaging: [msg] }] }, companyId));
@@ -215,7 +246,7 @@ export const FacebookAdapter: ProviderAdapterPort<FacebookWebhookEnvelope> = {
       }
       if (events.length > 0) return events;
     }
-    return [parseFacebookWebhookToNormalized(envelope, companyId)];
+    return [parseFacebookWebhookToNormalized(envelope as Record<string, unknown>, companyId)];
   },
 };
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getActorContext } from '../../../lib/auth/context';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
-import { CustomerService } from '../../../features/crm/services/customer.service';
+import { CustomerService, isDemoModeActive } from '../../../features/crm/services/customer.service';
 import { InboxService } from '../../../features/inbox/services/inbox.service';
 import {
   CUSTOMER_SOURCES,
@@ -172,9 +172,9 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
 
     let customerList = (customers as Customer[]) || [];
 
-    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+    const isDemoMode = isDemoModeActive();
 
-    // Fallback nạp danh sách khách hàng mẫu giai đoạn 2: Chỉ kích hoạt khi có cờ explicit NEXT_PUBLIC_DEMO_MODE === 'true'
+    // Fallback nạp danh sách khách hàng mẫu giai đoạn 2: Chỉ kích hoạt khi isDemoModeActive() === true
     if (isDemoMode && customerList.length === 0 && !search && !stage && !source) {
       customerList = [
         {
@@ -384,7 +384,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
         offset,
       },
     });
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
@@ -475,7 +475,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
     }
 
     const safeSource =
-      typeof source === 'string' && Object.values(CUSTOMER_SOURCES).includes(source as any)
+      typeof source === 'string' && (Object.values(CUSTOMER_SOURCES) as string[]).includes(source)
         ? (source as CustomerSource)
         : undefined;
 
@@ -585,7 +585,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       },
       { status: result.isNew ? 201 : 200 }
     );
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }

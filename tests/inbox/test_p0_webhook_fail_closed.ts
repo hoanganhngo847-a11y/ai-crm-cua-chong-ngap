@@ -4,8 +4,9 @@ import { NextRequest } from 'next/server';
 import { GET as webhookGetHandler, POST as webhookPostHandler } from '../../app/api/inbox/webhook/route';
 import { InboxIngressService } from '../../features/inbox/services/inbox-ingress.service';
 import { InboxService } from '../../features/inbox/services/inbox.service';
-import { FacebookAdapter } from '../../features/inbox/adapters/facebook.adapter';
-import { ZaloAdapter } from '../../features/inbox/adapters/zalo.adapter';
+import { FacebookAdapter, deriveFacebookTenant } from '../../features/inbox/adapters/facebook.adapter';
+import { ZaloAdapter, deriveZaloTenant } from '../../features/inbox/adapters/zalo.adapter';
+import { ProviderAdapterRegistry } from '../../features/inbox/types/webhook.types';
 
 async function runWebhookFailClosedTests() {
   process.env.DEMO_MODE = 'true';
@@ -17,7 +18,17 @@ async function runWebhookFailClosedTests() {
   const testCompanyB = '22222222-2222-2222-2222-222222222222';
   const testFbSecret = 'test_fb_secret_key_super_secure_999';
   const testZaloSecret = 'test_zalo_secret_key_super_secure_888';
+  const testSystemSecret = 'test_system_secret_key_super_secure_777';
   const testVerifyToken = 'facebook_verify_token_prod_123';
+
+  // Cấu hình Server-side Tenant Mapping an toàn (Tenant Authority thuộc độc quyền về Server)
+  process.env.FB_PAGE_TENANT_MAP = JSON.stringify({
+    'fb-page-101': testCompanyA,
+  });
+  process.env.ZALO_OA_TENANT_MAP = JSON.stringify({
+    'zalo-oa-202': testCompanyB,
+  });
+  process.env.INBOX_WEBHOOK_SECRET = testSystemSecret;
 
   // Clear caches and store
   InboxIngressService.resetIngressCache();
@@ -71,7 +82,8 @@ async function runWebhookFailClosedTests() {
 
   const samplePayloadFb = {
     provider: 'FACEBOOK',
-    company_id: testCompanyA,
+    page_id: 'fb-page-101',
+    company_id: '99999999-9999-9999-9999-999999999999', // Giả mạo company_id - Server PHẢI bỏ qua hoàn toàn!
     external_user_id: 'fb-user-101',
     sender_name: 'Khách hàng FB Test',
     message_id: 'msg-fb-001',
@@ -133,30 +145,86 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(dataPostFakeSig.error, 'UNAUTHORIZED');
   console.log('✓ PASS 2c: Invalid HMAC signature rejected with 401 UNAUTHORIZED');
 
-  // 2d. Missing company_id (Tenant Isolation): must return 400 MISSING_COMPANY_ID
-  const payloadNoTenant = {
+  // 2d. Fail-Closed Tenant Authority:
+  // 2d-1: Thiếu Page ID trong Facebook payload -> Bị từ chối với 400 INVALID_TENANT_DERIVATION
+  const payloadNoPageId = {
     provider: 'FACEBOOK',
     external_user_id: 'fb-user-101',
-    message_id: 'msg-fb-no-tenant',
-    content: 'Cửa chống ngập không có tenant',
+    message_id: 'msg-fb-no-page-id',
+    content: 'Cửa chống ngập không có page_id',
   };
-  const rawBodyNoTenant = JSON.stringify(payloadNoTenant);
-  const hmacNoTenant = crypto.createHmac('sha256', testFbSecret).update(rawBodyNoTenant).digest('hex');
+  const rawBodyNoPageId = JSON.stringify(payloadNoPageId);
+  const hmacNoPageId = crypto.createHmac('sha256', testFbSecret).update(rawBodyNoPageId).digest('hex');
 
-  const reqPostNoTenant = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+  const reqPostNoPageId = new NextRequest('http://localhost:3000/api/inbox/webhook', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-channel': 'facebook',
-      'x-hub-signature-256': `sha256=${hmacNoTenant}`,
+      'x-hub-signature-256': `sha256=${hmacNoPageId}`,
     },
-    body: rawBodyNoTenant,
+    body: rawBodyNoPageId,
   });
-  const resPostNoTenant = await webhookPostHandler(reqPostNoTenant);
-  assert.strictEqual(resPostNoTenant.status, 400, 'Missing company_id must be rejected with 400');
-  const dataPostNoTenant = await resPostNoTenant.json();
-  assert.strictEqual(dataPostNoTenant.error, 'MISSING_COMPANY_ID');
-  console.log('✓ PASS 2d: Missing company_id rejected with 400 MISSING_COMPANY_ID');
+  const resPostNoPageId = await webhookPostHandler(reqPostNoPageId);
+  assert.strictEqual(resPostNoPageId.status, 400, 'Missing Page ID must be rejected with 400');
+  const dataPostNoPageId = await resPostNoPageId.json();
+  assert.strictEqual(dataPostNoPageId.error, 'INVALID_TENANT_DERIVATION');
+  console.log('✓ PASS 2d-1: Missing Page ID rejected with 400 INVALID_TENANT_DERIVATION');
+
+  // 2d-2: Facebook webhook kèm company_id giả mạo nhưng Page ID không có trong cấu hình server -> Bị từ chối 403 TENANT_NOT_CONFIGURED (Fail-Closed)
+  const payloadFakeFbTenant = {
+    provider: 'FACEBOOK',
+    page_id: 'unconfigured-fb-page-999',
+    company_id: '33333333-3333-3333-3333-333333333333', // Fake tenant
+    external_user_id: 'fb-user-fake',
+    message_id: 'msg-fb-fake-tenant',
+    content: 'Tấn công giả mạo tenant',
+  };
+  const rawBodyFakeFb = JSON.stringify(payloadFakeFbTenant);
+  const hmacFakeFb = crypto.createHmac('sha256', testFbSecret).update(rawBodyFakeFb).digest('hex');
+
+  const reqPostFakeFb = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${hmacFakeFb}`,
+    },
+    body: rawBodyFakeFb,
+  });
+  const resPostFakeFb = await webhookPostHandler(reqPostFakeFb);
+  assert.strictEqual(resPostFakeFb.status, 403, 'Unconfigured Page ID with fake company_id must be rejected with 403');
+  const dataPostFakeFb = await resPostFakeFb.json();
+  assert.strictEqual(dataPostFakeFb.error, 'TENANT_NOT_CONFIGURED');
+  console.log('✓ PASS 2d-2: Fake company_id with unconfigured Facebook Page ID rejected with 403 TENANT_NOT_CONFIGURED (Fail-Closed)');
+
+  // 2d-3: Zalo webhook kèm company_id giả mạo nhưng OA ID không hợp lệ/chưa cấu hình -> Bị từ chối 403 TENANT_NOT_CONFIGURED (Fail-Closed)
+  process.env.ZALO_APP_SECRET = testZaloSecret;
+  const payloadFakeZaloTenant = {
+    provider: 'ZALO',
+    oa_id: 'unconfigured-zalo-oa-999',
+    company_id: '33333333-3333-3333-3333-333333333333', // Fake tenant
+    external_user_id: 'zalo-user-fake',
+    message_id: 'msg-zalo-fake-tenant',
+    content: 'Tấn công giả mạo Zalo tenant',
+  };
+  const rawBodyFakeZalo = JSON.stringify(payloadFakeZaloTenant);
+  const hmacFakeZalo = crypto.createHmac('sha256', testZaloSecret).update(rawBodyFakeZalo).digest('hex');
+
+  const reqPostFakeZalo = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'zalo',
+      'x-zalo-signature': hmacFakeZalo,
+    },
+    body: rawBodyFakeZalo,
+  });
+  const resPostFakeZalo = await webhookPostHandler(reqPostFakeZalo);
+  assert.strictEqual(resPostFakeZalo.status, 403, 'Unconfigured OA ID with fake company_id must be rejected with 403');
+  const dataPostFakeZalo = await resPostFakeZalo.json();
+  assert.strictEqual(dataPostFakeZalo.error, 'TENANT_NOT_CONFIGURED');
+  console.log('✓ PASS 2d-3: Fake company_id with unconfigured Zalo OA ID rejected with 403 TENANT_NOT_CONFIGURED (Fail-Closed)');
 
   // ============================================================================
   // SECTION 3: VALID WEBHOOK INGRESS & NORMALIZED INGRESS CONTRACT
@@ -188,6 +256,9 @@ async function runWebhookFailClosedTests() {
 
   const convsCompanyB = await InboxService.getConversations(testCompanyB);
   assert.strictEqual(convsCompanyB.length, 0, 'Company B must have 0 conversations (Tenant Isolation)');
+
+  const convsSpoofed = await InboxService.getConversations('99999999-9999-9999-9999-999999999999');
+  assert.strictEqual(convsSpoofed.length, 0, 'Spoofed company_id in Facebook payload must be completely ignored');
   console.log('✓ PASS 3a: Valid Facebook HMAC ingress successfully processed and saved with strict tenant isolation');
 
   // 3b. Idempotency test (L1 RAM Cache): Re-send same message_id -> returns duplicate: true (200 OK)
@@ -327,7 +398,8 @@ async function runWebhookFailClosedTests() {
 
   const samplePayloadZalo = {
     provider: 'ZALO',
-    company_id: testCompanyB,
+    oa_id: 'zalo-oa-202',
+    company_id: '99999999-9999-9999-9999-999999999999', // Giả mạo company_id - Server PHẢI bỏ qua hoàn toàn!
     external_user_id: 'zalo-user-202',
     sender_name: 'Chị Lan Zalo',
     message_id: 'msg-zalo-002',
@@ -356,6 +428,9 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(convsCompanyBAfter.length, 1);
   assert.strictEqual(convsCompanyBAfter[0].company_id, testCompanyB);
   assert.strictEqual(convsCompanyBAfter[0].channel, 'zalo');
+
+  const convsSpoofedZalo = await InboxService.getConversations('99999999-9999-9999-9999-999999999999');
+  assert.strictEqual(convsSpoofedZalo.length, 0, 'Spoofed company_id in Zalo payload must be completely ignored');
   console.log('✓ PASS 3c: Valid Zalo OA HMAC ingress processed and isolated to Company B');
 
   // 3d. Direct ingestNormalizedEvent programmatic contract test (For Member 3 & 4)
@@ -373,6 +448,52 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(directResult.duplicate, false);
   assert.strictEqual(directResult.message_id, 'msg-direct-003');
   console.log('✓ PASS 3d: Direct ingestNormalizedEvent contract functions cleanly for Member 3 & Member 4');
+
+  // 3e. SYSTEM Provider Webhook Ingress (Nội bộ): Cho phép company_id khi có secret xác thực
+  const samplePayloadSystem = {
+    provider: 'SYSTEM',
+    company_id: testCompanyA,
+    external_user_id: 'sys-user-001',
+    message_id: 'msg-sys-001',
+    content: 'Tin nhắn nội bộ qua System Provider',
+  };
+  const rawBodySystem = JSON.stringify(samplePayloadSystem);
+  const reqPostValidSystem = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'system',
+      'x-webhook-secret': testSystemSecret,
+    },
+    body: rawBodySystem,
+  });
+  const resPostValidSystem = await webhookPostHandler(reqPostValidSystem);
+  assert.strictEqual(resPostValidSystem.status, 201, 'Valid SYSTEM webhook must return 201 Created');
+  const dataPostValidSystem = await resPostValidSystem.json();
+  assert.strictEqual(dataPostValidSystem.success, true);
+
+  // SYSTEM webhook thiếu company_id phải trả về 400 MISSING_COMPANY_ID
+  const samplePayloadSystemNoTenant = {
+    provider: 'SYSTEM',
+    external_user_id: 'sys-user-002',
+    message_id: 'msg-sys-002',
+    content: 'Tin nhắn nội bộ thiếu company_id',
+  };
+  const rawBodySystemNoTenant = JSON.stringify(samplePayloadSystemNoTenant);
+  const reqPostSystemNoTenant = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'system',
+      'x-webhook-secret': testSystemSecret,
+    },
+    body: rawBodySystemNoTenant,
+  });
+  const resPostSystemNoTenant = await webhookPostHandler(reqPostSystemNoTenant);
+  assert.strictEqual(resPostSystemNoTenant.status, 400, 'SYSTEM webhook without company_id must return 400');
+  const dataPostSystemNoTenant = await resPostSystemNoTenant.json();
+  assert.strictEqual(dataPostSystemNoTenant.error, 'MISSING_COMPANY_ID');
+  console.log('✓ PASS 3e: SYSTEM Provider accepts valid company_id with secret and fails closed when missing');
 
   // ============================================================================
   // SECTION 4: ELIMINATION OF DEFAULT TENANT FALLBACK (FAIL-CLOSED VERIFICATION)
@@ -434,19 +555,216 @@ async function runWebhookFailClosedTests() {
   process.env.FB_PAGE_ID = 'page-test-no-tenant';
   delete process.env.FB_COMPANY_ID;
   (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
-  const derivedTenantFb = FacebookAdapter.deriveTenant('page-test-no-tenant');
-  assert.strictEqual(derivedTenantFb, null, 'FacebookAdapter must NOT fall back to DEFAULT_COMPANY_ID');
+  await assert.rejects(
+    async () => FacebookAdapter.deriveTenant({ page_id: 'page-test-no-tenant' }),
+    (err: any) => err.code === 'TENANT_NOT_CONFIGURED',
+    'FacebookAdapter must throw TENANT_NOT_CONFIGURED and NOT fall back to DEFAULT_COMPANY_ID'
+  );
+  assert.strictEqual(deriveFacebookTenant('page-test-no-tenant'), null);
   delete (process.env as any).DEFAULT_COMPANY_ID;
   delete process.env.FB_PAGE_ID;
 
   process.env.ZALO_OA_ID = 'oa-test-no-tenant';
   delete process.env.ZALO_COMPANY_ID;
   (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
-  const derivedTenantZalo = ZaloAdapter.deriveTenant('oa-test-no-tenant');
-  assert.strictEqual(derivedTenantZalo, null, 'ZaloAdapter must NOT fall back to DEFAULT_COMPANY_ID');
+  await assert.rejects(
+    async () => ZaloAdapter.deriveTenant({ oa_id: 'oa-test-no-tenant' }),
+    (err: any) => err.code === 'TENANT_NOT_CONFIGURED',
+    'ZaloAdapter must throw TENANT_NOT_CONFIGURED and NOT fall back to DEFAULT_COMPANY_ID'
+  );
+  assert.strictEqual(deriveZaloTenant('oa-test-no-tenant'), null);
   delete (process.env as any).DEFAULT_COMPANY_ID;
   delete process.env.ZALO_OA_ID;
   console.log('✓ PASS 4d: FacebookAdapter & ZaloAdapter deriveTenant never fall back to DEFAULT_COMPANY_ID');
+
+  // 4e. ProviderAdapterRegistry: Verifying Port & Registry Architecture
+  assert(ProviderAdapterRegistry.has('FACEBOOK'), 'Registry must have FACEBOOK adapter registered');
+  assert(ProviderAdapterRegistry.has('ZALO'), 'Registry must have ZALO adapter registered');
+  assert(ProviderAdapterRegistry.has('SYSTEM'), 'Registry must have SYSTEM adapter registered');
+  assert.strictEqual(ProviderAdapterRegistry.get('FACEBOOK'), FacebookAdapter);
+  assert.strictEqual(ProviderAdapterRegistry.get('ZALO'), ZaloAdapter);
+  console.log('✓ PASS 4e: ProviderAdapterRegistry dynamically resolves ports with clean Member 2/3/4 boundaries');
+
+  // ============================================================================
+  // SECTION 5: ATOMIC INBOUND PERSISTENCE & TRANSACTION ROLLBACK (P0 - Item 2)
+  // Tuân thủ Lỗi P0 số 2: record_inbound_interaction_atomic & Transaction Rollback
+  // ============================================================================
+  console.log('\n--- Section 5: Atomic Inbound Persistence & Transaction Rollback ---');
+
+  delete process.env.DEMO_MODE; // Non-demo production mode
+
+  const mockDbState = {
+    conversations: [] as any[],
+    interactions: [] as any[],
+    raw_contents: [] as any[],
+  };
+
+  let simulateRawInsertError = false;
+  const mockAtomicClient: any = {
+    from: (table: string) => ({
+      select: () => ({
+        maybeSingle: async () => ({
+          data: { id: 'cust-atomic-001', name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+          error: null,
+        }),
+      }),
+      insert: (record: any) => ({
+        select: () => ({
+          maybeSingle: async () => ({
+            data: { id: record.id || 'cust-atomic-001', name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+    rpc: async (fnName: string, params: any) => {
+      assert.strictEqual(fnName, 'record_inbound_interaction_atomic', 'Must call RPC record_inbound_interaction_atomic');
+      assert.strictEqual(params.p_company_id, testCompanyA);
+
+      // 1. Kiểm tra duplicate external_ref
+      if (params.p_external_ref) {
+        const existing = mockDbState.interactions.find(
+          (i) => i.company_id === params.p_company_id && i.channel === params.p_channel && i.external_ref === params.p_external_ref
+        );
+        if (existing) {
+          // Trả về duplicate = true, KHÔNG tăng unread_count, KHÔNG thay đổi conversations
+          return {
+            data: {
+              conversation_id: existing.conversation_id,
+              interaction_id: existing.id,
+              customer_id: existing.customer_id,
+              is_duplicate: true,
+            },
+            error: null,
+          };
+        }
+      }
+
+      // 2. Mô phỏng Transaction Rollback nếu raw content insert gặp lỗi
+      if (simulateRawInsertError) {
+        // Rollback: Zero changes to conversations, interactions, raw_contents
+        return {
+          data: null,
+          error: new Error('Postgres raw_contents disk space full (Database Transaction Rollback)'),
+        };
+      }
+
+      // 3. Khởi tạo/cập nhật conversation & interaction atomically
+      let conv = mockDbState.conversations.find((c) => c.company_id === params.p_company_id && c.channel === params.p_channel);
+      if (!conv) {
+        conv = {
+          id: 'conv-atomic-1',
+          company_id: params.p_company_id,
+          customer_id: params.p_customer_id,
+          channel: params.p_channel,
+          unread_count: 1,
+          status: 'OPEN',
+          last_message_at: new Date().toISOString(),
+        };
+        mockDbState.conversations.push(conv);
+      } else {
+        conv.unread_count += 1;
+        conv.last_message_at = new Date().toISOString();
+      }
+
+      const intId = `int-${Date.now()}`;
+      const interaction = {
+        id: intId,
+        company_id: params.p_company_id,
+        customer_id: params.p_customer_id,
+        conversation_id: conv.id,
+        channel: params.p_channel,
+        external_ref: params.p_external_ref,
+        sanitized_content: params.p_sanitized_content,
+        direction: 'INBOUND',
+      };
+      mockDbState.interactions.push(interaction);
+
+      mockDbState.raw_contents.push({
+        interaction_id: intId,
+        company_id: params.p_company_id,
+        raw_content: params.p_raw_content,
+      });
+
+      return {
+        data: {
+          conversation_id: conv.id,
+          interaction_id: intId,
+          customer_id: params.p_customer_id,
+          is_duplicate: false,
+        },
+        error: null,
+      };
+    },
+  };
+
+  // 5a. Happy path inbound message via atomic RPC
+  const inboundRes1 = await InboxService.addInboundMessage(
+    {
+      channel: 'facebook',
+      senderId: 'fb-user-atomic-001',
+      company_id: testCompanyA,
+      content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
+      externalMessageId: 'msg-ext-atomic-001',
+      customerId: 'cust-atomic-001',
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(inboundRes1.isNewConversation, true);
+  assert.strictEqual(mockDbState.conversations.length, 1);
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1);
+  assert.strictEqual(mockDbState.interactions.length, 1);
+  assert.strictEqual(mockDbState.raw_contents.length, 1);
+  console.log('✓ PASS 5a: Happy path inbound message commits conversation, interaction, and raw_content atomically');
+
+  // 5b. Duplicate concurrent/durable inbound webhook: RPC recognizes duplicate and does NOT increment unread_count
+  const inboundRes2 = await InboxService.addInboundMessage(
+    {
+      channel: 'facebook',
+      senderId: 'fb-user-atomic-001',
+      company_id: testCompanyA,
+      content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
+      externalMessageId: 'msg-ext-atomic-001', // Cùng external_ref
+      customerId: 'cust-atomic-001',
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(inboundRes2.isNewConversation, false);
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1, 'unread_count must NOT be incremented on duplicate');
+  assert.strictEqual(mockDbState.interactions.length, 1, 'No duplicate interaction record inserted');
+  assert.strictEqual(mockDbState.raw_contents.length, 1, 'No duplicate raw content record inserted');
+  console.log('✓ PASS 5b: Duplicate external_ref returns is_duplicate = true without mutating conversations or unread_count');
+
+  // 5c. Atomic Rollback: When raw content insert fails, entire transaction rolls back
+  simulateRawInsertError = true;
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'facebook',
+          senderId: 'fb-user-atomic-002',
+          company_id: testCompanyA,
+          content: 'Tin nhắn gây lỗi rollback',
+          externalMessageId: 'msg-ext-atomic-fail',
+          customerId: 'cust-atomic-001',
+        },
+        mockAtomicClient
+      );
+    },
+    /Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'Must fail closed when RPC transaction rolls back'
+  );
+
+  // Assert zero changes left behind
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1, 'unread_count remains unchanged on failure');
+  assert.strictEqual(mockDbState.interactions.length, 1, 'Zero orphan interaction committed');
+  assert.strictEqual(mockDbState.raw_contents.length, 1, 'Zero raw content committed');
+  console.log('✓ PASS 5c: Inbound atomic transaction rollback leaves zero partial records committed');
+
+  // Restore DEMO_MODE for downstream
+  process.env.DEMO_MODE = 'true';
 
   console.log('\n======================================================================');
   console.log('ALL P0 & P1 WEBHOOK FAIL-CLOSED TESTS PASSED SUCCESSFULLY! (100%)');

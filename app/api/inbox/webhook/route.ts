@@ -1,16 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   InboxIngressService,
-  SystemAdapter,
+  verifySystemSignature,
+  parseSystemWebhookToNormalized,
   UUID_REGEX,
 } from '@/features/inbox/services/inbox-ingress.service';
 import { FacebookAdapter } from '@/features/inbox/adapters/facebook.adapter';
 import { ZaloAdapter } from '@/features/inbox/adapters/zalo.adapter';
-import type {
-  NormalizedIngressEvent,
-  IngressProvider,
-  ProviderWebhookAdapter,
+import {
+  type IngressProvider,
+  type ProviderAdapterPort,
+  type IngressProcessResult,
+  ProviderAdapterRegistry,
+  INGRESS_PROVIDERS,
 } from '../../../../features/inbox/types/webhook.types';
+
+interface RouteError extends Error {
+  code?: string;
+  status?: number;
+}
+
+// Reference Adapter Port cho kênh nội bộ SYSTEM
+const systemAdapterPort: ProviderAdapterPort = {
+  provider: INGRESS_PROVIDERS.SYSTEM,
+  verifySignature: async (rawPayload: string, headers: Record<string, string>) => {
+    const signature =
+      headers['x-webhook-secret'] ||
+      headers['x-system-signature'] ||
+      headers['X-Webhook-Secret'] ||
+      headers['X-System-Signature'] ||
+      null;
+    const secret = process.env.INBOX_WEBHOOK_SECRET || process.env.SYSTEM_WEBHOOK_SECRET;
+    return verifySystemSignature(rawPayload, signature, secret);
+  },
+  deriveTenant: async (body: unknown) => {
+    const payload = body as { company_id?: string } | undefined;
+    const companyId = payload?.company_id;
+    if (!companyId || typeof companyId !== 'string' || !companyId.trim()) {
+      const err = new Error('Thiếu định danh công ty (company_id) trong sự kiện nội bộ SYSTEM (Fail-Closed).') as RouteError;
+      err.code = 'MISSING_COMPANY_ID';
+      err.status = 400;
+      throw err;
+    }
+    return companyId.trim();
+  },
+  parseToNormalized: async (body: unknown, resolvedCompanyId: string) => {
+    return [parseSystemWebhookToNormalized(body as Record<string, unknown>, resolvedCompanyId)];
+  },
+};
+
+// Đảm bảo các reference adapter ports được đăng ký vào Registry
+ProviderAdapterRegistry.register(INGRESS_PROVIDERS.FACEBOOK, FacebookAdapter);
+ProviderAdapterRegistry.register(INGRESS_PROVIDERS.ZALO, ZaloAdapter);
+ProviderAdapterRegistry.register(INGRESS_PROVIDERS.SYSTEM, systemAdapterPort);
 
 /**
  * GET /api/inbox/webhook
@@ -104,9 +146,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Phân tích cú pháp JSON
-    let body: any;
+    let body: Record<string, unknown>;
     try {
-      body = JSON.parse(rawBody);
+      body = JSON.parse(rawBody) as Record<string, unknown>;
     } catch {
       return NextResponse.json(
         { success: false, error: 'INVALID_JSON', message: 'Định dạng JSON không hợp lệ.' },
@@ -114,27 +156,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Xác định Provider & Chọn Adapter tương ứng (Gateway Dispatcher Pattern)
+    // 2. Xác định Provider & Chọn Adapter từ ProviderAdapterRegistry (Gateway Dispatcher Pattern)
     const channelHeader = request.headers.get('x-channel')?.toUpperCase();
     const fbSignature = request.headers.get('x-hub-signature-256');
     const zaloSignature = request.headers.get('x-zalo-signature') || request.headers.get('mac');
     const systemToken = request.headers.get('x-webhook-secret') || request.headers.get('x-system-signature');
 
     let provider: IngressProvider | null = null;
-    let signature: string | null = null;
-    let secret: string | undefined = undefined;
-    let adapter: ProviderWebhookAdapter;
-
     if (
       fbSignature ||
       channelHeader === 'FACEBOOK' ||
       body.provider === 'FACEBOOK' ||
       (body.object === 'page' && Array.isArray(body.entry))
     ) {
-      provider = 'FACEBOOK';
-      signature = fbSignature;
-      secret = process.env.FACEBOOK_APP_SECRET || process.env.FB_APP_SECRET;
-      adapter = FacebookAdapter;
+      provider = INGRESS_PROVIDERS.FACEBOOK;
     } else if (
       zaloSignature ||
       channelHeader === 'ZALO' ||
@@ -142,19 +177,13 @@ export async function POST(request: NextRequest) {
       body.oa_id ||
       body.event_name
     ) {
-      provider = 'ZALO';
-      signature = zaloSignature;
-      secret = process.env.ZALO_APP_SECRET || process.env.ZALO_WEBHOOK_SECRET;
-      adapter = ZaloAdapter;
+      provider = INGRESS_PROVIDERS.ZALO;
     } else if (
       channelHeader === 'SYSTEM' ||
       body.provider === 'SYSTEM' ||
       systemToken
     ) {
-      provider = 'SYSTEM';
-      signature = systemToken;
-      secret = process.env.INBOX_WEBHOOK_SECRET || process.env.SYSTEM_WEBHOOK_SECRET;
-      adapter = SystemAdapter;
+      provider = INGRESS_PROVIDERS.SYSTEM;
     } else {
       return NextResponse.json(
         {
@@ -166,34 +195,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Fail-Closed: Kiểm tra cấu hình Secret trên máy chủ
-    if (!secret || !secret.trim()) {
+    const adapter = ProviderAdapterRegistry.get(provider);
+    if (!adapter) {
       return NextResponse.json(
         {
           success: false,
-          error: 'CONFIGURATION_ERROR',
-          message: `Webhook secret cho kênh ${provider} chưa được cấu hình trên máy chủ (Fail-Closed).`,
+          error: 'ADAPTER_NOT_REGISTERED',
+          message: `Chưa đăng ký ProviderAdapter cho kênh ${provider}.`,
         },
         { status: 500 }
       );
     }
 
-    // 4. Fail-Closed: Kiểm tra Signature Header
-    if (!signature || !signature.trim()) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'UNAUTHORIZED',
-          message: `Thiếu header chữ ký số xác thực cho kênh ${provider} (Missing Signature Header).`,
-        },
-        { status: 401 }
-      );
-    }
+    // 3. Chuẩn bị headers cho adapter
+    const headersRecord: Record<string, string> = {};
+    request.headers.forEach((val, key) => {
+      headersRecord[key.toLowerCase()] = val;
+    });
 
-    // 5. Fail-Closed: Xác thực chữ ký số HMAC-SHA256 qua Adapter tương ứng
-    const verification = adapter.verifySignature(rawBody, signature, secret);
-
+    // 4. Fail-Closed: Xác thực chữ ký số HMAC-SHA256 qua Adapter
+    const verification = await adapter.verifySignature(rawBody, headersRecord);
     if (!verification.valid) {
+      if (
+        verification.reason?.includes('Configuration Error') ||
+        verification.reason?.includes('chưa được cấu hình') ||
+        verification.reason?.includes('Chưa cấu hình')
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'CONFIGURATION_ERROR',
+            message: verification.reason,
+          },
+          { status: 500 }
+        );
+      }
       return NextResponse.json(
         {
           success: false,
@@ -204,148 +240,54 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Cơ chế Derive Tenant an toàn qua Adapter (Fail-Closed, chống tự ý khai company_id)
-    // Tuân thủ Lỗi P0 số 4:
-    // - XÓA BỎ hoàn toàn việc tin cậy trực tiếp các tham số caller tự khai:
-    //   KHÔNG đọc `searchParams.get('company_id')`
-    //   KHÔNG đọc `request.headers.get('x-company-id')`
-    let companyId: string | null = null;
-
-    const isNormalizedEvent = Boolean(
-      body &&
-        typeof body === 'object' &&
-        (body.provider === 'FACEBOOK' || body.provider === 'ZALO' || body.provider === 'SYSTEM') &&
-        typeof body.external_user_id === 'string' &&
-        body.external_user_id.trim() &&
-        typeof body.message_id === 'string' &&
-        body.message_id.trim()
-    );
-
-    const isRawFacebookEnvelope = Boolean(
-      body &&
-        typeof body === 'object' &&
-        (body.object === 'page' || Array.isArray(body.entry))
-    );
-
-    const isRawZaloEnvelope = Boolean(
-      body &&
-        typeof body === 'object' &&
-        (body.event_name || (body.oa_id && !isNormalizedEvent))
-    );
-
-    if (isRawFacebookEnvelope) {
-      // 6a. Webhook Facebook trực tiếp: Derive Page ID từ recipient.id hoặc entry[0].id qua FacebookAdapter
-      const pageId =
-        body.entry?.[0]?.id ||
-        body.entry?.[0]?.messaging?.[0]?.recipient?.id ||
-        body.recipient?.id ||
-        body.page_id;
-
-      if (!pageId || typeof pageId !== 'string' || !pageId.trim()) {
+    // 5. Fail-Closed: Phân giải Tenant an toàn qua Adapter
+    let companyId: string;
+    try {
+      companyId = await adapter.deriveTenant(body);
+    } catch (err: unknown) {
+      const errorObj = err as RouteError | undefined;
+      if (errorObj?.code === 'INVALID_TENANT_DERIVATION') {
         return NextResponse.json(
           {
             success: false,
-            error: 'UNKNOWN_TENANT_OR_INTEGRATION_ACCOUNT',
-            message: 'Không thể giải mã Facebook Page ID hợp lệ từ payload webhook (Fail-Closed).',
+            error: 'INVALID_TENANT_DERIVATION',
+            message: errorObj.message,
           },
-          { status: 400 }
+          { status: errorObj.status || 400 }
         );
       }
-
-      companyId = FacebookAdapter.deriveTenant(pageId);
-      if (!companyId) {
+      if (errorObj?.code === 'TENANT_NOT_CONFIGURED') {
         return NextResponse.json(
           {
             success: false,
-            error: 'UNKNOWN_TENANT_OR_INTEGRATION_ACCOUNT',
-            message: `Không tìm thấy liên kết tenant cho Facebook Page ID "${pageId}" trong hệ thống (Fail-Closed).`,
+            error: 'TENANT_NOT_CONFIGURED',
+            message: errorObj.message,
           },
-          { status: 400 }
+          { status: errorObj.status || 403 }
         );
       }
-    } else if (isRawZaloEnvelope) {
-      // 6b. Webhook Zalo trực tiếp: Derive OA ID từ oa_id hoặc recipient.id qua ZaloAdapter
-      const oaId = body.oa_id || body.recipient?.id;
-
-      if (!oaId || typeof oaId !== 'string' || !oaId.trim()) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'UNKNOWN_TENANT_OR_INTEGRATION_ACCOUNT',
-            message: 'Không thể giải mã Zalo OA ID hợp lệ từ payload webhook (Fail-Closed).',
-          },
-          { status: 400 }
-        );
-      }
-
-      companyId = ZaloAdapter.deriveTenant(oaId);
-      if (!companyId) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'UNKNOWN_TENANT_OR_INTEGRATION_ACCOUNT',
-            message: `Không tìm thấy liên kết tenant cho Zalo OA ID "${oaId}" trong hệ thống (Fail-Closed).`,
-          },
-          { status: 400 }
-        );
-      }
-    } else if (isNormalizedEvent || provider === 'SYSTEM') {
-      // 6c. Sự kiện nội bộ chuẩn hóa (Normalized Ingress / System):
-      // Chỉ chấp nhận khi đi qua server-side trusted caller hoặc signature nội bộ (đã xác thực HMAC ở Bước 5).
-      if (body.recipient?.id || body.page_id) {
-        const derived = FacebookAdapter.deriveTenant(body.recipient?.id || body.page_id);
-        if (derived) companyId = derived;
-      } else if (body.oa_id) {
-        const derived = ZaloAdapter.deriveTenant(body.oa_id);
-        if (derived) companyId = derived;
-      }
-
-      // Nếu chưa derive qua Page/OA ID mapping, sử dụng company_id từ adapter mapping nội bộ
-      if (
-        !companyId &&
-        body.company_id &&
-        typeof body.company_id === 'string' &&
-        body.company_id.trim()
-      ) {
-        companyId = body.company_id.trim();
-      }
-
-      if (!companyId) {
+      if (errorObj?.code === 'MISSING_COMPANY_ID') {
         return NextResponse.json(
           {
             success: false,
             error: 'MISSING_COMPANY_ID',
-            message: 'Thiếu định danh công ty (company_id) trong sự kiện Webhook (Tenant Isolation).',
+            message: errorObj.message,
           },
-          { status: 400 }
+          { status: errorObj.status || 400 }
         );
       }
-    } else {
-      // 6d. Payload chưa xác định rõ dạng: Thử tìm account ID theo provider qua adapter
-      const accountId =
-        provider === 'FACEBOOK'
-          ? body.recipient?.id || body.page_id || body.entry?.[0]?.id
-          : body.oa_id || body.recipient?.id;
-
-      if (accountId && typeof accountId === 'string' && accountId.trim()) {
-        companyId = adapter.deriveTenant(accountId);
-      }
-
-      if (!companyId) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'UNKNOWN_TENANT_OR_INTEGRATION_ACCOUNT',
-            message:
-              'Không thể giải mã hoặc không tìm thấy liên kết tenant cho tài khoản tích hợp (Fail-Closed).',
-          },
-          { status: 400 }
-        );
-      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: errorObj?.code || 'TENANT_DERIVATION_FAILED',
+          message: errorObj?.message || 'Lỗi phân giải tenant.',
+        },
+        { status: errorObj?.status || 400 }
+      );
     }
 
-    // Kiểm tra định dạng UUID an toàn cho company_id đã resolve (ngăn chặn bypass / injection)
-    if (!UUID_REGEX.test(companyId)) {
+    // 6. Kiểm tra định dạng UUID an toàn cho company_id đã resolve (ngăn chặn bypass / injection)
+    if (!companyId || !UUID_REGEX.test(companyId)) {
       return NextResponse.json(
         {
           success: false,
@@ -356,39 +298,53 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 7. Chuyển hóa sang NormalizedIngressEvent qua Adapter tương ứng (Gateway Dispatcher)
-    const normalizedEvent = adapter.parseToNormalized(body, companyId);
-
-    if (!normalizedEvent.content || !normalizedEvent.content.trim()) {
+    // 7. Chuyển hóa sang NormalizedIngressEvent[] qua Adapter
+    const normalizedEvents = await adapter.parseToNormalized(body, companyId);
+    if (!Array.isArray(normalizedEvents) || normalizedEvents.length === 0) {
       return NextResponse.json(
         {
           success: false,
           error: 'INVALID_PAYLOAD',
-          message: 'Nội dung tin nhắn không được để trống.',
+          message: 'Không tìm thấy sự kiện tin nhắn hợp lệ trong payload webhook.',
         },
         { status: 400 }
       );
     }
 
-    // 8. Đẩy vào Core Ingestion Engine của Member 2
-    const result = await InboxIngressService.ingestNormalizedEvent(normalizedEvent);
+    for (const evt of normalizedEvents) {
+      if (!evt.content || !evt.content.trim()) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'INVALID_PAYLOAD',
+            message: 'Nội dung tin nhắn không được để trống.',
+          },
+          { status: 400 }
+        );
+      }
+    }
 
-    if (!result.success) {
-      return NextResponse.json(
-        { success: false, error: 'PROCESSING_FAILED', message: result.error },
-        { status: 422 }
-      );
+    // 8. Đẩy vào Core Ingestion Engine của Member 2
+    let lastResult: IngressProcessResult | null = null;
+    for (const event of normalizedEvents) {
+      lastResult = await InboxIngressService.ingestNormalizedEvent(event);
+      if (!lastResult.success) {
+        return NextResponse.json(
+          { success: false, error: 'PROCESSING_FAILED', message: lastResult.error },
+          { status: 422 }
+        );
+      }
     }
 
     return NextResponse.json(
       {
         success: true,
-        data: result,
-        message: result.duplicate
+        data: lastResult,
+        message: lastResult?.duplicate
           ? 'Sự kiện đã được xử lý trước đó (Idempotent OK).'
           : 'Tiếp nhận tin nhắn đa kênh thành công.',
       },
-      { status: result.duplicate ? 200 : 201 }
+      { status: lastResult?.duplicate ? 200 : 201 }
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Lỗi máy chủ khi xử lý Webhook.';

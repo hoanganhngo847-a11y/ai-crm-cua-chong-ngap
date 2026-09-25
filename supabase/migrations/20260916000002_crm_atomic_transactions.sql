@@ -185,7 +185,13 @@ BEGIN
 
   -- 8. Return structured payload
   RETURN jsonb_build_object(
-    'customer', to_jsonb(v_customer),
+    'customer', to_jsonb(v_customer) || jsonb_build_object(
+      'masked_phone',
+      CASE
+        WHEN length(p_raw_phone) <= 4 THEN '****'
+        ELSE substring(p_raw_phone from 1 for 2) || '******' || substring(p_raw_phone from length(p_raw_phone) - 1 for 2)
+      END
+    ),
     'contact', jsonb_build_object(
       'raw_phone', v_contact.raw_phone,
       'normalized_phone', v_contact.normalized_phone,
@@ -249,8 +255,8 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.'
-      USING ERRCODE = 'P0002';
+    RAISE EXCEPTION 'CUSTOMER_NOT_FOUND: Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.'
+      USING ERRCODE = 'P0002', HINT = 'CUSTOMER_NOT_FOUND';
   END IF;
 
   v_old_stage := v_customer.stage;

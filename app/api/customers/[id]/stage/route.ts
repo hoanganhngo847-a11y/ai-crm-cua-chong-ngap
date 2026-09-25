@@ -255,20 +255,28 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
         { status: 400 }
       );
     }
-    const errorObj = err as any;
-    if (errorObj?.status === 404 || errorObj?.code === 'NOT_FOUND') {
+    const errorObj = err as { message?: string; status?: number; code?: string } | undefined;
+    const errorMsg = String(errorObj?.message || '');
+    if (
+      errorObj?.status === 404 ||
+      errorObj?.code === 'NOT_FOUND' ||
+      errorObj?.code === 'CUSTOMER_NOT_FOUND' ||
+      errorMsg.includes('CUSTOMER_NOT_FOUND') ||
+      errorMsg.includes('không tồn tại') ||
+      errorMsg.includes('không thuộc quyền quản lý')
+    ) {
       return NextResponse.json(
         {
           success: false,
           error: 'NOT_FOUND',
-          message: errorObj.message || 'Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.',
+          message: errorObj?.message || 'Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.',
         },
         { status: 404 }
       );
     }
     if (errorObj?.status === 403 || errorObj?.code === 'FORBIDDEN') {
       return NextResponse.json(
-        { success: false, error: 'FORBIDDEN', message: errorObj.message || 'Không có quyền truy cập.' },
+        { success: false, error: 'FORBIDDEN', message: errorObj?.message || 'Không có quyền truy cập.' },
         { status: 403 }
       );
     }

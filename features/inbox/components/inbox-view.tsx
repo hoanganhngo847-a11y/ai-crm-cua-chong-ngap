@@ -10,7 +10,7 @@ interface InboxViewProps {
   initialCustomerId?: string | null;
 }
 
-export default function InboxView({ userRole, userFullName, initialCustomerId }: InboxViewProps) {
+export default function InboxView({ initialCustomerId }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
@@ -57,7 +57,14 @@ export default function InboxView({ userRole, userFullName, initialCustomerId }:
   }, [channelFilter, search, initialCustomerId, selectedConversationId]);
 
   useEffect(() => {
-    fetchConversations();
+    let isMounted = true;
+    const load = async () => {
+      if (isMounted) await fetchConversations();
+    };
+    void load();
+    return () => {
+      isMounted = false;
+    };
   }, [fetchConversations]);
 
   // 2. Fetch Messages when selectedConversationId changes
@@ -83,9 +90,16 @@ export default function InboxView({ userRole, userFullName, initialCustomerId }:
   }, []);
 
   useEffect(() => {
-    if (selectedConversationId) {
-      fetchMessages(selectedConversationId);
-    }
+    let isMounted = true;
+    const load = async () => {
+      if (isMounted && selectedConversationId) {
+        await fetchMessages(selectedConversationId);
+      }
+    };
+    void load();
+    return () => {
+      isMounted = false;
+    };
   }, [selectedConversationId, fetchMessages]);
 
   // Auto-scroll to bottom of messages

@@ -1,16 +1,16 @@
 /**
  * ZALO OFFICIAL ACCOUNT (OA) REFERENCE ADAPTER PORT
- *
+ * 
  * ============================================================================
  * ARCHITECTURAL OWNERSHIP & CONTRACT BOUNDARY
  * ============================================================================
  * - Member 2: Sở hữu Ingress Engine, Webhook Gateway Dispatcher và ProviderAdapterPort Interface.
  * - Member 3: Sở hữu Zalo OA Integration và cài đặt chính thức của ZaloAdapter.
- *
+ * 
  * File này định nghĩa Reference Adapter Port cho Zalo OA Ingress,
  * đóng vai trò contract stub để compile và test ở TV2; implementation chính thức
  * thuộc quyền sở hữu của Member 3 khi tích hợp vào nhánh main.
- *
+ * 
  * Thực thi nghiêm ngặt theo đúng ProviderAdapterPort<ZaloWebhookEnvelope>.
  */
 
@@ -107,26 +107,51 @@ export function deriveZaloTenant(oaIdOrEnvelope: string | ZaloWebhookEnvelope): 
   return null;
 }
 
+interface AdapterError extends Error {
+  code: string;
+  status: number;
+}
+
+function createAdapterError(message: string, code: string, status: number): AdapterError {
+  const err = new Error(message) as AdapterError;
+  err.code = code;
+  err.status = status;
+  return err;
+}
+
 /**
  * Trích xuất và chuyển đổi Zalo OA Webhook Envelope sang NormalizedIngressEvent
  */
 export function parseZaloWebhookToNormalized(
-  body: any,
+  body: Record<string, unknown>,
   resolvedCompanyId: string
 ): NormalizedIngressEvent {
+  const zalo = body as ZaloWebhookEnvelope;
   const externalUserId =
-    body.sender?.id || body.user_id_by_app || body.external_user_id || 'zalo-anon-user';
+    zalo.sender?.id ||
+    (typeof zalo.user_id_by_app === 'string' ? zalo.user_id_by_app : undefined) ||
+    (typeof zalo.external_user_id === 'string' ? zalo.external_user_id : undefined) ||
+    'zalo-anon-user';
   const messageId =
-    body.message?.msg_id || body.msg_id || body.message_id || `zalo-msg-${Date.now()}`;
+    zalo.message?.msg_id ||
+    (typeof zalo.msg_id === 'string' ? zalo.msg_id : undefined) ||
+    (typeof zalo.message_id === 'string' ? zalo.message_id : undefined) ||
+    `zalo-msg-${Date.now()}`;
   const content =
-    body.message?.text || body.content || '(Tin nhắn Zalo)';
+    zalo.message?.text ||
+    (typeof zalo.content === 'string' ? zalo.content : undefined) ||
+    '(Tin nhắn Zalo)';
   const senderName =
-    body.sender?.name || body.sender_name || 'Khách hàng Zalo';
-  const senderPhone = body.sender?.phone || body.sender_phone;
+    zalo.sender?.name ||
+    (typeof zalo.sender_name === 'string' ? zalo.sender_name : undefined) ||
+    'Khách hàng Zalo';
+  const senderPhone =
+    zalo.sender?.phone ||
+    (typeof zalo.sender_phone === 'string' ? zalo.sender_phone : undefined);
 
   let timestamp = new Date().toISOString();
-  if (body.timestamp) {
-    timestamp = new Date(body.timestamp).toISOString();
+  if (typeof zalo.timestamp === 'string' || typeof zalo.timestamp === 'number') {
+    timestamp = new Date(zalo.timestamp).toISOString();
   }
 
   return {
@@ -138,7 +163,10 @@ export function parseZaloWebhookToNormalized(
     message_id: messageId,
     content: content.trim(),
     timestamp,
-    metadata: body.metadata || { event_name: body.event_name, oa_id: body.oa_id },
+    metadata: (zalo.metadata as Record<string, unknown> | undefined) || {
+      event_name: zalo.event_name,
+      oa_id: zalo.oa_id,
+    },
   };
 }
 
@@ -162,37 +190,40 @@ export const ZaloAdapter: ProviderAdapterPort<ZaloWebhookEnvelope> = {
     if (typeof envelope === 'string') {
       cleanId = envelope.trim();
     } else if (envelope && typeof envelope === 'object') {
+      const zalo = envelope as ZaloWebhookEnvelope;
       cleanId =
-        envelope.oa_id ||
-        envelope.recipient?.id ||
-        envelope.metadata?.oa_id ||
-        envelope.external_id ||
+        zalo.oa_id ||
+        zalo.recipient?.id ||
+        (zalo.metadata as { oa_id?: string } | undefined)?.oa_id ||
+        (typeof zalo.external_id === 'string' ? zalo.external_id : null) ||
         null;
       if (cleanId) cleanId = String(cleanId).trim();
     }
 
     if (!cleanId) {
-      const err = new Error('Không tìm thấy Zalo OA ID hợp lệ trong payload webhook (Fail-Closed).');
-      (err as any).code = 'INVALID_TENANT_DERIVATION';
-      (err as any).status = 400;
-      throw err;
+      throw createAdapterError(
+        'Không tìm thấy Zalo OA ID hợp lệ trong payload webhook (Fail-Closed).',
+        'INVALID_TENANT_DERIVATION',
+        400
+      );
     }
 
     const companyId = deriveZaloTenant(cleanId);
     if (!companyId) {
-      const err = new Error(`Zalo OA ID "${cleanId}" chưa được cấu hình liên kết với bất kỳ tổ chức (tenant) nào trên hệ thống (Fail-Closed).`);
-      (err as any).code = 'TENANT_NOT_CONFIGURED';
-      (err as any).status = 403;
-      throw err;
+      throw createAdapterError(
+        `Zalo OA ID "${cleanId}" chưa được cấu hình liên kết với bất kỳ tổ chức (tenant) nào trên hệ thống (Fail-Closed).`,
+        'TENANT_NOT_CONFIGURED',
+        403
+      );
     }
 
     return companyId;
   },
   parseToNormalized: async (
-    envelope: ZaloWebhookEnvelope | any,
+    envelope: ZaloWebhookEnvelope | Record<string, unknown>,
     companyId: string
   ): Promise<NormalizedIngressEvent[]> => {
-    return [parseZaloWebhookToNormalized(envelope, companyId)];
+    return [parseZaloWebhookToNormalized(envelope as Record<string, unknown>, companyId)];
   },
 };
 

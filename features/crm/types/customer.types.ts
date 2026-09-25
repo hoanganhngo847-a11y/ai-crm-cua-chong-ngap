@@ -7,8 +7,6 @@
  * - docs/SUPABASE_SCHEMA_DESIGN.md (Sections 3.4, 3.5, 3.6, 3.7, Schema Decisions 01, 03, 07)
  */
 
-import type { ApplicationRole } from '../../../shared/constants/roles';
-
 /**
  * Canonical Customer Acquisition Sources (FROZEN ARCHITECTURE)
  * Database check constraint: CHECK (source IN ('FACEBOOK', 'ZALO', 'ZALO_OA', 'WEBSITE', 'HOTLINE', 'ADVERTISING', 'MANUAL'))

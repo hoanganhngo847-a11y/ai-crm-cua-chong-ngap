@@ -198,23 +198,24 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
           context?.supabaseClient,
           { userId, actorId: userId }
         );
-      } catch (err: any) {
-        if (err?.code === 'AUDIT_WRITE_FAILED') {
+      } catch (err: unknown) {
+        const errorObj = err as { code?: string; status?: number; message?: string } | undefined;
+        if (errorObj?.code === 'AUDIT_WRITE_FAILED') {
           return NextResponse.json(
             {
               success: false,
               error: 'AUDIT_WRITE_FAILED',
-              message: err.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
+              message: errorObj.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
             },
             { status: 500 }
           );
         }
-        if (err?.status === 404 || err?.code === 'NOT_FOUND') {
+        if (errorObj?.status === 404 || errorObj?.code === 'NOT_FOUND') {
           return NextResponse.json(
             {
               success: false,
               error: 'NOT_FOUND',
-              message: err.message || 'Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.',
+              message: errorObj.message || 'Cuộc hội thoại không tồn tại hoặc không thuộc quyền quản lý của tổ chức.',
             },
             { status: 404 }
           );
@@ -271,13 +272,14 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
       success: true,
       data: sanitizedConversations,
     });
-  } catch (err: any) {
-    if (err?.code === 'AUDIT_WRITE_FAILED') {
+  } catch (err: unknown) {
+    const errorObj = err as { code?: string; message?: string } | undefined;
+    if (errorObj?.code === 'AUDIT_WRITE_FAILED') {
       return NextResponse.json(
         {
           success: false,
           error: 'AUDIT_WRITE_FAILED',
-          message: err.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
+          message: errorObj.message || 'Lỗi ghi nhận kiểm toán bắt buộc. Thao tác xem nội dung gốc bị từ chối.',
         },
         { status: 500 }
       );
@@ -344,34 +346,41 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
         companyId
       );
 
+      // Đảm bảo không chứa raw_content trong DTO trả về (Lỗi P1 số 8)
+      const { raw_content: _raw_content, ...safeData } = newMessage;
+
       return NextResponse.json(
         {
           success: true,
-          data: newMessage,
-          message: 'Gửi tin nhắn phản hồi thành công.',
+          data: {
+            ...safeData,
+            delivery_status: safeData.delivery_status || 'PENDING_DISPATCH',
+          },
+          message: 'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
         },
         { status: 201 }
       );
-    } catch (sendErr: any) {
-      if (sendErr?.status === 404 || sendErr?.code === 'NOT_FOUND') {
+    } catch (sendErr: unknown) {
+      const errorObj = sendErr as { status?: number; code?: string; message?: string } | undefined;
+      if (errorObj?.status === 404 || errorObj?.code === 'NOT_FOUND') {
         return NextResponse.json(
           {
             success: false,
             error: 'NOT_FOUND',
-            message: sendErr.message || 'Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.',
+            message: errorObj.message || 'Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.',
           },
           { status: 404 }
         );
       }
-      if (sendErr?.status === 400 || sendErr?.code === 'BAD_REQUEST') {
+      if (errorObj?.status === 400 || errorObj?.code === 'BAD_REQUEST') {
         return NextResponse.json(
-          { success: false, error: 'BAD_REQUEST', message: sendErr.message },
+          { success: false, error: 'BAD_REQUEST', message: errorObj.message },
           { status: 400 }
         );
       }
       throw sendErr;
     }
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
