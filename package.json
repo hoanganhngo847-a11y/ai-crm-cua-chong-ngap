@@ -10,10 +10,20 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
+    "test:survey": "tsx --test features/survey/__tests__/survey.service.test.ts features/survey/__tests__/hardening.test.ts features/survey/__tests__/database.test.ts",
+    "test:ai-analysis": "tsx --conditions=react-server tests/ai-analysis/ai-analysis.test.ts",
+    "test:sales-style": "tsx --conditions=react-server tests/sales-style/sales-style.test.ts",
+    "test:sales-style-activation": "tsx --conditions=react-server tests/sales-style/sales-style-activation.test.ts",
+    "test:response-sla": "tsx --conditions=react-server tests/response-sla/evaluate-response-sla.test.ts",
+    "test:response-sla-db": "tsx --conditions=react-server tests/response-sla/response-sla-db.test.ts",
+    "test:analytics": "tsx --conditions=react-server tests/analytics/analytics.test.ts",
+    "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts",
+    "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
+    "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
+    "test": "npm run test:crm && npm run test:inbox",
     "test:crm": "npx tsx --conditions=react-server tests/crm/test_p0_fail_closed_and_zero_phone.ts && npx tsx --conditions=react-server tests/crm/test_p0_atomic_compensation.ts && npx tsx --conditions=react-server tests/crm/test_p0_urgent_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_history_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_allowlist.ts && npx tsx --conditions=react-server tests/crm/test_p1_server_authority_identity.ts",
     "test:inbox": "npx tsx --conditions=react-server tests/inbox/test_p0_inbox_tenant_isolation.ts && npx tsx --conditions=react-server tests/inbox/test_p0_zero_phone_sanitization.ts && npx tsx --conditions=react-server tests/inbox/test_p0_webhook_fail_closed.ts",
-    "test:all": "npm run test:auth && npm run test:security && npm run test:crm && npm run test:inbox",
-    "test": "npm run test:crm && npm run test:inbox"
+    "test:all": "npm run test:auth && npm run test:security && npm run test:crm && npm run test:inbox"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
