@@ -1,24 +1,27 @@
 /**
- * ZALO OFFICIAL ACCOUNT (OA) WEBHOOK ADAPTER
- * 
+ * ZALO OFFICIAL ACCOUNT (OA) REFERENCE ADAPTER PORT
+ *
  * ============================================================================
- * ARCHITECTURAL OWNERSHIP: MEMBER 3 (Zalo OA Integration Specialist)
+ * ARCHITECTURAL OWNERSHIP & CONTRACT BOUNDARY
  * ============================================================================
- * 
- * Trách nhiệm của Member 3:
- * 1. Giải mã Zalo Official Account Webhook Envelope (oa_id, event_name, sender, message).
- * 2. Xác thực chữ ký số HMAC-SHA256 (x-zalo-signature hoặc mac) chuẩn Zalo Developer Platform.
- * 3. Phân giải Tenant (company_id) an toàn từ Zalo OA ID (Fail-Closed).
- * 4. Chuyển đổi payload sang hợp đồng dữ liệu chuẩn NormalizedIngressEvent để bàn giao
- *    cho Core Ingestion Engine của Member 2.
+ * - Member 2: Sở hữu Ingress Engine, Webhook Gateway Dispatcher và ProviderAdapterPort Interface.
+ * - Member 3: Sở hữu Zalo OA Integration và cài đặt chính thức của ZaloAdapter.
+ *
+ * File này định nghĩa Reference Adapter Port cho Zalo OA Ingress,
+ * đóng vai trò contract stub để compile và test ở TV2; implementation chính thức
+ * thuộc quyền sở hữu của Member 3 khi tích hợp vào nhánh main.
+ *
+ * Thực thi nghiêm ngặt theo đúng ProviderAdapterPort<ZaloWebhookEnvelope>.
  */
 
 import * as crypto from 'crypto';
-import type {
-  NormalizedIngressEvent,
-  WebhookVerificationResult,
-  ZaloWebhookEnvelope,
-  ProviderWebhookAdapter,
+import {
+  type NormalizedIngressEvent,
+  type WebhookVerificationResult,
+  type ZaloWebhookEnvelope,
+  type ProviderAdapterPort,
+  ProviderAdapterRegistry,
+  INGRESS_PROVIDERS,
 } from '../types/webhook.types';
 
 /**
@@ -140,13 +143,60 @@ export function parseZaloWebhookToNormalized(
 }
 
 /**
- * Zalo Adapter bàn giao cho Member 3
+ * Zalo Reference Adapter Port bàn giao cho Member 3
  */
-export const ZaloAdapter: ProviderWebhookAdapter<ZaloWebhookEnvelope> = {
-  provider: 'ZALO',
-  verifySignature: verifyZaloSignature,
-  deriveTenant: deriveZaloTenant,
-  parseToNormalized: parseZaloWebhookToNormalized,
+export const ZaloAdapter: ProviderAdapterPort<ZaloWebhookEnvelope> = {
+  provider: INGRESS_PROVIDERS.ZALO,
+  verifySignature: async (rawPayload: string, headers: Record<string, string>): Promise<WebhookVerificationResult> => {
+    const signature =
+      headers['x-zalo-signature'] ||
+      headers['X-Zalo-Signature'] ||
+      headers['mac'] ||
+      headers['MAC'] ||
+      null;
+    const secret = process.env.ZALO_APP_SECRET || process.env.ZALO_WEBHOOK_SECRET;
+    return verifyZaloSignature(rawPayload, signature, secret);
+  },
+  deriveTenant: async (envelope: ZaloWebhookEnvelope | string): Promise<string> => {
+    let cleanId: string | null = null;
+    if (typeof envelope === 'string') {
+      cleanId = envelope.trim();
+    } else if (envelope && typeof envelope === 'object') {
+      cleanId =
+        envelope.oa_id ||
+        envelope.recipient?.id ||
+        envelope.metadata?.oa_id ||
+        envelope.external_id ||
+        null;
+      if (cleanId) cleanId = String(cleanId).trim();
+    }
+
+    if (!cleanId) {
+      const err = new Error('Không tìm thấy Zalo OA ID hợp lệ trong payload webhook (Fail-Closed).');
+      (err as any).code = 'INVALID_TENANT_DERIVATION';
+      (err as any).status = 400;
+      throw err;
+    }
+
+    const companyId = deriveZaloTenant(cleanId);
+    if (!companyId) {
+      const err = new Error(`Zalo OA ID "${cleanId}" chưa được cấu hình liên kết với bất kỳ tổ chức (tenant) nào trên hệ thống (Fail-Closed).`);
+      (err as any).code = 'TENANT_NOT_CONFIGURED';
+      (err as any).status = 403;
+      throw err;
+    }
+
+    return companyId;
+  },
+  parseToNormalized: async (
+    envelope: ZaloWebhookEnvelope | any,
+    companyId: string
+  ): Promise<NormalizedIngressEvent[]> => {
+    return [parseZaloWebhookToNormalized(envelope, companyId)];
+  },
 };
+
+// Đăng ký ZaloAdapter vào ProviderAdapterRegistry
+ProviderAdapterRegistry.register(INGRESS_PROVIDERS.ZALO, ZaloAdapter);
 
 export default ZaloAdapter;
