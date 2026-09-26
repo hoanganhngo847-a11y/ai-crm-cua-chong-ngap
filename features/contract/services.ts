@@ -1,5 +1,6 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 /**
  * Tự động sinh hợp đồng dựa trên đơn hàng đã cọc.
@@ -27,9 +28,20 @@ export async function generateContractForOrder(orderId: string, customerId: stri
     throw new Error('Chỉ được tạo hợp đồng khi đơn hàng đã xác nhận cọc');
   }
 
-  // 2. Mô phỏng Document Generator & Upload lên Storage (Trusted Server)
-  const pdfContent = `%PDF-1.4\n1 0 obj\n<< /Title (Hợp đồng cho Đơn hàng ${orderId}) >>\nendobj\n`;
-  const pdfBuffer = Buffer.from(pdfContent, 'utf-8');
+  // 2. Sinh Document Generator & Upload lên Storage (Trusted Server) bằng pdf-lib
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage();
+  const { width, height } = page.getSize();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  page.drawText(`Hop dong cho Don hang ${orderId}`, {
+    x: 50,
+    y: height - 100,
+    size: 20,
+    font,
+    color: rgb(0, 0, 0),
+  });
+  const pdfBytes = await pdfDoc.save();
+  const pdfBuffer = Buffer.from(pdfBytes);
   const filePath = `contracts/${orderId}/contract_v1_${Date.now()}.pdf`;
 
   const { error: uploadError } = await adminSupabase.storage
@@ -58,7 +70,7 @@ export async function generateContractForOrder(orderId: string, customerId: stri
       generated_file_ref: filePath, // Dùng đường dẫn thực tế từ upload thành công
       contract_value: orderData.final_amount,
       signed_file_ref: null
-    }, { onConflict: 'order_id', ignoreDuplicates: true })
+    }, { onConflict: 'order_id, revision_no', ignoreDuplicates: true })
     .select()
     .single();
 

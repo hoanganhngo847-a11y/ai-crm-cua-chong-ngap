@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS public.company_bank_accounts (
 
 -- Enable RLS for company_bank_accounts (basic policies)
 ALTER TABLE public.company_bank_accounts ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view their company bank accounts" ON public.company_bank_accounts FOR SELECT USING (true); -- simplify for now
+CREATE POLICY "Users can view their company bank accounts" ON public.company_bank_accounts FOR SELECT USING (public.has_company_role(company_id, 'BOSS_ADMIN'));
 
 -- 1. RPC for Payment Webhook (Security + Idempotency + Strict Logic)
 DROP FUNCTION IF EXISTS public.process_payment_webhook_rpc(text, text, text, numeric, timestamptz, text, text);
@@ -46,11 +46,6 @@ BEGIN
         RAISE EXCEPTION 'Amount must be greater than 0';
     END IF;
 
-    -- Idempotency Check: Bắt buộc
-    IF EXISTS (SELECT 1 FROM public.payment_transactions WHERE provider_ref = p_provider_ref AND provider = p_provider) THEN
-        RETURN jsonb_build_object('status', 'ALREADY_PROCESSED', 'provider_ref', p_provider_ref);
-    END IF;
-
     -- Resolve Company ID securely from mapping
     SELECT company_id INTO v_company_id
     FROM public.company_bank_accounts
@@ -60,6 +55,11 @@ BEGIN
     IF v_company_id IS NULL THEN
         -- Fallback or error out? Webhook should be rejected if we can't route it
         RAISE EXCEPTION 'Cannot map provider_account to company_id: % - %', p_provider, p_provider_account;
+    END IF;
+
+    -- Idempotency Check: Bắt buộc, thực hiện sau khi có company_id
+    IF EXISTS (SELECT 1 FROM public.payment_transactions WHERE company_id = v_company_id AND provider_ref = p_provider_ref AND provider = p_provider) THEN
+        RETURN jsonb_build_object('status', 'ALREADY_PROCESSED', 'provider_ref', p_provider_ref);
     END IF;
 
     -- Tìm Order khớp với payment_reference AND company_id
@@ -94,13 +94,15 @@ BEGIN
             FROM public.finance_summaries WHERE order_id = v_order_id;
 
             -- Lấy yêu cầu tiền cọc từ chính sách giá
-            SELECT COALESCE(
-                (SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order_final_amount
+            SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order_final_amount
+                 INTO v_required_deposit
                  FROM public.price_calculations pc
                  JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id
-                 WHERE pc.id = (SELECT price_calculation_id FROM public.orders WHERE id = v_order_id)),
-                0
-            ) INTO v_required_deposit;
+                 WHERE pc.id = (SELECT price_calculation_id FROM public.orders WHERE id = v_order_id);
+                 
+            IF v_required_deposit IS NULL THEN
+                RAISE EXCEPTION 'POLICY_CONFIGURATION_ERROR';
+            END IF;
 
             -- Nếu tổng tiền thu >= yêu cầu cọc (deposit threshold), set confirmed
             IF v_collected_amount >= v_required_deposit THEN
@@ -112,7 +114,7 @@ BEGIN
                 WHERE id = v_order_id;
             ELSE
                 UPDATE public.orders
-                SET deposit_status = 'PARTIAL_DEPOSIT', updated_at = now()
+                SET deposit_status = 'DEPOSIT_PENDING', updated_at = now()
                 WHERE id = v_order_id;
             END IF;
 
@@ -162,15 +164,15 @@ BEGIN
         RAISE EXCEPTION 'Deposit amount must be greater than 0';
     END IF;
 
-    IF EXISTS (SELECT 1 FROM public.payment_transactions WHERE provider_ref = p_idempotency_key AND provider = 'MANUAL') THEN
-        RETURN jsonb_build_object('success', true, 'status', 'ALREADY_PROCESSED');
-    END IF;
-
     -- Lấy thông tin order (Lock for update)
     SELECT * INTO v_order FROM public.orders WHERE id = p_order_id FOR UPDATE;
     
     IF v_order.id IS NULL THEN
         RAISE EXCEPTION 'Order not found';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM public.payment_transactions WHERE company_id = v_order.company_id AND provider_ref = p_idempotency_key AND provider = 'MANUAL') THEN
+        RETURN jsonb_build_object('success', true, 'status', 'ALREADY_PROCESSED');
     END IF;
 
     -- Ghi nhận transaction manual TRƯỚC
@@ -196,13 +198,15 @@ BEGIN
     FROM public.finance_summaries WHERE order_id = v_order.id;
 
     -- Lấy yêu cầu tiền cọc từ chính sách giá
-    SELECT COALESCE(
-        (SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount
+    SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount
+         INTO v_required_deposit
          FROM public.price_calculations pc
          JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id
-         WHERE pc.id = v_order.price_calculation_id),
-        0
-    ) INTO v_required_deposit;
+         WHERE pc.id = v_order.price_calculation_id;
+
+    IF v_required_deposit IS NULL THEN
+        RAISE EXCEPTION 'POLICY_CONFIGURATION_ERROR';
+    END IF;
 
     -- Cập nhật order
     IF v_collected_amount >= v_required_deposit THEN
@@ -214,7 +218,7 @@ BEGIN
         WHERE id = p_order_id;
     ELSE
         UPDATE public.orders
-        SET deposit_status = 'PARTIAL_DEPOSIT', updated_at = now()
+        SET deposit_status = 'DEPOSIT_PENDING', updated_at = now()
         WHERE id = p_order_id;
     END IF;
 
