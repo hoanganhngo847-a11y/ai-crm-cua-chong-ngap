@@ -541,7 +541,27 @@ async function runInboxTenantIsolationTests() {
             conversation_id: params.p_conversation_id,
             customer_id: 'cust-1',
             channel: 'ZALO',
+            delivery_id: 'del-rpc-outbound-1',
+            delivery_status: 'PENDING_DISPATCH',
           },
+          error: null,
+        };
+      }
+      if (fnName === 'claim_pending_outbound_deliveries') {
+        return {
+          data: [
+            {
+              id: 'del-rpc-outbound-1',
+              company_id: params.p_company_id,
+              conversation_id: 'conv-1',
+              interaction_id: 'int-rpc-outbound-1',
+              channel: 'ZALO',
+              delivery_status: 'QUEUED',
+              retry_count: 0,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ],
           error: null,
         };
       }
@@ -686,6 +706,19 @@ async function runInboxTenantIsolationTests() {
   );
   (mockDbClient as any).simulateOutboundError = false;
   console.log('✓ PASS 5e: Outbound atomic persistence fails closed and rolls back on failure');
+
+  // 5f. claimPendingDeliveries locks and claims outbox deliveries
+  const claimedDeliveries = await InboxService.claimPendingDeliveries(
+    companyA,
+    'worker-test-1',
+    10,
+    mockDbClient
+  );
+  assert.strictEqual(claimedDeliveries.length, 1);
+  assert.strictEqual(claimedDeliveries[0].delivery_status, 'QUEUED');
+  assert.strictEqual(claimedDeliveries[0].company_id, companyA);
+  assert(mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'claim_pending_outbound_deliveries'), 'Must call RPC claim_pending_outbound_deliveries');
+  console.log('✓ PASS 5f: claimPendingDeliveries locks and claims outbox deliveries for Outbox Worker');
 
   // Restore DEMO_MODE for downstream safety
   process.env.DEMO_MODE = 'true';

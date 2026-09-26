@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as crypto from 'crypto';
 import {
   InboxIngressService,
   verifySystemSignature,
@@ -347,7 +348,16 @@ export async function POST(request: NextRequest) {
       { status: lastResult?.duplicate ? 200 : 201 }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Lỗi máy chủ khi xử lý Webhook.';
-    return NextResponse.json({ success: false, error: 'INTERNAL_ERROR', message }, { status: 500 });
+    const traceId = crypto.randomUUID();
+    console.error('[WEBHOOK_INTERNAL_ERROR]', { traceId, error: err });
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'WEBHOOK_PROCESSING_FAILED',
+        message: 'Không thể xử lý dữ liệu webhook.',
+        trace_id: traceId,
+      },
+      { status: 500 }
+    );
   }
 }

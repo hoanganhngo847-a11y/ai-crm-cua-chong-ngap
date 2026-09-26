@@ -68,6 +68,25 @@ export interface OutboundDispatchResult {
 }
 
 /**
+ * Bản ghi Outbound Delivery phục vụ Transactional Outbox Worker
+ */
+export interface OutboundDeliveryRecord {
+  id: string;
+  company_id: string;
+  conversation_id: string;
+  interaction_id: string;
+  channel: string;
+  delivery_status: MessageDeliveryStatus;
+  provider_message_id?: string | null;
+  retry_count: number;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Message/Interaction item within a conversation
  * Tuân thủ public.interactions (Sanitized Derivative Security Zone) & private.interaction_raw_contents
  */

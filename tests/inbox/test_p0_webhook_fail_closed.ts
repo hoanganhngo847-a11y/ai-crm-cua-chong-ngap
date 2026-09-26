@@ -600,22 +600,30 @@ async function runWebhookFailClosedTests() {
   };
 
   let simulateRawInsertError = false;
+  let customerInsertAttempted = false;
+  const testAtomicCustomerId = 'c0000001-0000-4000-8000-000000000001';
+
   const mockAtomicClient: any = {
     from: (table: string) => ({
       select: () => ({
         maybeSingle: async () => ({
-          data: { id: 'cust-atomic-001', name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+          data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
           error: null,
         }),
       }),
-      insert: (record: any) => ({
-        select: () => ({
-          maybeSingle: async () => ({
-            data: { id: record.id || 'cust-atomic-001', name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
-            error: null,
+      insert: (record: any) => {
+        if (table === 'customers') {
+          customerInsertAttempted = true;
+        }
+        return {
+          select: () => ({
+            maybeSingle: async () => ({
+              data: { id: record.id || testAtomicCustomerId, name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+              error: null,
+            }),
           }),
-        }),
-      }),
+        };
+      },
     }),
     rpc: async (fnName: string, params: any) => {
       assert.strictEqual(fnName, 'record_inbound_interaction_atomic', 'Must call RPC record_inbound_interaction_atomic');
@@ -706,7 +714,7 @@ async function runWebhookFailClosedTests() {
       company_id: testCompanyA,
       content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
       externalMessageId: 'msg-ext-atomic-001',
-      customerId: 'cust-atomic-001',
+      customerId: testAtomicCustomerId,
     },
     mockAtomicClient
   );
@@ -726,7 +734,7 @@ async function runWebhookFailClosedTests() {
       company_id: testCompanyA,
       content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
       externalMessageId: 'msg-ext-atomic-001', // Cùng external_ref
-      customerId: 'cust-atomic-001',
+      customerId: testAtomicCustomerId,
     },
     mockAtomicClient
   );
@@ -748,7 +756,7 @@ async function runWebhookFailClosedTests() {
           company_id: testCompanyA,
           content: 'Tin nhắn gây lỗi rollback',
           externalMessageId: 'msg-ext-atomic-fail',
-          customerId: 'cust-atomic-001',
+          customerId: testAtomicCustomerId,
         },
         mockAtomicClient
       );
@@ -762,6 +770,90 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(mockDbState.interactions.length, 1, 'Zero orphan interaction committed');
   assert.strictEqual(mockDbState.raw_contents.length, 1, 'Zero raw content committed');
   console.log('✓ PASS 5c: Inbound atomic transaction rollback leaves zero partial records committed');
+
+  // 5d. Customer Resolution Fail-Closed: Fail immediately when customer cannot be resolved (no direct insert fallback)
+  customerInsertAttempted = false;
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'facebook',
+          senderId: 'fb-user-atomic-no-cust',
+          company_id: testCompanyA,
+          content: 'Tin nhắn không có khách hàng hợp lệ',
+          externalMessageId: 'msg-ext-atomic-no-cust',
+        },
+        mockAtomicClient
+      );
+    },
+    /Inbound customer resolution failed: Fail-Closed/,
+    'Must fail closed immediately when customer cannot be resolved'
+  );
+  assert.strictEqual(customerInsertAttempted, false, 'Must NOT attempt direct insert into customers table in production');
+  console.log('✓ PASS 5d: Inbound customer resolution fails closed with zero direct customer inserts');
+
+  // 5e. Ingress Idempotency Authority: Must NEVER query private schema (interaction_raw_contents)
+  let schemaCalled = false;
+  const mockIngressClient: any = {
+    from: (_table: string) => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  id: 'int-existing-1',
+                  conversation_id: 'conv-existing-1',
+                  customer_id: testAtomicCustomerId,
+                  channel: 'facebook',
+                  external_ref: 'msg-ext-dup-ingress',
+                },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+    schema: (schemaName: string) => {
+      schemaCalled = true;
+      throw new Error(`Forbidden: Direct access to schema ${schemaName} is prohibited.`);
+    },
+    rpc: async () => ({ data: null, error: null }),
+  };
+
+  const ingressDupResult = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb-user-dup-ingress',
+      message_id: 'msg-ext-dup-ingress',
+      content: 'Tin nhắn idempotency check',
+      timestamp: new Date().toISOString(),
+    },
+    mockIngressClient
+  );
+  assert.strictEqual(ingressDupResult.duplicate, true);
+  assert.strictEqual(schemaCalled, false, 'Must NOT call adminClient.schema() in findExistingInteractionDurable');
+  console.log('✓ PASS 5e: Ingress idempotency checks public.interactions without querying private schema');
+
+  // 5f. Webhook Error Boundary Sanitization: 500 response with trace_id and NO internal error leakage
+  const faultyRequest = {
+    headers: new Headers({
+      'content-type': 'application/json',
+    }),
+    text: () => Promise.reject(new Error('Internal database socket crash / sensitive credential stack trace')),
+  } as unknown as NextRequest;
+
+  const resErrorSanitized = await webhookPostHandler(faultyRequest);
+  assert.strictEqual(resErrorSanitized.status, 500);
+  const jsonErrorSanitized = await resErrorSanitized.json();
+  assert.strictEqual(jsonErrorSanitized.success, false);
+  assert.strictEqual(jsonErrorSanitized.error, 'WEBHOOK_PROCESSING_FAILED');
+  assert.strictEqual(jsonErrorSanitized.message, 'Không thể xử lý dữ liệu webhook.');
+  assert(typeof jsonErrorSanitized.trace_id === 'string' && jsonErrorSanitized.trace_id.length > 0, 'Must return trace_id');
+  assert(!JSON.stringify(jsonErrorSanitized).includes('Internal database socket crash'), 'Must NOT leak internal error message');
+  console.log('✓ PASS 5f: Webhook Error Boundary sanitizes 500 errors and returns trace_id');
 
   // Restore DEMO_MODE for downstream
   process.env.DEMO_MODE = 'true';

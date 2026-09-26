@@ -1,4 +1,3 @@
-import * as crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
@@ -8,6 +7,8 @@ import type {
   CustomerTimelineEvent,
   InboxChannel,
   InboxMessage,
+  MessageDeliveryStatus,
+  OutboundDeliveryRecord,
   SendMessageInput,
   SenderType,
 } from '../types/inbox.types';
@@ -75,17 +76,6 @@ export function isDemoModeActive(): boolean {
 
 function isDemoMode(): boolean {
   return isDemoModeActive();
-}
-
-function generateUUID(): string {
-  if (typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
 }
 
 // ============================================================================
@@ -985,6 +975,7 @@ export async function sendMessage(
   const interactionId = rpcData.interaction_id as string;
   const customerId = (rpcData.customer_id as string) || '';
   const channel = ((rpcData.channel as string) || 'facebook').toLowerCase() as InboxChannel;
+  const deliveryStatus = (rpcData.delivery_status as MessageDeliveryStatus) || 'PENDING_DISPATCH';
 
   return {
     id: interactionId,
@@ -999,7 +990,7 @@ export async function sendMessage(
     sanitization_status: 'SUCCEEDED',
     created_at: now,
     direction: 'outbound',
-    delivery_status: 'PENDING_DISPATCH',
+    delivery_status: deliveryStatus,
   };
 }
 
@@ -1395,53 +1386,33 @@ export async function addInboundMessage(params: {
 
   if (params.customerId && UUID_REGEX.test(params.customerId)) {
     resolvedCustomerId = params.customerId;
-  } else {
-    // Tìm hoặc tạo khách hàng mới nếu có senderPhone
-    if (params.senderPhone) {
-      try {
-        const custResult = await CustomerService.findOrCreateByPhone(
-          {
-            phone: params.senderPhone,
-            name: customerName,
-            companyId,
-            source: (dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
-          },
-          adminClient
-        );
-        if (custResult?.customer) {
-          resolvedCustomerId = custResult.customer.id;
-          customerCode = custResult.customer.customer_code;
-          customerName = custResult.customer.name;
-          customerStage = custResult.customer.stage;
-        }
-      } catch {
-        // Bỏ qua lỗi tìm khách qua phone
-      }
-    }
-
-    if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-      const newCustId = generateUUID();
-      const { data: createdCust } = await adminClient
-        .from('customers')
-        .insert({
-          id: newCustId,
-          company_id: companyId,
+  } else if (params.senderPhone) {
+    try {
+      const custResult = await CustomerService.findOrCreateByPhone(
+        {
+          phone: params.senderPhone,
           name: customerName,
-          source: dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK',
-          stage: 'LEAD_NEW',
-        })
-        .select('id, name, customer_code, stage')
-        .maybeSingle();
-
-      if (createdCust) {
-        resolvedCustomerId = createdCust.id;
-        customerName = createdCust.name || customerName;
-        customerCode = createdCust.customer_code || customerCode;
-        customerStage = createdCust.stage || customerStage;
-      } else {
-        resolvedCustomerId = newCustId;
+          companyId,
+          source: (dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
+        },
+        adminClient
+      );
+      if (!custResult?.customer?.id) {
+        throw new Error('Inbound customer resolution failed: Fail-Closed');
       }
+      resolvedCustomerId = custResult.customer.id;
+      customerCode = custResult.customer.customer_code || customerCode;
+      customerName = custResult.customer.name || customerName;
+      customerStage = custResult.customer.stage || customerStage;
+    } catch {
+      throw new Error('Inbound customer resolution failed: Fail-Closed');
     }
+  } else {
+    throw new Error('Inbound customer resolution failed: Fail-Closed');
+  }
+
+  if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+    throw new Error('Inbound customer resolution failed: Fail-Closed');
   }
 
   let rpcRes: { data: unknown; error: unknown } | null = null;
@@ -1565,6 +1536,41 @@ export function resetInboxStore(
   }
 }
 
+/**
+ * 7. Polling/Claim pending outbound deliveries for Transactional Outbox Worker
+ */
+export async function claimPendingDeliveries(
+  companyId: string,
+  workerId: string,
+  limit = 10,
+  client?: SupabaseClient
+): Promise<OutboundDeliveryRecord[]> {
+  if (!companyId || !UUID_REGEX.test(companyId)) {
+    throw new Error('company_id là bắt buộc để claim outbound deliveries (Fail-Closed).');
+  }
+
+  if (isDemoMode()) {
+    return [];
+  }
+
+  const adminClient = client || createAdminClient();
+  if (typeof adminClient.rpc !== 'function') {
+    throw new Error('claimPendingDeliveries: Atomic RPC không khả dụng (Fail-Closed).');
+  }
+
+  const { data, error } = await adminClient.rpc('claim_pending_outbound_deliveries', {
+    p_company_id: companyId,
+    p_worker_id: workerId,
+    p_limit: limit,
+  });
+
+  if (error) {
+    throw new Error(`claimPendingDeliveries failed: ${error.message}`);
+  }
+
+  return (data as OutboundDeliveryRecord[]) || [];
+}
+
 export const InboxService = {
   isDemoModeActive,
   getConversations,
@@ -1575,6 +1581,8 @@ export const InboxService = {
   addInboundMessage,
   updateConversationCustomerStage,
   resetInboxStore,
+  claimPendingDeliveries,
   sanitizePhoneInText,
   DEFAULT_INBOX_COMPANY_ID,
 };
+

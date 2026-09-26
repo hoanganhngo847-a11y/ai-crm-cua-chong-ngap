@@ -193,36 +193,6 @@ export async function findExistingInteractionDurable(
         }
       }
 
-      // 1c. Kiểm tra tại private.interaction_raw_contents (source_metadata->>external_message_id)
-      try {
-        const { data: rawData } = await adminClient
-          .schema('private')
-          .from('interaction_raw_contents')
-          .select('interaction_id, source_metadata')
-          .eq('company_id', cleanCompanyId)
-          .contains('source_metadata', { external_message_id: cleanMsgId })
-          .maybeSingle();
-
-        if (rawData?.interaction_id) {
-          const { data: intData } = await adminClient
-            .from('interactions')
-            .select('id, conversation_id, customer_id, channel')
-            .eq('id', rawData.interaction_id)
-            .eq('company_id', cleanCompanyId)
-            .maybeSingle();
-
-          if (intData) {
-            return {
-              id: intData.id,
-              conversation_id: intData.conversation_id,
-              customer_id: intData.customer_id,
-              channel,
-            };
-          }
-        }
-      } catch {
-        // Bỏ qua nếu môi trường test/mock không có schema private
-      }
     } catch {
       // Bỏ qua lỗi kết nối CSDL và tiếp tục kiểm tra fallback
     }
