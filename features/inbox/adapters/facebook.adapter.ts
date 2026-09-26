@@ -1,16 +1,16 @@
 /**
  * FACEBOOK MESSENGER REFERENCE ADAPTER PORT
- * 
+ *
  * ============================================================================
  * ARCHITECTURAL OWNERSHIP & CONTRACT BOUNDARY
  * ============================================================================
  * - Member 2: Sở hữu Ingress Engine, Webhook Gateway Dispatcher và ProviderAdapterPort Interface.
  * - Member 4: Sở hữu Facebook Messenger Integration và cài đặt chính thức của FacebookAdapter.
- * 
+ *
  * File này định nghĩa Reference Adapter Port cho Facebook Messenger Ingress,
  * đóng vai trò contract stub để compile và test ở TV2; implementation chính thức
  * thuộc quyền sở hữu của Member 4 khi tích hợp vào nhánh main.
- * 
+ *
  * Thực thi nghiêm ngặt theo đúng ProviderAdapterPort<FacebookWebhookEnvelope>.
  */
 

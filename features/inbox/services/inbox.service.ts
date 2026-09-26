@@ -1585,4 +1585,3 @@ export const InboxService = {
   sanitizePhoneInText,
   DEFAULT_INBOX_COMPANY_ID,
 };
-
