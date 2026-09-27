@@ -20,12 +20,14 @@
     "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts",
     "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
+    "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test": "npm run test:auth && npm run test:security && npm run test:survey"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.116.0",
     "next": "16.3.5",
+    "openai": "^7.20.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1",
