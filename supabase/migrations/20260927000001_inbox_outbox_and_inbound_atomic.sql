@@ -1,17 +1,27 @@
 -- ==============================================================================
--- MIGRATION: 20260916000004_outbound_delivery_outbox.sql
+-- MIGRATION: 20260927000001_inbox_outbox_and_inbound_atomic.sql
 -- Module: Omnichannel Inbox & Outbound Dispatcher (Member 2 Ownership Boundary)
 --
 -- Mục tiêu:
--- 1. Tạo bảng public.outbound_deliveries phục vụ Transactional Outbox Pattern cho Outbound Messaging.
+-- 1. Tạo bảng public.outbound_deliveries phục vụ Transactional Outbox Pattern cho Outbound Messaging:
+--    - Bổ sung client_command_id (uuid NULL).
+--    - Ràng buộc UNIQUE chống trùng lệnh gửi: CONSTRAINT uq_outbound_deliveries_command UNIQUE (company_id, client_command_id).
+--    - Khóa bảo mật RLS: Bật RLS, REVOKE toàn bộ từ authenticated và anon, chỉ GRANT ALL cho service_role.
 -- 2. Cập nhật ACID Atomic RPC public.record_outbound_interaction_atomic:
---    - Cập nhật conversations (last_message_at = now(), updated_at = now()).
---    - INSERT public.interactions (direction = 'OUTBOUND').
---    - INSERT private.interaction_raw_contents.
---    - INSERT public.outbound_deliveries (delivery_status = 'PENDING_DISPATCH').
---    - Đảm bảo tính Transactional: Rollback toàn bộ nếu bất kỳ bước nào lỗi.
---    - Trả về (interaction_id, conversation_id, customer_id, channel, delivery_id, delivery_status).
--- 3. Tạo RPC public.claim_pending_outbound_deliveries hỗ trợ Outbox Worker (FOR UPDATE SKIP LOCKED).
+--    - Thêm tham số: p_client_command_id uuid DEFAULT NULL.
+--    - Idempotency check: Nếu p_client_command_id IS NOT NULL và đã tồn tại -> trả về ngay thông tin hiện có kèm is_duplicate = true.
+--    - Nếu chưa tồn tại -> thực hiện trong 1 transaction:
+--      + Khóa conversations (FOR UPDATE).
+--      + Cập nhật conversations (last_message_at = now(), updated_at = now()).
+--      + INSERT public.interactions (direction = 'OUTBOUND').
+--      + INSERT private.interaction_raw_contents.
+--      + INSERT public.outbound_deliveries (lưu client_command_id, delivery_status = 'PENDING_DISPATCH').
+--      + Trả về kết quả bền vững kèm is_duplicate = false.
+-- 3. Cập nhật RPC public.claim_pending_outbound_deliveries:
+--    - Quét các bản ghi PENDING_DISPATCH (locked_at IS NULL HOẶC locked_at < now() - 5 phút)
+--      HOẶC các bản ghi QUEUED bị crash (locked_at < now() - 5 phút).
+--    - Khóa batch bằng FOR UPDATE SKIP LOCKED.
+--    - Khi claim: cập nhật delivery_status = 'QUEUED', locked_at = now(), locked_by = p_worker_id, retry_count = retry_count + 1.
 -- ==============================================================================
 
 -- 1. Bảng public.outbound_deliveries
@@ -22,39 +32,45 @@ CREATE TABLE IF NOT EXISTS public.outbound_deliveries (
   interaction_id uuid NOT NULL REFERENCES public.interactions(id) ON DELETE CASCADE,
   channel text NOT NULL CHECK (channel IN ('FACEBOOK', 'ZALO', 'SYSTEM', 'HOTLINE', 'DIRECT')),
   delivery_status text NOT NULL DEFAULT 'PENDING_DISPATCH' CHECK (delivery_status IN ('PENDING_DISPATCH', 'QUEUED', 'SENT', 'DELIVERED', 'FAILED')),
+  client_command_id uuid NULL,
   provider_message_id text,
   retry_count integer NOT NULL DEFAULT 0,
   locked_at timestamptz,
   locked_by text,
   error_message text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_outbound_deliveries_command UNIQUE (company_id, client_command_id)
 );
 
 -- Index phục vụ Polling Worker & Queue Dispatching
-CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_pending 
-  ON public.outbound_deliveries (company_id, delivery_status) 
-  WHERE delivery_status = 'PENDING_DISPATCH';
+CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_pending
+  ON public.outbound_deliveries (company_id, delivery_status, created_at)
+  WHERE delivery_status IN ('PENDING_DISPATCH', 'QUEUED');
 
-CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_interaction 
+CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_interaction
   ON public.outbound_deliveries (interaction_id);
 
-CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_conversation 
+CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_conversation
   ON public.outbound_deliveries (conversation_id);
 
--- RLS & Tenant Isolation
+CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_command
+  ON public.outbound_deliveries (company_id, client_command_id)
+  WHERE client_command_id IS NOT NULL;
+
+-- Khóa bảo mật RLS: Bật RLS, REVOKE toàn bộ quyền từ authenticated và anon, chỉ GRANT ALL cho service_role
 ALTER TABLE public.outbound_deliveries ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS outbound_deliveries_tenant_isolation ON public.outbound_deliveries;
-CREATE POLICY outbound_deliveries_tenant_isolation ON public.outbound_deliveries
-  FOR ALL
-  USING (company_id = (current_setting('app.current_company_id', true))::uuid);
-
+REVOKE ALL ON TABLE public.outbound_deliveries FROM PUBLIC;
+REVOKE ALL ON TABLE public.outbound_deliveries FROM anon;
+REVOKE ALL ON TABLE public.outbound_deliveries FROM authenticated;
 GRANT ALL ON TABLE public.outbound_deliveries TO service_role;
-GRANT SELECT ON TABLE public.outbound_deliveries TO authenticated;
 
 
 -- 2. Cập nhật RPC public.record_outbound_interaction_atomic
+DROP FUNCTION IF EXISTS public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb);
+DROP FUNCTION IF EXISTS public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid);
+
 CREATE OR REPLACE FUNCTION public.record_outbound_interaction_atomic(
   p_company_id uuid,
   p_conversation_id uuid,
@@ -63,7 +79,8 @@ CREATE OR REPLACE FUNCTION public.record_outbound_interaction_atomic(
   p_sanitized_content text DEFAULT NULL,
   p_raw_content text DEFAULT '',
   p_sanitization_status text DEFAULT 'SUCCEEDED',
-  p_source_metadata jsonb DEFAULT '{}'::jsonb
+  p_source_metadata jsonb DEFAULT '{}'::jsonb,
+  p_client_command_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -79,6 +96,7 @@ DECLARE
   v_delivery_id uuid;
   v_sanitization_status text;
   v_now timestamptz := now();
+  v_existing_delivery record;
 BEGIN
   -- 1. Validate mandatory fields
   IF p_company_id IS NULL THEN
@@ -88,7 +106,37 @@ BEGIN
     RAISE EXCEPTION 'p_conversation_id là bắt buộc';
   END IF;
 
-  -- 2. Resource Authorization & Lock conversation
+  -- 2. Idempotency check via client_command_id:
+  -- Nếu p_client_command_id IS NOT NULL và đã tồn tại -> trả về ngay thông tin hiện có kèm is_duplicate = true
+  IF p_client_command_id IS NOT NULL THEN
+    SELECT
+      od.id AS delivery_id,
+      od.interaction_id,
+      od.conversation_id,
+      od.channel,
+      od.delivery_status,
+      i.customer_id
+    INTO v_existing_delivery
+    FROM public.outbound_deliveries od
+    JOIN public.interactions i ON i.id = od.interaction_id
+    WHERE od.company_id = p_company_id
+      AND od.client_command_id = p_client_command_id
+    LIMIT 1;
+
+    IF FOUND THEN
+      RETURN jsonb_build_object(
+        'interaction_id', v_existing_delivery.interaction_id,
+        'conversation_id', v_existing_delivery.conversation_id,
+        'customer_id', v_existing_delivery.customer_id,
+        'channel', v_existing_delivery.channel,
+        'delivery_id', v_existing_delivery.delivery_id,
+        'delivery_status', v_existing_delivery.delivery_status,
+        'is_duplicate', true
+      );
+    END IF;
+  END IF;
+
+  -- 3. Resource Authorization & Lock conversation (FOR UPDATE)
   SELECT * INTO v_conversation
   FROM public.conversations
   WHERE id = p_conversation_id
@@ -115,14 +163,14 @@ BEGIN
     ELSE 'DIRECT'
   END;
 
-  -- 3. Cập nhật conversations: last_message_at = now(), updated_at = now()
+  -- 4. Cập nhật conversations: last_message_at = now(), updated_at = now()
   UPDATE public.conversations
   SET last_message_at = v_now,
       updated_at = v_now
   WHERE id = p_conversation_id
     AND company_id = p_company_id;
 
-  -- 4. INSERT public.interactions với direction = 'OUTBOUND'
+  -- 5. INSERT public.interactions với direction = 'OUTBOUND'
   v_interaction_id := gen_random_uuid();
 
   INSERT INTO public.interactions (
@@ -155,7 +203,7 @@ BEGIN
     v_now
   );
 
-  -- 5. INSERT private.interaction_raw_contents (Strict ACID Transaction - No Swallow)
+  -- 6. INSERT private.interaction_raw_contents (Strict ACID Transaction - No Swallow)
   INSERT INTO private.interaction_raw_contents (
     interaction_id,
     company_id,
@@ -172,7 +220,7 @@ BEGIN
     v_now
   );
 
-  -- 6. INSERT public.outbound_deliveries (Transactional Outbox Pattern)
+  -- 7. INSERT public.outbound_deliveries (Transactional Outbox Pattern với client_command_id)
   v_delivery_id := gen_random_uuid();
 
   INSERT INTO public.outbound_deliveries (
@@ -182,6 +230,7 @@ BEGIN
     interaction_id,
     channel,
     delivery_status,
+    client_command_id,
     retry_count,
     created_at,
     updated_at
@@ -192,33 +241,37 @@ BEGIN
     v_interaction_id,
     v_delivery_channel,
     'PENDING_DISPATCH',
+    p_client_command_id,
     0,
     v_now,
     v_now
   );
 
-  -- 7. Trả về kết quả bền vững
+  -- 8. Trả về kết quả bền vững với is_duplicate = false
   RETURN jsonb_build_object(
     'interaction_id', v_interaction_id,
     'conversation_id', p_conversation_id,
     'customer_id', v_customer_id,
     'channel', v_channel,
     'delivery_id', v_delivery_id,
-    'delivery_status', 'PENDING_DISPATCH'
+    'delivery_status', 'PENDING_DISPATCH',
+    'is_duplicate', false
   );
 END;
 $$;
 
-COMMENT ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb)
-  IS 'ACID Atomic outbound message reply with conversations update, interactions insert, raw content persistence, and outbound outbox delivery. Restricted to service_role.';
+COMMENT ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid)
+  IS 'ACID Atomic outbound message reply with conversations update, interactions insert, raw content persistence, client_command_id idempotency, and outbound outbox delivery. Restricted to service_role.';
 
-REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb) FROM anon;
-REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid) FROM anon;
+REVOKE ALL ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid) TO service_role;
 
 
 -- 3. RPC: public.claim_pending_outbound_deliveries
+DROP FUNCTION IF EXISTS public.claim_pending_outbound_deliveries(uuid, text, integer);
+
 CREATE OR REPLACE FUNCTION public.claim_pending_outbound_deliveries(
   p_company_id uuid,
   p_worker_id text,
@@ -239,13 +292,17 @@ BEGIN
   SET delivery_status = 'QUEUED',
       locked_at = now(),
       locked_by = p_worker_id,
+      retry_count = public.outbound_deliveries.retry_count + 1,
       updated_at = now()
   WHERE id IN (
     SELECT id
     FROM public.outbound_deliveries
     WHERE company_id = p_company_id
-      AND delivery_status = 'PENDING_DISPATCH'
-      AND (locked_at IS NULL OR locked_at < now() - INTERVAL '5 minutes')
+      AND (
+        (delivery_status = 'PENDING_DISPATCH' AND (locked_at IS NULL OR locked_at < now() - INTERVAL '5 minutes'))
+        OR
+        (delivery_status = 'QUEUED' AND locked_at < now() - INTERVAL '5 minutes')
+      )
     ORDER BY created_at ASC
     LIMIT coalesce(p_limit, 10)
     FOR UPDATE SKIP LOCKED
@@ -255,7 +312,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.claim_pending_outbound_deliveries(uuid, text, integer)
-  IS 'Atomic batch lock and claim pending outbound deliveries for workers using FOR UPDATE SKIP LOCKED. Restricted to service_role.';
+  IS 'Atomic batch lock and claim pending/crashed outbound deliveries for workers using FOR UPDATE SKIP LOCKED. Restricted to service_role.';
 
 REVOKE ALL ON FUNCTION public.claim_pending_outbound_deliveries(uuid, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.claim_pending_outbound_deliveries(uuid, text, integer) FROM anon;

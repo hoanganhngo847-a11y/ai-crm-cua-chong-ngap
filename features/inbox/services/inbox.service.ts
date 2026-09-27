@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
@@ -857,7 +858,7 @@ export async function sendMessage(
     throw err;
   }
 
-  const { conversation_id, content, sender_type = 'sale', sender_name } = input;
+  const { conversation_id, content, sender_type = 'sale', sender_name, clientCommandId } = input;
 
   if (!conversation_id || !content.trim()) {
     const err = new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.') as ServiceError;
@@ -897,6 +898,8 @@ export async function sendMessage(
       created_at: new Date().toISOString(),
       direction: sender_type === 'customer' ? 'inbound' : 'outbound',
       delivery_status: 'PENDING_DISPATCH',
+      client_command_id: clientCommandId,
+      is_duplicate: false,
     };
 
     if (!messagesStore[conversation_id]) {
@@ -941,6 +944,7 @@ export async function sendMessage(
         sender_name,
         sender_type,
       },
+      p_client_command_id: clientCommandId || null,
     });
   } catch (err: unknown) {
     rpcThrew = true;
@@ -976,6 +980,7 @@ export async function sendMessage(
   const customerId = (rpcData.customer_id as string) || '';
   const channel = ((rpcData.channel as string) || 'facebook').toLowerCase() as InboxChannel;
   const deliveryStatus = (rpcData.delivery_status as MessageDeliveryStatus) || 'PENDING_DISPATCH';
+  const isDuplicate = Boolean(rpcData.is_duplicate);
 
   return {
     id: interactionId,
@@ -991,6 +996,8 @@ export async function sendMessage(
     created_at: now,
     direction: 'outbound',
     delivery_status: deliveryStatus,
+    client_command_id: clientCommandId,
+    is_duplicate: isDuplicate,
   };
 }
 
@@ -1270,6 +1277,7 @@ export async function addInboundMessage(params: {
   timestamp?: string;
   externalMessageId?: string;
   customerId?: string;
+  externalUserId?: string;
 }, client?: SupabaseClient): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
   // Fail-Closed: Bắt buộc phải có company_id hợp lệ, xóa bỏ hoàn toàn fallback DEFAULT_INBOX_COMPANY_ID
   if (
@@ -1384,33 +1392,116 @@ export async function addInboundMessage(params: {
   let customerStage: string = 'LEAD_NEW';
   let resolvedCustomerId: string | null = null;
 
+  const channel = dbChannel; // 'ZALO' | 'FACEBOOK'
+
+  // Bậc 1: Nếu params.customerId có giá trị và hợp lệ -> Dùng luôn resolvedCustomerId = params.customerId
   if (params.customerId && UUID_REGEX.test(params.customerId)) {
     resolvedCustomerId = params.customerId;
-  } else if (params.senderPhone) {
+  }
+
+  // Bậc 2: Nếu có params.externalUserId:
+  if (!resolvedCustomerId && params.externalUserId) {
+    try {
+      const { data: identity } = await adminClient
+        .from('identities')
+        .select('customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', channel)
+        .eq('external_id', params.externalUserId)
+        .maybeSingle();
+
+      if (identity?.customer_id) {
+        resolvedCustomerId = identity.customer_id;
+        const { data: existingCust } = await adminClient
+          .from('customers')
+          .select('name, customer_code, stage')
+          .eq('id', resolvedCustomerId)
+          .eq('company_id', companyId)
+          .maybeSingle();
+
+        if (existingCust) {
+          customerName = existingCust.name || customerName;
+          customerCode = existingCust.customer_code || customerCode;
+          customerStage = existingCust.stage || customerStage;
+        }
+      }
+    } catch {
+      // Tiếp tục kiểm tra bậc tiếp theo nếu truy vấn gặp lỗi
+    }
+  }
+
+  // Bậc 3: Nếu chưa tìm thấy và CÓ params.senderPhone:
+  if (!resolvedCustomerId && params.senderPhone) {
     try {
       const custResult = await CustomerService.findOrCreateByPhone(
         {
           phone: params.senderPhone,
           name: customerName,
           companyId,
-          source: (dbChannel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
+          source: (channel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
         },
         adminClient
       );
-      if (!custResult?.customer?.id) {
-        throw new Error('Inbound customer resolution failed: Fail-Closed');
+      if (custResult?.customer?.id) {
+        resolvedCustomerId = custResult.customer.id;
+        customerCode = custResult.customer.customer_code || customerCode;
+        customerName = custResult.customer.name || customerName;
+        customerStage = custResult.customer.stage || customerStage;
       }
-      resolvedCustomerId = custResult.customer.id;
-      customerCode = custResult.customer.customer_code || customerCode;
-      customerName = custResult.customer.name || customerName;
-      customerStage = custResult.customer.stage || customerStage;
     } catch {
-      throw new Error('Inbound customer resolution failed: Fail-Closed');
+      // Tiếp tục kiểm tra bậc tiếp theo
     }
-  } else {
-    throw new Error('Inbound customer resolution failed: Fail-Closed');
   }
 
+  // Bậc 4: Nếu chưa tìm thấy và KHÔNG CÓ params.senderPhone, nhưng CÓ params.externalUserId:
+  // (Đây là khách mới từ Facebook/Zalo chưa có SĐT)
+  if (!resolvedCustomerId && !params.senderPhone && params.externalUserId) {
+    const newCustId = crypto.randomUUID();
+    const newCustName = params.senderName || ('Khách hàng ' + channel);
+
+    // INSERT khách hàng mới vào public.customers
+    const { data: createdCust } = await adminClient
+      .from('customers')
+      .insert({
+        id: newCustId,
+        company_id: companyId,
+        name: newCustName,
+        stage: 'LEAD_NEW',
+        source: channel,
+      })
+      .select('id, name, customer_code, stage')
+      .maybeSingle();
+
+    const createdId = createdCust?.id || newCustId;
+
+    // INSERT vào public.identities
+    await adminClient.from('identities').insert({
+      company_id: companyId,
+      customer_id: createdId,
+      channel: channel,
+      external_id: params.externalUserId,
+      verified: false,
+    });
+
+    // INSERT vào public.customer_stage_histories
+    await adminClient.from('customer_stage_histories').insert({
+      company_id: companyId,
+      customer_id: createdId,
+      stage: 'LEAD_NEW',
+      to_stage: 'LEAD_NEW',
+      from_stage: null,
+      actor_type: 'SYSTEM',
+      reason: 'Tự động tạo từ tương tác ' + channel,
+      note: 'Tự động tạo từ tương tác ' + channel,
+    });
+
+    resolvedCustomerId = createdId;
+    customerName = createdCust?.name || newCustName;
+    customerCode = createdCust?.customer_code || customerCode;
+    customerStage = createdCust?.stage || 'LEAD_NEW';
+  }
+
+  // Điều kiện Fail-Closed: Chỉ ném lỗi khi sau cả 4 bậc trên mà resolvedCustomerId vẫn rỗng.
   if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
     throw new Error('Inbound customer resolution failed: Fail-Closed');
   }

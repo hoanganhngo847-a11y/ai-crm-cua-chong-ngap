@@ -77,6 +77,7 @@ export interface OutboundDeliveryRecord {
   interaction_id: string;
   channel: string;
   delivery_status: MessageDeliveryStatus;
+  client_command_id?: string | null;
   provider_message_id?: string | null;
   retry_count: number;
   locked_at?: string | null;
@@ -106,6 +107,8 @@ export interface InboxMessage {
   created_at: string;
   direction?: 'inbound' | 'outbound' | 'INBOUND' | 'OUTBOUND';
   delivery_status?: MessageDeliveryStatus;
+  client_command_id?: string;
+  is_duplicate?: boolean;
 }
 
 /**
@@ -117,7 +120,11 @@ export interface SendMessageInput {
   content: string;
   sender_type?: SenderType;
   sender_name?: string;
+  clientCommandId?: string;
 }
+
+export type SendMessageParams = SendMessageInput;
+export type SendMessageResult = InboxMessage;
 
 /**
  * Filter query parameters for conversation list

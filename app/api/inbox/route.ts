@@ -8,6 +8,8 @@ import type { InboxChannel } from '../../../features/inbox/types/inbox.types';
 import type { ActorContext } from '../../../shared/contracts/auth';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface InboxRouteContext {
   params?: Promise<Record<string, string | string[]>>;
   actor?: ActorContext | null;
@@ -333,6 +335,29 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
       );
     }
 
+    // Trích xuất clientCommandId từ một trong các nguồn theo thứ tự ưu tiên:
+    // 1. Header: req.headers.get('x-client-command-id') || req.headers.get('x-idempotency-key')
+    // 2. Request Body: body.client_command_id || body.clientCommandId
+    const rawCommandId =
+      request.headers.get('x-client-command-id') ||
+      request.headers.get('x-idempotency-key') ||
+      (typeof body.client_command_id === 'string' ? body.client_command_id : null) ||
+      (typeof body.clientCommandId === 'string' ? body.clientCommandId : null);
+
+    const clientCommandId = rawCommandId ? rawCommandId.trim() : undefined;
+
+    // Nếu client cung cấp, kiểm tra định dạng UUID hợp lệ; nếu không hợp lệ thì trả về HTTP 400 INVALID_COMMAND_ID
+    if (clientCommandId && !UUID_REGEX.test(clientCommandId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'INVALID_COMMAND_ID',
+          message: 'client_command_id không hợp lệ (Bắt buộc phải là UUID).',
+        },
+        { status: 400 }
+      );
+    }
+
     // Resource Authorization & Tenant Isolation:
     // Tuyệt đối sử dụng companyId được giải mã từ session membership, không lấy từ client body.
     try {
@@ -342,23 +367,29 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
           company_id: companyId,
           content: content.trim(),
           sender_type: 'sale',
+          clientCommandId,
         },
         companyId
       );
 
       // Đảm bảo không chứa raw_content trong DTO trả về (Lỗi P1 số 8)
       const { raw_content: _raw_content, ...safeData } = newMessage;
+      const isDuplicate = Boolean(safeData.is_duplicate);
 
       return NextResponse.json(
         {
           success: true,
           data: {
             ...safeData,
+            client_command_id: safeData.client_command_id || clientCommandId || null,
             delivery_status: safeData.delivery_status || 'PENDING_DISPATCH',
+            is_duplicate: isDuplicate,
           },
-          message: 'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
+          message: isDuplicate
+            ? 'Lệnh gửi tin nhắn đã được ghi nhận trước đó (Idempotent OK).'
+            : 'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
         },
-        { status: 201 }
+        { status: isDuplicate ? 200 : 201 }
       );
     } catch (sendErr: unknown) {
       const errorObj = sendErr as { status?: number; code?: string; message?: string } | undefined;

@@ -389,6 +389,8 @@ async function runInboxTenantIsolationTests() {
 
   let queriedPrivateSchema = false;
   const mockDbCalls: { table?: string; action?: string; company_id?: string; schema?: string; record?: any; fnName?: string; params?: any }[] = [];
+  const recordedOutboundCommands = new Map<string, { interaction_id: string; delivery_id: string }>();
+  const mockOutboxDeliveries: any[] = [];
 
   const mockDbClient: any = {
     simulateAuditError: false,
@@ -535,35 +537,86 @@ async function runInboxTenantIsolationTests() {
         if (params.p_conversation_id === 'conv-cross-tenant') {
           return { data: null, error: { message: 'CONVERSATION_NOT_FOUND', code: 'P0002' } };
         }
+
+        const commandId = params.p_client_command_id;
+        if (commandId && recordedOutboundCommands.has(commandId)) {
+          const existing = recordedOutboundCommands.get(commandId)!;
+          return {
+            data: {
+              interaction_id: existing.interaction_id,
+              conversation_id: params.p_conversation_id,
+              customer_id: 'cust-1',
+              channel: 'ZALO',
+              delivery_id: existing.delivery_id,
+              delivery_status: 'PENDING_DISPATCH',
+              is_duplicate: true,
+            },
+            error: null,
+          };
+        }
+
+        const newInteractionId = `int-rpc-outbound-${Date.now()}-${mockDbCalls.length}`;
+        const newDeliveryId = `del-rpc-outbound-${Date.now()}-${mockDbCalls.length}`;
+        if (commandId) {
+          recordedOutboundCommands.set(commandId, {
+            interaction_id: newInteractionId,
+            delivery_id: newDeliveryId,
+          });
+        }
+
         return {
           data: {
-            interaction_id: 'int-rpc-outbound-1',
+            interaction_id: newInteractionId,
             conversation_id: params.p_conversation_id,
             customer_id: 'cust-1',
             channel: 'ZALO',
-            delivery_id: 'del-rpc-outbound-1',
+            delivery_id: newDeliveryId,
             delivery_status: 'PENDING_DISPATCH',
+            is_duplicate: false,
           },
           error: null,
         };
       }
       if (fnName === 'claim_pending_outbound_deliveries') {
-        return {
-          data: [
-            {
-              id: 'del-rpc-outbound-1',
-              company_id: params.p_company_id,
-              conversation_id: 'conv-1',
-              interaction_id: 'int-rpc-outbound-1',
-              channel: 'ZALO',
-              delivery_status: 'QUEUED',
-              retry_count: 0,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-          ],
-          error: null,
-        };
+        const nowMs = Date.now();
+        const claimed: any[] = [];
+        for (const del of mockOutboxDeliveries) {
+          if (del.company_id !== params.p_company_id) continue;
+          const isStaleLock = del.locked_at && (nowMs - new Date(del.locked_at).getTime()) > 5 * 60 * 1000;
+          const canClaim =
+            (del.delivery_status === 'PENDING_DISPATCH' && (!del.locked_at || isStaleLock)) ||
+            (del.delivery_status === 'QUEUED' && isStaleLock);
+
+          if (canClaim && claimed.length < (params.p_limit || 10)) {
+            del.delivery_status = 'QUEUED';
+            del.locked_at = new Date().toISOString();
+            del.locked_by = params.p_worker_id;
+            del.retry_count = (del.retry_count || 0) + 1;
+            del.updated_at = new Date().toISOString();
+            claimed.push({ ...del });
+          }
+        }
+
+        if (claimed.length === 0 && mockOutboxDeliveries.length === 0) {
+          return {
+            data: [
+              {
+                id: 'del-rpc-outbound-1',
+                company_id: params.p_company_id,
+                conversation_id: 'conv-1',
+                interaction_id: 'int-rpc-outbound-1',
+                channel: 'ZALO',
+                delivery_status: 'QUEUED',
+                retry_count: 0,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              },
+            ],
+            error: null,
+          };
+        }
+
+        return { data: claimed, error: null };
       }
       return { data: null, error: null };
     },
@@ -719,6 +772,69 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(claimedDeliveries[0].company_id, companyA);
   assert(mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'claim_pending_outbound_deliveries'), 'Must call RPC claim_pending_outbound_deliveries');
   console.log('✓ PASS 5f: claimPendingDeliveries locks and claims outbox deliveries for Outbox Worker');
+
+  // 5g. Outbound message idempotency with client_command_id
+  const commandId1 = '11111111-1111-4111-8111-111111111111';
+  const outboundRes1 = await InboxService.sendMessage(
+    {
+      conversation_id: 'conv-1',
+      company_id: companyA,
+      content: 'Chào anh, em gửi báo giá cửa chống ngập',
+      sender_type: 'sale',
+      clientCommandId: commandId1,
+    },
+    companyA,
+    mockDbClient
+  );
+  assert.strictEqual(outboundRes1.is_duplicate, false, 'First call with clientCommandId must return is_duplicate = false');
+  assert.strictEqual(outboundRes1.client_command_id, commandId1);
+
+  const outboundRes2 = await InboxService.sendMessage(
+    {
+      conversation_id: 'conv-1',
+      company_id: companyA,
+      content: 'Chào anh, em gửi báo giá cửa chống ngập (trùng lặp do network retry)',
+      sender_type: 'sale',
+      clientCommandId: commandId1,
+    },
+    companyA,
+    mockDbClient
+  );
+  assert.strictEqual(outboundRes2.is_duplicate, true, 'Second call with identical clientCommandId must return is_duplicate = true');
+  assert.strictEqual(outboundRes2.id, outboundRes1.id, 'Duplicate send must return identical interaction_id');
+  assert.strictEqual(outboundRes2.client_command_id, commandId1);
+  console.log('✓ PASS 5g: Outbound message idempotency with client_command_id verified');
+
+  // 5h. Stale QUEUED delivery recovery on worker crash
+  const staleLockedAt = new Date(Date.now() - 6 * 60 * 1000).toISOString(); // 6 minutes ago (> 5-minute lease)
+  mockOutboxDeliveries.push({
+    id: 'del-crashed-worker-999',
+    company_id: companyA,
+    conversation_id: 'conv-1',
+    interaction_id: 'int-crashed-1',
+    channel: 'ZALO',
+    delivery_status: 'QUEUED',
+    client_command_id: '22222222-2222-4222-8222-222222222222',
+    retry_count: 0,
+    locked_at: staleLockedAt,
+    locked_by: 'dead-worker-pid-1234',
+    created_at: staleLockedAt,
+    updated_at: staleLockedAt,
+  });
+
+  const recoveredDeliveries = await InboxService.claimPendingDeliveries(
+    companyA,
+    'recovery-worker-new',
+    10,
+    mockDbClient
+  );
+
+  const reclaimed = recoveredDeliveries.find((d) => d.id === 'del-crashed-worker-999');
+  assert(reclaimed, 'Stale QUEUED delivery must be reclaimed by recovery worker');
+  assert.strictEqual(reclaimed.locked_by, 'recovery-worker-new', 'locked_by must be updated to new worker');
+  assert.strictEqual(reclaimed.retry_count, 1, 'retry_count must be incremented by 1');
+  assert.strictEqual(reclaimed.delivery_status, 'QUEUED');
+  console.log('✓ PASS 5h: Stale QUEUED delivery recovery on worker crash verified (reclaimed, worker updated, retry_count incremented)');
 
   // Restore DEMO_MODE for downstream safety
   process.env.DEMO_MODE = 'true';

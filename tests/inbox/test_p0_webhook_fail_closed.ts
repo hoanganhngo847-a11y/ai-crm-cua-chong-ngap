@@ -593,10 +593,15 @@ async function runWebhookFailClosedTests() {
 
   delete process.env.DEMO_MODE; // Non-demo production mode
 
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
   const mockDbState = {
     conversations: [] as any[],
     interactions: [] as any[],
     raw_contents: [] as any[],
+    identities: [] as any[],
+    customers: [] as any[],
+    stage_histories: [] as any[],
   };
 
   let simulateRawInsertError = false;
@@ -604,27 +609,64 @@ async function runWebhookFailClosedTests() {
   const testAtomicCustomerId = 'c0000001-0000-4000-8000-000000000001';
 
   const mockAtomicClient: any = {
-    from: (table: string) => ({
-      select: () => ({
-        maybeSingle: async () => ({
-          data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
-          error: null,
-        }),
-      }),
-      insert: (record: any) => {
-        if (table === 'customers') {
-          customerInsertAttempted = true;
-        }
-        return {
-          select: () => ({
-            maybeSingle: async () => ({
-              data: { id: record.id || testAtomicCustomerId, name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
-              error: null,
-            }),
-          }),
+    from: (table: string) => {
+      const createQueryBuilder = (filters: Record<string, string> = {}) => {
+        const builder: any = {
+          eq: (col: string, val: string) => {
+            return createQueryBuilder({ ...filters, [col]: val });
+          },
+          maybeSingle: async () => {
+            if (table === 'identities') {
+              const found = mockDbState.identities.find(
+                (i) =>
+                  (!filters.company_id || i.company_id === filters.company_id) &&
+                  (!filters.channel || i.channel === filters.channel) &&
+                  (!filters.external_id || i.external_id === filters.external_id)
+              );
+              return { data: found || null, error: null };
+            }
+            if (table === 'customers') {
+              const found = mockDbState.customers.find((c) => !filters.id || c.id === filters.id);
+              if (found) {
+                return { data: found, error: null };
+              }
+              if (filters.id && filters.id !== testAtomicCustomerId) {
+                return { data: null, error: null };
+              }
+              return {
+                data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+                error: null,
+              };
+            }
+            return { data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' }, error: null };
+          },
         };
-      },
-    }),
+        return builder;
+      };
+
+      return {
+        select: (_cols?: string) => createQueryBuilder(),
+        insert: (record: any) => {
+          if (table === 'customers') {
+            customerInsertAttempted = true;
+            mockDbState.customers.push(record);
+          } else if (table === 'identities') {
+            mockDbState.identities.push(record);
+          } else if (table === 'customer_stage_histories') {
+            mockDbState.stage_histories.push(record);
+          }
+          return {
+            select: () => ({
+              maybeSingle: async () => ({
+                data: { id: record.id || testAtomicCustomerId, name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+                error: null,
+              }),
+            }),
+            then: (resolve: any) => resolve({ error: null, data: record }),
+          };
+        },
+      };
+    },
     rpc: async (fnName: string, params: any) => {
       assert.strictEqual(fnName, 'record_inbound_interaction_atomic', 'Must call RPC record_inbound_interaction_atomic');
       assert.strictEqual(params.p_company_id, testCompanyA);
@@ -658,10 +700,12 @@ async function runWebhookFailClosedTests() {
       }
 
       // 3. Khởi tạo/cập nhật conversation & interaction atomically
-      let conv = mockDbState.conversations.find((c) => c.company_id === params.p_company_id && c.channel === params.p_channel);
+      let conv = mockDbState.conversations.find(
+        (c) => c.company_id === params.p_company_id && c.channel === params.p_channel && c.customer_id === params.p_customer_id
+      );
       if (!conv) {
         conv = {
-          id: 'conv-atomic-1',
+          id: `conv-atomic-${mockDbState.conversations.length + 1}`,
           company_id: params.p_company_id,
           customer_id: params.p_customer_id,
           channel: params.p_channel,
@@ -675,7 +719,7 @@ async function runWebhookFailClosedTests() {
         conv.last_message_at = new Date().toISOString();
       }
 
-      const intId = `int-${Date.now()}`;
+      const intId = `int-${Date.now()}-${mockDbState.interactions.length + 1}`;
       const interaction = {
         id: intId,
         company_id: params.p_company_id,
@@ -770,6 +814,7 @@ async function runWebhookFailClosedTests() {
   assert.strictEqual(mockDbState.interactions.length, 1, 'Zero orphan interaction committed');
   assert.strictEqual(mockDbState.raw_contents.length, 1, 'Zero raw content committed');
   console.log('✓ PASS 5c: Inbound atomic transaction rollback leaves zero partial records committed');
+  simulateRawInsertError = false;
 
   // 5d. Customer Resolution Fail-Closed: Fail immediately when customer cannot be resolved (no direct insert fallback)
   customerInsertAttempted = false;
@@ -854,6 +899,57 @@ async function runWebhookFailClosedTests() {
   assert(typeof jsonErrorSanitized.trace_id === 'string' && jsonErrorSanitized.trace_id.length > 0, 'Must return trace_id');
   assert(!JSON.stringify(jsonErrorSanitized).includes('Internal database socket crash'), 'Must NOT leak internal error message');
   console.log('✓ PASS 5f: Webhook Error Boundary sanitizes 500 errors and returns trace_id');
+
+  // 5g. First-contact Facebook/Zalo without phone creates customer, identity and ingests message
+  customerInsertAttempted = false;
+  const firstContactRes = await InboxService.addInboundMessage(
+    {
+      channel: 'FACEBOOK' as any,
+      senderId: 'fb_user_first_contact_999',
+      externalUserId: 'fb_user_first_contact_999',
+      senderName: 'Nguyễn Văn Test',
+      company_id: testCompanyA,
+      content: 'Chào shop tư vấn giúp tôi cửa chống ngập',
+    },
+    mockAtomicClient
+  );
+
+  assert(firstContactRes.conversation.customer_id, 'Must return valid customer_id');
+  assert(UUID_REGEX.test(firstContactRes.conversation.customer_id), 'Returned customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Must create new customer in customers table');
+
+  const createdIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_user_first_contact_999');
+  assert(createdIdentity, 'Must create identity record for first contact');
+  assert.strictEqual(createdIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdIdentity.customer_id, firstContactRes.conversation.customer_id, 'Identity customer_id must match resolved customer');
+  assert.strictEqual(createdIdentity.channel, 'FACEBOOK');
+  assert.strictEqual(createdIdentity.company_id, testCompanyA);
+
+  const createdConv = mockDbState.conversations.find((c) => c.customer_id === firstContactRes.conversation.customer_id);
+  assert(createdConv, 'Must create conversation for first-contact customer');
+  assert.strictEqual(createdConv.channel, 'FACEBOOK');
+
+  const createdInteraction = mockDbState.interactions.find((i) => i.customer_id === firstContactRes.conversation.customer_id);
+  assert(createdInteraction, 'Must create interaction for first-contact message');
+  console.log('✓ PASS 5g: First-contact Facebook/Zalo without phone creates customer, identity and ingests message');
+
+  // 5h. Inbound message with unknown identity and no identifier fails closed
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'FACEBOOK' as any,
+          senderId: 'anonymous_sender_no_ident',
+          company_id: testCompanyA,
+          content: 'Tin nhắn không có bất kỳ thông tin định danh nào',
+        },
+        mockAtomicClient
+      );
+    },
+    /Inbound customer resolution failed: Fail-Closed/,
+    'Payload without customerId, externalUserId, and senderPhone must fail closed'
+  );
+  console.log('✓ PASS 5h: Inbound message with unknown identity and no identifier fails closed');
 
   // Restore DEMO_MODE for downstream
   process.env.DEMO_MODE = 'true';
