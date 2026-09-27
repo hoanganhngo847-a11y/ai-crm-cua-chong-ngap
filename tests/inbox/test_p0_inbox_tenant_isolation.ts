@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import * as crypto from 'crypto';
 import { NextRequest } from 'next/server';
 import { InboxService } from '../../features/inbox/services/inbox.service';
 import { GET as inboxGetHandler, POST as inboxPostHandler } from '../../app/api/inbox/route';
@@ -252,12 +253,14 @@ async function runInboxTenantIsolationTests() {
   console.log('\n--- Section 3: POST /api/inbox Route Mutation Isolation ---');
 
   // 3a. Company A user sending message to Company A conversation: 201 Created
+  const ownCommandId = crypto.randomUUID();
   const reqPostOwn = new NextRequest('http://localhost:3000/api/inbox', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       conversation_id: 'conv-a-1',
       content: 'Chào bạn, chúng tôi đã ghi nhận yêu cầu đo đạc.',
+      client_command_id: ownCommandId,
     }),
   });
   const resPostOwn = await inboxPostHandler(reqPostOwn, { actor: userSaleCompanyA });
@@ -282,6 +285,7 @@ async function runInboxTenantIsolationTests() {
     body: JSON.stringify({
       conversation_id: 'conv-a-1',
       content: 'Hack attempt: inject message into tenant A',
+      client_command_id: crypto.randomUUID(),
     }),
   });
   const resCrossPost = await inboxPostHandler(reqCrossPost, { actor: userSaleCompanyB });
@@ -299,6 +303,7 @@ async function runInboxTenantIsolationTests() {
       conversation_id: 'conv-a-1',
       company_id: companyA, // Attacker sends Company A ID in body
       content: 'Hack attempt with spoofed company_id in body',
+      client_command_id: crypto.randomUUID(),
     }),
   });
   const resSpoofedBodyPost = await inboxPostHandler(reqSpoofedBodyPost, { actor: userSaleCompanyB });
@@ -307,6 +312,38 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(dataSpoofedBodyPost.success, false);
   assert.strictEqual(dataSpoofedBodyPost.error, 'NOT_FOUND');
   console.log('✓ PASS 3c: Body company_id spoofing completely IGNORED and blocked');
+
+  // 3d. Missing client_command_id in POST /api/inbox: 400 MISSING_COMMAND_ID
+  const reqNoCmdPost = new NextRequest('http://localhost:3000/api/inbox', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      conversation_id: 'conv-a-1',
+      content: 'Tin nhắn thiếu client_command_id',
+    }),
+  });
+  const resNoCmdPost = await inboxPostHandler(reqNoCmdPost, { actor: userSaleCompanyA });
+  assert.strictEqual(resNoCmdPost.status, 400);
+  const dataNoCmdPost = await resNoCmdPost.json();
+  assert.strictEqual(dataNoCmdPost.error, 'MISSING_COMMAND_ID');
+  assert.strictEqual(dataNoCmdPost.message, 'Yêu cầu client_command_id để đảm bảo tính idempotent.');
+  console.log('✓ PASS 3d: POST /api/inbox without client_command_id rejected with 400 MISSING_COMMAND_ID');
+
+  // 3e. Invalid UUID client_command_id in POST /api/inbox: 400 INVALID_COMMAND_ID
+  const reqInvalidCmdPost = new NextRequest('http://localhost:3000/api/inbox', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      conversation_id: 'conv-a-1',
+      content: 'Tin nhắn với client_command_id không phải UUID',
+      client_command_id: 'not-a-valid-uuid-format',
+    }),
+  });
+  const resInvalidCmdPost = await inboxPostHandler(reqInvalidCmdPost, { actor: userSaleCompanyA });
+  assert.strictEqual(resInvalidCmdPost.status, 400);
+  const dataInvalidCmdPost = await resInvalidCmdPost.json();
+  assert.strictEqual(dataInvalidCmdPost.error, 'INVALID_COMMAND_ID');
+  console.log('✓ PASS 3e: POST /api/inbox with non-UUID client_command_id rejected with 400 INVALID_COMMAND_ID');
 
   // ============================================================================
   // SECTION 4: RBAC CONTROLS (TECHNICIAN BLOCKED, UNAUTH BLOCKED)
@@ -328,6 +365,7 @@ async function runInboxTenantIsolationTests() {
     body: JSON.stringify({
       conversation_id: 'conv-a-1',
       content: 'Tech trying to send message',
+      client_command_id: crypto.randomUUID(),
     }),
   });
   const resTechPost = await inboxPostHandler(reqTechPost, { actor: userTechCompanyA });
@@ -391,6 +429,7 @@ async function runInboxTenantIsolationTests() {
   const mockDbCalls: { table?: string; action?: string; company_id?: string; schema?: string; record?: any; fnName?: string; params?: any }[] = [];
   const recordedOutboundCommands = new Map<string, { interaction_id: string; delivery_id: string }>();
   const mockOutboxDeliveries: any[] = [];
+  const mockInteractions: any[] = [];
 
   const mockDbClient: any = {
     simulateAuditError: false,
@@ -539,6 +578,8 @@ async function runInboxTenantIsolationTests() {
         }
 
         const commandId = params.p_client_command_id;
+        // Atomic command claim check: nếu commandId đã tồn tại, trả về bản ghi cũ kèm is_duplicate = true
+        // và tuyệt đối KHÔNG tạo interaction mới hay outbox delivery mới.
         if (commandId && recordedOutboundCommands.has(commandId)) {
           const existing = recordedOutboundCommands.get(commandId)!;
           return {
@@ -557,12 +598,35 @@ async function runInboxTenantIsolationTests() {
 
         const newInteractionId = `int-rpc-outbound-${Date.now()}-${mockDbCalls.length}`;
         const newDeliveryId = `del-rpc-outbound-${Date.now()}-${mockDbCalls.length}`;
+        const newDeliveryRecord = {
+          id: newDeliveryId,
+          company_id: params.p_company_id,
+          conversation_id: params.p_conversation_id,
+          interaction_id: newInteractionId,
+          channel: 'ZALO',
+          delivery_status: 'PENDING_DISPATCH',
+          client_command_id: commandId || null,
+          retry_count: 0,
+          locked_at: null,
+          locked_by: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        mockOutboxDeliveries.push(newDeliveryRecord);
+
         if (commandId) {
           recordedOutboundCommands.set(commandId, {
             interaction_id: newInteractionId,
             delivery_id: newDeliveryId,
           });
         }
+
+        mockInteractions.push({
+          id: newInteractionId,
+          company_id: params.p_company_id,
+          conversation_id: params.p_conversation_id,
+          sanitized_content: params.p_sanitized_content,
+        });
 
         return {
           data: {
@@ -773,8 +837,11 @@ async function runInboxTenantIsolationTests() {
   assert(mockDbCalls.some((c) => c.action === 'rpc' && c.fnName === 'claim_pending_outbound_deliveries'), 'Must call RPC claim_pending_outbound_deliveries');
   console.log('✓ PASS 5f: claimPendingDeliveries locks and claims outbox deliveries for Outbox Worker');
 
-  // 5g. Outbound message idempotency with client_command_id
+  // 5g. Outbound message idempotency with client_command_id (Atomic Command Claim)
   const commandId1 = '11111111-1111-4111-8111-111111111111';
+  const outboxCountBefore = mockOutboxDeliveries.length;
+  const interactionsCountBefore = mockInteractions.length;
+
   const outboundRes1 = await InboxService.sendMessage(
     {
       conversation_id: 'conv-1',
@@ -788,6 +855,8 @@ async function runInboxTenantIsolationTests() {
   );
   assert.strictEqual(outboundRes1.is_duplicate, false, 'First call with clientCommandId must return is_duplicate = false');
   assert.strictEqual(outboundRes1.client_command_id, commandId1);
+  assert.strictEqual(mockOutboxDeliveries.length, outboxCountBefore + 1, 'First call must create an outbox delivery record');
+  assert.strictEqual(mockInteractions.length, interactionsCountBefore + 1, 'First call must create an interaction record');
 
   const outboundRes2 = await InboxService.sendMessage(
     {
@@ -803,7 +872,9 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(outboundRes2.is_duplicate, true, 'Second call with identical clientCommandId must return is_duplicate = true');
   assert.strictEqual(outboundRes2.id, outboundRes1.id, 'Duplicate send must return identical interaction_id');
   assert.strictEqual(outboundRes2.client_command_id, commandId1);
-  console.log('✓ PASS 5g: Outbound message idempotency with client_command_id verified');
+  assert.strictEqual(mockOutboxDeliveries.length, outboxCountBefore + 1, 'Duplicate call must NOT create a new outbox delivery record');
+  assert.strictEqual(mockInteractions.length, interactionsCountBefore + 1, 'Duplicate call must NOT create a new interaction record');
+  console.log('✓ PASS 5g: Outbound message idempotency with client_command_id verified (atomic claim, zero orphan interactions)');
 
   // 5h. Stale QUEUED delivery recovery on worker crash
   const staleLockedAt = new Date(Date.now() - 6 * 60 * 1000).toISOString(); // 6 minutes ago (> 5-minute lease)
@@ -835,6 +906,47 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(reclaimed.retry_count, 1, 'retry_count must be incremented by 1');
   assert.strictEqual(reclaimed.delivery_status, 'QUEUED');
   console.log('✓ PASS 5h: Stale QUEUED delivery recovery on worker crash verified (reclaimed, worker updated, retry_count incremented)');
+
+  // 5i. Deterministic Outbound Concurrency: concurrent replay with same client_command_id returns identical logical result and is_duplicate: true
+  const concurrentCommandId = '33333333-3333-4333-8333-333333333333';
+  const outboxBeforeConcurrent = mockOutboxDeliveries.length;
+  const interactionsBeforeConcurrent = mockInteractions.length;
+
+  const [resA, resB] = await Promise.all([
+    InboxService.sendMessage(
+      {
+        conversation_id: 'conv-1',
+        company_id: companyA,
+        content: 'Báo giá cửa chống ngập đồng thời luồng 1',
+        sender_type: 'sale',
+        clientCommandId: concurrentCommandId,
+      },
+      companyA,
+      mockDbClient
+    ),
+    InboxService.sendMessage(
+      {
+        conversation_id: 'conv-1',
+        company_id: companyA,
+        content: 'Báo giá cửa chống ngập đồng thời luồng 2',
+        sender_type: 'sale',
+        clientCommandId: concurrentCommandId,
+      },
+      companyA,
+      mockDbClient
+    ),
+  ]);
+
+  const duplicates = [resA, resB].filter((r) => r.is_duplicate);
+  const originals = [resA, resB].filter((r) => !r.is_duplicate);
+  assert.strictEqual(originals.length, 1, 'Exactly one concurrent call must be original (is_duplicate: false)');
+  assert.strictEqual(duplicates.length, 1, 'Exactly one concurrent call must be duplicate (is_duplicate: true)');
+  assert.strictEqual(resA.id, resB.id, 'Both concurrent calls must return identical interaction_id');
+  assert.strictEqual(resA.client_command_id, concurrentCommandId);
+  assert.strictEqual(resB.client_command_id, concurrentCommandId);
+  assert.strictEqual(mockOutboxDeliveries.length, outboxBeforeConcurrent + 1, 'Exactly 1 outbox record created despite concurrent calls');
+  assert.strictEqual(mockInteractions.length, interactionsBeforeConcurrent + 1, 'Exactly 1 interaction record created despite concurrent calls');
+  console.log('✓ PASS 5i: Deterministic Outbound Concurrency: concurrent replay with same client_command_id returns identical logical result and is_duplicate: true');
 
   // Restore DEMO_MODE for downstream safety
   process.env.DEMO_MODE = 'true';

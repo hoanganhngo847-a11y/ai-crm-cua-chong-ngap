@@ -6,7 +6,7 @@ import { InboxIngressService } from '../../features/inbox/services/inbox-ingress
 import { InboxService } from '../../features/inbox/services/inbox.service';
 import { FacebookAdapter, deriveFacebookTenant } from '../../features/inbox/adapters/facebook.adapter';
 import { ZaloAdapter, deriveZaloTenant } from '../../features/inbox/adapters/zalo.adapter';
-import { ProviderAdapterRegistry } from '../../features/inbox/types/webhook.types';
+import { ProviderAdapterRegistry, type NormalizedIngressEvent } from '../../features/inbox/types/webhook.types';
 
 async function runWebhookFailClosedTests() {
   process.env.DEMO_MODE = 'true';
@@ -625,6 +625,15 @@ async function runWebhookFailClosedTests() {
               );
               return { data: found || null, error: null };
             }
+            if (table === 'interactions') {
+              const found = mockDbState.interactions.find(
+                (i) =>
+                  (!filters.company_id || i.company_id === filters.company_id) &&
+                  (!filters.channel || i.channel === filters.channel) &&
+                  (!filters.external_ref || i.external_ref === filters.external_ref)
+              );
+              return { data: found || null, error: null };
+            }
             if (table === 'customers') {
               const found = mockDbState.customers.find((c) => !filters.id || c.id === filters.id);
               if (found) {
@@ -638,7 +647,7 @@ async function runWebhookFailClosedTests() {
                 error: null,
               };
             }
-            return { data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' }, error: null };
+            return { data: null, error: null };
           },
         };
         return builder;
@@ -668,7 +677,10 @@ async function runWebhookFailClosedTests() {
       };
     },
     rpc: async (fnName: string, params: any) => {
-      assert.strictEqual(fnName, 'record_inbound_interaction_atomic', 'Must call RPC record_inbound_interaction_atomic');
+      assert(
+        fnName === 'ingest_provider_message_atomic' || fnName === 'record_inbound_interaction_atomic',
+        `Must call RPC ingest_provider_message_atomic (called ${fnName})`
+      );
       assert.strictEqual(params.p_company_id, testCompanyA);
 
       // 1. Kiểm tra duplicate external_ref
@@ -679,12 +691,12 @@ async function runWebhookFailClosedTests() {
         if (existing) {
           // Trả về duplicate = true, KHÔNG tăng unread_count, KHÔNG thay đổi conversations
           return {
-            data: {
+            data: [{
               conversation_id: existing.conversation_id,
               interaction_id: existing.id,
               customer_id: existing.customer_id,
               is_duplicate: true,
-            },
+            }],
             error: null,
           };
         }
@@ -699,15 +711,61 @@ async function runWebhookFailClosedTests() {
         };
       }
 
-      // 3. Khởi tạo/cập nhật conversation & interaction atomically
+      // 3. Định danh khách hàng 4 bậc bên trong RPC
+      let resolvedCustomerId = params.p_customer_id;
+      if (!resolvedCustomerId && params.p_external_user_id) {
+        const existingIdentity = mockDbState.identities.find(
+          (i) => i.company_id === params.p_company_id && i.channel === params.p_channel && i.external_id === params.p_external_user_id
+        );
+        if (existingIdentity) {
+          resolvedCustomerId = existingIdentity.customer_id;
+        } else {
+          // Khách mới qua social channel chưa có SĐT
+          resolvedCustomerId = crypto.randomUUID();
+          customerInsertAttempted = true;
+          mockDbState.customers.push({
+            id: resolvedCustomerId,
+            company_id: params.p_company_id,
+            name: params.p_sender_name || 'Khách hàng ' + params.p_channel,
+            customer_code: 'KH-000001',
+            stage: 'LEAD_NEW',
+          });
+          mockDbState.identities.push({
+            id: `id-${Date.now()}-${mockDbState.identities.length}`,
+            company_id: params.p_company_id,
+            customer_id: resolvedCustomerId,
+            channel: params.p_channel,
+            external_id: params.p_external_user_id,
+            verified: false,
+          });
+        }
+      } else if (!resolvedCustomerId && params.p_sender_phone) {
+        resolvedCustomerId = crypto.randomUUID();
+        customerInsertAttempted = true;
+        mockDbState.customers.push({
+          id: resolvedCustomerId,
+          company_id: params.p_company_id,
+          name: params.p_sender_name || 'Khách hàng ' + params.p_channel,
+          phone: params.p_sender_phone,
+        });
+      }
+
+      if (!resolvedCustomerId) {
+        return {
+          data: null,
+          error: { message: 'Inbound customer resolution failed: Fail-Closed' },
+        };
+      }
+
+      // 4. Khởi tạo/cập nhật conversation & interaction atomically
       let conv = mockDbState.conversations.find(
-        (c) => c.company_id === params.p_company_id && c.channel === params.p_channel && c.customer_id === params.p_customer_id
+        (c) => c.company_id === params.p_company_id && c.channel === params.p_channel && c.customer_id === resolvedCustomerId
       );
       if (!conv) {
         conv = {
           id: `conv-atomic-${mockDbState.conversations.length + 1}`,
           company_id: params.p_company_id,
-          customer_id: params.p_customer_id,
+          customer_id: resolvedCustomerId,
           channel: params.p_channel,
           unread_count: 1,
           status: 'OPEN',
@@ -723,7 +781,7 @@ async function runWebhookFailClosedTests() {
       const interaction = {
         id: intId,
         company_id: params.p_company_id,
-        customer_id: params.p_customer_id,
+        customer_id: resolvedCustomerId,
         conversation_id: conv.id,
         channel: params.p_channel,
         external_ref: params.p_external_ref,
@@ -739,12 +797,12 @@ async function runWebhookFailClosedTests() {
       });
 
       return {
-        data: {
+        data: [{
           conversation_id: conv.id,
           interaction_id: intId,
-          customer_id: params.p_customer_id,
+          customer_id: resolvedCustomerId,
           is_duplicate: false,
-        },
+        }],
         error: null,
       };
     },
@@ -950,6 +1008,100 @@ async function runWebhookFailClosedTests() {
     'Payload without customerId, externalUserId, and senderPhone must fail closed'
   );
   console.log('✓ PASS 5h: Inbound message with unknown identity and no identifier fails closed');
+
+  // 5i. Ingress wiring test: ingestNormalizedEvent forwards external_user_id to addInboundMessage
+  customerInsertAttempted = false;
+  const ingressFirstContact = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb_user_via_ingress_777',
+      sender_name: 'Khách Ingress Mới',
+      message_id: 'msg-ingress-first-contact-777',
+      content: 'Chào shop từ Facebook Ingress',
+      timestamp: new Date().toISOString(),
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(ingressFirstContact.success, true);
+  assert(ingressFirstContact.customer_id, 'Ingress must resolve and return customer_id');
+  assert(UUID_REGEX.test(ingressFirstContact.customer_id), 'customer_id must be valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Must create customer record via ingress wiring');
+  const ingressIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_user_via_ingress_777');
+  assert(ingressIdentity, 'Must create identity record from external_user_id passed via ingestNormalizedEvent');
+  assert.strictEqual(ingressIdentity.verified, false);
+  assert.strictEqual(ingressIdentity.customer_id, ingressFirstContact.customer_id);
+  console.log('✓ PASS 5i: ingestNormalizedEvent wires external_user_id to addInboundMessage, successfully resolving first-contact');
+
+  // 5j. Integration: ingestNormalizedEvent for first-contact Facebook & Zalo without phone successfully creates customer, identity and interaction
+  // Facebook first-contact
+  customerInsertAttempted = false;
+  const fbFirstContactEvent: NormalizedIngressEvent = {
+    provider: 'FACEBOOK',
+    company_id: testCompanyA,
+    external_user_id: 'fb_psid_real_first_contact_888',
+    message_id: 'fb_mid_888',
+    sender_name: 'Khách Hàng Facebook Mới',
+    sender_phone: undefined,
+    content: 'Chào shop, tư vấn giúp em',
+    timestamp: new Date().toISOString(),
+  };
+
+  const fbRes = await InboxIngressService.ingestNormalizedEvent(fbFirstContactEvent, mockAtomicClient);
+  assert.strictEqual(fbRes.success, true, 'Facebook first contact must succeed');
+  assert(fbRes.customer_id, 'Facebook customer_id must be resolved');
+  assert(UUID_REGEX.test(fbRes.customer_id), 'Facebook customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Facebook first contact must create new customer in mock state');
+
+  const createdFbIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_psid_real_first_contact_888');
+  assert(createdFbIdentity, 'Must create identity record for Facebook first contact');
+  assert.strictEqual(createdFbIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdFbIdentity.customer_id, fbRes.customer_id, 'Identity customer_id must match returned customer_id');
+  assert.strictEqual(createdFbIdentity.channel, 'FACEBOOK');
+  assert.strictEqual(createdFbIdentity.company_id, testCompanyA);
+
+  const createdFbConv = mockDbState.conversations.find((c) => c.customer_id === fbRes.customer_id);
+  assert(createdFbConv, 'Must create conversation for Facebook first contact');
+  assert.strictEqual(createdFbConv.channel, 'FACEBOOK');
+
+  const createdFbInteraction = mockDbState.interactions.find((i) => i.customer_id === fbRes.customer_id);
+  assert(createdFbInteraction, 'Must create interaction for Facebook first contact');
+
+  // Zalo first-contact
+  customerInsertAttempted = false;
+  const zaloFirstContactEvent: NormalizedIngressEvent = {
+    provider: 'ZALO',
+    company_id: testCompanyA,
+    external_user_id: 'zalo_uid_real_first_contact_999',
+    message_id: 'zalo_mid_999',
+    sender_name: 'Khách Hàng Zalo Mới',
+    sender_phone: undefined,
+    content: 'Chào shop, em cần tư vấn lắp cửa chống ngập',
+    timestamp: new Date().toISOString(),
+  };
+
+  const zaloRes = await InboxIngressService.ingestNormalizedEvent(zaloFirstContactEvent, mockAtomicClient);
+  assert.strictEqual(zaloRes.success, true, 'Zalo first contact must succeed');
+  assert(zaloRes.customer_id, 'Zalo customer_id must be resolved');
+  assert(UUID_REGEX.test(zaloRes.customer_id), 'Zalo customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Zalo first contact must create new customer in mock state');
+
+  const createdZaloIdentity = mockDbState.identities.find((i) => i.external_id === 'zalo_uid_real_first_contact_999');
+  assert(createdZaloIdentity, 'Must create identity record for Zalo first contact');
+  assert.strictEqual(createdZaloIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdZaloIdentity.customer_id, zaloRes.customer_id, 'Identity customer_id must match returned customer_id');
+  assert.strictEqual(createdZaloIdentity.channel, 'ZALO');
+  assert.strictEqual(createdZaloIdentity.company_id, testCompanyA);
+
+  const createdZaloConv = mockDbState.conversations.find((c) => c.customer_id === zaloRes.customer_id);
+  assert(createdZaloConv, 'Must create conversation for Zalo first contact');
+  assert.strictEqual(createdZaloConv.channel, 'ZALO');
+
+  const createdZaloInteraction = mockDbState.interactions.find((i) => i.customer_id === zaloRes.customer_id);
+  assert(createdZaloInteraction, 'Must create interaction for Zalo first contact');
+
+  console.log('✓ PASS 5j: Integration: ingestNormalizedEvent for first-contact Facebook & Zalo without phone successfully creates customer, identity and interaction');
 
   // Restore DEMO_MODE for downstream
   process.env.DEMO_MODE = 'true';

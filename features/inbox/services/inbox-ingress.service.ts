@@ -413,6 +413,7 @@ export async function ingestNormalizedEvent(
       result = await InboxService.addInboundMessage({
         channel,
         senderId: event.external_user_id,
+        externalUserId: event.external_user_id,
         company_id: cleanCompanyId,
         senderName: event.sender_name,
         senderPhone: event.sender_phone,

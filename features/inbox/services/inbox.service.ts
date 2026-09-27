@@ -1,4 +1,3 @@
-import * as crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import type {
@@ -14,9 +13,8 @@ import type {
   SenderType,
 } from '../types/inbox.types';
 import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
-import { CustomerService, maskPhone } from '../../crm/services/customer.service';
+import { maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
-import type { CustomerSource } from '../../crm/types/customer.types';
 
 interface ServiceError extends Error {
   status?: number;
@@ -1269,7 +1267,7 @@ export async function getCustomerTimeline(
  */
 export async function addInboundMessage(params: {
   channel: InboxChannel;
-  senderId: string;
+  senderId?: string;
   company_id?: string;
   senderName?: string;
   senderPhone?: string;
@@ -1278,7 +1276,19 @@ export async function addInboundMessage(params: {
   externalMessageId?: string;
   customerId?: string;
   externalUserId?: string;
-}, client?: SupabaseClient): Promise<{ conversation: Conversation; message: InboxMessage; isNewConversation: boolean }> {
+  externalConversationId?: string;
+  externalRef?: string;
+  rawContent?: string;
+  metadata?: Record<string, unknown>;
+}, client?: SupabaseClient): Promise<{
+  conversation: Conversation;
+  message: InboxMessage;
+  isNewConversation: boolean;
+  conversationId: string;
+  interactionId: string;
+  customerId: string;
+  isDuplicate: boolean;
+}> {
   // Fail-Closed: Bắt buộc phải có company_id hợp lệ, xóa bỏ hoàn toàn fallback DEFAULT_INBOX_COMPANY_ID
   if (
     !params.company_id ||
@@ -1368,196 +1378,83 @@ export async function addInboundMessage(params: {
       conversation,
       message: newMessage,
       isNewConversation,
+      conversationId: conversation.id,
+      interactionId: newMessage.id,
+      customerId: conversation.customer_id,
+      isDuplicate: false,
     };
   }
 
-  // 2. Canonical Database Persistence: Bắt buộc dùng RPC atomic record_inbound_interaction_atomic
+  // 2. Canonical Database Persistence: Gọi trực tiếp RPC atomic toàn diện ingest_provider_message_atomic
   const adminClient = client || createAdminClient();
 
   if (typeof adminClient.rpc !== 'function') {
     throw new Error('Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại (Fail-Closed). (DATABASE_ERROR)');
   }
 
-  const dbChannel = params.channel.toUpperCase();
-  const externalConvId = params.senderId;
-
-  const rawContent = params.content || '';
+  const channel = params.channel.toUpperCase();
+  const rawContent = params.rawContent || params.content || '';
   const sanitizedContent = sanitizePhoneInText(rawContent);
   const isSanitized = sanitizedContent !== rawContent;
   const sanitizationStatus: 'CLEAN' | 'SANITIZED' = isSanitized ? 'SANITIZED' : 'CLEAN';
 
-  let customerName: string =
-    params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
-  let customerCode: string = 'KH-000001';
-  let customerStage: string = 'LEAD_NEW';
-  let resolvedCustomerId: string | null = null;
+  const externalConversationId = params.externalConversationId || params.senderId || null;
+  const externalRef = params.externalRef || params.externalMessageId || null;
+  const sourceMetadata = params.metadata || {
+    channel: params.channel,
+    external_message_id: externalRef,
+    sender_id: params.senderId,
+    sender_name: params.senderName,
+    sender_phone: params.senderPhone,
+  };
 
-  const channel = dbChannel; // 'ZALO' | 'FACEBOOK'
-
-  // Bậc 1: Nếu params.customerId có giá trị và hợp lệ -> Dùng luôn resolvedCustomerId = params.customerId
-  if (params.customerId && UUID_REGEX.test(params.customerId)) {
-    resolvedCustomerId = params.customerId;
-  }
-
-  // Bậc 2: Nếu có params.externalUserId:
-  if (!resolvedCustomerId && params.externalUserId) {
-    try {
-      const { data: identity } = await adminClient
-        .from('identities')
-        .select('customer_id')
-        .eq('company_id', companyId)
-        .eq('channel', channel)
-        .eq('external_id', params.externalUserId)
-        .maybeSingle();
-
-      if (identity?.customer_id) {
-        resolvedCustomerId = identity.customer_id;
-        const { data: existingCust } = await adminClient
-          .from('customers')
-          .select('name, customer_code, stage')
-          .eq('id', resolvedCustomerId)
-          .eq('company_id', companyId)
-          .maybeSingle();
-
-        if (existingCust) {
-          customerName = existingCust.name || customerName;
-          customerCode = existingCust.customer_code || customerCode;
-          customerStage = existingCust.stage || customerStage;
-        }
-      }
-    } catch {
-      // Tiếp tục kiểm tra bậc tiếp theo nếu truy vấn gặp lỗi
-    }
-  }
-
-  // Bậc 3: Nếu chưa tìm thấy và CÓ params.senderPhone:
-  if (!resolvedCustomerId && params.senderPhone) {
-    try {
-      const custResult = await CustomerService.findOrCreateByPhone(
-        {
-          phone: params.senderPhone,
-          name: customerName,
-          companyId,
-          source: (channel === 'ZALO' ? 'ZALO' : 'FACEBOOK') as CustomerSource,
-        },
-        adminClient
-      );
-      if (custResult?.customer?.id) {
-        resolvedCustomerId = custResult.customer.id;
-        customerCode = custResult.customer.customer_code || customerCode;
-        customerName = custResult.customer.name || customerName;
-        customerStage = custResult.customer.stage || customerStage;
-      }
-    } catch {
-      // Tiếp tục kiểm tra bậc tiếp theo
-    }
-  }
-
-  // Bậc 4: Nếu chưa tìm thấy và KHÔNG CÓ params.senderPhone, nhưng CÓ params.externalUserId:
-  // (Đây là khách mới từ Facebook/Zalo chưa có SĐT)
-  if (!resolvedCustomerId && !params.senderPhone && params.externalUserId) {
-    const newCustId = crypto.randomUUID();
-    const newCustName = params.senderName || ('Khách hàng ' + channel);
-
-    // INSERT khách hàng mới vào public.customers
-    const { data: createdCust } = await adminClient
-      .from('customers')
-      .insert({
-        id: newCustId,
-        company_id: companyId,
-        name: newCustName,
-        stage: 'LEAD_NEW',
-        source: channel,
-      })
-      .select('id, name, customer_code, stage')
-      .maybeSingle();
-
-    const createdId = createdCust?.id || newCustId;
-
-    // INSERT vào public.identities
-    await adminClient.from('identities').insert({
-      company_id: companyId,
-      customer_id: createdId,
-      channel: channel,
-      external_id: params.externalUserId,
-      verified: false,
-    });
-
-    // INSERT vào public.customer_stage_histories
-    await adminClient.from('customer_stage_histories').insert({
-      company_id: companyId,
-      customer_id: createdId,
-      stage: 'LEAD_NEW',
-      to_stage: 'LEAD_NEW',
-      from_stage: null,
-      actor_type: 'SYSTEM',
-      reason: 'Tự động tạo từ tương tác ' + channel,
-      note: 'Tự động tạo từ tương tác ' + channel,
-    });
-
-    resolvedCustomerId = createdId;
-    customerName = createdCust?.name || newCustName;
-    customerCode = createdCust?.customer_code || customerCode;
-    customerStage = createdCust?.stage || 'LEAD_NEW';
-  }
-
-  // Điều kiện Fail-Closed: Chỉ ném lỗi khi sau cả 4 bậc trên mà resolvedCustomerId vẫn rỗng.
-  if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-    throw new Error('Inbound customer resolution failed: Fail-Closed');
-  }
-
-  let rpcRes: { data: unknown; error: unknown } | null = null;
-  let rpcThrew = false;
-  let caughtErr: unknown = null;
-  try {
-    rpcRes = await adminClient.rpc('record_inbound_interaction_atomic', {
+  const { data: rpcData, error: rpcError } = await adminClient.rpc(
+    'ingest_provider_message_atomic',
+    {
       p_company_id: companyId,
-      p_customer_id: resolvedCustomerId,
-      p_channel: dbChannel,
-      p_external_conversation_id: externalConvId,
-      p_external_ref: params.externalMessageId || null,
+      p_channel: channel,
+      p_external_user_id: params.externalUserId || null,
+      p_sender_name: params.senderName || null,
+      p_sender_phone: params.senderPhone || null,
+      p_external_conversation_id: externalConversationId,
+      p_external_ref: externalRef,
       p_sanitized_content: sanitizedContent,
       p_raw_content: rawContent,
-      p_source_metadata: {
-        channel: params.channel,
-        external_message_id: params.externalMessageId,
-        sender_id: params.senderId,
-        sender_name: params.senderName,
-        sender_phone: params.senderPhone,
-      },
+      p_source_metadata: sourceMetadata,
       p_sanitization_status: sanitizationStatus,
-    });
-  } catch (err: unknown) {
-    rpcThrew = true;
-    caughtErr = err;
-  }
+      p_customer_id: params.customerId || null,
+    }
+  );
 
-  const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string } | undefined;
-  const rpcData = rpcRes?.data as { conversation_id?: string; interaction_id?: string; customer_id?: string; is_duplicate?: boolean } | null | undefined;
-
+  // Xử lý lỗi Fail-Closed:
   if (rpcError) {
-    const errMsg = String(rpcError?.message || '');
+    const errMsg = rpcError.message || 'Inbound ingest atomic transaction failed';
+    if (errMsg.includes('Inbound customer resolution failed: Fail-Closed')) {
+      throw new Error('Inbound customer resolution failed: Fail-Closed');
+    }
     throw new Error(`Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại (Fail-Closed). ${errMsg}`);
   }
 
-  if (!rpcData || typeof rpcData !== 'object' || !rpcData.conversation_id || !rpcData.interaction_id) {
-    throw new Error('Không thể tiếp nhận tin nhắn inbound: Dữ liệu phản hồi từ Atomic RPC không hợp lệ (Fail-Closed).');
+  const result = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  if (!result || !result.conversation_id || !result.interaction_id) {
+    throw new Error('Inbound customer resolution failed: Fail-Closed');
   }
 
-  const conversationId = String(rpcData.conversation_id || '');
-  const interactionId = String(rpcData.interaction_id || '');
-  const finalCustomerId = String(rpcData.customer_id || resolvedCustomerId || '');
-  const isDuplicate = Boolean(rpcData.is_duplicate);
+  const conversationId = String(result.conversation_id);
+  const interactionId = String(result.interaction_id);
+  const customerId = String(result.customer_id);
+  const isDuplicate = Boolean(result.is_duplicate);
 
+  const customerName = params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
   const conversation: Conversation = {
     id: conversationId,
     company_id: companyId,
-    customer_id: finalCustomerId,
+    customer_id: customerId,
     customer_name: customerName,
-    customer_code: customerCode,
+    customer_code: 'KH-000001',
     customer_phone: params.senderPhone,
-    customer_stage: customerStage,
-    customer_source: dbChannel,
+    customer_stage: 'LEAD_NEW',
+    customer_source: channel,
     channel: params.channel,
     last_message: rawContent,
     last_message_at: timestamp,
@@ -1571,7 +1468,7 @@ export async function addInboundMessage(params: {
     id: interactionId,
     company_id: companyId,
     conversation_id: conversationId,
-    customer_id: finalCustomerId,
+    customer_id: customerId,
     channel: params.channel,
     sender_type: 'customer',
     sender_name: params.senderName || customerName,
@@ -1587,6 +1484,10 @@ export async function addInboundMessage(params: {
     conversation,
     message: newMessage,
     isNewConversation: !isDuplicate,
+    conversationId,
+    interactionId,
+    customerId,
+    isDuplicate,
   };
 }
 

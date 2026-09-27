@@ -346,8 +346,20 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
 
     const clientCommandId = rawCommandId ? rawCommandId.trim() : undefined;
 
-    // Nếu client cung cấp, kiểm tra định dạng UUID hợp lệ; nếu không hợp lệ thì trả về HTTP 400 INVALID_COMMAND_ID
-    if (clientCommandId && !UUID_REGEX.test(clientCommandId)) {
+    // BẮT BUỘC: Nếu !clientCommandId -> Trả về HTTP 400 MISSING_COMMAND_ID
+    if (!clientCommandId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'MISSING_COMMAND_ID',
+          message: 'Yêu cầu client_command_id để đảm bảo tính idempotent.',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Kiểm tra định dạng UUID: Nếu không khớp regex UUID -> trả về HTTP 400 INVALID_COMMAND_ID
+    if (!UUID_REGEX.test(clientCommandId)) {
       return NextResponse.json(
         {
           success: false,
