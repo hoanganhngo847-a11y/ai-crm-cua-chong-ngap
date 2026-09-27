@@ -3,7 +3,6 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import { resolveVoiceCallProviderForCompany } from '../providers/provider-factory';
 import type { CallProvider } from '../../../shared/contracts/sensitive';
-import { markAttemptResult } from './call-attempt-scheduler';
 
 // ---------------------------------------------------------------------------
 // Types nội bộ
@@ -16,129 +15,115 @@ export interface DispatchResult {
 }
 
 // ---------------------------------------------------------------------------
-// Core dispatcher
+// Core dispatcher with atomic state machine
 // ---------------------------------------------------------------------------
 
 /**
- * Dispatch một cuộc gọi AI outbound cho một attempt cụ thể.
+ * Dispatch một cuộc gọi AI outbound cho một attempt cụ thể với state machine bền vững.
  *
- * Luồng bắt buộc (theo Foundation HANDOFF §3):
- * 1. Load attempt → xác nhận còn PENDING
- * 2. Resolve raw phone qua private RPC (chỉ trong bộ nhớ server)
- * 3. INSERT calls (INITIATED) — durable record trước khi gọi provider
- * 4. INSERT audit_logs (INITIATE_AI_OUTBOUND_CALL) — FAIL CLOSED nếu lỗi
- * 5. Gọi AI provider → nhận providerCallId
- * 6. UPDATE calls (RINGING, provider_call_id)
- * 7. UPDATE call_attempts (called_at, call_id)
- * 8. INSERT interactions (CALL_EVENT, NOT_REQUIRED, AI)
- * 9. Return { callId, status } — KHÔNG trả phone hay providerCallId
+ * State machine:
+ * PENDING_DISPATCH -> DISPATCHING -> PROVIDER_ACCEPTED -> ACTIVE -> COMPLETED / FAILED
+ *                                 \-> RECONCILIATION_REQUIRED
  *
- * SECURITY:
- * - raw phone KHÔNG bao giờ ra khỏi hàm này.
- * - Provider errors bị bắt và normalize thành generic error.
- * - Audit fail → FAIL CLOSED (call marked FAILED, throw).
+ * INVARIANTS:
+ * 1. Durable dispatch command / idempotency record được tạo trước khi gọi tổng đài.
+ * 2. Nếu tổng đài đã accept nhưng DB finalize lỗi: lưu trạng thái RECONCILIATION_REQUIRED.
+ * 3. Khi retry logical dispatch: không được gọi tổng đài lần thứ 2 nếu tổng đài trước đó đã accept.
+ * 4. Giao dịch finalize được thực thi atomically bằng DB RPC: bind provider_call_id,
+ *    update calls, update call_attempts, persist interaction, transition command to ACTIVE.
+ * 5. raw phone KHÔNG bao giờ log hay trả ra ngoài hàm này.
  *
- * @param provider  Provider inject — dùng trong tests. Production: auto-resolved.
+ * @param attemptId      ID của call attempt cần dispatch
+ * @param companyId      ID của công ty sở hữu
+ * @param provider       Provider override (cho tests/stubs)
+ * @param idempotencyKey Key chống trùng lặp logic
  */
 export async function dispatchAiOutboundCall(
   attemptId: string,
   companyId: string,
-  provider?: CallProvider
+  provider?: CallProvider,
+  idempotencyKey?: string
 ): Promise<DispatchResult> {
   const adminClient = createAdminClient();
   const callProvider = await resolveVoiceCallProviderForCompany(companyId, provider);
 
-  // A single bounded RPC validates tenant+attempt, reads only that phone and claims the attempt.
-  const { data: claimData, error: claimError } = await adminClient.rpc('claim_voice_attempt_phone', {
-    p_company_id: companyId,
-    p_attempt_id: attemptId,
-  });
-  const attempt = (Array.isArray(claimData) ? claimData[0] : claimData) as {
-    customer_id: string;
-    contact_cycle_id: string;
-    attempt_no: number;
-    raw_phone: string;
-  } | null;
-  if (claimError || !attempt?.raw_phone) {
-    throw new ServerAuthError('Lịch gọi không hợp lệ hoặc không có liên hệ.', 409, 'INTERNAL_ERROR');
-  }
-  const customerId = attempt.customer_id;
-  const rawPhone = attempt.raw_phone;
-
-  // ── 3. INSERT calls (INITIATED) — durable record trước khi gọi ──────────
   const providerDbValue = (['MANUAL', 'STRINGEE', 'VIETTEL', 'TWILIO', 'VINFON'] as const).includes(
     callProvider.name as 'MANUAL' | 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON'
   )
     ? callProvider.name
     : 'MANUAL';
 
-  const { data: callRecord, error: callError } = await adminClient
-    .from('calls')
-    .insert({
-      company_id: companyId,
-      customer_id: customerId,
-      direction: 'OUTBOUND',
-      agent_type: 'AI',
-      provider: providerDbValue,
-      started_at: new Date().toISOString(),
-      status: 'INITIATED',
-      transcript_status: 'PENDING',
-    })
-    .select('id')
-    .single();
+  const dispatchKey = idempotencyKey || `dispatch_${companyId}_${attemptId}`;
 
-  if (callError || !callRecord) {
-    await adminClient.rpc('release_voice_attempt_claim', {
-      p_company_id: companyId, p_attempt_id: attemptId,
-    });
+  // ── 1. PREPARE ATOMIC DISPATCH ───────────────────────────────────────────
+  const { data: prepData, error: prepError } = await adminClient.rpc('prepare_voice_dispatch_atomic', {
+    p_company_id: companyId,
+    p_attempt_id: attemptId,
+    p_idempotency_key: dispatchKey,
+    p_provider: providerDbValue,
+  });
+
+  if (prepError || !prepData) {
+    const msg = prepError?.message || '';
+    if (msg.includes('VOICE_DISPATCH_IN_PROGRESS')) {
+      throw new ServerAuthError('Cuộc gọi đang được xử lý bởi tiến trình khác.', 409, 'INTERNAL_ERROR');
+    }
+    throw new ServerAuthError('Lịch gọi không hợp lệ hoặc không có liên hệ.', 409, 'INTERNAL_ERROR');
+  }
+
+  const prepRow = (Array.isArray(prepData) ? prepData[0] : prepData) as {
+    call_id: string;
+    customer_id: string;
+    raw_phone: string | null;
+    provider_call_id: string | null;
+    dispatch_status: string;
+    is_reconciliation: boolean;
+  } | null;
+
+  if (!prepRow) {
     throw new ServerAuthError('Lỗi khởi tạo hồ sơ cuộc gọi.', 500, 'INTERNAL_ERROR');
   }
 
-  const callId = callRecord.id as string;
+  const callId = prepRow.call_id;
+  const customerId = prepRow.customer_id;
 
-  const { error: bindError } = await adminClient.rpc('bind_voice_attempt_call', {
-    p_company_id: companyId, p_attempt_id: attemptId, p_call_id: callId,
-  });
-  if (bindError) {
-    await adminClient.from('calls').update({ status: 'FAILED' })
-      .eq('id', callId).eq('company_id', companyId);
-    await adminClient.rpc('release_voice_attempt_claim', {
-      p_company_id: companyId, p_attempt_id: attemptId,
+  // ── 2. RECONCILIATION PATH ───────────────────────────────────────────────
+  // Nếu cuộc gọi trước đó đã được tổng đài chấp nhận (hoặc cần đối soát),
+  // KHÔNG gọi lại tổng đài! Tiến hành hoàn tất liên kết DB.
+  if (prepRow.is_reconciliation && prepRow.provider_call_id) {
+    const { error: finError } = await adminClient.rpc('finalize_voice_dispatch_atomic', {
+      p_company_id: companyId,
+      p_attempt_id: attemptId,
+      p_call_id: callId,
+      p_provider_call_id: prepRow.provider_call_id,
     });
-    throw new ServerAuthError('Lỗi liên kết lịch gọi.', 500, 'INTERNAL_ERROR');
+
+    if (finError) {
+      await adminClient.rpc('mark_voice_dispatch_reconciliation_required_atomic', {
+        p_company_id: companyId,
+        p_attempt_id: attemptId,
+        p_call_id: callId,
+        p_error: finError.message,
+      });
+      throw new ServerAuthError(
+        'Lỗi hoàn tất liên kết cuộc gọi sau xác nhận từ tổng đài.',
+        500,
+        'INTERNAL_ERROR'
+      );
+    }
+
+    return {
+      callId,
+      status: 'CALLING',
+    };
   }
 
-  // ── 4. MANDATORY AUDIT — FAIL CLOSED ────────────────────────────────────
-  const { error: auditError } = await adminClient.from('audit_logs').insert({
-    company_id: companyId,
-    user_id: null, // AI Worker — không phải human actor
-    action: 'INITIATE_AI_OUTBOUND_CALL',
-    resource_type: 'CALL',
-    resource_id: callId,
-    customer_id: customerId,
-    result: 'SUCCESS',
-    metadata: {
-      call_id: callId,
-      attempt_id: attemptId,
-      attempt_no: attempt.attempt_no,
-      contact_cycle_id: attempt.contact_cycle_id,
-      // SECURITY: KHÔNG log raw_phone, normalized_phone
-    },
-  });
-
-  if (auditError) {
-    // FAIL CLOSED — đánh dấu call FAILED và không gọi provider
-    await adminClient.from('calls').update({ status: 'FAILED' })
-      .eq('id', callId).eq('company_id', companyId);
-    await markAttemptResult(attemptId, companyId, 'FAILED', callId);
-    throw new ServerAuthError(
-      'Lỗi ghi nhận kiểm toán bắt buộc. Cuộc gọi bị từ chối.',
-      500,
-      'AUDIT_WRITE_FAILED'
-    );
+  const rawPhone = prepRow.raw_phone;
+  if (!rawPhone) {
+    throw new ServerAuthError('Không tìm thấy số điện thoại liên hệ.', 409, 'INTERNAL_ERROR');
   }
 
-  // ── 5. Gọi AI provider ───────────────────────────────────────────────────
+  // ── 3. GỌI PROVIDER ──────────────────────────────────────────────────────
   let providerResult: { providerCallId: string; status: string };
 
   try {
@@ -149,12 +134,13 @@ export async function dispatchAiOutboundCall(
       companyId,
     });
   } catch {
-    // CRITICAL SECURITY: KHÔNG bao giờ log hoặc expose _err.message
-    // (có thể chứa raw phone hoặc provider credentials)
-    await adminClient.from('calls').update({ status: 'FAILED' })
-      .eq('id', callId).eq('company_id', companyId);
-
-    await markAttemptResult(attemptId, companyId, 'FAILED', callId);
+    // SECURITY: Không bao giờ leak chi tiết provider error ra ngoài
+    await adminClient.rpc('fail_voice_dispatch_atomic', {
+      p_company_id: companyId,
+      p_attempt_id: attemptId,
+      p_call_id: callId,
+      p_error: 'CALL_PROVIDER_FAILURE',
+    });
 
     throw new ServerAuthError(
       'Không thể thực hiện cuộc gọi qua tổng đài.',
@@ -163,30 +149,40 @@ export async function dispatchAiOutboundCall(
     );
   }
 
-  // ── 6. UPDATE calls (RINGING) ────────────────────────────────────────────
-  await adminClient
-    .from('calls')
-    .update({
-      provider_call_id: providerResult.providerCallId,
-      status: 'RINGING',
-    })
-    .eq('id', callId).eq('company_id', companyId);
-
-  // ── 8. INSERT interactions (CALL_EVENT, non-textual system event) ─────────
-  await adminClient.from('interactions').insert({
-    company_id: companyId,
-    customer_id: customerId,
-    conversation_id: null,
-    channel: 'AI_VOICE',
-    type: 'CALL_EVENT',
-    direction: 'OUTBOUND',
-    sanitized_content: null,
-    sanitization_status: 'NOT_REQUIRED',
-    actor_type: 'AI',
-    actor_user_id: null,
+  // ── 4. RECORD PROVIDER ACCEPTED ATOMICALLY ──────────────────────────────
+  // Đảm bảo provider_call_id được persist bền vững trước khi finalize
+  await adminClient.rpc('record_voice_provider_accepted_atomic', {
+    p_company_id: companyId,
+    p_attempt_id: attemptId,
+    p_call_id: callId,
+    p_provider_call_id: providerResult.providerCallId,
   });
 
-  // ── 9. Return safe result — KHÔNG trả phone hay providerCallId ────────────
+  // ── 5. FINALIZE DISPATCH ATOMICALLY ─────────────────────────────────────
+  const { error: finError } = await adminClient.rpc('finalize_voice_dispatch_atomic', {
+    p_company_id: companyId,
+    p_attempt_id: attemptId,
+    p_call_id: callId,
+    p_provider_call_id: providerResult.providerCallId,
+  });
+
+  if (finError) {
+    // Provider đã tạo cuộc gọi thật nhưng DB finalize thất bại:
+    // Đánh dấu RECONCILIATION_REQUIRED để retry không gọi lại khách
+    await adminClient.rpc('mark_voice_dispatch_reconciliation_required_atomic', {
+      p_company_id: companyId,
+      p_attempt_id: attemptId,
+      p_call_id: callId,
+      p_error: finError.message,
+    });
+
+    throw new ServerAuthError(
+      'Lỗi ghi nhận hoàn tất cuộc gọi sau xác nhận từ tổng đài.',
+      500,
+      'INTERNAL_ERROR'
+    );
+  }
+
   return {
     callId,
     status: 'CALLING',

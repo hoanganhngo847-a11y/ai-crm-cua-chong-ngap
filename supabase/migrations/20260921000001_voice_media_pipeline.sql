@@ -1,17 +1,15 @@
 -- Voice media pipeline: private recording bucket, durable retry queue and bounded transcript writer.
 
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
 VALUES (
   'call-recordings',
   'call-recordings',
   false,
-  26214400,
-  ARRAY['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/mp4']
+  26214400
 )
 ON CONFLICT (id) DO UPDATE SET
   public = false,
-  file_size_limit = EXCLUDED.file_size_limit,
-  allowed_mime_types = EXCLUDED.allowed_mime_types;
+  file_size_limit = EXCLUDED.file_size_limit;
 
 CREATE TABLE public.voice_media_jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -14,7 +14,7 @@ Tài liệu: [Stringee outbound](https://developer.stringee.com/docs/rest-api-re
 
 ## Cấu hình
 
-1. Apply lần lượt migration `20260921000001_voice_media_pipeline.sql`, `20260921000002_openai_realtime.sql` và `20260922000001_voice_security_hardening.sql`.
+1. Apply lần lượt migration `20260921000001_voice_media_pipeline.sql`, `20260921000002_openai_realtime.sql` và `20260922000003_voice_security_hardening.sql`.
 2. Chép nhóm biến Voice trong `.env.example` sang môi trường triển khai.
 3. Sinh hai routing token ngẫu nhiên tối thiểu 32 ký tự (một Stringee, một OpenAI). Chỉ lưu SHA-256 của token và tên biến môi trường trong `voice_provider_integrations`; secret thật không nằm trong DB.
 4. Trên Stringee Dashboard, cấu hình Event URL và Answer URL thành `https://<domain>/api/webhooks/voice/<STRINGEE_ROUTING_TOKEN>`, bật recording. `project_id` từ webhook phải khớp `provider_account_id` đã cấu hình.

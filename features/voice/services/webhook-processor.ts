@@ -4,9 +4,7 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import { normalizeVietnamPhoneToE164 } from '../utils/phone';
 import { processRecordingReady } from './media-pipeline';
-import {
-  markAttemptResult,
-} from './call-attempt-scheduler';
+import { calculateRetryScheduledAt } from './call-attempt-scheduler';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +31,8 @@ export interface VoiceWebhookPayload {
   callCreatedReason?: string;
   project_id?: string | number;
   projectId?: string | number;
+  event_id?: string;
+  timestamp?: string | number;
   from?: { number?: string; type?: string };
   to?: { number?: string; type?: string };
   intake?: {
@@ -77,7 +77,6 @@ export function verifyWebhookSignature(
   const webhookSecret = secretOverride || process.env.VOICE_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
-    // Nếu chưa cấu hình secret → chỉ cho phép trong dev
     if (process.env.NODE_ENV === 'production') {
       console.error('[webhook-processor] VOICE_WEBHOOK_SECRET chưa được cấu hình trong production.');
       return false;
@@ -86,7 +85,6 @@ export function verifyWebhookSignature(
     return true;
   }
 
-  // Provider-specific signature verification
   const provider = providerOverride || process.env.VOICE_PROVIDER || 'MANUAL';
 
   if (provider === 'STRINGEE') {
@@ -102,7 +100,6 @@ export function verifyWebhookSignature(
     return received.length === expected.length && timingSafeEqual(received, expected);
   }
 
-  // Generic: kiểm tra Authorization header = Bearer <secret>
   const authHeader = headers.get('authorization');
   if (!authHeader) return false;
   const token = authHeader.replace(/^Bearer\s+/i, '');
@@ -188,16 +185,16 @@ export async function bindStringeeCallId(
 }
 
 // ---------------------------------------------------------------------------
-// Xử lý event: call.status_updated / call.completed
+// Xử lý event: call.status_updated / call.completed (ATOMIC TRANSACTION)
 // ---------------------------------------------------------------------------
 
 /**
- * Cập nhật trạng thái cuộc gọi sau khi nhận webhook.
- * Nếu kết thúc (COMPLETED/NO_ANSWER/BUSY/FAILED) → cập nhật attempt result.
- *
- * SECURITY: recording_url từ provider KHÔNG được lưu trực tiếp vào DB.
- * Recording phải được download server-side và lưu vào bucket 'call-recordings'.
- * recording_ref = path nội bộ (không phải URL provider).
+ * Cập nhật trạng thái cuộc gọi atomically bằng DB RPC: apply_voice_call_status_atomic.
+ * Đảm bảo:
+ * 1. Khóa row call, kiểm tra legal state transition.
+ * 2. Cập nhật call status + attempt result atomically.
+ * 3. Chống ghi trùng / lặp bằng idempotency key.
+ * 4. Không advance cycle lần hai khi nhận lặp webhook.
  */
 export async function processCallStatusUpdate(
   payload: VoiceWebhookPayload,
@@ -209,15 +206,6 @@ export async function processCallStatusUpdate(
   if (!providerCallId) {
     return { handled: false, message: 'provider_call_id missing' };
   }
-
-  const call = await findCallByProviderCallId(providerCallId, companyId, provider);
-
-  if (!call) {
-    // Do not log provider correlation IDs; acknowledge races without leaking metadata.
-    return { handled: false, message: 'call not found — ignored' };
-  }
-
-  const adminClient = createAdminClient();
 
   // Map provider status sang internal status
   const statusMap: Record<string, string> = {
@@ -234,49 +222,39 @@ export async function processCallStatusUpdate(
   const rawStatus = (payload.status || '').toLowerCase();
   const newStatus = statusMap[rawStatus] || rawStatus.toUpperCase();
 
-  // Update calls
-  const updateFields: Record<string, unknown> = { status: newStatus };
+  // Bounded deterministic event key nếu provider không cung cấp event_id
+  const eventIdempotencyKey = payload.event_id ||
+    `status_${provider}_${providerCallId}_${newStatus}_${payload.ended_at || payload.timestamp || ''}`;
 
-  if (payload.ended_at) {
-    updateFields.ended_at = payload.ended_at;
-  } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED'].includes(newStatus)) {
-    updateFields.ended_at = new Date().toISOString();
+  const adminClient = createAdminClient();
+
+  // Tính next retry time nếu terminal và có thể retry
+  let nextRetryAt: string | null = null;
+  if (['NO_ANSWER', 'BUSY', 'FAILED'].includes(newStatus)) {
+    nextRetryAt = calculateRetryScheduledAt(new Date(), 2);
   }
 
-  const { error: updateError } = await adminClient.from('calls').update(updateFields)
-    .eq('id', call.id).eq('company_id', companyId).eq('provider', provider);
-  if (updateError) throw new ServerAuthError('Lỗi cập nhật trạng thái cuộc gọi.', 500, 'INTERNAL_ERROR');
+  const { data, error } = await adminClient.rpc('apply_voice_call_status_atomic', {
+    p_company_id: companyId,
+    p_provider: provider,
+    p_provider_call_id: providerCallId,
+    p_new_status: newStatus,
+    p_event_idempotency_key: eventIdempotencyKey,
+    p_ended_at: payload.ended_at || null,
+    p_next_retry_at: nextRetryAt,
+  });
 
-  // Nếu cuộc gọi kết thúc → cập nhật attempt result
-  const terminalStatuses = ['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED'];
-  if (terminalStatuses.includes(newStatus)) {
-    // Tìm attempt tương ứng
-    const { data: attempts } = await adminClient
-      .from('call_attempts')
-      .select('id, attempt_no, contact_cycle_id, customer_id, company_id, result')
-      .eq('call_id', call.id)
-      .eq('company_id', call.company_id)
-      .eq('result', 'PENDING') // chỉ update nếu vẫn PENDING
-      .limit(1);
+  if (error) {
+    throw new ServerAuthError('Lỗi cập nhật trạng thái cuộc gọi atomic.', 500, 'INTERNAL_ERROR');
+  }
 
-    if (attempts && attempts.length > 0) {
-      const attempt = attempts[0] as {
-        id: string;
-        attempt_no: number;
-        contact_cycle_id: string;
-        customer_id: string;
-        company_id: string;
-        result: string;
-      };
+  const resultRow = Array.isArray(data) ? data[0] : data;
+  if (!resultRow) {
+    return { handled: false, message: 'call not found — ignored' };
+  }
 
-      const attemptResult =
-        newStatus === 'COMPLETED' ? 'ANSWERED' :
-        newStatus === 'NO_ANSWER' ? 'NO_ANSWER' :
-        newStatus === 'BUSY' ? 'BUSY' :
-        'FAILED';
-
-      await markAttemptResult(attempt.id, call.company_id, attemptResult, call.id);
-    }
+  if (resultRow.is_duplicate) {
+    return { handled: true, message: 'duplicate event acknowledged' };
   }
 
   if (newStatus === 'COMPLETED') {
@@ -285,49 +263,33 @@ export async function processCallStatusUpdate(
         event: 'call.recording_ready',
         provider_call_id: providerCallId,
         recording_id: payload.recording_id || providerCallId,
-      }, call.company_id, provider);
+      }, companyId, provider);
     } catch {
-      // Status delivery must remain idempotent; the provider may send recording_ready later.
+      // Idempotent background recording import
     }
   }
 
-  return { handled: true, message: `call ${call.id} updated to ${newStatus}` };
+  return { handled: true, message: `call ${resultRow.call_id} updated to ${resultRow.current_status}` };
 }
 
 // ---------------------------------------------------------------------------
-// Xử lý event: call.inbound
+// Xử lý event: call.inbound (ATOMIC TRANSACTION)
 // ---------------------------------------------------------------------------
 
 /**
- * Xử lý cuộc gọi Hotline inbound từ khách.
+ * Xử lý cuộc gọi Hotline inbound từ khách atomically: ingest_inbound_voice_call_atomic.
  *
- * Quy tắc (PROJECT_MASTER §4):
- * - Inbound KHÔNG tạo call_attempts, KHÔNG tính vào quy tắc 3 lần.
- * - Tìm customer theo normalized_phone (qua HMAC lookup trong identities).
- * - Nếu chưa có customer → tạo mới với source='HOTLINE'.
- * - Ghi calls (INBOUND, AI) + interactions (HOTLINE, CALL_EVENT, SYSTEM).
- *
- * SECURITY:
- * - from_number trong payload là raw phone từ tổng đài.
- * - KHÔNG log from_number.
- * - KHÔNG lưu từ payload trực tiếp vào bảng public.
- * - Chỉ dùng để lookup identity trong private schema.
+ * Invariants:
+ * - Inbound KHÔNG tạo call_attempts, KHÔNG tính vào chu kỳ 3 lần.
+ * - Customer resolution + identity + call + interaction tạo trong 1 DB transaction.
+ * - ZERO-PHONE trong public customer profile (chỉ lưu trong bảng nhạy cảm nội bộ).
+ * - Rollback toàn bộ nếu bất kỳ bước nào thất bại.
  */
 export async function processInboundCall(
   payload: VoiceWebhookPayload,
   companyId: string,
   provider: 'STRINGEE' | 'VIETTEL' | 'TWILIO' | 'VINFON' = 'STRINGEE'
 ): Promise<WebhookProcessResult> {
-  const adminClient = createAdminClient();
-
-  // Chống ghi trùng: kiểm tra provider_call_id đã tồn tại chưa
-  if (payload.provider_call_id) {
-    const existing = await findCallByProviderCallId(payload.provider_call_id, companyId, provider);
-    if (existing) {
-      return { handled: true, message: `inbound call already recorded: ${existing.id}` };
-    }
-  }
-
   const normalizedPhone = payload.from_number
     ? normalizeVietnamPhoneToE164(payload.from_number)
     : null;
@@ -335,61 +297,61 @@ export async function processInboundCall(
   if (!normalizedPhone || !payload.from_number || !payload.provider_call_id || !identitySecret) {
     return { handled: false, message: 'canonical inbound identity is unavailable' };
   }
+
   const identityHash = createHmac('sha256', identitySecret)
     .update(`${companyId}:${normalizedPhone}`).digest('hex');
-  const { data: customerData, error: customerError } = await adminClient.rpc(
-    'resolve_or_create_hotline_customer', {
-      p_company_id: companyId,
-      p_normalized_phone: normalizedPhone,
-      p_raw_phone: payload.from_number,
-      p_phone_identity_hash: identityHash,
-    }
-  );
-  if (customerError || !customerData) {
-    throw new ServerAuthError('Lỗi định danh khách gọi Hotline.', 500, 'INTERNAL_ERROR');
-  }
-  const customerId = customerData as string;
-  const { error: callError } = await adminClient.rpc('create_inbound_voice_call', {
+
+  const adminClient = createAdminClient();
+
+  const { data, error } = await adminClient.rpc('ingest_inbound_voice_call_atomic', {
     p_company_id: companyId,
-    p_customer_id: customerId,
     p_provider: provider,
     p_provider_call_id: payload.provider_call_id,
+    p_normalized_phone: normalizedPhone,
+    p_raw_phone: payload.from_number,
+    p_phone_identity_hash: identityHash,
   });
-  if (callError) throw new ServerAuthError('Lỗi lưu cuộc gọi Hotline inbound.', 500, 'INTERNAL_ERROR');
 
-  // KHÔNG tạo call_attempts — inbound không thuộc chu kỳ 3 lần
+  if (error) {
+    throw new ServerAuthError('Lỗi tiếp nhận cuộc gọi Hotline inbound atomic.', 500, 'INTERNAL_ERROR');
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
   return {
     handled: true,
-    message: 'inbound call recorded',
+    message: row?.created ? 'inbound call recorded' : 'inbound call already recorded',
   };
 }
 
 // ---------------------------------------------------------------------------
-// Lưu recording_ref sau khi recording đã được download server-side
+// Lưu recording_ref với trust boundary xác thực
 // ---------------------------------------------------------------------------
 
 /**
- * Cập nhật recording_ref vào call record sau khi ghi âm đã được
- * download từ provider và lưu vào bucket 'call-recordings'.
- *
- * SECURITY: URL gốc từ provider KHÔNG được lưu vào DB.
- * Chỉ internal storage ref mới được lưu.
+ * Cập nhật recording_ref vào call record với storage trust boundary: attach_call_recording_ref_atomic.
+ * Phải xác thực path thuộc đúng tenant/resource: voice/{companyId}/{callId}/...
  */
 export async function updateCallRecordingRef(
   callId: string,
   companyId: string,
-  internalRecordingRef: string
+  internalRecordingRef: string,
+  lockToken?: string
 ): Promise<void> {
+  if (!/\.(mp3|mp4|ogg|wav|webm)$/i.test(internalRecordingRef)) {
+    throw new ServerAuthError('Định dạng tệp ghi âm không hợp lệ.', 400, 'RESOURCE_FORBIDDEN');
+  }
+
   const adminClient = createAdminClient();
 
-  const { error } = await adminClient
-    .from('calls')
-    .update({ recording_ref: internalRecordingRef })
-    .eq('id', callId)
-    .eq('company_id', companyId);
+  const { error } = await adminClient.rpc('attach_call_recording_ref_atomic', {
+    p_company_id: companyId,
+    p_call_id: callId,
+    p_recording_ref: internalRecordingRef,
+    p_lock_token: lockToken || null,
+  });
 
   if (error) {
-    throw new ServerAuthError('Lỗi lưu tham chiếu ghi âm.', 500, 'INTERNAL_ERROR');
+    throw new ServerAuthError('Lỗi lưu tham chiếu ghi âm bảo mật.', 400, 'RESOURCE_FORBIDDEN');
   }
 }
 

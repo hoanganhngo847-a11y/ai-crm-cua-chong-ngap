@@ -47,8 +47,10 @@ export async function POST(request: NextRequest, context: Context): Promise<Next
       return NextResponse.json({ ok: true, ...await processCallIntake(payload, integration.companyId, 'STRINGEE') });
     }
     return NextResponse.json({ ok: true, handled: false });
-  } catch {
-    return NextResponse.json({ error: 'Internal processing error' }, { status: 500 });
+  } catch (err: unknown) {
+    const traceId = `vwh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    console.error(`[webhook/voice] trace=${traceId} internal error:`, (err as Error).message);
+    return NextResponse.json({ error: 'INTERNAL_ERROR', trace_id: traceId }, { status: 500 });
   }
 }
 

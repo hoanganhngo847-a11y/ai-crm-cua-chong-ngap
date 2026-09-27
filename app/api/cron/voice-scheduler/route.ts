@@ -10,9 +10,7 @@ import { processDueVoiceMediaJobs } from '../../../../features/voice/services/me
 // Cron job endpoint — gọi định kỳ (khuyến nghị mỗi 5 phút).
 // Query call_attempts đến hạn và dispatch AI outbound call.
 //
-// Xác thực: Authorization: Bearer <CRON_SECRET>
-// Không dùng user session — dùng createAdminClient() bên trong các service.
-//
+// Không dùng user session — các service tự xác thực ngữ cảnh nội bộ.
 // Biến môi trường:
 //   CRON_SECRET  — secret để xác thực cron job caller
 //
