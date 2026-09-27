@@ -101,6 +101,18 @@ export async function POST(request: NextRequest) {
     const syncService = new ZaloSyncService();
     const result = await syncService.handleWebhookEvent(payload);
 
+    if (result.status === 'busy') {
+      return NextResponse.json(
+        {
+          error: 'EVENT_BUSY_RETRY_LATER',
+          message: result.message,
+          result,
+          trace_id: traceId,
+        },
+        { status: 429 }
+      );
+    }
+
     return NextResponse.json({
       error: 0,
       message: 'Success',

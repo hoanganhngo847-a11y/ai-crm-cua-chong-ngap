@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient } from '../../omnichannel/zalo/zalo-client';
+import { ZaloClient, ZaloClientFactory } from '../../omnichannel/zalo/zalo-client';
 import {
   AudienceCustomerInfo,
   CARE_AUDIENCE_GROUPS,
@@ -28,11 +28,11 @@ export interface ZaloCareCampaignServiceOptions {
  */
 export class ZaloCareCampaignService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient: ZaloClient;
+  private readonly zaloClient?: ZaloClient;
   private readonly analyticsService: ZaloCareAnalyticsService;
 
   constructor(options: ZaloCareCampaignServiceOptions = {}) {
-    this.zaloClient = options.zaloClient || new ZaloClient();
+    this.zaloClient = options.zaloClient;
 
     if (options.supabase) {
       this.supabase = options.supabase;
@@ -231,6 +231,20 @@ export class ZaloCareCampaignService {
     const template = campaign.message_template;
     const audience = await this.getAudienceCustomers(campaign.company_id, audienceGroup);
 
+    let client = this.zaloClient;
+    if (!client) {
+      const { data: oaConfig } = await this.supabase
+        .from('zalo_oa_configs')
+        .select('oa_id')
+        .eq('company_id', campaign.company_id)
+        .eq('status', 'ACTIVE')
+        .limit(1)
+        .maybeSingle();
+
+      const oaId = oaConfig?.oa_id || '';
+      client = await ZaloClientFactory.getClientForOa(campaign.company_id, oaId, { supabase: this.supabase });
+    }
+
     let sent = 0;
     let failed = 0;
     let skipped = 0;
@@ -306,7 +320,7 @@ export class ZaloCareCampaignService {
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
-            const sendRes = await this.zaloClient.sendTextMessage(target.zaloUid, renderedMessage);
+            const sendRes = await client.sendTextMessage(target.zaloUid, renderedMessage);
 
             if (sendRes.error === 0) {
               isSuccess = true;

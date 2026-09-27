@@ -1,5 +1,5 @@
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient } from './zalo-client';
+import { ZaloClient, ZaloClientFactory } from './zalo-client';
 import { ZaloWebhookPayload } from './types';
 import { sanitizeMessageContent } from './sanitizer';
 import { IZaloOAMappingResolver, ZaloOAMappingService } from './oa-mapping';
@@ -7,7 +7,7 @@ import { IZaloOAMappingResolver, ZaloOAMappingService } from './oa-mapping';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface SyncResult {
-  status: 'synced' | 'duplicate' | 'ignored' | 'error';
+  status: 'synced' | 'duplicate' | 'ignored' | 'error' | 'busy';
   interactionId?: string;
   conversationId?: string;
   customerId?: string;
@@ -43,50 +43,49 @@ const OPT_OUT_KEYWORDS = [
  * 1. Provider Verification & Tenant Isolation:
  *    Maps company_id server-side via verified OA ID. Fails closed if OA ID is unmapped.
  * 2. Durable Idempotency Claim Invariant:
- *    Uses zalo_ingress_events table with UNIQUE(company_id, oa_id, external_ref).
- *    Claims via INSERT ... ON CONFLICT DO NOTHING (or unique constraint rejection).
- * 3. Atomic Ingress Pipeline:
- *    Pipeline: Ingress Claim -> Customer -> Identity -> Conversation -> Interaction -> Private Raw Data.
- *    Fail-closed: Absolutely NEVER catch and swallow private raw payload storage errors.
- *    Rolls back on failure to prevent orphan records.
+ *    Uses zalo_ingress_events table with state machine ('CLAIMED', 'PROCESSED', 'FAILED').
+ *    Atomic claim via zalo_claim_ingress_event RPC.
+ * 3. Atomic Ingress Pipeline & Zero JS Rollback:
+ *    Postgres RPC (zalo_process_ingress_message) executes complete CRM mutation atomically.
+ *    No manual JS compensation deletes. PostgreSQL rolls back automatically on error.
  * 4. Zero-Phone Sanitization:
  *    Sanitizes public text before recording; sets sanitization_status = 'SUCCEEDED' for SALE.
  */
 export class ZaloSyncService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient: ZaloClient;
+  private readonly zaloClient?: ZaloClient;
   private readonly oaMappingResolver: IZaloOAMappingResolver;
 
   constructor(options: ZaloSyncServiceOptions = {}) {
-    this.zaloClient = options.zaloClient || new ZaloClient();
+    // 1. Initialize supabase client first (Fix Lỗi 1)
+    const supabase = options.supabase ?? createAdminClient();
+    this.supabase = supabase;
 
+    // 2. Only mock client allowed from test suite (Fix Lỗi 7)
+    this.zaloClient = options.zaloClient;
+
+    // 3. Inject initialized supabase instance into ZaloOAMappingService
     if (options.oaMappingResolver) {
       this.oaMappingResolver = options.oaMappingResolver;
     } else {
       const customMapping: Record<string, string> = {};
       if (options.defaultCompanyId) {
         customMapping['__test_fallback__'] = options.defaultCompanyId;
-        if (this.zaloClient.oaId) {
+        if (this.zaloClient?.oaId) {
           customMapping[this.zaloClient.oaId] = options.defaultCompanyId;
         }
       }
       this.oaMappingResolver = new ZaloOAMappingService({
         customMapping,
-        supabase: options.supabase,
+        supabase: this.supabase,
         allowTestMockFallback: Boolean(options.defaultCompanyId),
       });
-    }
-
-    if (options.supabase) {
-      this.supabase = options.supabase;
-    } else {
-      this.supabase = createAdminClient();
     }
   }
 
   /**
    * Main webhook event ingestion pipeline.
-   * Atomically claims event, processes data entities, and records private raw payload.
+   * Atomically claims event, processes data entities, and records private raw payload via DB RPC.
    */
   async handleWebhookEvent(event: ZaloWebhookPayload): Promise<SyncResult> {
     const eventName = event.event_name;
@@ -104,6 +103,11 @@ export class ZaloSyncService {
       '';
 
     const companyId = await this.oaMappingResolver.resolveCompanyId(oaId);
+
+    // 2. RESOLVE CLIENT: Dynamic tenant client via ZaloClientFactory in production runtime (Fix Lỗi 7)
+    const client =
+      this.zaloClient ??
+      (await ZaloClientFactory.getClientForOa(companyId, oaId, { supabase: this.supabase }));
 
     const senderId = event.sender?.id;
     const recipientId = event.recipient?.id;
@@ -130,285 +134,120 @@ export class ZaloSyncService {
       rawContent = `[Tin nhắn ${eventName}]`;
     }
 
-    // 2. DURABLE IDEMPOTENCY CLAIM INVARIANT:
+    // 3. DURABLE IDEMPOTENCY CLAIM INVARIANT (Fix Lỗi 2, 13)
     // Namespaced idempotency key: zalo:companyId:oaId:rawMsgId
     const namespacedExternalRef = `zalo:${companyId}:${oaId}:${rawMsgId}`;
 
-    // Atomically claim the ingress event via DB invariant (UNIQUE constraint on company_id, oa_id, external_ref)
-    const { error: claimError } = await this.supabase
-      .from('zalo_ingress_events')
-      .insert({
-        company_id: companyId,
-        oa_id: oaId,
-        external_ref: namespacedExternalRef,
-        event_name: eventName,
-        sender_id: senderId,
-        recipient_id: recipientId,
-        status: 'CLAIMED',
-      });
+    // Atomically claim via zalo_claim_ingress_event RPC
+    const { data: claimData, error: claimRpcError } = await this.supabase.rpc('zalo_claim_ingress_event', {
+      p_company_id: companyId,
+      p_oa_id: oaId,
+      p_external_ref: namespacedExternalRef,
+      p_event_name: eventName,
+      p_sender_id: senderId,
+      p_recipient_id: recipientId,
+    });
 
-    if (claimError) {
-      // 23505 is PostgreSQL unique_violation error code
-      const isUniqueViolation =
-        claimError.code === '23505' ||
-        claimError.message?.toLowerCase().includes('unique') ||
-        claimError.message?.toLowerCase().includes('duplicate');
-
-      if (isUniqueViolation) {
-        // Query existing interaction to return consistent idempotent acknowledgment
-        const { data: existingInteraction } = await this.supabase
-          .from('interactions')
-          .select('id, conversation_id, customer_id')
-          .eq('company_id', companyId)
-          .eq('channel', 'ZALO')
-          .in('external_ref', [rawMsgId, namespacedExternalRef])
-          .maybeSingle();
-
-        return {
-          status: 'duplicate',
-          interactionId: existingInteraction?.id,
-          conversationId: existingInteraction?.conversation_id,
-          customerId: existingInteraction?.customer_id,
-          message: 'Duplicate event skipped by idempotency claim invariant',
-        };
-      }
-
-      throw new Error(`Failed to claim webhook ingress event: ${claimError.message}`);
+    if (claimRpcError) {
+      throw new Error(`Failed to claim webhook ingress event: ${claimRpcError.message}`);
     }
 
-    // Pipeline tracking for safe atomic rollback on downstream failure
-    let createdCustomerId: string | null = null;
-    let createdIdentityId: string | null = null;
-    let createdConversationId: string | null = null;
-    let createdInteractionId: string | null = null;
+    const claimResult = Array.isArray(claimData) ? claimData[0] : claimData;
+    const claimStatus = claimResult?.claim_status || 'CLAIMED';
+
+    if (claimStatus === 'DUPLICATE') {
+      const { data: existingInteraction } = await this.supabase
+        .from('interactions')
+        .select('id, conversation_id, customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', 'ZALO')
+        .in('external_ref', [rawMsgId, namespacedExternalRef])
+        .maybeSingle();
+
+      return {
+        status: 'duplicate',
+        interactionId: existingInteraction?.id,
+        conversationId: existingInteraction?.conversation_id,
+        customerId: existingInteraction?.customer_id,
+        message: 'Duplicate event skipped by idempotency claim invariant',
+      };
+    }
+
+    if (claimStatus === 'BUSY') {
+      return {
+        status: 'busy',
+        message: 'Event is currently being processed by another worker (lease active). Retry later.',
+      };
+    }
+
+    // 4. ATOMIC CRM INGRESS MUTATION (Zero JS Compensation, Fix Lỗi 3, 13)
+    let customerName = `Khách Zalo ${zaloUserUid.slice(-4)}`;
+    try {
+      const profile = await client.getUserProfile(zaloUserUid);
+      if (profile?.user_name) {
+        customerName = profile.user_name;
+      }
+    } catch {
+      // Fallback to placeholder name
+    }
+
+    const { sanitizedText } = sanitizeMessageContent(rawContent);
 
     try {
-      // 3. EVIDENCE CONTRACT: IDENTITY & CUSTOMER RESOLUTION
-      let customerId: string;
-      let isNewCustomer = false;
+      const { data: mutationData, error: mutationError } = await this.supabase.rpc('zalo_process_ingress_message', {
+        p_company_id: companyId,
+        p_oa_id: oaId,
+        p_external_ref: namespacedExternalRef, // Fix Lỗi 13: namespaced external ref
+        p_raw_msg_id: rawMsgId,                // Provider message ID in source_metadata
+        p_zalo_user_uid: zaloUserUid,
+        p_user_name: customerName,
+        p_event_name: eventName,
+        p_sender_id: senderId,
+        p_recipient_id: recipientId,
+        p_is_inbound: isInbound,
+        p_sanitized_content: sanitizedText,
+        p_raw_content: rawContent,
+        p_raw_payload: event as unknown as Record<string, unknown>,
+        p_timestamp: typeof event.timestamp === 'number' ? event.timestamp : Date.now(),
+      });
 
-      const { data: existingIdentity } = await this.supabase
-        .from('identities')
-        .select('id, customer_id')
-        .eq('company_id', companyId)
-        .eq('channel', 'ZALO')
-        .eq('external_id', zaloUserUid)
-        .maybeSingle();
-
-      if (existingIdentity?.customer_id) {
-        customerId = existingIdentity.customer_id;
-      } else {
-        isNewCustomer = true;
-        let customerName = `Khách Zalo ${zaloUserUid.slice(-4)}`;
-
-        try {
-          const profile = await this.zaloClient.getUserProfile(zaloUserUid);
-          if (profile.user_name) {
-            customerName = profile.user_name;
-          }
-        } catch {
-          // Fallback to placeholder name
-        }
-
-        const { data: newCustomer, error: custError } = await this.supabase
-          .from('customers')
-          .insert({
-            company_id: companyId,
-            name: customerName,
-            source: 'ZALO_OA',
-            stage: 'LEAD_NEW',
-          })
-          .select('id')
-          .single();
-
-        if (custError || !newCustomer) {
-          throw new Error(`Failed to create customer for Zalo UID ${zaloUserUid}: ${custError?.message}`);
-        }
-
-        customerId = newCustomer.id;
-        createdCustomerId = newCustomer.id;
-
-        // Link identity strictly by external_id
-        const { data: newIdent, error: identError } = await this.supabase
-          .from('identities')
-          .insert({
-            company_id: companyId,
-            customer_id: customerId,
-            channel: 'ZALO',
-            external_id: zaloUserUid,
-            verified: false,
-            metadata: { zalo_uid: zaloUserUid },
-          })
-          .select('id')
-          .maybeSingle();
-
-        if (identError) {
-          throw new Error(`Failed to create identity for Zalo UID ${zaloUserUid}: ${identError.message}`);
-        }
-
-        if (newIdent) {
-          createdIdentityId = newIdent.id;
-        }
-      }
-
-      // 4. CONVERSATION MANAGEMENT
-      let conversationId: string;
-      const nowIso = new Date().toISOString();
-
-      const { data: existingConversation } = await this.supabase
-        .from('conversations')
-        .select('id, unread_count')
-        .eq('company_id', companyId)
-        .eq('channel', 'ZALO')
-        .eq('external_conversation_id', zaloUserUid)
-        .maybeSingle();
-
-      if (existingConversation) {
-        conversationId = existingConversation.id;
-        const newUnread = isInbound
-          ? existingConversation.unread_count + 1
-          : existingConversation.unread_count;
-
-        await this.supabase
-          .from('conversations')
-          .update({
-            last_message_at: nowIso,
-            unread_count: newUnread,
-            status: 'OPEN',
-            updated_at: nowIso,
-          })
-          .eq('id', conversationId);
-      } else {
-        const { data: newConv, error: convError } = await this.supabase
-          .from('conversations')
-          .insert({
-            company_id: companyId,
-            customer_id: customerId,
-            channel: 'ZALO',
-            external_conversation_id: zaloUserUid,
-            last_message_at: nowIso,
-            unread_count: isInbound ? 1 : 0,
-            status: 'OPEN',
-          })
-          .select('id')
-          .single();
-
-        if (convError || !newConv) {
-          throw new Error(`Failed to create conversation for Zalo UID ${zaloUserUid}: ${convError?.message}`);
-        }
-
-        conversationId = newConv.id;
-        createdConversationId = newConv.id;
-      }
-
-      // 5. SECURITY ZONE INGRESS: SANITIZE CONTENT & RECORD INTERACTION
-      const { sanitizedText } = sanitizeMessageContent(rawContent);
-
-      const { data: newInteraction, error: intError } = await this.supabase
-        .from('interactions')
-        .insert({
-          company_id: companyId,
-          customer_id: customerId,
-          conversation_id: conversationId,
-          channel: 'ZALO',
-          type: 'MESSAGE',
-          direction: isInbound ? 'INBOUND' : 'OUTBOUND',
-          sanitized_content: sanitizedText,
-          sanitization_status: 'SUCCEEDED',
-          sanitized_at: nowIso,
-          sanitizer_version: 'v1.0',
-          external_ref: rawMsgId,
-          actor_type: isInbound ? 'CUSTOMER' : 'SALE',
-          actor_user_id: null,
-          created_at: nowIso,
-        })
-        .select('id')
-        .single();
-
-      if (intError || !newInteraction) {
-        throw new Error(`Failed to insert interaction: ${intError?.message}`);
-      }
-
-      createdInteractionId = newInteraction.id;
-
-      // 6. PRIVATE SECURITY ZONE: RECORD RAW PAYLOAD & RAW CONTENT
-      // CRITICAL: NEVER swallow or ignore errors here. Fail closed and rollback on failure.
-      const rawRecord = {
-        interaction_id: newInteraction.id,
-        company_id: companyId,
-        raw_content: rawContent,
-        raw_payload: event as unknown as Record<string, unknown>,
-        source_metadata: {
-          oa_id: oaId,
-          sender_id: senderId,
-          recipient_id: recipientId,
-          timestamp: event.timestamp,
-          event_name: event.event_name,
-        },
-        created_at: nowIso,
-      };
-
-      type SupabaseWithSchema = SupabaseClient & {
-        schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
-      };
-      const clientWithSchema = this.supabase as SupabaseWithSchema;
-
-      let rawInsertError: { message?: string } | null = null;
-      if (typeof clientWithSchema.schema === 'function') {
-        const res = await clientWithSchema.schema('private').from('interaction_raw_contents').insert(rawRecord);
-        rawInsertError = res.error;
-      } else {
-        const res = await this.supabase.from('interaction_raw_contents').insert(rawRecord);
-        rawInsertError = res.error;
-      }
-
-      if (rawInsertError) {
+      if (mutationError || !mutationData) {
         throw new Error(
-          `Security Zone Ingress Violation: Failed to persist raw interaction content in private zone: ${rawInsertError.message}`
+          mutationError?.message || 'Atomic ingress mutation failed at database level'
         );
       }
 
-      // Mark ingress event as PROCESSED
-      await this.supabase
-        .from('zalo_ingress_events')
-        .update({ status: 'PROCESSED' })
-        .eq('company_id', companyId)
-        .eq('oa_id', oaId)
-        .eq('external_ref', namespacedExternalRef);
+      const res = mutationData as {
+        customer_id: string;
+        conversation_id: string;
+        interaction_id: string;
+        is_new_customer: boolean;
+      };
 
-      // 7. POST-INGESTION CARE ACTIONS
+      // 5. POST-INGESTION CARE ACTIONS
       if (isInbound) {
-        await this.handlePostMessageCareActions(companyId, customerId, rawContent);
+        await this.handlePostMessageCareActions(companyId, res.customer_id, rawContent);
       }
 
       return {
         status: 'synced',
-        interactionId: newInteraction.id,
-        conversationId,
-        customerId,
-        isNewCustomer,
+        interactionId: res.interaction_id,
+        conversationId: res.conversation_id,
+        customerId: res.customer_id,
+        isNewCustomer: res.is_new_customer,
         message: 'Message processed and recorded successfully',
       };
     } catch (pipelineError: unknown) {
-      // ATOMIC INGRESS ROLLBACK: Cleanup created entities to prevent orphan data
-      if (createdInteractionId) {
-        await this.supabase.from('interactions').delete().eq('id', createdInteractionId);
-      }
-      if (createdConversationId) {
-        await this.supabase.from('conversations').delete().eq('id', createdConversationId);
-      }
-      if (createdIdentityId) {
-        await this.supabase.from('identities').delete().eq('id', createdIdentityId);
-      }
-      if (createdCustomerId) {
-        await this.supabase.from('customers').delete().eq('id', createdCustomerId);
-      }
-
-      // Mark ingress event as FAILED
+      // ZERO JS ROLLBACK: PostgreSQL transaction already rolled back atomic state.
+      // Update ingress event to FAILED with last_error.
       const errorMsg = pipelineError instanceof Error ? pipelineError.message : 'Pipeline error';
       await this.supabase
         .from('zalo_ingress_events')
-        .update({ status: 'FAILED', error_message: errorMsg })
+        .update({
+          status: 'FAILED',
+          last_error: errorMsg,
+          updated_at: new Date().toISOString(),
+        })
         .eq('company_id', companyId)
         .eq('oa_id', oaId)
         .eq('external_ref', namespacedExternalRef);

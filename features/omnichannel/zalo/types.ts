@@ -128,6 +128,8 @@ export interface ZaloMessageItem {
 export interface SendZaloReplyParams {
   conversationId: string;
   content: string;
+  commandId?: string;
+  oaId?: string;
 }
 
 export interface SendZaloReplyResult {

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient } from '../../omnichannel/zalo/zalo-client';
+import { ZaloClient, ZaloClientFactory } from '../../omnichannel/zalo/zalo-client';
 import { CareScheduleDTO } from './types';
 
 export interface ZaloCareSchedulerServiceOptions {
@@ -63,10 +63,10 @@ export function addMonths(date: Date, months: number): Date {
  */
 export class ZaloCareSchedulerService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient: ZaloClient;
+  private readonly zaloClient?: ZaloClient;
 
   constructor(options: ZaloCareSchedulerServiceOptions = {}) {
-    this.zaloClient = options.zaloClient || new ZaloClient();
+    this.zaloClient = options.zaloClient;
 
     if (options.supabase) {
       this.supabase = options.supabase;
@@ -211,28 +211,27 @@ export class ZaloCareSchedulerService {
         continue;
       }
 
-      const nowIso = new Date().toISOString();
-      const idempotencyKey = `care_sched:${schedule.id}:${schedule.next_send_at}:ZALO`;
+      // 2. ATOMIC CLAIM: care_scheduler_claim_delivery RPC (Fix Lỗi 9)
+      const targetDate = schedule.next_send_at.split('T')[0];
 
-      // 2. Pre-record delivery in care_deliveries as PENDING
-      const { data: deliveryRecord } = await this.supabase
-        .from('care_deliveries')
-        .insert({
-          company_id: schedule.company_id,
-          customer_id: schedule.customer_id,
-          campaign_id: null,
-          channel: 'ZALO',
-          idempotency_key: idempotencyKey,
-          status: 'PENDING',
-          message_content: defaultTemplate,
-          metadata: { schedule_id: schedule.id, due_at: schedule.next_send_at },
-          created_at: nowIso,
-          updated_at: nowIso,
-        })
-        .select('id')
-        .maybeSingle();
+      const { data: claimResult, error: claimError } = await this.supabase.rpc(
+        'care_scheduler_claim_delivery',
+        {
+          p_company_id: schedule.company_id,
+          p_schedule_id: schedule.id,
+          p_customer_id: schedule.customer_id,
+          p_target_date: targetDate,
+          p_message_content: defaultTemplate,
+        }
+      );
 
-      const deliveryId = deliveryRecord?.id;
+      const deliveryId = claimResult;
+
+      // FAIL-CLOSED: Only worker who successfully claimed delivery ID is allowed to dispatch to provider
+      if (claimError || !deliveryId) {
+        skipped++;
+        continue;
+      }
 
       // 3. Send message via ZaloClient with explicit error handling (NO empty catch)
       let sendSuccess = false;
@@ -240,7 +239,21 @@ export class ZaloCareSchedulerService {
       let failureError = '';
 
       try {
-        const sendRes = await this.zaloClient.sendTextMessage(identity.external_id, defaultTemplate);
+        let client = this.zaloClient;
+        if (!client) {
+          const { data: oaConfig } = await this.supabase
+            .from('zalo_oa_configs')
+            .select('oa_id')
+            .eq('company_id', schedule.company_id)
+            .eq('status', 'ACTIVE')
+            .limit(1)
+            .maybeSingle();
+
+          const oaId = oaConfig?.oa_id || '';
+          client = await ZaloClientFactory.getClientForOa(schedule.company_id, oaId, { supabase: this.supabase });
+        }
+
+        const sendRes = await client.sendTextMessage(identity.external_id, defaultTemplate);
         if (sendRes.error === 0) {
           sendSuccess = true;
           providerMessageId = sendRes.data?.message_id || `msg_care_${Date.now()}`;

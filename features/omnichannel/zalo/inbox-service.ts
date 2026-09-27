@@ -1,6 +1,7 @@
+import crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient } from './zalo-client';
+import { ZaloClient, ZaloClientFactory } from './zalo-client';
 import { sanitizeMessageContent } from './sanitizer';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import {
@@ -37,6 +38,17 @@ interface InteractionDbRow {
   created_at: string;
 }
 
+interface OutboundDeliveryDbRow {
+  id: string;
+  company_id: string;
+  conversation_id: string;
+  customer_id: string;
+  recipient_zalo_uid: string;
+  content: string;
+  provider_msg_id: string | null;
+  status: string;
+}
+
 export interface ZaloInboxServiceOptions {
   supabase?: SupabaseClient;
   zaloClient?: ZaloClient;
@@ -56,33 +68,46 @@ export interface GetZaloMessagesParams {
   offset?: number;
 }
 
-export interface SendZaloReplyContext {
-  actor?: {
-    userId: string;
-    companyId: string;
-    role?: string;
-  };
+export interface AuthenticatedActor {
+  userId: string;
+  companyId: string;
+  role: string;
 }
+
+export interface SendZaloReplyContext {
+  actor: AuthenticatedActor;
+}
+
+export interface SendSystemZaloReplyContext {
+  principal: 'SYSTEM';
+  systemUserId?: string;
+}
+
+const ALLOWED_ACTOR_ROLES = ['SALE', 'BOSS_ADMIN'];
 
 /**
  * Service providing the standardized interface for Member 2 (Unified Inbox).
  *
  * Security Invariants & Outbound Safety:
- * 1. Boundary Protection:
- *    - Does NOT trust companyId, customerId, recipientZaloId from client input.
- *    - Derives customer, identity, and recipient Zalo UID securely from DB via conversationId.
- *    - Verifies tenant isolation: Rejects with 403 Forbidden if conversation belongs to another company.
- * 2. Durable Outbox & Outbound Idempotency:
- *    - Creates an outbound delivery record in PENDING state before calling Zalo OpenAPI.
- *    - Updates record to SENT with provider_msg_id on success; records FAILED on failure.
- *    - Never creates false interaction records if provider call fails.
+ * 1. Actor Authentication & Authorization (Fix Lỗi 4):
+ *    - Enforces context.actor presence, active tenant match, and whitelist role ('SALE' | 'BOSS_ADMIN').
+ *    - Rejects unauthorized or cross-tenant outbound requests with 401/403.
+ * 2. Durable Outbox & Stable Idempotency (Fix Lỗi 5):
+ *    - Generates or receives deterministic UUIDv4/caller command_id (No Math.random()).
+ *    - Pre-records outbox entry in PENDING before provider call.
+ *    - Fail-closed: Halts immediately if outbox insertion fails.
+ * 3. Provider Call & Finalize Transaction (Fix Lỗi 6):
+ *    - Updates outbox to SENDING with lease_until.
+ *    - Calls Zalo Provider API.
+ *    - On provider success: updates provider_msg_id and calls atomic finalize RPC.
+ *    - If DB finalize fails: marks outbox as PROVIDER_SENT_PENDING_FINALIZE (NEVER resends to provider).
  */
 export class ZaloInboxService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient: ZaloClient;
+  private readonly zaloClient?: ZaloClient;
 
   constructor(options: ZaloInboxServiceOptions = {}) {
-    this.zaloClient = options.zaloClient || new ZaloClient();
+    this.zaloClient = options.zaloClient;
 
     if (options.supabase) {
       this.supabase = options.supabase;
@@ -167,16 +192,67 @@ export class ZaloInboxService {
   }
 
   /**
-   * Sends a reply message from the Unified Inbox directly to Zalo OpenAPI.
-   *
-   * Security & Outbox Contract:
-   * - Caller only needs to specify `{ conversationId, content }`.
-   * - Derives tenant, customer, and recipient from DB with tenant isolation checks.
-   * - Pre-records PENDING outbound delivery in DB before invoking Zalo OpenAPI.
+   * Sends a reply message from the Unified Inbox directly to Zalo OpenAPI (User / Sale Actor).
+   * Context with authenticated actor is strictly required.
    */
   async sendZaloReply(
     params: SendZaloReplyParams,
-    context?: SendZaloReplyContext
+    context: SendZaloReplyContext
+  ): Promise<SendZaloReplyResult> {
+    if (!context || !context.actor || !context.actor.userId || !context.actor.companyId) {
+      throw new ServerAuthError(
+        'Authentication required: Missing authenticated actor for reply',
+        401,
+        'UNAUTHENTICATED'
+      );
+    }
+
+    return this.executeSendReply(params, {
+      actorType: 'SALE',
+      userId: context.actor.userId,
+      companyId: context.actor.companyId,
+      role: context.actor.role,
+    });
+  }
+
+  /**
+   * Sends an automated system reply using System Principal.
+   */
+  async sendSystemZaloReply(
+    params: SendZaloReplyParams,
+    context: SendSystemZaloReplyContext = { principal: 'SYSTEM' }
+  ): Promise<SendZaloReplyResult> {
+    if (!context || context.principal !== 'SYSTEM') {
+      throw new ServerAuthError(
+        'System authorization required for system reply',
+        403,
+        'ROLE_FORBIDDEN'
+      );
+    }
+
+    return this.executeSendReply(params, {
+      actorType: 'SYSTEM',
+      userId: context.systemUserId || null,
+      companyId: null,
+      role: 'SYSTEM',
+    });
+  }
+
+  /**
+   * Core Outbound Reply Execution Pipeline:
+   * 1. Validate permissions & tenant ownership
+   * 2. Fail-closed outbox claim
+   * 3. Provider invocation
+   * 4. Atomic DB finalization / reconciliation flagging
+   */
+  private async executeSendReply(
+    params: SendZaloReplyParams,
+    actorInfo: {
+      actorType: 'SALE' | 'SYSTEM';
+      userId: string | null;
+      companyId: string | null;
+      role: string;
+    }
   ): Promise<SendZaloReplyResult> {
     const { conversationId, content } = params;
 
@@ -207,19 +283,27 @@ export class ZaloInboxService {
       external_conversation_id: string;
     };
 
-    // 2. TENANT ISOLATION BOUNDARY: Verify actor permissions and company ownership
-    const actorCompanyId = context?.actor?.companyId;
-    if (actorCompanyId && actorCompanyId !== conversation.company_id) {
-      throw new ServerAuthError(
-        'Access forbidden: User tenant does not match conversation company',
-        403,
-        'RESOURCE_FORBIDDEN'
-      );
+    // 2. TENANT ISOLATION & ROLE AUTHORIZATION (Fix Lỗi 4)
+    if (actorInfo.actorType === 'SALE') {
+      if (actorInfo.companyId !== conversation.company_id) {
+        throw new ServerAuthError(
+          'Access forbidden: User tenant does not match conversation company',
+          403,
+          'RESOURCE_FORBIDDEN'
+        );
+      }
+
+      if (!ALLOWED_ACTOR_ROLES.includes(actorInfo.role)) {
+        throw new ServerAuthError(
+          `Access forbidden: Role "${actorInfo.role}" is not authorized to send Zalo replies`,
+          403,
+          'ROLE_FORBIDDEN'
+        );
+      }
     }
 
     const effectiveCompanyId = conversation.company_id;
     const effectiveCustomerId = conversation.customer_id;
-    const saleUserId = context?.actor?.userId || null;
 
     // 3. RESOLVE TRUSTED RECIPIENT ZALO UID FROM IDENTITIES TABLE
     let recipientZaloId = conversation.external_conversation_id;
@@ -243,8 +327,10 @@ export class ZaloInboxService {
       };
     }
 
-    // 4. DURABLE OUTBOX: Pre-record outbound delivery in PENDING state with unique idempotency key
-    const idempotencyKey = `outbound:${effectiveCompanyId}:${conversationId}:${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    // 4. DURABLE OUTBOX & STABLE IDEMPOTENCY (Fix Lỗi 5)
+    // Deterministic command ID: Caller-provided or generated UUIDv4 (NO Date.now() + Math.random())
+    const commandId = params.commandId || crypto.randomUUID();
+    const idempotencyKey = `outbound:${effectiveCompanyId}:${conversationId}:${commandId}`;
     const nowIso = new Date().toISOString();
 
     const { data: deliveryRecord, error: deliveryErr } = await this.supabase
@@ -254,158 +340,229 @@ export class ZaloInboxService {
         conversation_id: conversationId,
         customer_id: effectiveCustomerId,
         recipient_zalo_uid: recipientZaloId,
+        channel: 'ZALO',
+        command_id: commandId,
         idempotency_key: idempotencyKey,
         content: content.trim(),
         status: 'PENDING',
-        attempts: 1,
+        attempts: 0,
+        created_at: nowIso,
+        updated_at: nowIso,
       })
       .select('id')
       .maybeSingle();
 
-    if (deliveryErr) {
-      console.error('Failed to create outbound delivery record:', deliveryErr.message);
+    // FAIL-CLOSED: If outbox insert fails or cannot claim, STOP IMMEDIATELY! NEVER call Zalo API without outbox record.
+    if (deliveryErr || !deliveryRecord?.id) {
+      throw new Error(
+        `Durable outbox claim failed: ${deliveryErr?.message || 'Unable to record outbox delivery'}. Send halted (fail-closed).`
+      );
     }
 
-    const deliveryId = deliveryRecord?.id;
+    const deliveryId = deliveryRecord.id;
 
-    // 5. CALL ZALO OPENAPI OUTBOUND ENDPOINT
+    // 5. MARK OUTBOX DELIVERY AS SENDING WITH LEASE (Fix Lỗi 6)
+    const leaseUntilIso = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    await this.supabase
+      .from('zalo_outbound_deliveries')
+      .update({
+        status: 'SENDING',
+        lease_until: leaseUntilIso,
+        attempts: 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deliveryId);
+
+    // Resolve client
+    let oaId = params.oaId || '';
+    if (!oaId) {
+      const { data: oaConfig } = await this.supabase
+        .from('zalo_oa_configs')
+        .select('oa_id')
+        .eq('company_id', effectiveCompanyId)
+        .eq('status', 'ACTIVE')
+        .limit(1)
+        .maybeSingle();
+      if (oaConfig?.oa_id) {
+        oaId = oaConfig.oa_id;
+      }
+    }
+
+    const client =
+      this.zaloClient ??
+      (await ZaloClientFactory.getClientForOa(effectiveCompanyId, oaId, { supabase: this.supabase }));
+
+    // 6. CALL ZALO OPENAPI OUTBOUND ENDPOINT
     let zaloRes;
     try {
-      zaloRes = await this.zaloClient.sendTextMessage(recipientZaloId, content.trim());
+      zaloRes = await client.sendTextMessage(recipientZaloId, content.trim());
     } catch (apiError: unknown) {
       const errorMsg = apiError instanceof Error ? apiError.message : 'Zalo OpenAPI communication failure';
 
       // Update delivery record to FAILED
-      if (deliveryId) {
-        await this.supabase
-          .from('zalo_outbound_deliveries')
-          .update({
-            status: 'FAILED',
-            error_code: 'PROVIDER_EXCEPTION',
-            error_message: errorMsg,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', deliveryId);
-      }
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    // 6. PROCESS PROVIDER RESPONSE
-    if (zaloRes.error !== 0) {
-      const errorMsg = `Zalo API error [${zaloRes.error}]: ${zaloRes.message}`;
-
-      if (deliveryId) {
-        await this.supabase
-          .from('zalo_outbound_deliveries')
-          .update({
-            status: 'FAILED',
-            error_code: String(zaloRes.error),
-            error_message: zaloRes.message || errorMsg,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', deliveryId);
-      }
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    const externalMessageId = zaloRes.data?.message_id || `zalo_out_${Date.now()}`;
-
-    // 7. RECORD CRM INTERACTION ON SUCCESS
-    const { sanitizedText } = sanitizeMessageContent(content.trim());
-
-    const { data: newInteraction, error: intError } = await this.supabase
-      .from('interactions')
-      .insert({
-        company_id: effectiveCompanyId,
-        customer_id: effectiveCustomerId,
-        conversation_id: conversationId,
-        channel: 'ZALO',
-        type: 'MESSAGE',
-        direction: 'OUTBOUND',
-        sanitized_content: sanitizedText,
-        sanitization_status: 'SUCCEEDED',
-        sanitized_at: nowIso,
-        sanitizer_version: 'v1.0',
-        external_ref: externalMessageId,
-        actor_type: 'SALE',
-        actor_user_id: saleUserId,
-        created_at: nowIso,
-      })
-      .select('id')
-      .single();
-
-    if (intError) {
-      throw new Error(`Failed to record outbound interaction in CRM: ${intError.message}`);
-    }
-
-    // 8. RECORD RAW OUTBOUND CONTENT TO PRIVATE SECURITY ZONE
-    if (newInteraction) {
-      const rawRecord = {
-        interaction_id: newInteraction.id,
-        company_id: effectiveCompanyId,
-        raw_content: content.trim(),
-        raw_payload: {
-          recipient: { user_id: recipientZaloId },
-          message: { text: content.trim() },
-          response: zaloRes,
-        },
-        source_metadata: {
-          recipient_zalo_id: recipientZaloId,
-          sale_user_id: saleUserId,
-          external_message_id: externalMessageId,
-        },
-        created_at: nowIso,
-      };
-
-      try {
-        type SupabaseWithSchema = SupabaseClient & {
-          schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
-        };
-        const clientWithSchema = this.supabase as SupabaseWithSchema;
-        if (typeof clientWithSchema.schema === 'function') {
-          await clientWithSchema.schema('private').from('interaction_raw_contents').insert(rawRecord);
-        } else {
-          await this.supabase.from('interaction_raw_contents').insert(rawRecord);
-        }
-      } catch {
-        // Schema fallback caught
-      }
-    }
-
-    // 9. UPDATE OUTBOUND DELIVERY RECORD TO SENT
-    if (deliveryId) {
       await this.supabase
         .from('zalo_outbound_deliveries')
         .update({
-          status: 'SENT',
-          provider_msg_id: externalMessageId,
-          interaction_id: newInteraction?.id || null,
+          status: 'FAILED',
+          error_code: 'PROVIDER_EXCEPTION',
+          error_message: errorMsg,
           updated_at: new Date().toISOString(),
         })
         .eq('id', deliveryId);
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
     }
 
-    // 10. UPDATE CONVERSATION LAST_MESSAGE_AT
-    await this.supabase
-      .from('conversations')
-      .update({
-        last_message_at: nowIso,
-        updated_at: nowIso,
-      })
-      .eq('id', conversationId);
+    // 7. PROCESS PROVIDER RESPONSE
+    if (zaloRes.error !== 0) {
+      const errorMsg = `Zalo API error [${zaloRes.error}]: ${zaloRes.message}`;
 
-    return {
-      success: true,
-      interactionId: newInteraction?.id,
-      externalMessageId,
-    };
+      await this.supabase
+        .from('zalo_outbound_deliveries')
+        .update({
+          status: 'FAILED',
+          error_code: String(zaloRes.error),
+          error_message: zaloRes.message || errorMsg,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', deliveryId);
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+
+    const providerMsgId = zaloRes.data?.message_id || `zalo_out_${Date.now()}`;
+
+    // Update provider_msg_id on outbox record immediately
+    await this.supabase
+      .from('zalo_outbound_deliveries')
+      .update({
+        provider_msg_id: providerMsgId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deliveryId);
+
+    // 8. ATOMIC DATABASE FINALIZE (Fix Lỗi 6)
+    const { sanitizedText } = sanitizeMessageContent(content.trim());
+
+    try {
+      const { data: finalizeInteractionId, error: finalizeErr } = await this.supabase.rpc(
+        'zalo_finalize_outbound_reply',
+        {
+          p_company_id: effectiveCompanyId,
+          p_delivery_id: deliveryId,
+          p_conversation_id: conversationId,
+          p_customer_id: effectiveCustomerId,
+          p_recipient_zalo_uid: recipientZaloId,
+          p_content: content.trim(),
+          p_sanitized_content: sanitizedText,
+          p_provider_msg_id: providerMsgId,
+          p_actor_type: actorInfo.actorType,
+          p_actor_user_id: actorInfo.userId,
+          p_raw_payload: {
+            recipient: { user_id: recipientZaloId },
+            message: { text: content.trim() },
+            response: zaloRes,
+          },
+        }
+      );
+
+      if (finalizeErr || !finalizeInteractionId) {
+        throw new Error(finalizeErr?.message || 'Finalize RPC failed');
+      }
+
+      return {
+        success: true,
+        interactionId: finalizeInteractionId,
+        externalMessageId: providerMsgId,
+      };
+    } catch (finalizeError: unknown) {
+      // CRITICAL: Provider already sent! Do NOT mark FAILED or resend to Zalo!
+      // Mark outbox status as PROVIDER_SENT_PENDING_FINALIZE for reconciliation!
+      const errDetail =
+        finalizeError instanceof Error ? finalizeError.message : 'DB finalize failed after provider dispatch';
+
+      await this.supabase
+        .from('zalo_outbound_deliveries')
+        .update({
+          status: 'PROVIDER_SENT_PENDING_FINALIZE',
+          error_message: errDetail,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', deliveryId);
+
+      throw new Error(
+        `Outbound message sent by provider (${providerMsgId}) but DB finalize failed. Marked as PROVIDER_SENT_PENDING_FINALIZE for reconciliation.`
+      );
+    }
+  }
+
+  /**
+   * Reconciles deliveries in PROVIDER_SENT_PENDING_FINALIZE state.
+   * CRITICAL ARCHITECTURE RULE (Fix Lỗi 6):
+   * NEVER calls Zalo API again (the message was already dispatched by the provider).
+   * Only retries the atomic DB finalization via zalo_finalize_outbound_reply RPC.
+   */
+  async reconcilePendingDeliveries(options?: {
+    companyId?: string;
+    limit?: number;
+  }): Promise<{ reconciled: number; failed: number }> {
+    let query = this.supabase
+      .from('zalo_outbound_deliveries')
+      .select('*')
+      .eq('status', 'PROVIDER_SENT_PENDING_FINALIZE');
+
+    if (options?.companyId) {
+      query = query.eq('company_id', options.companyId);
+    }
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const { data: pendingDeliveries, error } = await query;
+    if (error || !pendingDeliveries) {
+      return { reconciled: 0, failed: 0 };
+    }
+
+    let reconciled = 0;
+    let failed = 0;
+
+    for (const delivery of pendingDeliveries as OutboundDeliveryDbRow[]) {
+      const { sanitizedText } = sanitizeMessageContent(delivery.content || '');
+      const { data: finalizeId, error: finalizeErr } = await this.supabase.rpc(
+        'zalo_finalize_outbound_reply',
+        {
+          p_company_id: delivery.company_id,
+          p_delivery_id: delivery.id,
+          p_conversation_id: delivery.conversation_id,
+          p_customer_id: delivery.customer_id,
+          p_recipient_zalo_uid: delivery.recipient_zalo_uid,
+          p_content: delivery.content,
+          p_sanitized_content: sanitizedText,
+          p_provider_msg_id: delivery.provider_msg_id,
+          p_actor_type: 'SALE',
+          p_actor_user_id: null,
+          p_raw_payload: {
+            recipient: { user_id: delivery.recipient_zalo_uid },
+            message: { text: delivery.content },
+            reconciled: true,
+          },
+        }
+      );
+
+      if (finalizeErr || !finalizeId) {
+        failed++;
+      } else {
+        reconciled++;
+      }
+    }
+
+    return { reconciled, failed };
   }
 }
+

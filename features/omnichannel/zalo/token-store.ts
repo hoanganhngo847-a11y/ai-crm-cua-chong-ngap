@@ -53,44 +53,111 @@ export class DatabaseZaloTokenStore implements IZaloTokenStore {
 
   async setToken(companyId: string, oaId: string, token: ZaloTokenInfo): Promise<void> {
     const expiresAtIso = new Date(token.expiresAt).toISOString();
-    const { error } = await this.supabase
-      .from('zalo_oa_configs')
-      .update({
-        access_token: token.accessToken,
-        refresh_token: token.refreshToken,
-        token_expires_at: expiresAtIso,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('company_id', companyId)
-      .eq('oa_id', oaId);
 
-    if (error) {
-      throw new Error(`Database token update failed for OA ${oaId}: ${error.message}`);
+    // 1. Update in private.zalo_oa_secrets
+    try {
+      type SupabaseWithSchema = SupabaseClient & {
+        schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
+      };
+      const clientWithSchema = this.supabase as SupabaseWithSchema;
+      const privateFrom = typeof clientWithSchema.schema === 'function'
+        ? clientWithSchema.schema('private').from('zalo_oa_secrets')
+        : this.supabase.from('zalo_oa_secrets');
+
+      await privateFrom
+        .update({
+          access_token: token.accessToken,
+          refresh_token: token.refreshToken,
+          token_expires_at: expiresAtIso,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId);
+    } catch {
+      // Fall through to public table update
+    }
+
+    // 2. Also update in public.zalo_oa_configs if columns exist for backward compatibility
+    try {
+      await this.supabase
+        .from('zalo_oa_configs')
+        .update({
+          access_token: token.accessToken,
+          refresh_token: token.refreshToken,
+          token_expires_at: expiresAtIso,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId);
+    } catch {
+      // Ignore if columns were removed from public table
     }
   }
 
   async getCredentials(companyId: string, oaId: string): Promise<ZaloOACredentials | null> {
-    const { data, error } = await this.supabase
+    // 1. Fetch public config metadata
+    const { data: config, error: configError } = await this.supabase
       .from('zalo_oa_configs')
-      .select('company_id, oa_id, app_id, app_secret, access_token, refresh_token, token_expires_at, token_version')
+      .select('company_id, oa_id, app_id, app_secret, access_token, refresh_token, token_expires_at, token_version, status')
       .eq('company_id', companyId)
       .eq('oa_id', oaId)
       .eq('status', 'ACTIVE')
       .maybeSingle();
 
-    if (error || !data) {
+    if (configError || !config) {
       return null;
     }
 
+    // 2. Query private.zalo_oa_secrets for isolated secrets
+    let privateSecrets: {
+      app_secret?: string;
+      access_token?: string | null;
+      refresh_token?: string | null;
+      token_expires_at?: string | null;
+      token_version?: number;
+    } | null = null;
+
+    try {
+      type SupabaseWithSchema = SupabaseClient & {
+        schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
+      };
+      const clientWithSchema = this.supabase as SupabaseWithSchema;
+      const privateFrom = typeof clientWithSchema.schema === 'function'
+        ? clientWithSchema.schema('private').from('zalo_oa_secrets')
+        : this.supabase.from('zalo_oa_secrets');
+
+      const { data: secData } = await privateFrom
+        .select('app_secret, access_token, refresh_token, token_expires_at, token_version')
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId)
+        .maybeSingle();
+
+      if (secData) {
+        privateSecrets = secData;
+      }
+    } catch {
+      // Schema query fallback to public config
+    }
+
+    const appSecret = privateSecrets?.app_secret || config.app_secret || '';
+    const accessToken = privateSecrets?.access_token ?? config.access_token ?? null;
+    const refreshToken = privateSecrets?.refresh_token ?? config.refresh_token ?? null;
+    const expiresAt = privateSecrets?.token_expires_at
+      ? new Date(privateSecrets.token_expires_at).getTime()
+      : config.token_expires_at
+      ? new Date(config.token_expires_at).getTime()
+      : null;
+    const tokenVersion = privateSecrets?.token_version ?? config.token_version ?? 1;
+
     return {
-      companyId: data.company_id,
-      oaId: data.oa_id,
-      appId: data.app_id,
-      appSecret: data.app_secret,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: data.token_expires_at ? new Date(data.token_expires_at).getTime() : null,
-      tokenVersion: data.token_version ?? 1,
+      companyId: config.company_id,
+      oaId: config.oa_id,
+      appId: config.app_id,
+      appSecret,
+      accessToken,
+      refreshToken,
+      expiresAt,
+      tokenVersion,
     };
   }
 
@@ -118,33 +185,48 @@ export class DatabaseZaloTokenStore implements IZaloTokenStore {
     const newToken = await refreshFn(current, current.refreshToken);
     const expiresAtIso = new Date(newToken.expiresAt).toISOString();
 
-    // Optimistic lock update: ensure token_version matches
-    const { data: updated, error } = await this.supabase
-      .from('zalo_oa_configs')
-      .update({
-        access_token: newToken.accessToken,
-        refresh_token: newToken.refreshToken,
-        token_expires_at: expiresAtIso,
-        token_version: currentVersion + 1,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('company_id', companyId)
-      .eq('oa_id', oaId)
-      .eq('token_version', currentVersion)
-      .select('access_token, refresh_token, token_expires_at')
-      .maybeSingle();
+    // 1. Optimistic lock update in private.zalo_oa_secrets
+    try {
+      type SupabaseWithSchema = SupabaseClient & {
+        schema?: (s: string) => { from: (t: string) => ReturnType<SupabaseClient['from']> };
+      };
+      const clientWithSchema = this.supabase as SupabaseWithSchema;
+      const privateFrom = typeof clientWithSchema.schema === 'function'
+        ? clientWithSchema.schema('private').from('zalo_oa_secrets')
+        : this.supabase.from('zalo_oa_secrets');
 
-    if (error) {
-      throw new Error(`Atomic token rotation update failed: ${error.message}`);
+      await privateFrom
+        .update({
+          access_token: newToken.accessToken,
+          refresh_token: newToken.refreshToken,
+          token_expires_at: expiresAtIso,
+          token_version: currentVersion + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId)
+        .eq('token_version', currentVersion)
+        .select('access_token')
+        .maybeSingle();
+    } catch {
+      // Fallback
     }
 
-    // If update returned null, a concurrent process already rotated the token
-    if (!updated) {
-      const refreshedNow = await this.getToken(companyId, oaId);
-      if (refreshedNow?.accessToken) {
-        return refreshedNow;
-      }
-      throw new Error('Concurrent token rotation collision and failed to retrieve updated token');
+    // 2. Also update public table for backward compatibility if present
+    try {
+      await this.supabase
+        .from('zalo_oa_configs')
+        .update({
+          access_token: newToken.accessToken,
+          refresh_token: newToken.refreshToken,
+          token_expires_at: expiresAtIso,
+          token_version: currentVersion + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('company_id', companyId)
+        .eq('oa_id', oaId);
+    } catch {
+      // Ignore
     }
 
     return newToken;

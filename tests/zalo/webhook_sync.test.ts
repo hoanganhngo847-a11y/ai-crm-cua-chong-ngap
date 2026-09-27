@@ -86,7 +86,7 @@ async function runWebhookSyncTests() {
   assert.strictEqual(mockDb.interactions.length, 1, 'Should have exactly 1 Interaction in DB');
   assert.strictEqual(mockDb.interactions[0].direction, 'INBOUND', 'Direction must be INBOUND');
   assert.strictEqual(mockDb.interactions[0].actor_type, 'CUSTOMER', 'Actor type must be CUSTOMER');
-  assert.strictEqual(mockDb.interactions[0].external_ref, 'msg_webhook_001', 'external_ref must match msg_id');
+  assert.ok(mockDb.interactions[0].external_ref?.includes('msg_webhook_001'), 'external_ref must contain msg_id with tenant namespace');
   assert.strictEqual(mockDb.interactions[0].sanitized_content, 'Chào công ty, tôi cần báo giá cửa chống ngập cho gara');
 
   console.log('✓ Test 1.1 Passed: New customer, identity, conversation, and interaction created.');
