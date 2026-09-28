@@ -47,4 +47,4 @@ export interface AttachInstallationEvidenceInput {
     installationId: string;
     fileKey: string;
     type: InstallationEvidenceType;
-}
+}
