@@ -19,6 +19,7 @@
     "test:analytics": "tsx --conditions=react-server tests/analytics/analytics.test.ts",
     "test:analytics-ui": "tsx --conditions=react-server tests/analytics/analytics_ui.test.ts",
     "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
+    "test:tv9-cross-module": "tsx --conditions=react-server tests/e2e/tv9-cross-module.integration.test.ts",
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test:operations": "tsx --conditions=react-server --test tests/operations/operations.test.ts tests/operations/database.test.ts",
