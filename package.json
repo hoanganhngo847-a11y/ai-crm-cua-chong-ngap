@@ -21,7 +21,7 @@
     "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
-    "test:operations": "tsx --conditions=react-server tests/operations/operations.test.ts",
+    "test:operations": "tsx --conditions=react-server --test tests/operations/operations.test.ts tests/operations/database.test.ts",
     "test": "npm run test:auth && npm run test:security && npm run test:survey"
   },
   "dependencies": {

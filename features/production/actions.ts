@@ -1,7 +1,8 @@
 'use server';
 
 import { z } from 'zod';
-import { AuthError, getActorContext, requireCompanyRole } from '../../lib/auth/context';
+import { sanitizeErrorMessage } from '../operations/server';
+import { getActorContext, requireCompanyRole } from '../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
 import {
     createProductionOrder,
@@ -19,14 +20,14 @@ import type {
 // RUNTIME VALIDATION SCHEMAS (ZOD - P1)
 // ==============================================================================
 const createProductionOrderSchema = z.object({
-    orderId: z.string().min(1, 'Mã đơn hàng (orderId) là bắt buộc.'),
-    specs: z.record(z.string(), z.any()),
-    materials: z.record(z.string(), z.any()),
-    deadline: z.string().min(1, 'Hạn chót sản xuất (deadline) là bắt buộc.'),
+    orderId: z.uuid(),
+    specs: z.record(z.string(), z.unknown()),
+    materials: z.record(z.string(), z.unknown()),
+    deadline: z.iso.datetime({ offset: true }),
 });
 
 const updateProductionProgressSchema = z.object({
-    productionOrderId: z.string().min(1, 'Mã lệnh sản xuất (productionOrderId) là bắt buộc.'),
+    productionOrderId: z.uuid(),
     status: z.enum([
         'RELEASED_TO_FACTORY',
         'IN_PRODUCTION',
@@ -38,29 +39,13 @@ const updateProductionProgressSchema = z.object({
 });
 
 const recordQualityCheckSchema = z.object({
-    productionOrderId: z.string().min(1, 'Mã lệnh sản xuất (productionOrderId) là bắt buộc.'),
+    productionOrderId: z.uuid(),
     qcStatus: z.enum(['PASSED', 'REWORK_REQUIRED', 'REJECTED'], {
         message: 'Kết quả kiểm tra QC chỉ chấp nhận PASSED, REWORK_REQUIRED hoặc REJECTED.',
     }),
     notes: z.string().optional(),
 });
 
-function sanitizeErrorMessage(err: unknown, defaultMsg: string): string {
-    if (err instanceof AuthError) {
-        throw err;
-    }
-    const error = err as Error;
-    const msg = error.message || defaultMsg;
-    if (
-        msg.includes('relation "') ||
-        msg.includes('syntax error') ||
-        msg.includes('pg_') ||
-        msg.includes('connection refused')
-    ) {
-        return 'Lỗi thao tác cơ sở dữ liệu. Vui lòng thử lại sau.';
-    }
-    return msg;
-}
 
 /**
  * Action: Tạo lệnh sản xuất (Việc 29)
@@ -85,7 +70,7 @@ export async function createProductionOrderAction(
         // Chỉ Quản trị viên (Sếp) mới được phê duyệt lệnh xuống xưởng
         await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
 
-        const data = await createProductionOrder(actor.companyId, parsed.data);
+        const data = await createProductionOrder(actor.companyId, parsed.data, undefined, actor.userId);
         return { success: true, data };
     } catch (err: unknown) {
         return { success: false, error: sanitizeErrorMessage(err, 'Lỗi tạo lệnh xưởng.') };

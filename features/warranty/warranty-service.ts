@@ -1,5 +1,5 @@
 import 'server-only';
-import { AuthError } from '../../lib/auth/context';
+import { operationsRpc, type OperationsClient, type OperationsActor } from '../operations/server';
 import { createAdminClient } from '../../lib/supabase/admin';
 import type {
     AssignWarrantyTicketInput,
@@ -33,7 +33,7 @@ export const VALID_WARRANTY_TRANSITIONS: Record<WarrantyTicketStatus, WarrantyTi
 export async function createWarrantyTicket(
     companyId: string,
     input: CreateWarrantyTicketInput,
-    overrideAdminClient?: any
+    overrideAdminClient?: OperationsClient
 ): Promise<WarrantyTicketDTO> {
     const admin = overrideAdminClient || createAdminClient();
 
@@ -108,206 +108,12 @@ export async function createWarrantyTicket(
     };
 }
 
-/**
- * 2. Phân công Kỹ thuật viên xử lý bảo hành (Việc 32)
- * Ràng buộc P1:
- * - Chỉ cho phép phân công khi ticket đang ở 'OPEN' hoặc 'REOPENED'. Không cho gán lại khi đã RESOLVED/CLOSED.
- * - technicianId phải tồn tại trong company_members với status = 'ACTIVE' và role = 'TECHNICIAN'.
- * - Chuẩn hóa mã lỗi và ẩn raw DB error.
- */
-export async function assignWarrantyTicket(
-    companyId: string,
-    input: AssignWarrantyTicketInput,
-    overrideAdminClient?: any
-): Promise<void> {
-    const admin = overrideAdminClient || createAdminClient();
-
-    // 1. Kiểm tra trạng thái phiếu bảo hành (P1)
-    const { data: ticket, error: ticketErr } = await admin
-        .from('warranty_tickets')
-        .select('id, status')
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .maybeSingle();
-
-    if (ticketErr || !ticket) {
-        throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy phiếu bảo hành.');
-    }
-
-    if (ticket.status !== 'OPEN' && ticket.status !== 'REOPENED') {
-        throw new Error(
-            `INVALID_STATE_TRANSITION: Không thể phân công cho phiếu bảo hành ở trạng thái '${ticket.status}'. Chỉ cho phép phân công khi phiếu ở trạng thái 'OPEN' hoặc 'REOPENED'.`
-        );
-    }
-
-    // 2. Xác minh gán quyền Kỹ thuật viên trong company_members (P1)
-    const { data: member, error: memberErr } = await admin
-        .from('company_members')
-        .select('id, user_id, role, status')
-        .eq('company_id', companyId)
-        .eq('user_id', input.technicianId)
-        .maybeSingle();
-
-    if (memberErr || !member) {
-        throw new Error('RESOURCE_NOT_FOUND: Kỹ thuật viên không tồn tại trong công ty.');
-    }
-
-    if (member.status !== 'ACTIVE' || member.role !== 'TECHNICIAN') {
-        throw new Error(
-            'PERMISSION_DENIED: Chỉ được phân công cho nhân viên có vai trò TECHNICIAN đang hoạt động (ACTIVE).'
-        );
-    }
-
-    const { data: updated, error } = await admin
-        .from('warranty_tickets')
-        .update({
-            assigned_to: input.technicianId,
-            status: 'ASSIGNED' as WarrantyTicketStatus,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .select('id')
-        .single();
-
-    if (error || !updated) {
-        throw new Error('INVALID_STATE_TRANSITION: Phân công kỹ thuật viên bảo hành thất bại.');
-    }
+export async function assignWarrantyTicket(companyId: string,input: AssignWarrantyTicketInput,overrideAdminClient?: OperationsClient,actor?: OperationsActor): Promise<void> {
+ await operationsRpc(overrideAdminClient || createAdminClient(),'update_warranty_status_atomic',{p_company_id:companyId,p_ticket_id:input.ticketId,p_actor_id:actor?.userId,p_actor_role:actor?.role,p_operation:'assign',p_technician_id:input.technicianId});
 }
-
-/**
- * 3. Cập nhật tiến độ xử lý bảo hành (Việc 32)
- * Ràng buộc:
- * - Chặn không cho generic update nhảy sang REOPENED (chỉ qua reopenWarrantyTicket) (P1).
- * - Chặn cập nhật khi ticket đã RESOLVED hoặc CLOSED.
- * - Nếu actor là TECHNICIAN, bắt buộc kiểm tra ticket.assigned_to === actor.userId (P0).
- * - Chuẩn hóa mã lỗi và ẩn raw DB error.
- */
-export async function updateWarrantyStatus(
-    companyId: string,
-    input: UpdateWarrantyStatusInput,
-    overrideAdminClient?: any,
-    actor?: { userId: string; role?: string | null }
-): Promise<void> {
-    // Chặn generic update nhảy sang REOPENED (P1)
-    if (input.status === 'REOPENED') {
-        throw new Error(
-            "INVALID_STATE_TRANSITION: Không thể cập nhật trực tiếp sang trạng thái 'REOPENED'. Vui lòng dùng hàm reopenWarrantyTicket để mở lại phiếu bảo hành."
-        );
-    }
-
-    const admin = overrideAdminClient || createAdminClient();
-
-    // Truy vấn phiếu bảo hành hiện tại
-    const { data: ticket, error: ticketErr } = await admin
-        .from('warranty_tickets')
-        .select('id, status, assigned_to')
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .maybeSingle();
-
-    if (ticketErr || !ticket) {
-        throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy phiếu bảo hành.');
-    }
-
-    // Chặn cập nhật trực tiếp trên ticket đã CLOSED (bắt buộc dùng reopenWarrantyTicket)
-    if (ticket.status === 'CLOSED' && input.status !== ticket.status) {
-        throw new Error(
-            `INVALID_STATE_TRANSITION: Không thể cập nhật phiếu bảo hành đã ở trạng thái 'CLOSED'. Vui lòng sử dụng reopenWarrantyTicket để mở lại.`
-        );
-    }
-
-    // Kiểm tra chuyển đổi trạng thái hợp lệ theo State Machine (P1)
-    if (ticket.status !== input.status) {
-        const allowedTransitions = VALID_WARRANTY_TRANSITIONS[ticket.status as WarrantyTicketStatus] || [];
-        if (!allowedTransitions.includes(input.status)) {
-            throw new Error(
-                `INVALID_STATE_TRANSITION: Chuyển đổi trạng thái bảo hành không hợp lệ từ '${ticket.status}' sang '${input.status}'.`
-            );
-        }
-    }
-
-    // Giới hạn quyền TECHNICIAN: Chỉ được cập nhật ticket được phân công cho mình (P0)
-    if (actor && actor.role === 'TECHNICIAN') {
-        if (ticket.assigned_to !== actor.userId) {
-            throw new AuthError('PERMISSION_DENIED: Bạn không được phân công thực hiện phiếu bảo hành này', 403);
-        }
-    }
-
-    const updatePayload: Record<string, unknown> = {
-        status: input.status,
-        updated_at: new Date().toISOString(),
-    };
-
-    if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
-        updatePayload.resolved_at = new Date().toISOString();
-    }
-
-    if (input.notes) {
-        updatePayload.notes = input.notes;
-    }
-
-    const { data: updated, error } = await admin
-        .from('warranty_tickets')
-        .update(updatePayload)
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .select('id')
-        .single();
-
-    if (error || !updated) {
-        throw new Error('INVALID_STATE_TRANSITION: Cập nhật trạng thái bảo hành thất bại.');
-    }
+export async function updateWarrantyStatus(companyId: string,input: UpdateWarrantyStatusInput,overrideAdminClient?: OperationsClient,actor?: OperationsActor): Promise<void> {
+ await operationsRpc(overrideAdminClient || createAdminClient(),'update_warranty_status_atomic',{p_company_id:companyId,p_ticket_id:input.ticketId,p_actor_id:actor?.userId,p_actor_role:actor?.role,p_operation:'update',p_status:input.status,p_notes:input.notes});
 }
-
-/**
- * 4. Tái mở phiếu bảo hành khi phát sinh lỗi lại (Việc 32)
- * Ràng buộc P1 (State Machine): Chỉ cho phép reopenWarrantyTicket khi ticket đang ở trạng thái 'RESOLVED' hoặc 'CLOSED'.
- */
-export async function reopenWarrantyTicket(
-    companyId: string,
-    input: ReopenWarrantyTicketInput,
-    overrideAdminClient?: any
-): Promise<void> {
-    const admin = overrideAdminClient || createAdminClient();
-
-    const { data: currentTicket, error: fetchErr } = await admin
-        .from('warranty_tickets')
-        .select('id, status, notes')
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .maybeSingle();
-
-    if (fetchErr || !currentTicket) {
-        throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy phiếu bảo hành để mở lại.');
-    }
-
-    if (currentTicket.status !== 'RESOLVED' && currentTicket.status !== 'CLOSED') {
-        throw new Error(
-            `INVALID_STATE_TRANSITION: Không thể mở lại phiếu bảo hành ở trạng thái '${currentTicket.status}'. Chỉ cho phép mở lại khi phiếu đã ở trạng thái 'RESOLVED' hoặc 'CLOSED'.`
-        );
-    }
-
-    const timestamp = new Date().toISOString();
-    const appendNote = `\n[${timestamp}] REOPEN: ${input.reason}`;
-    const updatedNotes = currentTicket.notes
-        ? `${currentTicket.notes}${appendNote}`
-        : appendNote.trim();
-
-    const { data: updated, error } = await admin
-        .from('warranty_tickets')
-        .update({
-            status: 'REOPENED' as WarrantyTicketStatus,
-            resolved_at: null,
-            notes: updatedNotes,
-            updated_at: timestamp,
-        })
-        .eq('company_id', companyId)
-        .eq('id', input.ticketId)
-        .select('id')
-        .single();
-
-    if (error || !updated) {
-        throw new Error('INVALID_STATE_TRANSITION: Mở lại phiếu bảo hành thất bại.');
-    }
+export async function reopenWarrantyTicket(companyId: string,input: ReopenWarrantyTicketInput,overrideAdminClient?: OperationsClient,actor?: OperationsActor): Promise<void> {
+ await operationsRpc(overrideAdminClient || createAdminClient(),'update_warranty_status_atomic',{p_company_id:companyId,p_ticket_id:input.ticketId,p_actor_id:actor?.userId,p_actor_role:actor?.role,p_operation:'reopen',p_notes:input.reason});
 }
