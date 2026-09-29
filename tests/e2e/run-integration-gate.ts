@@ -171,6 +171,20 @@ const GATES: GateStep[] = [
     description: 'Verify P0 inbox tenant isolation, zero-phone sanitization, and webhook fail-closed',
   },
   {
+    id: 'GATE_11D_ZALO_UNIT',
+    name: '11d. TV3 Zalo OA & Care Unit Gate (PGlite)',
+    command: 'npm',
+    args: ['run', 'test:zalo'],
+    description: 'Verify Zalo OA provider runtime, HMAC, atomicity, outbox, and bulk care automation',
+  },
+  {
+    id: 'GATE_11E_ZALO_DB',
+    name: '11e. TV3 Zalo OA & Care DB Integration Gate',
+    command: 'npm',
+    args: ['run', 'test:zalo:db'],
+    description: 'Verify Zalo DB concurrency, RLS isolation, token rotation, and TV2 outbox dispatch on real Supabase stack',
+  },
+  {
     id: 'GATE_12_TYPECHECK',
     name: '12. TypeScript Typecheck Gate',
     command: 'npm',
