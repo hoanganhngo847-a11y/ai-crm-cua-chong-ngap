@@ -959,6 +959,128 @@ async function runTests() {
   }
   assert(delIntErr, 'Test 24i: Trigger interaction deletion rejected by ON DELETE RESTRICT on SLA window');
 
+  // ---------------------------------------------------------------------------
+  // Test 25: P0 Security — Locked down permissions for resolve_response_sla_on_sale_reply
+  // ---------------------------------------------------------------------------
+  // 25a: anon role cannot execute resolve_response_sla_on_sale_reply
+  const { error: privAnonErr } = await anonClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_2_ID,
+    p_sale_interaction_id: INT_OUTBOUND_SALE_1,
+  });
+  assert(
+    Boolean(privAnonErr && (privAnonErr.code === '42501' || privAnonErr.message?.includes('permission denied'))),
+    'Test 25a: anon execution of resolve_response_sla_on_sale_reply rejected by ACL (42501)'
+  );
+
+  // 25b: authenticated SALE cannot execute resolve_response_sla_on_sale_reply
+  const { error: privSaleErr } = await saleClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_2_ID,
+    p_sale_interaction_id: INT_OUTBOUND_SALE_1,
+  });
+  assert(
+    Boolean(privSaleErr && (privSaleErr.code === '42501' || privSaleErr.message?.includes('permission denied'))),
+    'Test 25b: authenticated SALE execution of resolve_response_sla_on_sale_reply rejected by ACL (42501)'
+  );
+
+  // 25c: authenticated BOSS_ADMIN cannot execute resolve_response_sla_on_sale_reply
+  const { error: privBossErr } = await bossClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_2_ID,
+    p_sale_interaction_id: INT_OUTBOUND_SALE_1,
+  });
+  assert(
+    Boolean(privBossErr && (privBossErr.code === '42501' || privBossErr.message?.includes('permission denied'))),
+    'Test 25c: authenticated BOSS_ADMIN execution of resolve_response_sla_on_sale_reply rejected by ACL (42501)'
+  );
+
+  // 25d: service_role CAN execute resolve_response_sla_on_sale_reply
+  const { error: privSrErr } = await adminClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_2_ID,
+    p_sale_interaction_id: INT_OUTBOUND_SALE_1,
+  });
+  assert(!privSrErr, `Test 25d: service_role can execute resolve_response_sla_on_sale_reply: ${privSrErr?.message}`);
+
+  // 25e-g: PostgreSQL catalog privilege check via has_function_privilege
+  const privCheckSql = `
+    SELECT
+      has_function_privilege('anon', 'public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)', 'EXECUTE') as anon_priv,
+      has_function_privilege('authenticated', 'public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)', 'EXECUTE') as auth_priv,
+      has_function_privilege('service_role', 'public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)', 'EXECUTE') as sr_priv;
+  `;
+  const privResultRaw = execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${privCheckSql.replace(/"/g, '\\"')}"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const [anonPriv, authPriv, srPriv] = privResultRaw.split(',');
+  assert(anonPriv === 'f', 'Test 25e: Catalog ACL: anon has_function_privilege = false');
+  assert(authPriv === 'f', 'Test 25f: Catalog ACL: authenticated has_function_privilege = false');
+  assert(srPriv === 't', 'Test 25g: Catalog ACL: service_role has_function_privilege = true');
+
+  // 25h-i: PostgreSQL catalog overload verification
+  const overloadCheckSql = `
+    SELECT
+      coalesce(to_regprocedure('public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid)')::text, 'DROPPED') as old_overload,
+      coalesce(to_regprocedure('public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)')::text, 'MISSING') as new_signature;
+  `;
+  const overloadResultRaw = execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${overloadCheckSql.replace(/"/g, '\\"')}"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const [oldOverload, newSignature] = overloadResultRaw.split(',');
+  assert(oldOverload === 'DROPPED', 'Test 25h: Catalog verification: old 3-arg overload does NOT exist (DROPPED)');
+  assert(newSignature.includes('resolve_response_sla_on_sale_reply'), 'Test 25i: Catalog verification: new 4-arg signature exists');
+
+  // 25j-k: Non-Hán / generic channel backdating protection
+  const CONVO_NON_HAN_ID = '92000000-0000-0000-0000-000000000099';
+  const INT_NON_HAN_CUST = '93000000-0000-0000-0000-000000000098';
+  const INT_NON_HAN_SALE = '93000000-0000-0000-0000-000000000099';
+  const nonHanSaleCreatedAt = new Date().toISOString();
+
+  executeRawSql(`
+    INSERT INTO public.conversations (id, company_id, customer_id, channel, status, external_conversation_id)
+    VALUES ('${CONVO_NON_HAN_ID}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', 'ZALO', 'OPEN', 'zalo_convo_99')
+    ON CONFLICT (id) DO NOTHING;
+
+    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
+    VALUES ('${INT_NON_HAN_CUST}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'INBOUND', 'CUSTOMER', now() - interval '2 minutes')
+    ON CONFLICT (id) DO NOTHING;
+
+    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
+    VALUES ('${INT_NON_HAN_SALE}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'OUTBOUND', 'SALE', '${nonHanSaleCreatedAt}')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
+  await openResponseSlaWindow({
+    companyId: COMPANY_A_ID,
+    conversationId: CONVO_NON_HAN_ID,
+    triggerInteractionId: INT_NON_HAN_CUST,
+  });
+
+  // Attempt to resolve non-Hán interaction with timestamp EARLIER than interaction.created_at -> must reject
+  const invalidPastTime = new Date(Date.now() - 300_000).toISOString();
+  const { error: pastTimeErr } = await adminClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_NON_HAN_ID,
+    p_sale_interaction_id: INT_NON_HAN_SALE,
+    p_resolved_at: invalidPastTime,
+  });
+  assert(Boolean(pastTimeErr), 'Test 25j: Non-Hán backdating earlier than interaction.created_at is rejected');
+
+  // Attempt to resolve non-Hán interaction with valid timestamp >= created_at -> must succeed
+  const validResolvedAt = new Date(Date.now() + 1000).toISOString();
+  const { data: validNonHanData, error: validNonHanErr } = await adminClient.rpc('resolve_response_sla_on_sale_reply', {
+    p_company_id: COMPANY_A_ID,
+    p_conversation_id: CONVO_NON_HAN_ID,
+    p_sale_interaction_id: INT_NON_HAN_SALE,
+    p_resolved_at: validResolvedAt,
+  });
+  assert(!validNonHanErr, `Test 25k: Valid non-Hán resolve succeeded: ${validNonHanErr?.message}`);
+  const nonHanRow = Array.isArray(validNonHanData) ? validNonHanData[0] : validNonHanData;
+  assert(nonHanRow?.state === 'SALE_RESPONDED', 'Test 25k: Window transitioned to SALE_RESPONDED');
+
   console.log('\n==================================================');
   console.log(`RESPONSE SLA DB TESTS: ${passCount} PASSED, ${failCount} FAILED`);
   console.log('==================================================\n');

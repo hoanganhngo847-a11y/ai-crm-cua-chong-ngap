@@ -6,6 +6,7 @@ import {
   persistSalesStyleProfile,
 } from '../../features/sales-style/services/sales-style-store';
 import { activateSalesStyleProfile } from '../../features/sales-style/services/sales-style-activation';
+import { elevateClientToAal2 } from '../e2e/test-mfa-helpers';
 import type {
   SalesStyleOutput,
   SalesStyleSourceRef,
@@ -377,6 +378,20 @@ async function runTests() {
   assert(draft1.activatedAt === null, 'DRAFT activatedAt is null');
   assert(draft1.activatedByUserId === null, 'DRAFT activatedByUserId is null');
 
+  // Test AAL1: BOSS_ADMIN at AAL1 is denied fail-closed with MFA_REQUIRED
+  let aal1Denied = false;
+  try {
+    await activateSalesStyleProfile(bossAClient, draft1.id);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    aal1Denied = msg.includes('MFA_REQUIRED') || msg.includes('42501');
+  }
+  assert(aal1Denied, 'Test AAL1: BOSS_ADMIN at AAL1 denied fail-closed with MFA_REQUIRED');
+
+  // Elevate Boss A and Boss B to AAL2
+  await elevateClientToAal2(bossAClient, 'Boss A TOTP Factor');
+  await elevateClientToAal2(bossBClient, 'Boss B TOTP Factor');
+
   const activated1 = await activateSalesStyleProfile(bossAClient, draft1.id);
 
   // Test 1: active same-company BOSS activates DRAFT -> ACTIVE
@@ -460,6 +475,17 @@ async function runTests() {
     saleDenied = msg.includes('ACTOR_ROLE_NOT_BOSS_ADMIN') || msg.includes('42501');
   }
   assert(saleDenied, 'Test 4: SALE actor denied fail-closed');
+
+  // Test 4b: SALE actor elevated to AAL2 is still denied with ACTOR_ROLE_NOT_BOSS_ADMIN
+  await elevateClientToAal2(saleAClient, 'Sale A TOTP Factor');
+  let saleAal2Denied = false;
+  try {
+    await activateSalesStyleProfile(saleAClient, draftForAuth.id);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    saleAal2Denied = msg.includes('ACTOR_ROLE_NOT_BOSS_ADMIN') || msg.includes('42501');
+  }
+  assert(saleAal2Denied, 'Test 4b: SALE actor at AAL2 denied with ACTOR_ROLE_NOT_BOSS_ADMIN');
 
   // Test 5: TECH actor denied
   let techDenied = false;
