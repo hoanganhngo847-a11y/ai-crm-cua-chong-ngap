@@ -27,11 +27,11 @@ jobs:
       - run: npm ci
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
-      - run: npm run lint
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm run test:auth
-      - run: npm run test:security
+      - run: npm run test:integration-gate
       - run: npm run test:omnichannel
       - run: npm run test:omnichannel:db
+      - run: npm run test:operations
+      - run: npm run test:survey
+      - run: npm run test:voice
+      - run: npm run build
       - run: git diff --check
