@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
     "test:survey": "tsx --test features/survey/__tests__/survey.service.test.ts features/survey/__tests__/hardening.test.ts features/survey/__tests__/database.test.ts",
