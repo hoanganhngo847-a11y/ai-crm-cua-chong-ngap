@@ -6,9 +6,12 @@
  * 2. Database Migration Integrity Guard
  * 3. Auth & Sensitive Security Suites (Foundation)
  * 4. Response SLA Gate (Unit & DB Concurrency)
+ * 4c. Facebook SLA Real Runtime Gate
  * 5. AI Customer Analysis Gate
+ * 5b. AI Customer Analysis Worker Gate
  * 6. Sales-Style Learning Gate
- * 7. Sales-Style Approval & Activation Gate
+ * 7. Sales-Style Approval & Activation Gate (AAL2 MFA)
+ * 7b. Sales Style Runtime Context Gate
  * 8. Analytics Data Layer Gate
  * 9. Analytics UI & Static Security Gate
  * 10. Cross-Module E2E Integration Scenarios (A–P)
@@ -52,22 +55,8 @@ const GATES: GateStep[] = [
     id: 'GATE_02_MIGRATION_INTEGRITY',
     name: '2. Database Migration Integrity Guard',
     command: 'npx',
-    args: [
-      'tsx',
-      '--conditions=react-server',
-      '-e',
-      `
-      import * as fs from 'fs';
-      import * as path from 'path';
-      const dir = path.resolve('supabase/migrations');
-      const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql'));
-      if (files.length !== 9) throw new Error('Expected 9 migrations, found: ' + files.length);
-      const sorted = [...files].sort();
-      if (JSON.stringify(files) !== JSON.stringify(sorted)) throw new Error('Migrations not in deterministic chronological order');
-      console.log('✓ Migration schema integrity verified (9/9 canonical migrations in sequence).');
-      `,
-    ],
-    description: 'Verify strictly 9 migrations, correct formatting, unique timestamps, and deterministic order',
+    args: ['tsx', '--conditions=react-server', 'tests/e2e/migration-integrity.test.ts'],
+    description: 'Verify canonical foundation migrations, frozen checksums, unique timestamps, and deterministic order',
   },
   {
     id: 'GATE_03_AUTH_SECURITY',
@@ -98,11 +87,25 @@ const GATES: GateStep[] = [
     description: 'Verify SLA window state machine, atomic AI claim lease, audit logging, and race conditions',
   },
   {
+    id: 'GATE_04C_FACEBOOK_SLA_RUNTIME',
+    name: '4c. Facebook SLA Real Runtime Gate',
+    command: 'npm',
+    args: ['run', 'test:response-sla-facebook'],
+    description: 'Verify Facebook inbound han_ingest 5-minute SLA window and Sale reply han_prepare_send resolution',
+  },
+  {
     id: 'GATE_05_AI_ANALYSIS',
     name: '5. AI Customer Analysis Gate',
     command: 'npm',
     args: ['run', 'test:ai-analysis'],
     description: 'Verify sanitized-only ingestion, immutable customer stage, and model provenance',
+  },
+  {
+    id: 'GATE_05B_AI_ANALYSIS_WORKER',
+    name: '5b. AI Customer Analysis Worker Gate',
+    command: 'npm',
+    args: ['run', 'test:ai-analysis-worker'],
+    description: 'Verify AI Customer Analysis server-only runtime worker, OpenAI config, and stage immutability',
   },
   {
     id: 'GATE_06_SALES_STYLE_LEARNING',
@@ -116,7 +119,14 @@ const GATES: GateStep[] = [
     name: '7. Sales-Style Approval & Activation Gate',
     command: 'npm',
     args: ['run', 'test:sales-style-activation'],
-    description: 'Verify human Boss activation, atomic superseding, single-active invariant, and worker-only read',
+    description: 'Verify human Boss activation with AAL2 MFA, atomic superseding, single-active invariant, and worker-only read',
+  },
+  {
+    id: 'GATE_07B_SALES_STYLE_RUNTIME',
+    name: '7b. Sales Style Runtime Context Gate',
+    command: 'npm',
+    args: ['run', 'test:sales-style-runtime'],
+    description: 'Verify composable Sales Style runtime prompt context builder, policy firewall, and safe neutral default fallback',
   },
   {
     id: 'GATE_08_ANALYTICS_DATA_LAYER',

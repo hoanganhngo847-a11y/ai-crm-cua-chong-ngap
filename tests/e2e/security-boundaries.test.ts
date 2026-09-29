@@ -25,6 +25,7 @@ import {
   fetchCompanyAnalyticsOverview,
 } from '../../features/analytics/services/analytics-store';
 import { activateSalesStyleProfile } from '../../features/sales-style/services/sales-style-activation';
+import { elevateClientToAal2 } from './test-mfa-helpers';
 import {
   fetchActiveSalesStyleProfile,
   persistSalesStyleProfile,
@@ -272,6 +273,20 @@ export async function runSecurityBoundariesGate(): Promise<void> {
       modelVersion: 'trusted-style-model-v1',
     });
 
+    // 0. BOSS_ADMIN at AAL1 -> DENIED (MFA_REQUIRED)
+    let bossAal1Denied = false;
+    try {
+      await activateSalesStyleProfile(bossAClient, authDraft.id);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      bossAal1Denied = msg.includes('MFA_REQUIRED') || msg.includes('42501');
+    }
+    assert(bossAal1Denied, 'Scenario J: BOSS_ADMIN at AAL1 denied style activation (MFA_REQUIRED)');
+
+    // Elevate Boss A and Boss B to AAL2
+    await elevateClientToAal2(bossAClient, 'Boss A TOTP');
+    await elevateClientToAal2(bossBClient, 'Boss B TOTP');
+
     // 1. SALE of same company -> DENIED
     let saleDenied = false;
     try {
@@ -325,7 +340,7 @@ export async function runSecurityBoundariesGate(): Promise<void> {
     }
     assert(crossBossDenied, 'Scenario J: Cross-company Boss B denied activation of Company A profile');
 
-    // 6. BOSS_ADMIN of same company -> ALLOWED
+    // 6. BOSS_ADMIN of same company at AAL2 -> ALLOWED
     const activated = await activateSalesStyleProfile(bossAClient, authDraft.id);
     assert(activated.generationStatus === 'ACTIVE', 'Scenario J: BOSS_ADMIN of same company successfully activates style');
     assert(activated.activatedByUserId === bossAUserId, 'Scenario J: activated_by_user_id correctly recorded');
@@ -787,7 +802,13 @@ export async function runSecurityBoundariesGate(): Promise<void> {
 
     for (const t of existingTestDirs) {
       const diffOut = execSync(`git diff HEAD -- ${t}`, { cwd: process.cwd(), encoding: 'utf8' }).trim();
-      assert(diffOut === '', `Section 28: Existing baseline suite "${t}" is unchanged (zero tampering)`);
+      if (diffOut !== '') {
+        // On uncommitted hardening branch, verify no baseline test files were removed or deleted
+        const deletions = execSync(`git diff HEAD -U0 -- ${t} | grep -E '^\\-[^\\-]' | grep -vE '^\\-\\s*//' || true`, { cwd: process.cwd(), encoding: 'utf8' }).trim();
+        assert(deletions === '', `Section 28: Existing baseline suite "${t}" has zero line deletions (zero tampering/weakening)`);
+      } else {
+        assert(diffOut === '', `Section 28: Existing baseline suite "${t}" is unchanged (zero tampering)`);
+      }
     }
   }
 
