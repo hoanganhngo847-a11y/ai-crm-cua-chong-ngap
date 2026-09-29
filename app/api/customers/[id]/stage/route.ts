@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '../../../../../lib/supabase/server';
-import { createAdminClient } from '../../../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../../../shared/constants/roles';
 import { CustomerService } from '../../../../../features/crm/services/customer.service';
 import {
@@ -174,7 +173,7 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       );
     }
 
-    const adminClient = context?.adminClient || createAdminClient();
+    const routeClient = context?.adminClient || context?.supabaseClient;
 
     // Call CustomerService.updateStage with mandatory companyId derived directly from server context
     const result = await CustomerService.updateStage(
@@ -189,7 +188,7 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
         actorId: userId,
         sourceRef: source_ref ? String(source_ref).trim() : undefined,
       },
-      adminClient
+      routeClient
     );
 
     // Xử lý thông tin liên hệ và bảo vệ Zero-Phone cho SALE
@@ -202,7 +201,7 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
           CONTACT_ACCESS_PURPOSES.PRIVILEGED_ADMIN_OPERATION,
           {
             reason: 'Cập nhật giai đoạn khách hàng và xem thông tin liên hệ (BOSS_ADMIN)',
-            overrideAdminClient: adminClient,
+            overrideAdminClient: context?.adminClient,
             client: supabase,
           }
         );

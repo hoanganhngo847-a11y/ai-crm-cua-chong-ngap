@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getActorContext } from '../../../lib/auth/context';
-import { createAdminClient } from '../../../lib/supabase/admin';
+import { createClient as createServerClient } from '../../../lib/supabase/server';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { CustomerService, isDemoModeActive } from '../../../features/crm/services/customer.service';
 import { InboxService } from '../../../features/inbox/services/inbox.service';
@@ -74,7 +74,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10), 1), 100);
     const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
 
-    const adminClient = context?.adminClient || createAdminClient();
+    const adminClient = context?.adminClient || (await createServerClient());
 
     // Lấy danh sách ID khách hàng có tin nhắn phản hồi mới (PENDING_SALE) từ Hộp thư
     const pendingSaleCustomerIds = new Set<string>();
@@ -429,7 +429,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       );
     }
 
-    const adminClient = context?.adminClient || createAdminClient();
+    const adminClient = context?.adminClient || (await createServerClient());
 
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {

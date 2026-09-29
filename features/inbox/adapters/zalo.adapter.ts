@@ -131,12 +131,26 @@ export function parseZaloWebhookToNormalized(
     zalo.sender?.id ||
     (typeof zalo.user_id_by_app === 'string' ? zalo.user_id_by_app : undefined) ||
     (typeof zalo.external_user_id === 'string' ? zalo.external_user_id : undefined) ||
-    'zalo-anon-user';
+    null;
+  if (!externalUserId || !externalUserId.trim()) {
+    throw createAdapterError(
+      'Missing Zalo sender ID (user_id_by_app). Cannot create synthetic identity (Fail-Closed).',
+      'MISSING_PROVIDER_USER_ID',
+      400
+    );
+  }
   const messageId =
     zalo.message?.msg_id ||
     (typeof zalo.msg_id === 'string' ? zalo.msg_id : undefined) ||
     (typeof zalo.message_id === 'string' ? zalo.message_id : undefined) ||
-    `zalo-msg-${Date.now()}`;
+    null;
+  if (!messageId || !messageId.trim()) {
+    throw createAdapterError(
+      'Missing Zalo message ID (msg_id). Cannot create synthetic message ID (Fail-Closed).',
+      'MISSING_PROVIDER_MESSAGE_ID',
+      400
+    );
+  }
   const content =
     zalo.message?.text ||
     (typeof zalo.content === 'string' ? zalo.content : undefined) ||

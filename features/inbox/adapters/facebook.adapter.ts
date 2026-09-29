@@ -139,12 +139,26 @@ export function parseFacebookWebhookToNormalized(
     messaging?.sender?.id ||
     (typeof fb.external_user_id === 'string' ? fb.external_user_id : undefined) ||
     (fb.sender as { id?: string } | undefined)?.id ||
-    'fb-anon-user';
+    null;
+  if (!externalUserId || !externalUserId.trim()) {
+    throw createAdapterError(
+      'Missing Facebook sender ID (external_user_id). Cannot create synthetic identity (Fail-Closed).',
+      'MISSING_PROVIDER_USER_ID',
+      400
+    );
+  }
   const messageId =
     messaging?.message?.mid ||
     (typeof fb.message_id === 'string' ? fb.message_id : undefined) ||
     (fb.message as { id?: string } | undefined)?.id ||
-    `fb-msg-${Date.now()}`;
+    null;
+  if (!messageId || !messageId.trim()) {
+    throw createAdapterError(
+      'Missing Facebook message ID (mid). Cannot create synthetic message ID (Fail-Closed).',
+      'MISSING_PROVIDER_MESSAGE_ID',
+      400
+    );
+  }
   const content =
     messaging?.message?.text ||
     (typeof fb.content === 'string' ? fb.content : undefined) ||

@@ -89,7 +89,7 @@ export interface OutboundDeliveryRecord {
 
 /**
  * Message/Interaction item within a conversation
- * Tuân thủ public.interactions (Sanitized Derivative Security Zone) & private.interaction_raw_contents
+ * Tuân thủ public.interactions (Sanitized Derivative Security Zone) & private raw contents schema
  */
 export interface InboxMessage {
   id: string;
@@ -121,6 +121,7 @@ export interface SendMessageInput {
   sender_type?: SenderType;
   sender_name?: string;
   clientCommandId?: string;
+  actor_user_id?: string; // Authenticated actor attribution (P0 Requirement 6)
 }
 
 export type SendMessageParams = SendMessageInput;

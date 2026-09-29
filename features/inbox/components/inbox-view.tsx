@@ -107,12 +107,27 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Pending command tracking for idempotent retry (P0 Requirement 8)
+  const pendingCommandRef = useRef<{ commandId: string; content: string } | null>(null);
+
   // 3. Send Message Action
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!selectedConversationId || !replyText.trim() || sending) return;
 
     const text = replyText.trim();
+
+    // Determine commandId: reuse if retrying same content, generate new otherwise
+    let commandId: string;
+    if (pendingCommandRef.current && pendingCommandRef.current.content === text) {
+      // Network retry: REUSE SAME commandId
+      commandId = pendingCommandRef.current.commandId;
+    } else {
+      // New logical send: NEW commandId
+      commandId = crypto.randomUUID();
+      pendingCommandRef.current = { commandId, content: text };
+    }
+
     setSending(true);
 
     try {
@@ -122,13 +137,19 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
         body: JSON.stringify({
           conversation_id: selectedConversationId,
           content: text,
+          client_command_id: commandId,
         }),
       });
 
       const json = await res.json();
       if (json.success && json.data) {
-        setMessages((prev) => [...prev, json.data]);
+        // If server says is_duplicate=true, do NOT append duplicate bubble
+        if (!json.data.is_duplicate) {
+          setMessages((prev) => [...prev, json.data]);
+        }
         setReplyText('');
+        // Clear pending command on success (next send gets new UUID)
+        pendingCommandRef.current = null;
 
         // Cập nhật tin nhắn mới nhất trong danh sách cột trái
         setConversations((prev) =>
@@ -139,8 +160,10 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
           )
         );
       }
+      // If res.ok but json.success is false, keep pendingCommandRef for retry
     } catch (err) {
       console.error('Lỗi khi gửi tin nhắn:', err);
+      // Keep pendingCommandRef intact so retry reuses same commandId
     } finally {
       setSending(false);
     }

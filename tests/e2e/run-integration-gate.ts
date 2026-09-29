@@ -157,6 +157,20 @@ const GATES: GateStep[] = [
     description: 'Tenant isolation matrix, authorization matrix, static service-role scan, secret scan, and diff guards',
   },
   {
+    id: 'GATE_11B_INBOX_DB',
+    name: '11b. TV2 Inbox/Outbox DB Integration Gate',
+    command: 'npm',
+    args: ['run', 'test:inbox:db'],
+    description: 'Verify ingest_provider_message_atomic, record_outbound_interaction_atomic, claim_pending_outbound_deliveries, and RLS enforcement',
+  },
+  {
+    id: 'GATE_11C_INBOX_P0',
+    name: '11c. P0 Inbox Tenant Isolation & Webhook Gate',
+    command: 'npm',
+    args: ['run', 'test:inbox'],
+    description: 'Verify P0 inbox tenant isolation, zero-phone sanitization, and webhook fail-closed',
+  },
+  {
     id: 'GATE_12_TYPECHECK',
     name: '12. TypeScript Typecheck Gate',
     command: 'npm',

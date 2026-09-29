@@ -133,7 +133,7 @@ export interface Customer {
 }
 
 /**
- * Isolated Customer Private Contact (private.customer_private_contacts)
+ * Isolated Customer Private Contact (in private schema)
  * Accessible ONLY by trusted server operations / RPC.
  */
 export interface CustomerPrivateContact {

@@ -309,7 +309,7 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
     if (authResult.errorResponse) {
       return authResult.errorResponse;
     }
-    const { companyId } = authResult.actor!;
+    const { companyId, userId } = authResult.actor!;
 
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
@@ -380,6 +380,7 @@ export async function POST(request: NextRequest, context?: InboxRouteContext) {
           content: content.trim(),
           sender_type: 'sale',
           clientCommandId,
+          actor_user_id: userId,
         },
         companyId
       );

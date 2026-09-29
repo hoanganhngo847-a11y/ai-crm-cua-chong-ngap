@@ -2,7 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getActorContext } from '../../../../lib/auth/context';
-import { createAdminClient } from '../../../../lib/supabase/admin';
+import { createClient as createServerClient } from '../../../../lib/supabase/server';
 import { APPLICATION_ROLES } from '../../../../shared/constants/roles';
 import { CustomerService, maskPhone } from '../../../../features/crm/services/customer.service';
 import { InboxService } from '../../../../features/inbox/services/inbox.service';
@@ -165,7 +165,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
   }
 
   const { id } = await params;
-  const adminClient = createAdminClient();
+  const supabase = await createServerClient();
   const isBossAdmin = actor.role === APPLICATION_ROLES.BOSS_ADMIN;
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   let displayPhone = '';
@@ -192,7 +192,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
 
   // Luôn ưu tiên truy vấn Database trước (fail-closed khi lỗi DB)
   try {
-    const { data: dbCustomer, error: dbQueryErr } = await adminClient
+    const { data: dbCustomer, error: dbQueryErr } = await supabase
       .from('customers')
       .select('*')
       .eq('company_id', actor.companyId)
@@ -216,7 +216,6 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
             CONTACT_ACCESS_PURPOSES.PRIVILEGED_ADMIN_OPERATION,
             {
               reason: 'Xem chi tiết hồ sơ khách hàng tại Customer 360 (BOSS_ADMIN)',
-              overrideAdminClient: adminClient,
             }
           );
           rawPhone = contact.rawPhone;
@@ -235,7 +234,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         displayPhone = typeof meta?.masked_phone === 'string' ? maskPhone(meta.masked_phone) : '';
       }
 
-      const { data: identities, error: identitiesErr } = await adminClient
+      const { data: identities, error: identitiesErr } = await supabase
         .from('identities')
         .select('channel, external_id, verified')
         .eq('customer_id', id);
@@ -277,7 +276,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       displayPhone = maskPhone(customerData.phone);
     } else {
       // BOSS_ADMIN: Bắt buộc ghi audit log (FAIL-CLOSED) TRƯỚC KHI hiển thị raw phone
-      const { error: auditErr } = await adminClient.from('audit_logs').insert({
+      const { error: auditErr } = await supabase.from('audit_logs').insert({
         company_id: actor.companyId,
         user_id: actor.userId,
         action: 'VIEW_RAW_PHONE',
@@ -321,7 +320,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     const stageHistories = await CustomerService.getStageHistories(
       actor.companyId,
       customerData.id,
-      adminClient
+      supabase
     );
 
     if (stageHistories && stageHistories.length > 0) {

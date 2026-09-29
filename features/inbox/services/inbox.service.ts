@@ -706,8 +706,8 @@ export async function getMessagesByConversationId(
 
   // ZERO-PHONE INVARIANT & PRIVILEGE BOUNDARY:
   // - Với vai trò SALE: Chỉ query/trả về dữ liệu từ public.interactions.sanitized_content.
-  //   Tuyệt đối KHÔNG join hay select từ private.interaction_raw_contents.
-  // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc (private.interaction_raw_contents).
+  //   Tuyệt đối KHÔNG join hay select từ private schema interaction raw contents.
+  // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc (từ private schema).
   const { data: interactions, error: msgError } = await adminClient
     .from('interactions')
     .select('id, company_id, customer_id, conversation_id, channel, type, direction, sanitized_content, sanitization_status, actor_type, actor_user_id, created_at')
@@ -797,6 +797,7 @@ export async function getMessagesByConversationId(
       const raw = rawMap.get(m.id) || m.sanitized_content || '';
       const sanitized = m.sanitized_content || sanitizePhoneInText(raw);
       const status = sanitized !== raw ? 'SANITIZED' : 'CLEAN';
+      const canonicalStatus = (status === 'SANITIZED' || status === 'CLEAN') ? 'SUCCEEDED' : status;
       const senderType: SenderType =
         m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
 
@@ -809,7 +810,7 @@ export async function getMessagesByConversationId(
         sender_type: senderType,
         content: raw, // BOSS_ADMIN nhận nguyên văn bản gốc
         sanitized_content: sanitized,
-        sanitization_status: status,
+        sanitization_status: canonicalStatus,
         raw_content: raw,
         created_at: m.created_at,
         direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
@@ -832,7 +833,7 @@ export async function getMessagesByConversationId(
       sender_type: senderType,
       content: sanitized, // Mặc định hiển thị sanitized_content
       sanitized_content: sanitized,
-      sanitization_status: (m.sanitization_status || 'SUCCEEDED') as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
+      sanitization_status: (() => { const s = m.sanitization_status || 'SUCCEEDED'; return (s === 'CLEAN' || s === 'SANITIZED') ? 'SUCCEEDED' : s; })() as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
       created_at: m.created_at,
       direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
     };
@@ -856,7 +857,7 @@ export async function sendMessage(
     throw err;
   }
 
-  const { conversation_id, content, sender_type = 'sale', sender_name, clientCommandId } = input;
+  const { conversation_id, content, sender_type = 'sale', sender_name, clientCommandId, actor_user_id } = input;
 
   if (!conversation_id || !content.trim()) {
     const err = new Error('Nội dung tin nhắn và mã hội thoại là bắt buộc.') as ServiceError;
@@ -936,13 +937,14 @@ export async function sendMessage(
       p_channel: null,
       p_sanitized_content: sanitizedContent,
       p_raw_content: rawContent,
-      p_sanitization_status: sanitizationStatus,
+      p_sanitization_status: sanitizationStatus === 'SANITIZED' ? 'SUCCEEDED' : sanitizationStatus === 'CLEAN' ? 'SUCCEEDED' : sanitizationStatus,
       p_source_metadata: {
         source: 'sale_reply',
         sender_name,
         sender_type,
       },
       p_client_command_id: clientCommandId || null,
+      p_actor_user_id: actor_user_id || null,
     });
   } catch (err: unknown) {
     rpcThrew = true;
