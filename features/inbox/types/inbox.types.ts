@@ -1,0 +1,156 @@
+/**
+ * Inbox and Conversation Types for Omnichannel Inbox Module.
+ *
+ * Conforms strictly to:
+ * - docs/PROJECT_MASTER.md (Sections 3, 7, 8, 14, 15)
+ * - docs/DATA_CONTRACT.md (Section 7: Interaction, Section 8: Conversation)
+ * - docs/SUPABASE_SCHEMA_DESIGN.md (Section 3.8: conversations, Section 3.9: interactions)
+ */
+
+export const INBOX_CHANNELS = {
+  ZALO: 'zalo',
+  FACEBOOK: 'facebook',
+} as const;
+
+export type InboxChannel = (typeof INBOX_CHANNELS)[keyof typeof INBOX_CHANNELS];
+
+export const SENDER_TYPES = {
+  CUSTOMER: 'customer',
+  SALE: 'sale',
+  AI: 'ai',
+} as const;
+
+export type SenderType = (typeof SENDER_TYPES)[keyof typeof SENDER_TYPES];
+
+export const CONVERSATION_STATUSES = {
+  OPEN: 'OPEN',
+  PENDING_SALE: 'PENDING_SALE',
+  AI_HANDLING: 'AI_HANDLING',
+  CLOSED: 'CLOSED',
+} as const;
+
+export type ConversationStatus = (typeof CONVERSATION_STATUSES)[keyof typeof CONVERSATION_STATUSES];
+
+/**
+ * Integrated Conversation Entity for the 3-column Inbox
+ */
+export interface Conversation {
+  id: string;
+  company_id: string; // MANDATORY - Strict Tenant Isolation
+  customer_id: string;
+  customer_name: string;
+  customer_code: string;
+  customer_phone?: string;
+  customer_stage?: string;
+  customer_source?: string;
+  channel: InboxChannel;
+  last_message: string;
+  last_message_at?: string;
+  unread_count: number;
+  status: ConversationStatus;
+  updated_at: string;
+  created_at?: string;
+}
+
+/**
+ * Trạng thái chuyển phát tin nhắn Outbound (Delivery Lifecycle)
+ */
+export type MessageDeliveryStatus = 'PENDING_DISPATCH' | 'QUEUED' | 'SENT' | 'DELIVERED' | 'FAILED';
+
+/**
+ * Hợp đồng chuyển phát tin nhắn Outbound (Outbound Dispatcher Port - Member 3 Zalo & Member 4 Facebook)
+ */
+export interface OutboundDispatchResult {
+  dispatched: boolean;
+  provider_message_id?: string;
+  delivery_status: MessageDeliveryStatus;
+  error?: string;
+}
+
+/**
+ * Bản ghi Outbound Delivery phục vụ Transactional Outbox Worker
+ */
+export interface OutboundDeliveryRecord {
+  id: string;
+  company_id: string;
+  conversation_id: string;
+  interaction_id: string;
+  channel: string;
+  delivery_status: MessageDeliveryStatus;
+  client_command_id?: string | null;
+  provider_message_id?: string | null;
+  retry_count: number;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Message/Interaction item within a conversation
+ * Tuân thủ public.interactions (Sanitized Derivative Security Zone) & private raw contents schema
+ */
+export interface InboxMessage {
+  id: string;
+  company_id?: string;
+  conversation_id: string;
+  customer_id: string;
+  channel: InboxChannel;
+  sender_type: SenderType;
+  sender_name?: string;
+  sender_id?: string;
+  content: string; // Mặc định hiển thị sanitized_content (an toàn cho DTO công khai)
+  sanitized_content?: string; // Bản làm sạch che số điện thoại (Zero-Phone Security Zone)
+  sanitization_status?: 'CLEAN' | 'SANITIZED' | 'RAW' | 'SUCCEEDED' | 'PENDING' | 'FAILED' | 'NOT_REQUIRED'; // Trạng thái làm sạch dữ liệu
+  raw_content?: string; // Vùng riêng tư (private): chỉ cấp cho BOSS_ADMIN khi có thẩm quyền
+  created_at: string;
+  direction?: 'inbound' | 'outbound' | 'INBOUND' | 'OUTBOUND';
+  delivery_status?: MessageDeliveryStatus;
+  client_command_id?: string;
+  is_duplicate?: boolean;
+}
+
+/**
+ * Input for sending a reply message from Sale
+ */
+export interface SendMessageInput {
+  conversation_id: string;
+  company_id: string; // MANDATORY - Strict Tenant Isolation
+  content: string;
+  sender_type?: SenderType;
+  sender_name?: string;
+  clientCommandId?: string;
+  actor_user_id?: string; // Authenticated actor attribution (P0 Requirement 6)
+}
+
+export type SendMessageParams = SendMessageInput;
+export type SendMessageResult = InboxMessage;
+
+/**
+ * Filter query parameters for conversation list
+ */
+export interface ConversationFilter {
+  company_id?: string;
+  channel?: InboxChannel | 'all';
+  search?: string;
+  status?: ConversationStatus | 'all';
+  unread_only?: boolean;
+}
+
+/**
+ * Customer 360 Timeline Event item
+ */
+export interface CustomerTimelineEvent {
+  id: string;
+  company_id?: string;
+  customer_id: string;
+  type: 'MESSAGE' | 'CALL' | 'STAGE_CHANGE' | 'SURVEY' | 'NOTE';
+  channel?: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  actor_type: 'customer' | 'sale' | 'ai' | 'technician' | 'system';
+  actor_name?: string;
+  metadata?: Record<string, unknown>;
+}
