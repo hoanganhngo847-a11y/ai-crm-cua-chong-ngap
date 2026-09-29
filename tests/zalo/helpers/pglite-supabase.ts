@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Real-PostgreSQL test harness for the Zalo module, without Docker.
  *
