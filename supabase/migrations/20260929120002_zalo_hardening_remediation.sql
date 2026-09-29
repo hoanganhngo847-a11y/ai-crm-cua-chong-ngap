@@ -1,4 +1,4 @@
--- Migration: 20260927000001_zalo_hardening_remediation.sql
+-- Migration: 20260929120002_zalo_hardening_remediation.sql
 -- Module: Omnichannel Zalo OA & Care Automation Architecture Hardening
 -- Remediates: P0/P1 Regressions (Issues 1-14)
 -- Standards: DB-level atomicity, Zero JS compensation, Fail-closed outbox, Secret isolation in private schema.

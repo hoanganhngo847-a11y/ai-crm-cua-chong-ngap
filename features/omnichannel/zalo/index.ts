@@ -8,3 +8,5 @@ export * from './sanitizer';
 export * from './oa-mapping';
 export * from './opt-out';
 export * from './webhook-handler';
+export * from './outbound-dispatcher';
+export * from './oa-service';

@@ -1,12 +1,15 @@
 'use server';
 
 import { createClient } from '../../lib/supabase/server';
-import { createAdminClient } from '../../lib/supabase/admin';
 import { getActorContext } from '../../lib/auth/context';
 import { verifyActorForCompany, requirePrivilegedBoss } from '../../lib/server-auth/authorize';
 import { ServerAuthError, isServerAuthError } from '../../lib/server-auth/errors';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
-import { ZaloInboxService } from '../../features/omnichannel/zalo/inbox-service';
+import {
+  ZaloInboxService,
+  upsertZaloOaConnection,
+  setZaloOaConnectionStatus,
+} from '../../features/omnichannel/zalo';
 import type {
   SendZaloReplyResult,
   ZaloConversationItem,
@@ -56,20 +59,24 @@ export async function sendZaloReplyAction(params: {
   commandId: string;
 }): Promise<ActionResult<SendZaloReplyResult>> {
   try {
-    const admin = createAdminClient();
-    const { data: conversation } = await admin
+    // 1. Authenticated session & caller company resolution first (never discover tenant via resource ID)
+    const companyId = await resolveSessionCompanyId();
+    const actor = await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
+
+    // 2. Query conversation strictly scoped to caller tenant: cross-tenant IDs yield identical 404
+    const client = await createClient();
+    const { data: conversation } = await client
       .from('conversations')
-      .select('company_id')
+      .select('id, company_id')
       .eq('id', params.conversationId)
+      .eq('company_id', companyId)
       .eq('channel', 'ZALO')
       .maybeSingle();
-    if (!conversation?.company_id) {
+    if (!conversation) {
       throw new ServerAuthError('Không tìm thấy hội thoại Zalo.', 404, 'RESOURCE_NOT_FOUND');
     }
 
-    // Company derived from the resource; the session must be an ACTIVE SALE/BOSS_ADMIN of it.
-    const actor = await verifyActorForCompany(conversation.company_id, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const service = new ZaloInboxService({ supabase: admin });
+    const service = new ZaloInboxService();
     const result = await service.sendZaloReply(
       { conversationId: params.conversationId, content: params.content, commandId: params.commandId },
       actor
@@ -88,7 +95,7 @@ export async function listZaloConversationsAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const service = new ZaloInboxService({ supabase: createAdminClient() });
+    const service = new ZaloInboxService();
     const data = await service.getZaloConversations({
       companyId,
       status: params.status,
@@ -109,7 +116,7 @@ export async function getZaloMessagesAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const service = new ZaloInboxService({ supabase: createAdminClient() });
+    const service = new ZaloInboxService();
     const data = await service.getZaloMessagesByConversation({
       companyId,
       conversationId: params.conversationId,
@@ -138,24 +145,27 @@ export async function upsertZaloOaConnectionAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     const actor = await requirePrivilegedBoss(companyId);
-    const { data, error } = await createAdminClient().rpc('zalo_upsert_oa_connection', {
-      p_company_id: companyId,
-      p_oa_id: params.oaId?.trim(),
-      p_app_id: params.appId?.trim(),
-      p_app_secret: params.appSecret,
-      p_access_token: params.accessToken || null,
-      p_refresh_token: params.refreshToken || null,
-      p_token_expires_at: params.tokenExpiresAt || null,
-      p_webhook_secret: params.webhookSecret || null,
-      p_actor_user_id: actor.userId,
-    });
-    if (error) {
-      if (error.message.includes('OWNED_BY_OTHER_COMPANY')) {
+    let configId: string;
+    try {
+      configId = await upsertZaloOaConnection({
+        companyId,
+        oaId: params.oaId?.trim(),
+        appId: params.appId?.trim(),
+        appSecret: params.appSecret,
+        accessToken: params.accessToken,
+        refreshToken: params.refreshToken,
+        tokenExpiresAt: params.tokenExpiresAt,
+        webhookSecret: params.webhookSecret,
+        actorUserId: actor.userId,
+      });
+    } catch (dbErr: unknown) {
+      const msg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      if (msg.includes('OWNED_BY_OTHER_COMPANY')) {
         throw new ServerAuthError('OA này đã được kết nối với doanh nghiệp khác.', 403, 'RESOURCE_FORBIDDEN');
       }
-      throw new Error(error.message);
+      throw dbErr;
     }
-    return { success: true, data: { configId: data as string } };
+    return { success: true, data: { configId } };
   } catch (err: unknown) {
     return toFailure(err, 'Không thể lưu cấu hình Zalo OA.');
   }
@@ -168,14 +178,13 @@ export async function setZaloOaStatusAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     const actor = await requirePrivilegedBoss(companyId);
-    const { data, error } = await createAdminClient().rpc('zalo_set_oa_connection_status', {
-      p_company_id: companyId,
-      p_oa_id: params.oaId,
-      p_status: params.status,
-      p_actor_user_id: actor.userId,
+    const updated = await setZaloOaConnectionStatus({
+      companyId,
+      oaId: params.oaId,
+      status: params.status,
+      actorUserId: actor.userId,
     });
-    if (error) throw new Error(error.message);
-    return { success: true, data: { updated: Boolean(data) } };
+    return { success: true, data: { updated } };
   } catch (err: unknown) {
     return toFailure(err, 'Không thể cập nhật trạng thái Zalo OA.');
   }
@@ -189,7 +198,7 @@ export async function createZaloCareCampaignAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const campaign = await new ZaloCareCampaignService({ supabase: createAdminClient() }).createCampaign({
+    const campaign = await new ZaloCareCampaignService().createCampaign({
       companyId,
       title: params.title,
       audienceGroup: params.audienceGroup,
@@ -207,7 +216,7 @@ export async function executeZaloCareCampaignAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const result = await new ZaloCareCampaignService({ supabase: createAdminClient() }).executeCampaign(params.campaignId, {
+    const result = await new ZaloCareCampaignService().executeCampaign(params.campaignId, {
       companyId,
     });
     return { success: true, data: result };
@@ -228,7 +237,7 @@ export async function reactivateZaloCareScheduleAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     const actor = await verifyActorForCompany(companyId, { allowedRoles: [APPLICATION_ROLES.BOSS_ADMIN] });
-    const schedule = await new ZaloCareSchedulerService({ supabase: createAdminClient() }).createOrUpdateSchedule({
+    const schedule = await new ZaloCareSchedulerService().createOrUpdateSchedule({
       companyId,
       customerId: params.customerId,
       frequencyMonths: params.frequencyMonths,
@@ -247,7 +256,7 @@ export async function stopZaloCareScheduleAction(params: {
   try {
     const companyId = await resolveSessionCompanyId();
     const actor = await verifyActorForCompany(companyId, { allowedRoles: INBOX_ROLES, requireAal2: false });
-    const stopped = await new ZaloCareSchedulerService({ supabase: createAdminClient() }).stopSchedule(
+    const stopped = await new ZaloCareSchedulerService().stopSchedule(
       companyId,
       params.customerId,
       `BUSINESS_STOP: ${(params.reason || '').trim().slice(0, 200)}`,

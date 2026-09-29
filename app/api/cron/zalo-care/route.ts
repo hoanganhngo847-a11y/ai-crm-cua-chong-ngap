@@ -1,7 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createAdminClient } from '../../../../lib/supabase/admin';
-import { ZaloCareSchedulerService } from '../../../../features/care/zalo/scheduler-service';
-import { ZaloInboxService } from '../../../../features/omnichannel/zalo/inbox-service';
+import { runZaloCareCron } from '../../../../features/care/zalo';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,41 +25,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  const supabase = createAdminClient();
-  const { data: configs, error } = await supabase.from('zalo_oa_configs').select('company_id').eq('status', 'ACTIVE');
-  if (error) {
-    console.error('[cron/zalo-care] Không đọc được danh sách OA:', error.message);
+  try {
+    const result = await runZaloCareCron();
+    return NextResponse.json(result);
+  } catch (err: unknown) {
+    console.error('[cron/zalo-care] Cron execution failed:', (err as Error).message);
     return NextResponse.json({ error: 'Database error' }, { status: 500 });
   }
-
-  const companyIds = Array.from(new Set(((configs || []) as { company_id: string }[]).map((c) => c.company_id)));
-  const scheduler = new ZaloCareSchedulerService({ supabase });
-  const inbox = new ZaloInboxService({ supabase });
-
-  const care = { processed: 0, advanced: 0, failed: 0, uncertain: 0, skipped: 0 };
-  const outbound = { reconciled: 0, failed: 0, uncertain: 0 };
-  let companyErrors = 0;
-
-  for (const companyId of companyIds) {
-    try {
-      const r = await scheduler.processDueSchedules({ companyId });
-      care.processed += r.processed;
-      care.advanced += r.advanced;
-      care.failed += r.failed;
-      care.uncertain += r.uncertain;
-      care.skipped += r.skipped;
-
-      const o = await inbox.reconcilePendingDeliveries({ companyId });
-      outbound.reconciled += o.reconciled;
-      outbound.failed += o.failed;
-      outbound.uncertain += o.uncertain;
-    } catch (err) {
-      companyErrors++;
-      console.error(`[cron/zalo-care] company=${companyId}:`, (err as Error).message);
-    }
-  }
-
-  return NextResponse.json({ ok: companyErrors === 0, companies: companyIds.length, care, outbound });
 }
-
-export const POST = GET;

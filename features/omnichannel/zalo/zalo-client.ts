@@ -219,7 +219,15 @@ export class ZaloClient {
       }
 
       if (body.error === 0) {
-        return { outcome: 'ACCEPTED', providerMsgId: body.data?.message_id };
+        const msgId = body.data?.message_id?.trim();
+        if (!msgId) {
+          return {
+            outcome: 'UNCERTAIN',
+            errorCode: 'MISSING_PROVIDER_MSG_ID',
+            errorMessage: 'Zalo claimed success but omitted stable message_id (fail-closed, no synthetic fallback)',
+          };
+        }
+        return { outcome: 'ACCEPTED', providerMsgId: msgId };
       }
       return {
         outcome: 'REJECTED',

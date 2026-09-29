@@ -4,7 +4,7 @@
  * but these MUST be sanitized before storing in public.interactions.sanitized_content.
  *
  * Role SALE is strictly prohibited from seeing unmasked phone numbers.
- * Raw contents are preserved in the private security zone (private.interaction_raw_contents).
+ * Raw contents are preserved in the private security storage zone.
  */
 
 export interface SanitizeResult {

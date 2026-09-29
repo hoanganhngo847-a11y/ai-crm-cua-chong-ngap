@@ -161,25 +161,40 @@ export class ZaloCareSchedulerService {
         throw new Error('A reactivation reason is required');
       }
 
+      if (isStopped && params.reactivation) {
+        const { data: scheduleId, error: rpcError } = await this.supabase.rpc('care_reactivate_schedule', {
+          p_company_id: companyId,
+          p_customer_id: customerId,
+          p_actor_user_id: params.reactivation.actorUserId,
+          p_reason: params.reactivation.reason.trim(),
+          p_frequency_months: frequencyMonths,
+          p_next_send_at: nextSendAt,
+        });
+        if (rpcError) {
+          throw new Error(`Failed to reactivate care schedule: ${rpcError.message}`);
+        }
+        const { data: reactivated, error: fetchError } = await this.supabase
+          .from('care_schedules')
+          .select('*')
+          .eq('id', scheduleId)
+          .single();
+        if (fetchError || !reactivated) {
+          throw new Error(`Failed to load reactivated schedule: ${fetchError?.message}`);
+        }
+        return toDto(reactivated as ScheduleRow);
+      }
+
       const { data, error } = await this.supabase
         .from('care_schedules')
         .update({
           frequency_months: frequencyMonths,
           next_send_at: nextSendAt,
-          ...(isStopped ? { enabled: true, stop_reason: null } : {}),
         })
         .eq('id', existing.id)
         .select('*')
         .single();
       if (error || !data) {
         throw new Error(`Failed to update care schedule: ${error?.message}`);
-      }
-
-      if (isStopped && params.reactivation) {
-        await this.audit(companyId, customerId, existing.id, 'CARE_SCHEDULE_REACTIVATED', params.reactivation.actorUserId, {
-          previous_stop_reason: existing.stop_reason ?? null,
-          reason: params.reactivation.reason.trim().slice(0, 300),
-        });
       }
       return toDto(data as ScheduleRow);
     }

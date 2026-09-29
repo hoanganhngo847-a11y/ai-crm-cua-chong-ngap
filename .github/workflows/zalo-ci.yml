@@ -2,7 +2,7 @@ name: Zalo OA & care gate
 
 on:
   push:
-    branches: [feature/zalo-care]
+    branches: [feature/zalo-care, fix/tv3-zalo-hardening]
   pull_request:
     branches: [main]
 
@@ -30,7 +30,7 @@ jobs:
       # Real PostgreSQL (PGlite) — all migrations + Zalo RPC/transaction regression suite
       - run: npm run test:zalo
       # Real Supabase stack — PostgREST wiring, JWT ACL, multi-connection concurrency
-      - run: supabase start
+      - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
       - run: npm run test:zalo:db
       - run: npm run test:auth

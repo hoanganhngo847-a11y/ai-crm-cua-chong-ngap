@@ -10,6 +10,7 @@ import {
 } from './types';
 import { ZaloCareAnalyticsService } from './analytics-service';
 import { renderCareTemplate } from './template';
+import { ServerAuthError } from '../../../lib/server-auth/errors';
 
 export type CampaignClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
 
@@ -192,7 +193,7 @@ export class ZaloCareCampaignService {
       .eq('company_id', options.companyId)
       .maybeSingle();
     if (campError || !campaign) {
-      throw new Error(`Care campaign ${campaignId} not found`);
+      throw new ServerAuthError(`Không tìm thấy chiến dịch chăm sóc (${campaignId}).`, 404, 'RESOURCE_NOT_FOUND');
     }
 
     const audienceGroup = campaign.audience_rule?.audienceGroup as CareAudienceGroup;

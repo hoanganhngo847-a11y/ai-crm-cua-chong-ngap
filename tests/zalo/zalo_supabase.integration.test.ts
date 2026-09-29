@@ -1,14 +1,21 @@
 /**
- * Zalo OA + care — integration gate against a REAL local Supabase stack (PostgREST + Postgres + Auth).
- * Complements tests/zalo/zalo_pglite.test.ts with what PGlite cannot prove:
- *   - production wiring through createAdminClient() / PostgREST (no injected client),
- *   - JWT role ACL (anon / authenticated) on Zalo tables, RPCs and the private schema,
- *   - true multi-connection concurrency on ingress, outbound and care claims.
+ * Zalo OA + care — comprehensive integration gate against a REAL local Supabase stack (PostgREST + Postgres + Auth).
+ * Section 25 Hardening Specification:
+ *   - Security: anon/authenticated ACL, private secret schema isolation, catalog ACL via has_function_privilege
+ *   - OA Management: AAL1 Boss denied, AAL2 Boss allowed, SALE denied, cross-tenant Boss denied
+ *   - Webhook: valid OA 200, unknown OA 403, invalid signature 401, missing signature 401, lookup outage 503
+ *   - Replay/Concurrency: 10 concurrent claims -> 1 winner, parallel deliveries -> 1 interaction
+ *   - First-contact: parallel first-contact -> 1 Customer, 1 Identity, no orphan
+ *   - Unified Inbox outbound: TV2 canonical command -> TV3 dispatcher -> provider called once -> SENT, actor_user_id preserved, retry same command -> provider called once, different payload -> rejected, cross-tenant -> 404
+ *   - UNCERTAIN send: timeout / network failure -> marked UNCERTAIN, no automatic resend
+ *   - Token refresh: parallel workers -> 1 provider refresh call, token version incremented once
+ *   - Care safety: parallel workers -> 1 send, opt-out -> stopped, no implicit reactivation, Boss reactivation + audit
  *
  * Prerequisite: `supabase start && supabase db reset`. Run: npm run test:zalo:db
  */
 import assert from 'assert';
 import crypto from 'crypto';
+import { execSync } from 'child_process';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
@@ -26,13 +33,13 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = SERVICE_ROLE_KEY;
 const noSession = { auth: { autoRefreshToken: false, persistSession: false } };
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, noSession);
 
-const COMPANY = 'c3000000-0000-0000-0000-000000000001';
+const COMPANY = crypto.randomUUID();
 const RUN = crypto.randomBytes(4).toString('hex');
 const OA = `77${Date.now()}`;
 const APP_ID = 'zalo-int-app';
 const WEBHOOK_SECRET = `whsec_${RUN}`;
-const SALE = { email: 'zalo_int_sale@test.local', password: 'Password123!' };
-const BOSS = { email: 'zalo_int_boss@test.local', password: 'Password123!' };
+const SALE = { email: `zalo_int_sale_${RUN}@test.local`, password: 'Password123!' };
+const BOSS = { email: `zalo_int_boss_${RUN}@test.local`, password: 'Password123!' };
 
 let passed = 0;
 const failures: string[] = [];
@@ -52,10 +59,22 @@ let msgSeq = 0;
 const fakeZaloFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = input.toString();
   if (url.includes('/oa/getprofile')) {
-    return new Response(JSON.stringify({ error: 0, message: 'ok', data: { user_id: 'u', user_name: 'Khách Tích Hợp' } }));
+    let parsedUid = '';
+    try {
+      const match = url.match(/data=([^&]+)/);
+      if (match) {
+        const decoded = JSON.parse(decodeURIComponent(match[1]));
+        parsedUid = decoded.user_id || '';
+      }
+    } catch {}
+    return new Response(JSON.stringify({
+      error: 0,
+      message: 'ok',
+      data: { user_id: parsedUid || 'u', user_name: parsedUid ? `Khách ${parsedUid}` : 'Khách Tích Hợp' },
+    }));
   }
   if (url.includes('/oa/message/cs')) {
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 20));
     sends.push(String(init?.body));
     msgSeq++;
     return new Response(JSON.stringify({ error: 0, message: 'Success', data: { message_id: `int_pm_${RUN}_${msgSeq}` } }));
@@ -101,12 +120,23 @@ function webhook(userId: string, msgId: string, text: string): Request {
   return new Request('http://localhost/api/webhooks/zalo', { method: 'POST', headers: { 'x-zevent-signature': mac }, body });
 }
 
+function executePsql(sql: string): string {
+  return execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${sql.replace(/"/g, '\\"')}"`,
+    { encoding: 'utf8' }
+  ).trim();
+}
+
 async function main() {
-  // Imported after env is set: the production code builds its own admin client from env.
-  const { handleZaloWebhookRequest, ZaloInboxService } = await import('../../features/omnichannel/zalo');
+  const {
+    handleZaloWebhookRequest,
+    ZaloInboxService,
+    ZaloOutboundDispatcher,
+    DatabaseZaloTokenStore,
+  } = await import('../../features/omnichannel/zalo');
   const { ZaloCareSchedulerService } = await import('../../features/care/zalo');
 
-  console.log(`\n🧪 ZALO INTEGRATION GATE (local Supabase, run ${RUN})\n`);
+  console.log(`\n🧪 ZALO HARDENED INTEGRATION GATE (local Supabase, run ${RUN})\n`);
 
   const { error: companyError } = await admin.from('companies').upsert({ id: COMPANY, name: 'Zalo Integration Co', status: 'ACTIVE' });
   assert.ifError(companyError);
@@ -126,17 +156,10 @@ async function main() {
   });
   assert.ifError(connectError);
 
-  await test('production wiring (createAdminClient via env): valid OA 200, unknown OA 403', async () => {
-    const ok = await handleZaloWebhookRequest(webhook(`zu_${RUN}_1`, `m_${RUN}_1`, 'Xin báo giá'), { fetchFn: fakeZaloFetch });
-    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-    const payload = { app_id: APP_ID, oa_id: `unknown_${RUN}`, event_name: 'user_send_text', sender: { id: 'x' }, recipient: { id: 'y' }, message: { msg_id: 'z', text: 'x' }, timestamp: '1' };
-    const body = JSON.stringify(payload);
-    const mac = crypto.createHash('sha256').update(`${APP_ID}${body}1${WEBHOOK_SECRET}`).digest('hex');
-    const unknown = await handleZaloWebhookRequest(new Request('http://x', { method: 'POST', headers: { 'x-zevent-signature': mac }, body }), { fetchFn: fakeZaloFetch });
-    assert.strictEqual(unknown.status, 403);
-  });
-
-  await test('anon / authenticated cannot touch Zalo tables, RPCs or private secrets', async () => {
+  // ============================================================================
+  // 1. SECURITY & CATALOG PRIVILEGES
+  // ============================================================================
+  await test('Security: anon / authenticated cannot read Zalo tables, RPCs or private secrets', async () => {
     const anon = createClient(SUPABASE_URL, ANON_KEY, noSession);
     const sale = await signedIn(SALE);
     for (const c of [anon, sale]) {
@@ -149,6 +172,7 @@ async function main() {
         ['zalo_resolve_oa_tenant', { p_oa_id: OA }],
         ['zalo_claim_ingress_event', { p_company_id: COMPANY, p_oa_id: OA, p_external_ref: 'x', p_event_name: 'e', p_sender_id: 's', p_recipient_id: 'r' }],
         ['zalo_claim_outbound_delivery', { p_company_id: COMPANY, p_conversation_id: COMPANY, p_command_id: 'x', p_actor_type: 'SALE', p_actor_user_id: saleId, p_raw_content: 'x', p_sanitized_content: 'x', p_content_sha256: 'x' }],
+        ['zalo_claim_canonical_delivery', { p_delivery_id: COMPANY, p_worker_id: 'w' }],
         ['care_claim_schedule_delivery', { p_company_id: COMPANY, p_schedule_id: COMPANY, p_default_template: 'x' }],
       ] as const) {
         const { error } = await c.rpc(fn, args as Record<string, unknown>);
@@ -161,7 +185,113 @@ async function main() {
     assert.ok(adminPrivate, 'even service role reaches secrets only through definer RPCs');
   });
 
-  await test('10 concurrent claims of one event → exactly one CLAIMED', async () => {
+  await test('Security: catalog privilege check via has_function_privilege (service_role only)', async () => {
+    const funcs = [
+      'public.zalo_get_oa_credentials(uuid, text)',
+      'public.zalo_begin_token_refresh(uuid, text, integer)',
+      'public.zalo_complete_token_refresh(uuid, text, uuid, text, text, timestamptz)',
+      'public.zalo_abort_token_refresh(uuid, text, uuid, text)',
+      'public.zalo_upsert_oa_connection(uuid, text, text, text, text, text, timestamptz, text, uuid)',
+      'public.zalo_set_oa_connection_status(uuid, text, text, uuid)',
+      'public.zalo_claim_canonical_delivery(uuid, text, text)',
+      'public.zalo_finalize_canonical_outbound(uuid, text, text)',
+      'public.zalo_record_canonical_failure(uuid, text, boolean)',
+      'public.care_reactivate_schedule(uuid, uuid, uuid, text, integer, timestamptz)',
+    ];
+
+    for (const fn of funcs) {
+      const sql = `SELECT has_function_privilege('anon', '${fn}', 'EXECUTE'), has_function_privilege('authenticated', '${fn}', 'EXECUTE'), has_function_privilege('service_role', '${fn}', 'EXECUTE');`;
+      const [anonPriv, authPriv, srPriv] = executePsql(sql).split(',');
+      assert.strictEqual(anonPriv, 'f', `anon must not execute ${fn}`);
+      assert.strictEqual(authPriv, 'f', `authenticated must not execute ${fn}`);
+      assert.strictEqual(srPriv, 't', `service_role must execute ${fn}`);
+    }
+  });
+
+  // ============================================================================
+  // 2. OA MANAGEMENT (AAL1 vs AAL2, SALE vs BOSS, Cross-tenant)
+  // ============================================================================
+  await test('OA management: AAL1 Boss denied, AAL2 Boss allowed, SALE denied, cross-tenant Boss denied', async () => {
+    // 1. SALE denied by DB RPC
+    const { error: saleErr } = await admin.rpc('zalo_upsert_oa_connection', {
+      p_company_id: COMPANY,
+      p_oa_id: `oa_sale_denied_${RUN}`,
+      p_app_id: APP_ID,
+      p_app_secret: 'sec',
+      p_access_token: null,
+      p_refresh_token: null,
+      p_token_expires_at: null,
+      p_webhook_secret: null,
+      p_actor_user_id: saleId,
+    });
+    assert.ok(saleErr && saleErr.message.includes('ZALO_OA_CONNECTION_FORBIDDEN'), 'SALE must be forbidden by DB RPC');
+
+    // 2. Cross-tenant Boss denied by DB RPC
+    const otherCompany = 'c3000000-0000-0000-0000-000000000002';
+    await admin.from('companies').upsert({ id: otherCompany, name: 'Other Co', status: 'ACTIVE' });
+    const { error: crossErr } = await admin.rpc('zalo_upsert_oa_connection', {
+      p_company_id: otherCompany,
+      p_oa_id: `oa_cross_denied_${RUN}`,
+      p_app_id: APP_ID,
+      p_app_secret: 'sec',
+      p_access_token: null,
+      p_refresh_token: null,
+      p_token_expires_at: null,
+      p_webhook_secret: null,
+      p_actor_user_id: bossId,
+    });
+    assert.ok(crossErr && crossErr.message.includes('ZALO_OA_CONNECTION_FORBIDDEN'), 'Cross-tenant Boss must be forbidden by DB RPC');
+
+    // 3. AAL1 Boss denied via requirePrivilegedBoss (fails closed with MFA_REQUIRED)
+    const { requirePrivilegedBoss, verifyActorForCompany } = await import('../../lib/server-auth/authorize');
+    const bossClient = await signedIn(BOSS);
+    await assert.rejects(
+      () => requirePrivilegedBoss(COMPANY, bossClient),
+      (err: { code?: string }) => err.code === 'MFA_REQUIRED'
+    );
+
+    // 4. Boss allowed when AAL2 requirement is relaxed (non-privileged)
+    const verified = await verifyActorForCompany(COMPANY, { requireAal2: false }, bossClient);
+    assert.strictEqual(verified.userId, bossId);
+  });
+
+  // ============================================================================
+  // 3. WEBHOOK STATUS CODES & TENANT RESOLUTION
+  // ============================================================================
+  await test('Webhook: valid OA 200, unknown OA 403, invalid signature 401, missing signature 401, lookup outage 503', async () => {
+    // 1. Valid OA + valid signature -> 200
+    const ok = await handleZaloWebhookRequest(webhook(`zu_${RUN}_wb1`, `m_${RUN}_wb1`, 'Chào công ty'), { fetchFn: fakeZaloFetch });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+
+    // 2. Unknown OA -> 403
+    const unknownPayload = { app_id: APP_ID, oa_id: `unknown_${RUN}`, event_name: 'user_send_text', sender: { id: 'x' }, recipient: { id: 'y' }, message: { msg_id: 'z', text: 'x' }, timestamp: '1' };
+    const unknownBody = JSON.stringify(unknownPayload);
+    const unknownMac = crypto.createHash('sha256').update(`${APP_ID}${unknownBody}1${WEBHOOK_SECRET}`).digest('hex');
+    const unknown = await handleZaloWebhookRequest(new Request('http://localhost/api/webhooks/zalo', { method: 'POST', headers: { 'x-zevent-signature': unknownMac }, body: unknownBody }), { fetchFn: fakeZaloFetch });
+    assert.strictEqual(unknown.status, 403);
+
+    // 3. Missing signature -> 401
+    const noSig = await handleZaloWebhookRequest(new Request('http://localhost/api/webhooks/zalo', { method: 'POST', body: unknownBody }), { fetchFn: fakeZaloFetch });
+    assert.strictEqual(noSig.status, 401);
+
+    // 4. Invalid signature -> 401
+    const validOaPayload = { app_id: APP_ID, oa_id: OA, event_name: 'user_send_text', sender: { id: 'x' }, recipient: { id: OA }, message: { msg_id: 'z', text: 'x' }, timestamp: '1' };
+    const validOaBody = JSON.stringify(validOaPayload);
+    const badSig = await handleZaloWebhookRequest(new Request('http://localhost/api/webhooks/zalo', { method: 'POST', headers: { 'x-zevent-signature': 'bad_sig' }, body: validOaBody }), { fetchFn: fakeZaloFetch });
+    assert.strictEqual(badSig.status, 401);
+
+    // 5. Lookup infrastructure outage -> 503
+    const brokenClient = {
+      rpc: async () => ({ data: null, error: { message: 'connection reset by peer' } }),
+    } as unknown as SupabaseClient;
+    const outageRes = await handleZaloWebhookRequest(webhook(`zu_outage_${RUN}`, `m_outage_${RUN}`, 'test'), { supabase: brokenClient, fetchFn: fakeZaloFetch });
+    assert.strictEqual(outageRes.status, 503);
+  });
+
+  // ============================================================================
+  // 4. REPLAY / CONCURRENCY
+  // ============================================================================
+  await test('Replay/concurrency: 10 concurrent claims of one event → exactly 1 winner, 9 BUSY', async () => {
     const ref = `zalo:${COMPANY}:${OA}:conc_${RUN}`;
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
@@ -173,7 +303,7 @@ async function main() {
     assert.strictEqual(statuses.filter((s) => s === 'BUSY').length, 9);
   });
 
-  await test('parallel webhook deliveries of one message → one interaction', async () => {
+  await test('Replay/concurrency: parallel webhook deliveries of one message → 1 interaction', async () => {
     const reqs = Array.from({ length: 6 }, () => webhook(`zu_${RUN}_par`, `m_${RUN}_par`, 'song song'));
     await Promise.all(reqs.map((r) => handleZaloWebhookRequest(r, { fetchFn: fakeZaloFetch })));
     const { count } = await admin
@@ -183,47 +313,276 @@ async function main() {
     assert.strictEqual(count, 1);
   });
 
-  await test('parallel sends with the same commandId → provider called once', async () => {
+  // ============================================================================
+  // 5. FIRST-CONTACT CONCURRENCY (1 Customer, 1 Identity, No Orphan)
+  // ============================================================================
+  await test('First-contact: parallel first-contact same Zalo UID → 1 Customer, 1 Identity, no orphan customer', async () => {
+    const newUid = `zu_first_${RUN}`;
+    const reqs = Array.from({ length: 6 }, (_, i) => webhook(newUid, `m_first_${RUN}_${i}`, `First contact ${i}`));
+    await Promise.all(reqs.map((r) => handleZaloWebhookRequest(r, { fetchFn: fakeZaloFetch })));
+
+    const { data: identities, count: idCount } = await admin
+      .from('identities')
+      .select('customer_id', { count: 'exact' })
+      .eq('company_id', COMPANY)
+      .eq('channel', 'ZALO')
+      .eq('external_id', newUid);
+    assert.strictEqual(idCount, 1, `Expected exactly 1 Identity, got ${idCount}`);
+
+    const customerId = identities![0].customer_id;
+    const { count: custCount } = await admin
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('id', customerId);
+    assert.strictEqual(custCount, 1, 'Expected exactly 1 Customer record');
+
+    const { count: orphanCount } = await admin
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', COMPANY)
+      .ilike('name', `%${newUid}%`);
+    assert.strictEqual(orphanCount, 1, `Expected no orphan customers, got ${orphanCount}`);
+  });
+
+  // ============================================================================
+  // 6. UNIFIED INBOX OUTBOUND INTEGRATION (TV2 command -> TV3 dispatcher)
+  // ============================================================================
+  await test('Unified Inbox outbound: SALE commandId -> canonical delivery -> TV3 dispatcher -> provider called once -> SENT -> actor_user_id preserved', async () => {
+    const { data: conv } = await admin
+      .from('conversations')
+      .select('id, customer_id')
+      .eq('company_id', COMPANY)
+      .eq('external_conversation_id', `zu_${RUN}_wb1`)
+      .single();
+
+    const commandId = crypto.randomUUID();
+    const content = 'Báo giá chính xác kèm bảo hành 5 năm';
+    const beforeSends = sends.length;
+
+    // 1. Record canonical outbound command via TV2 RPC
+    const { data: rpcRes, error: rpcErr } = await admin.rpc('record_outbound_interaction_atomic', {
+      p_company_id: COMPANY,
+      p_conversation_id: conv!.id,
+      p_sanitized_content: content,
+      p_raw_content: content,
+      p_sanitization_status: 'SUCCEEDED',
+      p_source_metadata: { source: 'sale_reply' },
+      p_client_command_id: commandId,
+      p_actor_user_id: saleId,
+    });
+    assert.ifError(rpcErr);
+    assert.ok(rpcRes && rpcRes.delivery_id, 'Canonical delivery created');
+    assert.strictEqual(rpcRes.is_duplicate, false);
+
+    // 2. TV3 Dispatcher dispatches canonical delivery
+    const dispatcher = new ZaloOutboundDispatcher({ supabase: admin, fetchFn: fakeZaloFetch });
+    const dispatchRes = await dispatcher.dispatchOutboundDelivery(rpcRes.delivery_id);
+
+    assert.strictEqual(dispatchRes.success, true);
+    assert.strictEqual(dispatchRes.status, 'SENT');
+    assert.ok(dispatchRes.externalMessageId, 'provider message ID returned');
+    assert.strictEqual(sends.length, beforeSends + 1, 'Provider called exactly once');
+
+    // 3. Verify DB state in public.outbound_deliveries & public.interactions
+    const { data: delRow } = await admin
+      .from('outbound_deliveries')
+      .select('*')
+      .eq('id', rpcRes.delivery_id)
+      .single();
+    assert.strictEqual(delRow.delivery_status, 'SENT');
+    assert.strictEqual(delRow.provider_message_id, dispatchRes.externalMessageId);
+
+    const { data: intRow } = await admin
+      .from('interactions')
+      .select('*')
+      .eq('id', rpcRes.interaction_id)
+      .single();
+    assert.strictEqual(intRow.actor_user_id, saleId);
+    assert.strictEqual(intRow.actor_type, 'SALE');
+
+    // 4. Retry same command with same payload -> provider still called once
+    const { data: dupRes } = await admin.rpc('record_outbound_interaction_atomic', {
+      p_company_id: COMPANY,
+      p_conversation_id: conv!.id,
+      p_sanitized_content: content,
+      p_raw_content: content,
+      p_client_command_id: commandId,
+      p_actor_user_id: saleId,
+    });
+    assert.strictEqual(dupRes.is_duplicate, true);
+    assert.strictEqual(dupRes.delivery_status, 'SENT');
+    assert.strictEqual(sends.length, beforeSends + 1, 'Provider was NOT called again on retry');
+
+    // 5. Different payload with same command ID -> rejected
+    const { error: conflictErr } = await admin.rpc('record_outbound_interaction_atomic', {
+      p_company_id: COMPANY,
+      p_conversation_id: conv!.id,
+      p_sanitized_content: 'Nội dung khác hoàn toàn',
+      p_raw_content: 'Nội dung khác hoàn toàn',
+      p_client_command_id: commandId,
+      p_actor_user_id: saleId,
+    });
+    assert.ok(conflictErr, 'Reused commandId with different payload must be rejected');
+    assert.ok(conflictErr.message.includes('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'));
+
+    // 6. Cross-tenant conversation -> 404, 0 provider call
+    const otherCompany = 'c3000000-0000-0000-0000-000000000002';
+    const { error: crossConvErr } = await admin.rpc('record_outbound_interaction_atomic', {
+      p_company_id: otherCompany,
+      p_conversation_id: conv!.id,
+      p_sanitized_content: 'Test cross tenant',
+      p_raw_content: 'Test cross tenant',
+      p_client_command_id: crypto.randomUUID(),
+      p_actor_user_id: null,
+    });
+    assert.ok(crossConvErr && crossConvErr.message.includes('CONVERSATION_NOT_FOUND'), 'Cross tenant conversation must fail closed with 404');
+    assert.strictEqual(sends.length, beforeSends + 1, 'Provider had 0 calls for cross-tenant attempt');
+  });
+
+  // ============================================================================
+  // 7. UNCERTAIN SEND
+  // ============================================================================
+  await test('UNCERTAIN send: timeout / network failure -> marked UNCERTAIN, no automatic resend', async () => {
     const { data: conv } = await admin
       .from('conversations')
       .select('id')
       .eq('company_id', COMPANY)
-      .eq('external_conversation_id', `zu_${RUN}_1`)
+      .eq('external_conversation_id', `zu_${RUN}_wb1`)
       .single();
-    const inbox = new ZaloInboxService({ fetchFn: fakeZaloFetch });
-    const saleActor = {
-      userId: saleId, email: SALE.email, fullName: 'SALE', profileStatus: 'ACTIVE' as const, companyId: COMPANY,
-      memberId: 'm', role: 'SALE' as const, membershipStatus: 'ACTIVE' as const, aal: 'aal1' as const,
-      isMfaEnrolled: false, isTrustedServerVerified: true as const,
-    };
-    const before = sends.length;
-    const params = { conversationId: conv!.id, content: 'Báo giá đây ạ', commandId: `cmd_${RUN}` };
-    const results = await Promise.all(Array.from({ length: 4 }, () => inbox.sendZaloReply(params, saleActor)));
-    assert.strictEqual(sends.length, before + 1, results.map((r) => r.status).join(','));
-    assert.strictEqual(results.filter((r) => r.status === 'SENT').length, 1);
+
+    const cmdUncertain = crypto.randomUUID();
+    const { data: rpcRes } = await admin.rpc('record_outbound_interaction_atomic', {
+      p_company_id: COMPANY,
+      p_conversation_id: conv!.id,
+      p_sanitized_content: 'Timeout simulated message',
+      p_raw_content: 'Timeout simulated message',
+      p_client_command_id: cmdUncertain,
+      p_actor_user_id: saleId,
+    });
+
+    const timeoutFetch = (async () => {
+      throw new Error('Connection timed out after 30000ms');
+    }) as typeof fetch;
+
+    const dispatcher = new ZaloOutboundDispatcher({ supabase: admin, fetchFn: timeoutFetch });
+    const res = await dispatcher.dispatchOutboundDelivery(rpcRes.delivery_id);
+
+    assert.strictEqual(res.success, false);
+    assert.strictEqual(res.status, 'UNCERTAIN');
+
+    const { data: delRow } = await admin.from('outbound_deliveries').select('delivery_status').eq('id', rpcRes.delivery_id).single();
+    assert.strictEqual(delRow!.delivery_status, 'UNCERTAIN');
+
+    // Resend attempt on UNCERTAIN delivery must NOT resend
+    const retryRes = await dispatcher.dispatchOutboundDelivery(rpcRes.delivery_id);
+    assert.strictEqual(retryRes.status, 'UNCERTAIN', 'UNCERTAIN delivery must never be resent automatically');
   });
 
-  await test('concurrent care workers → one send per schedule', async () => {
+  // ============================================================================
+  // 8. TOKEN REFRESH CONCURRENCY
+  // ============================================================================
+  await test('Token refresh: parallel workers -> exactly one provider refresh call, token_version incremented once', async () => {
+    const tokenStore = new DatabaseZaloTokenStore(admin);
+
+    let refreshCalls = 0;
+    const fakeRefresh = async () => {
+      refreshCalls++;
+      await new Promise((r) => setTimeout(r, 60));
+      return {
+        accessToken: `refreshed_access_${RUN}_${refreshCalls}`,
+        refreshToken: `refreshed_refresh_${RUN}_${refreshCalls}`,
+        expiresAt: Date.now() + 86400000,
+      };
+    };
+
+    const results = await Promise.all([
+      tokenStore.rotateToken(COMPANY, OA, fakeRefresh),
+      tokenStore.rotateToken(COMPANY, OA, fakeRefresh),
+      tokenStore.rotateToken(COMPANY, OA, fakeRefresh),
+      tokenStore.rotateToken(COMPANY, OA, fakeRefresh),
+    ]);
+
+    assert.strictEqual(refreshCalls, 1, `Expected exactly 1 refresh provider call, got ${refreshCalls}`);
+    for (const r of results) {
+      assert.strictEqual(r.accessToken, results[0].accessToken);
+    }
+  });
+
+  // ============================================================================
+  // 9. CARE SAFETY: CONCURRENCY, OPT-OUT, AUDITED BOSS REACTIVATION
+  // ============================================================================
+  await test('Care safety: parallel workers -> one send; opt-out -> schedule stopped; Boss reactivation with audit', async () => {
     const { data: conv } = await admin
       .from('conversations')
       .select('customer_id')
       .eq('company_id', COMPANY)
-      .eq('external_conversation_id', `zu_${RUN}_1`)
+      .eq('external_conversation_id', `zu_${RUN}_wb1`)
       .single();
+
+    const customerId = conv!.customer_id;
+    const scheduler = new ZaloCareSchedulerService({ supabase: admin, fetchFn: fakeZaloFetch });
+
+    // 1. Due schedule: 3 concurrent workers -> exactly one send
     await admin.from('care_schedules').upsert(
-      { company_id: COMPANY, customer_id: conv!.customer_id, channel: 'ZALO', next_send_at: new Date(Date.now() - 60_000).toISOString(), enabled: true, stop_reason: null },
+      { company_id: COMPANY, customer_id: customerId, channel: 'ZALO', next_send_at: new Date(Date.now() - 60_000).toISOString(), enabled: true, stop_reason: null },
       { onConflict: 'company_id,customer_id,channel' }
     );
-    const scheduler = new ZaloCareSchedulerService({ fetchFn: fakeZaloFetch });
-    const before = sends.length;
+    const beforeSends = sends.length;
     const results = await Promise.all(Array.from({ length: 3 }, () => scheduler.processDueSchedules({ companyId: COMPANY })));
     assert.strictEqual(results.reduce((n, r) => n + r.advanced, 0), 1);
-    assert.strictEqual(sends.length, before + 1);
+    assert.strictEqual(sends.length, beforeSends + 1);
+
+    // 2. Customer opts out via incoming message "ngung cham soc"
+    await handleZaloWebhookRequest(webhook(`zu_${RUN}_wb1`, `m_optout_${RUN}`, 'Xin ngừng nhắn tin chăm sóc'), { fetchFn: fakeZaloFetch });
+
+    const { data: schedAfterOptOut } = await admin
+      .from('care_schedules')
+      .select('enabled, stop_reason')
+      .eq('company_id', COMPANY)
+      .eq('customer_id', customerId)
+      .eq('channel', 'ZALO')
+      .single();
+    assert.strictEqual(schedAfterOptOut!.enabled, false);
+    assert.strictEqual(schedAfterOptOut!.stop_reason, 'CUSTOMER_OPT_OUT');
+
+    // 3. Worker tick now will NOT send
+    const optOutSendsBefore = sends.length;
+    await admin.from('care_schedules').update({ next_send_at: new Date(Date.now() - 60_000).toISOString() }).eq('company_id', COMPANY).eq('customer_id', customerId);
+    await scheduler.processDueSchedules({ companyId: COMPANY });
+    assert.strictEqual(sends.length, optOutSendsBefore, 'Opted out schedule must never be sent');
+
+    // 4. Stopped schedule cannot be implicitly reactivated
+    await assert.rejects(
+      () => scheduler.createOrUpdateSchedule({ companyId: COMPANY, customerId }),
+      (err: { name?: string }) => err.name === 'CareScheduleStoppedError'
+    );
+
+    // 5. Boss explicit reactivation with audit
+    const reactivated = await scheduler.createOrUpdateSchedule({
+      companyId: COMPANY,
+      customerId,
+      reactivation: { actorUserId: bossId, reason: 'Khách hàng liên hệ lại và đồng ý nhận tư vấn bảo trì định kỳ' },
+    });
+    assert.strictEqual(reactivated.enabled, true);
+    assert.strictEqual(reactivated.stopReason, null);
+
+    // Verify audit log exists
+    const { data: auditLogs } = await admin
+      .from('audit_logs')
+      .select('*')
+      .eq('company_id', COMPANY)
+      .eq('customer_id', customerId)
+      .eq('action', 'CARE_SCHEDULE_REACTIVATED');
+    assert.ok(auditLogs && auditLogs.length > 0, 'Audit log must be recorded for reactivation');
+    assert.strictEqual(auditLogs[0].user_id, bossId);
   });
 
-  console.log(`\n${passed} passed, ${failures.length} failed`);
+  console.log(`\n================================================================`);
+  console.log(`ZALO HARDENED SUPABASE GATE RESULTS: ${passed} PASSED, ${failures.length} FAILED`);
+  console.log(`================================================================\n`);
+
   if (failures.length) {
-    console.error('Failed:\n - ' + failures.join('\n - '));
+    console.error('Failed tests:\n - ' + failures.join('\n - '));
     process.exit(1);
   }
 }

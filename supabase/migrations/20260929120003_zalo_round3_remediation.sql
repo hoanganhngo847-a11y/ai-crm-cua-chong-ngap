@@ -1,5 +1,5 @@
 -- ==============================================================================
--- Migration: 20260929000001_zalo_round3_remediation.sql
+-- Migration: 20260929120003_zalo_round3_remediation.sql
 -- Module: Omnichannel Zalo OA & Zalo Care (Member 3 — feature/zalo-care)
 -- Remediates review round 3 (HEAD f480407):
 --   #2  FAILED ingress events are re-claimable (claim token + lease state machine)
@@ -1598,11 +1598,18 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
+  v_sched_id uuid;
   v_row public.care_deliveries%ROWTYPE;
   v_status text;
 BEGIN
   IF p_outcome NOT IN ('ACCEPTED', 'REJECTED', 'UNCERTAIN') THEN
     RAISE EXCEPTION 'CARE_OUTCOME_INVALID' USING ERRCODE = '22023';
+  END IF;
+
+  -- Maintain consistent lock order: care_schedules -> care_deliveries to prevent deadlock
+  SELECT d.care_schedule_id INTO v_sched_id FROM public.care_deliveries d WHERE d.id = p_delivery_id;
+  IF v_sched_id IS NOT NULL THEN
+    PERFORM 1 FROM public.care_schedules s WHERE s.id = v_sched_id FOR UPDATE;
   END IF;
 
   SELECT d.* INTO v_row FROM public.care_deliveries d WHERE d.id = p_delivery_id FOR UPDATE;
@@ -1635,7 +1642,330 @@ END;
 $$;
 
 -- ==============================================================================
--- 6. GRANTS: service role only
+-- 7. TV2 UNIFIED INBOX ↔ TV3 PROVIDER DISPATCHER INTEGRATION
+-- ==============================================================================
+
+-- 7.1 Extend public.outbound_deliveries check constraint to support UNCERTAIN status
+ALTER TABLE public.outbound_deliveries DROP CONSTRAINT IF EXISTS outbound_deliveries_delivery_status_check;
+ALTER TABLE public.outbound_deliveries
+  ADD CONSTRAINT outbound_deliveries_delivery_status_check
+  CHECK (delivery_status IN ('PENDING_DISPATCH', 'QUEUED', 'SENT', 'DELIVERED', 'FAILED', 'UNCERTAIN'));
+
+-- 7.2 Link public.zalo_outbound_deliveries as transport extension
+ALTER TABLE public.zalo_outbound_deliveries
+  ADD COLUMN IF NOT EXISTS canonical_delivery_id uuid REFERENCES public.outbound_deliveries(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_zalo_outbound_canonical_delivery
+  ON public.zalo_outbound_deliveries (canonical_delivery_id)
+  WHERE canonical_delivery_id IS NOT NULL;
+
+-- 7.3 Atomic Claim of Canonical Outbound Delivery for Zalo Dispatcher
+CREATE OR REPLACE FUNCTION public.zalo_claim_canonical_delivery(
+  p_delivery_id uuid,
+  p_worker_id text,
+  p_override_oa_id text DEFAULT NULL
+)
+RETURNS TABLE (
+  delivery_id uuid,
+  company_id uuid,
+  conversation_id uuid,
+  interaction_id uuid,
+  customer_id uuid,
+  recipient_zalo_uid text,
+  oa_id text,
+  raw_content text,
+  sanitized_content text,
+  client_command_id uuid,
+  claim_status text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_del public.outbound_deliveries%ROWTYPE;
+  v_conv record;
+  v_raw text;
+  v_sanitized text;
+  v_oa text;
+BEGIN
+  SELECT * INTO v_del
+  FROM public.outbound_deliveries d
+  WHERE d.id = p_delivery_id AND d.channel = 'ZALO'
+  FOR UPDATE SKIP LOCKED;
+
+  IF v_del.id IS NULL THEN
+    SELECT * INTO v_del FROM public.outbound_deliveries d WHERE d.id = p_delivery_id;
+    IF v_del.id IS NULL THEN
+      RETURN QUERY SELECT NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text, NULL::uuid, 'NOT_FOUND'::text;
+      RETURN;
+    ELSIF v_del.delivery_status = 'SENT' THEN
+      RETURN QUERY SELECT v_del.id, v_del.company_id, v_del.conversation_id, v_del.interaction_id, NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text, v_del.client_command_id, 'ALREADY_SENT'::text;
+      RETURN;
+    ELSIF v_del.delivery_status = 'UNCERTAIN' THEN
+      RETURN QUERY SELECT v_del.id, v_del.company_id, v_del.conversation_id, v_del.interaction_id, NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text, v_del.client_command_id, 'UNCERTAIN'::text;
+      RETURN;
+    ELSE
+      RETURN QUERY SELECT v_del.id, v_del.company_id, v_del.conversation_id, v_del.interaction_id, NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text, v_del.client_command_id, 'BUSY'::text;
+      RETURN;
+    END IF;
+  END IF;
+
+  IF v_del.delivery_status NOT IN ('PENDING_DISPATCH', 'QUEUED', 'FAILED') THEN
+    RETURN QUERY SELECT v_del.id, v_del.company_id, v_del.conversation_id, v_del.interaction_id, NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text, v_del.client_command_id, v_del.delivery_status;
+    RETURN;
+  END IF;
+
+  SELECT c.id, c.customer_id, c.external_conversation_id INTO v_conv
+  FROM public.conversations c
+  WHERE c.id = v_del.conversation_id AND c.company_id = v_del.company_id;
+
+  IF v_conv.id IS NULL THEN
+    RAISE EXCEPTION 'ZALO_CONVERSATION_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF p_override_oa_id IS NOT NULL THEN
+    v_oa := p_override_oa_id;
+  ELSE
+    v_oa := private.zalo_resolve_customer_oa(v_del.company_id, v_conv.customer_id);
+  END IF;
+
+  IF v_oa IS NULL THEN
+    SELECT c.oa_id INTO v_oa
+    FROM public.zalo_oa_configs c
+    WHERE c.company_id = v_del.company_id AND c.status = 'ACTIVE'
+    LIMIT 1;
+  END IF;
+
+  IF v_oa IS NULL THEN
+    RAISE EXCEPTION 'ZALO_OA_NOT_CONFIGURED' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Raw outbound content from private.interaction_raw_contents
+  SELECT p.raw_content INTO v_raw
+  FROM private.interaction_raw_contents p
+  WHERE p.interaction_id = v_del.interaction_id AND p.company_id = v_del.company_id;
+
+  SELECT i.sanitized_content INTO v_sanitized
+  FROM public.interactions i
+  WHERE i.id = v_del.interaction_id;
+
+  IF v_raw IS NULL OR v_raw = '' THEN
+    v_raw := coalesce(v_sanitized, '');
+  END IF;
+
+  UPDATE public.outbound_deliveries
+  SET delivery_status = 'QUEUED',
+      locked_at = clock_timestamp(),
+      locked_by = p_worker_id,
+      retry_count = retry_count + 1,
+      updated_at = clock_timestamp()
+  WHERE id = v_del.id;
+
+  RETURN QUERY SELECT
+    v_del.id,
+    v_del.company_id,
+    v_del.conversation_id,
+    v_del.interaction_id,
+    v_conv.customer_id,
+    v_conv.external_conversation_id,
+    v_oa,
+    v_raw,
+    v_sanitized,
+    v_del.client_command_id,
+    'CLAIMED'::text;
+END;
+$$;
+
+-- 7.4 Finalize Canonical Outbound Delivery
+CREATE OR REPLACE FUNCTION public.zalo_finalize_canonical_outbound(
+  p_delivery_id uuid,
+  p_provider_msg_id text,
+  p_oa_id text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_del public.outbound_deliveries%ROWTYPE;
+  v_canonical_ref text;
+BEGIN
+  IF coalesce(btrim(p_provider_msg_id), '') = '' THEN
+    RAISE EXCEPTION 'ZALO_PROVIDER_MSG_ID_REQUIRED' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_del
+  FROM public.outbound_deliveries d
+  WHERE d.id = p_delivery_id
+  FOR UPDATE;
+
+  IF v_del.id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  v_canonical_ref := 'zalo:' || v_del.company_id::text || ':' || p_oa_id || ':' || p_provider_msg_id;
+
+  UPDATE public.outbound_deliveries
+  SET delivery_status = 'SENT',
+      provider_message_id = p_provider_msg_id,
+      locked_at = NULL,
+      locked_by = NULL,
+      error_message = NULL,
+      updated_at = clock_timestamp()
+  WHERE id = p_delivery_id;
+
+  UPDATE public.interactions
+  SET external_ref = v_canonical_ref
+  WHERE id = v_del.interaction_id;
+
+  IF v_del.client_command_id IS NOT NULL THEN
+    UPDATE public.zalo_outbound_deliveries
+    SET status = 'SENT',
+        provider_msg_id = p_provider_msg_id,
+        canonical_delivery_id = p_delivery_id,
+        updated_at = clock_timestamp()
+    WHERE company_id = v_del.company_id
+      AND (command_id = v_del.client_command_id::text OR canonical_delivery_id = p_delivery_id);
+  END IF;
+
+  RETURN true;
+END;
+$$;
+
+-- 7.5 Record Canonical Outbound Failure (FAILED or UNCERTAIN)
+CREATE OR REPLACE FUNCTION public.zalo_record_canonical_failure(
+  p_delivery_id uuid,
+  p_error_message text,
+  p_is_uncertain boolean
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_del public.outbound_deliveries%ROWTYPE;
+  v_new_status text;
+  v_zalo_status text;
+BEGIN
+  SELECT * INTO v_del
+  FROM public.outbound_deliveries d
+  WHERE d.id = p_delivery_id
+  FOR UPDATE;
+
+  IF v_del.id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  IF p_is_uncertain THEN
+    v_new_status := 'UNCERTAIN';
+    v_zalo_status := 'PROVIDER_UNCERTAIN';
+  ELSE
+    v_new_status := 'FAILED';
+    v_zalo_status := 'FAILED';
+  END IF;
+
+  UPDATE public.outbound_deliveries
+  SET delivery_status = v_new_status,
+      error_message = p_error_message,
+      locked_at = NULL,
+      locked_by = NULL,
+      updated_at = clock_timestamp()
+  WHERE id = p_delivery_id;
+
+  IF v_del.client_command_id IS NOT NULL THEN
+    UPDATE public.zalo_outbound_deliveries
+    SET status = v_zalo_status,
+        error_message = p_error_message,
+        canonical_delivery_id = p_delivery_id,
+        updated_at = clock_timestamp()
+    WHERE company_id = v_del.company_id
+      AND (command_id = v_del.client_command_id::text OR canonical_delivery_id = p_delivery_id);
+  END IF;
+
+  RETURN true;
+END;
+$$;
+
+-- 7.6 Atomic Care Schedule Reactivation with Invariant Audit Log
+CREATE OR REPLACE FUNCTION public.care_reactivate_schedule(
+  p_company_id uuid,
+  p_customer_id uuid,
+  p_actor_user_id uuid,
+  p_reason text,
+  p_frequency_months integer DEFAULT 1,
+  p_next_send_at timestamptz DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_schedule_id uuid;
+  v_prev_reason text;
+  v_next timestamptz := coalesce(p_next_send_at, now() + make_interval(months => coalesce(p_frequency_months, 1)));
+BEGIN
+  IF coalesce(btrim(p_reason), '') = '' THEN
+    RAISE EXCEPTION 'A reactivation reason is required' USING ERRCODE = '22023';
+  END IF;
+
+  -- Defense in depth: Verify actor is BOSS_ADMIN of company
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.company_members m
+    JOIN public.user_profiles up ON up.id = m.user_id AND up.status = 'ACTIVE'
+    WHERE m.company_id = p_company_id
+      AND m.user_id = p_actor_user_id
+      AND m.status = 'ACTIVE'
+      AND m.role = 'BOSS_ADMIN'
+  ) THEN
+    RAISE EXCEPTION 'Only BOSS_ADMIN may reactivate care schedule' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT s.id, s.stop_reason INTO v_schedule_id, v_prev_reason
+  FROM public.care_schedules s
+  WHERE s.company_id = p_company_id AND s.customer_id = p_customer_id AND s.channel = 'ZALO'
+  FOR UPDATE;
+
+  IF v_schedule_id IS NULL THEN
+    INSERT INTO public.care_schedules (company_id, customer_id, channel, frequency_months, next_send_at, enabled, stop_reason)
+    VALUES (p_company_id, p_customer_id, 'ZALO', coalesce(p_frequency_months, 1), v_next, true, NULL)
+    RETURNING id INTO v_schedule_id;
+  ELSE
+    UPDATE public.care_schedules
+    SET enabled = true,
+        stop_reason = NULL,
+        frequency_months = coalesce(p_frequency_months, frequency_months),
+        next_send_at = v_next,
+        updated_at = clock_timestamp()
+    WHERE id = v_schedule_id;
+  END IF;
+
+  -- Atomic audit log: in same transaction; if audit fails, the whole reactivation rolls back
+  INSERT INTO public.audit_logs (company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata)
+  VALUES (
+    p_company_id,
+    p_actor_user_id,
+    'CARE_SCHEDULE_REACTIVATED',
+    'CARE_SCHEDULE',
+    v_schedule_id,
+    p_customer_id,
+    'SUCCESS',
+    jsonb_build_object(
+      'previous_stop_reason', v_prev_reason,
+      'reason', left(btrim(p_reason), 300)
+    )
+  );
+
+  RETURN v_schedule_id;
+END;
+$$;
+
+-- ==============================================================================
+-- 8. GRANTS: service role only
 -- ==============================================================================
 DO $$
 DECLARE
@@ -1658,7 +1988,11 @@ BEGIN
     'public.zalo_finalize_outbound_delivery(uuid)',
     'public.care_claim_schedule_delivery(uuid, uuid, text, timestamptz, integer, integer)',
     'public.care_claim_campaign_delivery(uuid, uuid, integer, integer)',
-    'public.care_complete_delivery(uuid, uuid, text, text, text, text)'
+    'public.care_complete_delivery(uuid, uuid, text, text, text, text)',
+    'public.zalo_claim_canonical_delivery(uuid, text, text)',
+    'public.zalo_finalize_canonical_outbound(uuid, text, text)',
+    'public.zalo_record_canonical_failure(uuid, text, boolean)',
+    'public.care_reactivate_schedule(uuid, uuid, uuid, text, integer, timestamptz)'
   ] LOOP
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', v_fn);
     EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', v_fn);

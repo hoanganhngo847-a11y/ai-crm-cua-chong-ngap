@@ -1,7 +1,7 @@
 # Zalo OA & chăm sóc Zalo — vận hành và bất biến
 
 Phạm vi: Thành viên 3 (`features/omnichannel/zalo`, `features/care/zalo`, `app/api/webhooks/zalo`, `app/api/cron/zalo-care`, `app/actions/zalo.ts`).
-Migration: `supabase/migrations/20260929000001_zalo_round3_remediation.sql`.
+Migration: `supabase/migrations/20260929120003_zalo_round3_remediation.sql`.
 
 ## 1. Kết nối OA (BOSS_ADMIN + MFA)
 
