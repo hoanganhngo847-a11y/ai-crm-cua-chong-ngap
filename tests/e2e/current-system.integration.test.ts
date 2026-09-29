@@ -25,6 +25,7 @@ import { activateSalesStyleProfile } from '../../features/sales-style/services/s
 import {
   validateSalesStyleOutput,
 } from '../../features/sales-style/services/validate-sales-style';
+import { elevateClientToAal2 } from './test-mfa-helpers';
 import {
   fetchCompanyAnalyticsOverview,
 } from '../../features/analytics/services/analytics-store';
@@ -202,9 +203,11 @@ async function setupFixtures() {
   bossBUserId = await ensureTestUser(USER_BOSS_B, COMPANY_B_ID, 'BOSS_ADMIN');
 
   bossAClient = await loginUser(USER_BOSS_A);
+  await elevateClientToAal2(bossAClient, 'Boss A TOTP');
   saleAClient = await loginUser(USER_SALE_A);
   techAClient = await loginUser(USER_TECH_A);
   bossBClient = await loginUser(USER_BOSS_B);
+  await elevateClientToAal2(bossBClient, 'Boss B TOTP');
   void techAUserId;
   void bossBUserId;
 
