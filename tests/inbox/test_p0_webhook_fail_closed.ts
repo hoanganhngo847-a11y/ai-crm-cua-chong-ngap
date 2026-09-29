@@ -1,0 +1,1117 @@
+import assert from 'node:assert';
+import * as crypto from 'crypto';
+import { NextRequest } from 'next/server';
+import { GET as webhookGetHandler, POST as webhookPostHandler } from '../../app/api/inbox/webhook/route';
+import { InboxIngressService } from '../../features/inbox/services/inbox-ingress.service';
+import { InboxService } from '../../features/inbox/services/inbox.service';
+import { FacebookAdapter, deriveFacebookTenant } from '../../features/inbox/adapters/facebook.adapter';
+import { ZaloAdapter, deriveZaloTenant } from '../../features/inbox/adapters/zalo.adapter';
+import { ProviderAdapterRegistry, type NormalizedIngressEvent } from '../../features/inbox/types/webhook.types';
+
+async function runWebhookFailClosedTests() {
+  process.env.DEMO_MODE = 'true';
+  console.log('======================================================================');
+  console.log('STARTING P0 & P1 TEST SUITE: WEBHOOK INGRESS FAIL-CLOSED & NORMALIZED CONTRACT');
+  console.log('======================================================================');
+
+  const testCompanyA = '11111111-1111-1111-1111-111111111111';
+  const testCompanyB = '22222222-2222-2222-2222-222222222222';
+  const testFbSecret = 'test_fb_secret_key_super_secure_999';
+  const testZaloSecret = 'test_zalo_secret_key_super_secure_888';
+  const testSystemSecret = 'test_system_secret_key_super_secure_777';
+  const testVerifyToken = 'facebook_verify_token_prod_123';
+
+  // Cấu hình Server-side Tenant Mapping an toàn (Tenant Authority thuộc độc quyền về Server)
+  process.env.FB_PAGE_TENANT_MAP = JSON.stringify({
+    'fb-page-101': testCompanyA,
+  });
+  process.env.ZALO_OA_TENANT_MAP = JSON.stringify({
+    'zalo-oa-202': testCompanyB,
+  });
+  process.env.INBOX_WEBHOOK_SECRET = testSystemSecret;
+
+  // Clear caches and store
+  InboxIngressService.resetIngressCache();
+  InboxService.resetInboxStore([], {});
+
+  // ============================================================================
+  // SECTION 1: GET HANDSHAKE CHALLENGE (FAIL-CLOSED)
+  // ============================================================================
+  console.log('\n--- Section 1: GET Handshake Challenge Fail-Closed ---');
+
+  // 1a. Missing FACEBOOK_VERIFY_TOKEN in env: must return 500 CONFIGURATION_ERROR
+  delete process.env.FACEBOOK_VERIFY_TOKEN;
+  delete process.env.FB_VERIFY_TOKEN;
+
+  const reqGetNoEnv = new NextRequest(
+    'http://localhost:3000/api/inbox/webhook?hub.mode=subscribe&hub.challenge=test_chal_123&hub.verify_token=any',
+    { method: 'GET' }
+  );
+  const resGetNoEnv = await webhookGetHandler(reqGetNoEnv);
+  assert.strictEqual(resGetNoEnv.status, 500, 'Missing verify token in env must fail-closed with 500');
+  const dataGetNoEnv = await resGetNoEnv.json();
+  assert.strictEqual(dataGetNoEnv.error, 'CONFIGURATION_ERROR');
+  console.log('✓ PASS 1a: Missing verify token env fails closed with 500 (no hard-coded bypass)');
+
+  // 1b. Configure FACEBOOK_VERIFY_TOKEN, but wrong token sent: 403 FORBIDDEN
+  process.env.FACEBOOK_VERIFY_TOKEN = testVerifyToken;
+
+  const reqGetWrongToken = new NextRequest(
+    'http://localhost:3000/api/inbox/webhook?hub.mode=subscribe&hub.challenge=test_chal_123&hub.verify_token=wrong_token',
+    { method: 'GET' }
+  );
+  const resGetWrongToken = await webhookGetHandler(reqGetWrongToken);
+  assert.strictEqual(resGetWrongToken.status, 403);
+  console.log('✓ PASS 1b: Wrong verify token rejected with 403 FORBIDDEN');
+
+  // 1c. Valid verify token sent: 200 OK returning challenge string
+  const reqGetValidToken = new NextRequest(
+    `http://localhost:3000/api/inbox/webhook?hub.mode=subscribe&hub.challenge=test_chal_123&hub.verify_token=${testVerifyToken}`,
+    { method: 'GET' }
+  );
+  const resGetValidToken = await webhookGetHandler(reqGetValidToken);
+  assert.strictEqual(resGetValidToken.status, 200);
+  const textValidToken = await resGetValidToken.text();
+  assert.strictEqual(textValidToken, 'test_chal_123');
+  console.log('✓ PASS 1c: Valid verify token returns challenge with 200 OK');
+
+  // ============================================================================
+  // SECTION 2: POST WEBHOOK FAIL-CLOSED (MISSING SECRET & SIGNATURE)
+  // ============================================================================
+  console.log('\n--- Section 2: POST Webhook Fail-Closed Security ---');
+
+  const samplePayloadFb = {
+    provider: 'FACEBOOK',
+    page_id: 'fb-page-101',
+    company_id: '99999999-9999-9999-9999-999999999999', // Giả mạo company_id - Server PHẢI bỏ qua hoàn toàn!
+    external_user_id: 'fb-user-101',
+    sender_name: 'Khách hàng FB Test',
+    message_id: 'msg-fb-001',
+    content: 'Cửa chống ngập bản 2m giá sao em?',
+  };
+  const rawBodyFb = JSON.stringify(samplePayloadFb);
+
+  // 2a. Missing FACEBOOK_APP_SECRET in env: must return 500 CONFIGURATION_ERROR (no bypass)
+  delete process.env.FACEBOOK_APP_SECRET;
+  delete process.env.FB_APP_SECRET;
+
+  const reqPostNoSecret = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': 'sha256=abcdef123456',
+    },
+    body: rawBodyFb,
+  });
+  const resPostNoSecret = await webhookPostHandler(reqPostNoSecret);
+  assert.strictEqual(resPostNoSecret.status, 500, 'Missing secret must fail-closed with 500');
+  const dataPostNoSecret = await resPostNoSecret.json();
+  assert.strictEqual(dataPostNoSecret.error, 'CONFIGURATION_ERROR');
+  console.log('✓ PASS 2a: Missing secret in env rejected with 500 CONFIGURATION_ERROR (no bypass)');
+
+  // Configure Facebook Secret in env
+  process.env.FACEBOOK_APP_SECRET = testFbSecret;
+
+  // 2b. Missing signature header: must return 401 UNAUTHORIZED
+  const reqPostNoSig = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+    },
+    body: rawBodyFb,
+  });
+  const resPostNoSig = await webhookPostHandler(reqPostNoSig);
+  assert.strictEqual(resPostNoSig.status, 401, 'Missing signature header must be rejected with 401');
+  const dataPostNoSig = await resPostNoSig.json();
+  assert.strictEqual(dataPostNoSig.error, 'UNAUTHORIZED');
+  console.log('✓ PASS 2b: Missing signature header rejected with 401 UNAUTHORIZED');
+
+  // 2c. Invalid signature (tampered/spoofed HMAC): must return 401 UNAUTHORIZED
+  const fakeSig = 'sha256=' + '0'.repeat(64);
+  const reqPostFakeSig = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': fakeSig,
+    },
+    body: rawBodyFb,
+  });
+  const resPostFakeSig = await webhookPostHandler(reqPostFakeSig);
+  assert.strictEqual(resPostFakeSig.status, 401, 'Invalid HMAC signature must be rejected with 401');
+  const dataPostFakeSig = await resPostFakeSig.json();
+  assert.strictEqual(dataPostFakeSig.error, 'UNAUTHORIZED');
+  console.log('✓ PASS 2c: Invalid HMAC signature rejected with 401 UNAUTHORIZED');
+
+  // 2d. Fail-Closed Tenant Authority:
+  // 2d-1: Thiếu Page ID trong Facebook payload -> Bị từ chối với 400 INVALID_TENANT_DERIVATION
+  const payloadNoPageId = {
+    provider: 'FACEBOOK',
+    external_user_id: 'fb-user-101',
+    message_id: 'msg-fb-no-page-id',
+    content: 'Cửa chống ngập không có page_id',
+  };
+  const rawBodyNoPageId = JSON.stringify(payloadNoPageId);
+  const hmacNoPageId = crypto.createHmac('sha256', testFbSecret).update(rawBodyNoPageId).digest('hex');
+
+  const reqPostNoPageId = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${hmacNoPageId}`,
+    },
+    body: rawBodyNoPageId,
+  });
+  const resPostNoPageId = await webhookPostHandler(reqPostNoPageId);
+  assert.strictEqual(resPostNoPageId.status, 400, 'Missing Page ID must be rejected with 400');
+  const dataPostNoPageId = await resPostNoPageId.json();
+  assert.strictEqual(dataPostNoPageId.error, 'INVALID_TENANT_DERIVATION');
+  console.log('✓ PASS 2d-1: Missing Page ID rejected with 400 INVALID_TENANT_DERIVATION');
+
+  // 2d-2: Facebook webhook kèm company_id giả mạo nhưng Page ID không có trong cấu hình server -> Bị từ chối 403 TENANT_NOT_CONFIGURED (Fail-Closed)
+  const payloadFakeFbTenant = {
+    provider: 'FACEBOOK',
+    page_id: 'unconfigured-fb-page-999',
+    company_id: '33333333-3333-3333-3333-333333333333', // Fake tenant
+    external_user_id: 'fb-user-fake',
+    message_id: 'msg-fb-fake-tenant',
+    content: 'Tấn công giả mạo tenant',
+  };
+  const rawBodyFakeFb = JSON.stringify(payloadFakeFbTenant);
+  const hmacFakeFb = crypto.createHmac('sha256', testFbSecret).update(rawBodyFakeFb).digest('hex');
+
+  const reqPostFakeFb = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${hmacFakeFb}`,
+    },
+    body: rawBodyFakeFb,
+  });
+  const resPostFakeFb = await webhookPostHandler(reqPostFakeFb);
+  assert.strictEqual(resPostFakeFb.status, 403, 'Unconfigured Page ID with fake company_id must be rejected with 403');
+  const dataPostFakeFb = await resPostFakeFb.json();
+  assert.strictEqual(dataPostFakeFb.error, 'TENANT_NOT_CONFIGURED');
+  console.log('✓ PASS 2d-2: Fake company_id with unconfigured Facebook Page ID rejected with 403 TENANT_NOT_CONFIGURED (Fail-Closed)');
+
+  // 2d-3: Zalo webhook kèm company_id giả mạo nhưng OA ID không hợp lệ/chưa cấu hình -> Bị từ chối 403 TENANT_NOT_CONFIGURED (Fail-Closed)
+  process.env.ZALO_APP_SECRET = testZaloSecret;
+  const payloadFakeZaloTenant = {
+    provider: 'ZALO',
+    oa_id: 'unconfigured-zalo-oa-999',
+    company_id: '33333333-3333-3333-3333-333333333333', // Fake tenant
+    external_user_id: 'zalo-user-fake',
+    message_id: 'msg-zalo-fake-tenant',
+    content: 'Tấn công giả mạo Zalo tenant',
+  };
+  const rawBodyFakeZalo = JSON.stringify(payloadFakeZaloTenant);
+  const hmacFakeZalo = crypto.createHmac('sha256', testZaloSecret).update(rawBodyFakeZalo).digest('hex');
+
+  const reqPostFakeZalo = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'zalo',
+      'x-zalo-signature': hmacFakeZalo,
+    },
+    body: rawBodyFakeZalo,
+  });
+  const resPostFakeZalo = await webhookPostHandler(reqPostFakeZalo);
+  assert.strictEqual(resPostFakeZalo.status, 403, 'Unconfigured OA ID with fake company_id must be rejected with 403');
+  const dataPostFakeZalo = await resPostFakeZalo.json();
+  assert.strictEqual(dataPostFakeZalo.error, 'TENANT_NOT_CONFIGURED');
+  console.log('✓ PASS 2d-3: Fake company_id with unconfigured Zalo OA ID rejected with 403 TENANT_NOT_CONFIGURED (Fail-Closed)');
+
+  // ============================================================================
+  // SECTION 3: VALID WEBHOOK INGRESS & NORMALIZED INGRESS CONTRACT
+  // ============================================================================
+  console.log('\n--- Section 3: Valid Webhook Ingress & Normalized Contract ---');
+
+  // 3a. Valid Facebook Webhook Ingress with valid HMAC
+  const validHmacFb = crypto.createHmac('sha256', testFbSecret).update(rawBodyFb).digest('hex');
+  const reqPostValidFb = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${validHmacFb}`,
+    },
+    body: rawBodyFb,
+  });
+  const resPostValidFb = await webhookPostHandler(reqPostValidFb);
+  assert.strictEqual(resPostValidFb.status, 201, 'Valid webhook must return 201 Created');
+  const dataPostValidFb = await resPostValidFb.json();
+  assert.strictEqual(dataPostValidFb.success, true);
+  assert.strictEqual(dataPostValidFb.data.duplicate, false);
+  assert.strictEqual(dataPostValidFb.data.message_id, 'msg-fb-001');
+
+  // Verify conversation and message saved in store with correct company_id
+  const convsCompanyA = await InboxService.getConversations(testCompanyA);
+  assert.strictEqual(convsCompanyA.length, 1);
+  assert.strictEqual(convsCompanyA[0].company_id, testCompanyA);
+
+  const convsCompanyB = await InboxService.getConversations(testCompanyB);
+  assert.strictEqual(convsCompanyB.length, 0, 'Company B must have 0 conversations (Tenant Isolation)');
+
+  const convsSpoofed = await InboxService.getConversations('99999999-9999-9999-9999-999999999999');
+  assert.strictEqual(convsSpoofed.length, 0, 'Spoofed company_id in Facebook payload must be completely ignored');
+  console.log('✓ PASS 3a: Valid Facebook HMAC ingress successfully processed and saved with strict tenant isolation');
+
+  // 3b. Idempotency test (L1 RAM Cache): Re-send same message_id -> returns duplicate: true (200 OK)
+  const reqPostDuplicate = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${validHmacFb}`,
+    },
+    body: rawBodyFb,
+  });
+  const resPostDuplicate = await webhookPostHandler(reqPostDuplicate);
+  assert.strictEqual(resPostDuplicate.status, 200, 'Duplicate message must return 200 OK');
+  const dataPostDuplicate = await resPostDuplicate.json();
+  assert.strictEqual(dataPostDuplicate.success, true);
+  assert.strictEqual(dataPostDuplicate.data.duplicate, true);
+
+  // Verify no duplicate conversation or messages were created
+  const convsAfterDup = await InboxService.getConversations(testCompanyA);
+  assert.strictEqual(convsAfterDup.length, 1);
+  console.log('✓ PASS 3b: Idempotency verified: duplicate message_id detected via L1 cache, no duplicate records created');
+
+  // 3b-1. Durable Idempotency test: Xóa sạch hoàn toàn L1 RAM cache (mô phỏng process restart / crash / eviction)
+  // Gửi lại sự kiện trùng lặp -> Khẳng định hệ thống vẫn truy vấn CSDL và phát hiện trùng lặp bền vững (L2 Durable Invariant)
+  InboxIngressService.resetIngressCache();
+  assert.strictEqual(
+    InboxIngressService.isDuplicateEvent('msg-fb-001', testCompanyA, 'FACEBOOK'),
+    false,
+    'L1 RAM cache must be completely cleared after reset'
+  );
+
+  const reqPostDurableDup = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'facebook',
+      'x-hub-signature-256': `sha256=${validHmacFb}`,
+    },
+    body: rawBodyFb,
+  });
+  const resPostDurableDup = await webhookPostHandler(reqPostDurableDup);
+  assert.strictEqual(resPostDurableDup.status, 200, 'Durable duplicate must return 200 OK (not 201 Created)');
+  const dataPostDurableDup = await resPostDurableDup.json();
+  assert.strictEqual(dataPostDurableDup.success, true);
+  assert.strictEqual(dataPostDurableDup.data.duplicate, true, 'Must detect duplicate via durable persistence');
+  assert.strictEqual(dataPostDurableDup.data.message_id, 'msg-fb-001');
+  assert.strictEqual(dataPostDurableDup.data.conversation_id, convsCompanyA[0].id);
+  assert.strictEqual(dataPostDurableDup.data.customer_id, convsCompanyA[0].customer_id);
+
+  // Khẳng định kho lưu trữ không bị sinh thêm cuộc hội thoại hay tin nhắn thừa
+  const convsAfterDurable = await InboxService.getConversations(testCompanyA);
+  assert.strictEqual(convsAfterDurable.length, 1, 'Conversations count must remain 1');
+  const msgsAfterDurable = await InboxService.getMessagesByConversationId(
+    testCompanyA,
+    convsCompanyA[0].id,
+    'BOSS_ADMIN'
+  );
+  assert.strictEqual(msgsAfterDurable.length, 1, 'Messages count must remain 1 (no duplicate interaction created)');
+
+  // Khẳng định L1 cache đã được tự động nạp ngược lại từ kết quả truy vấn bền vững
+  assert.strictEqual(
+    InboxIngressService.isDuplicateEvent('msg-fb-001', testCompanyA, 'FACEBOOK'),
+    true,
+    'L1 cache must be backfilled from L2 durable match'
+  );
+  console.log('✓ PASS 3b-1: Durable Idempotency verified: duplicate detected via durable store across RAM reset, L1 backfilled');
+
+  // 3b-2. Mock Supabase Database Durable Idempotency (Direct SQL test)
+  // Khẳng định truy vấn CSDL chính xác theo (company_id, channel, external_ref) theo index UNIQUE Foundation
+  let queriedInteractionsTable = false;
+  let queriedExtRefValue = '';
+  let queriedCompanyId = '';
+  let queriedChannel = '';
+
+  const mockDbClient: any = {
+    from: (table: string) => {
+      if (table === 'interactions') {
+        queriedInteractionsTable = true;
+      }
+      return {
+        select: (_cols: string) => ({
+          eq: (col1: string, val1: string) => ({
+            eq: (col2: string, val2: string) => ({
+              eq: (col3: string, val3: string) => ({
+                maybeSingle: async () => {
+                  if (col1 === 'company_id') queriedCompanyId = val1;
+                  if (col2 === 'channel') queriedChannel = val2;
+                  if (col3 === 'external_ref') queriedExtRefValue = val3;
+                  return {
+                    data: {
+                      id: 'int-durable-sql-001',
+                      conversation_id: 'conv-durable-sql-001',
+                      customer_id: 'cust-durable-sql-001',
+                      channel: 'FACEBOOK',
+                      external_ref: val3,
+                    },
+                    error: null,
+                  };
+                },
+              }),
+            }),
+          }),
+        }),
+        insert: () => {
+          assert.fail('Should NOT insert when duplicate is found in DB!');
+        },
+      };
+    },
+  };
+
+  InboxIngressService.resetIngressCache();
+  const dbDurableResult = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb-user-db-999',
+      message_id: 'msg-sql-durable-999',
+      content: 'Tin nhắn kiểm thử SQL durable lookup',
+      timestamp: new Date().toISOString(),
+    },
+    mockDbClient
+  );
+
+  assert.strictEqual(dbDurableResult.success, true);
+  assert.strictEqual(dbDurableResult.duplicate, true, 'Must return duplicate = true from DB lookup');
+  assert.strictEqual(dbDurableResult.conversation_id, 'conv-durable-sql-001');
+  assert.strictEqual(dbDurableResult.customer_id, 'cust-durable-sql-001');
+  assert.strictEqual(queriedInteractionsTable, true, 'Must query interactions table in DB');
+  assert.strictEqual(queriedCompanyId, testCompanyA, 'Must query with company_id for Tenant Isolation');
+  assert.strictEqual(queriedChannel, 'FACEBOOK', 'Must query with channel for Tenant Isolation');
+  assert.strictEqual(queriedExtRefValue, 'msg-sql-durable-999', 'Must query by external_ref matching message_id');
+  console.log('✓ PASS 3b-2: Mock DB Durable Idempotency verified: queried public.interactions by (company_id, channel, external_ref)');
+
+  // 3c. Valid Zalo OA Webhook Ingress
+  process.env.ZALO_APP_SECRET = testZaloSecret;
+
+  const samplePayloadZalo = {
+    provider: 'ZALO',
+    oa_id: 'zalo-oa-202',
+    company_id: '99999999-9999-9999-9999-999999999999', // Giả mạo company_id - Server PHẢI bỏ qua hoàn toàn!
+    external_user_id: 'zalo-user-202',
+    sender_name: 'Chị Lan Zalo',
+    message_id: 'msg-zalo-002',
+    content: 'Tư vấn cửa chống ngập tự động cho gara ô tô',
+  };
+  const rawBodyZalo = JSON.stringify(samplePayloadZalo);
+  const validHmacZalo = crypto.createHmac('sha256', testZaloSecret).update(rawBodyZalo).digest('hex');
+
+  const reqPostValidZalo = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'zalo',
+      'x-zalo-signature': validHmacZalo,
+    },
+    body: rawBodyZalo,
+  });
+  const resPostValidZalo = await webhookPostHandler(reqPostValidZalo);
+  assert.strictEqual(resPostValidZalo.status, 201);
+  const dataPostValidZalo = await resPostValidZalo.json();
+  assert.strictEqual(dataPostValidZalo.success, true);
+  assert.strictEqual(dataPostValidZalo.data.channel, 'zalo');
+
+  // Verify Company B now has 1 conversation, separate from Company A
+  const convsCompanyBAfter = await InboxService.getConversations(testCompanyB);
+  assert.strictEqual(convsCompanyBAfter.length, 1);
+  assert.strictEqual(convsCompanyBAfter[0].company_id, testCompanyB);
+  assert.strictEqual(convsCompanyBAfter[0].channel, 'zalo');
+
+  const convsSpoofedZalo = await InboxService.getConversations('99999999-9999-9999-9999-999999999999');
+  assert.strictEqual(convsSpoofedZalo.length, 0, 'Spoofed company_id in Zalo payload must be completely ignored');
+  console.log('✓ PASS 3c: Valid Zalo OA HMAC ingress processed and isolated to Company B');
+
+  // 3d. Direct ingestNormalizedEvent programmatic contract test (For Member 3 & 4)
+  const directEvent = {
+    provider: 'FACEBOOK' as const,
+    company_id: testCompanyA,
+    external_user_id: 'fb-user-direct-303',
+    sender_name: 'Khách hàng Direct Test',
+    message_id: 'msg-direct-003',
+    content: 'Tin nhắn gửi trực tiếp qua contract NormalizedIngressEvent',
+    timestamp: new Date().toISOString(),
+  };
+  const directResult = await InboxIngressService.ingestNormalizedEvent(directEvent);
+  assert.strictEqual(directResult.success, true);
+  assert.strictEqual(directResult.duplicate, false);
+  assert.strictEqual(directResult.message_id, 'msg-direct-003');
+  console.log('✓ PASS 3d: Direct ingestNormalizedEvent contract functions cleanly for Member 3 & Member 4');
+
+  // 3e. SYSTEM Provider Webhook Ingress (Nội bộ): Cho phép company_id khi có secret xác thực
+  const samplePayloadSystem = {
+    provider: 'SYSTEM',
+    company_id: testCompanyA,
+    external_user_id: 'sys-user-001',
+    message_id: 'msg-sys-001',
+    content: 'Tin nhắn nội bộ qua System Provider',
+  };
+  const rawBodySystem = JSON.stringify(samplePayloadSystem);
+  const reqPostValidSystem = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'system',
+      'x-webhook-secret': testSystemSecret,
+    },
+    body: rawBodySystem,
+  });
+  const resPostValidSystem = await webhookPostHandler(reqPostValidSystem);
+  assert.strictEqual(resPostValidSystem.status, 201, 'Valid SYSTEM webhook must return 201 Created');
+  const dataPostValidSystem = await resPostValidSystem.json();
+  assert.strictEqual(dataPostValidSystem.success, true);
+
+  // SYSTEM webhook thiếu company_id phải trả về 400 MISSING_COMPANY_ID
+  const samplePayloadSystemNoTenant = {
+    provider: 'SYSTEM',
+    external_user_id: 'sys-user-002',
+    message_id: 'msg-sys-002',
+    content: 'Tin nhắn nội bộ thiếu company_id',
+  };
+  const rawBodySystemNoTenant = JSON.stringify(samplePayloadSystemNoTenant);
+  const reqPostSystemNoTenant = new NextRequest('http://localhost:3000/api/inbox/webhook', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel': 'system',
+      'x-webhook-secret': testSystemSecret,
+    },
+    body: rawBodySystemNoTenant,
+  });
+  const resPostSystemNoTenant = await webhookPostHandler(reqPostSystemNoTenant);
+  assert.strictEqual(resPostSystemNoTenant.status, 400, 'SYSTEM webhook without company_id must return 400');
+  const dataPostSystemNoTenant = await resPostSystemNoTenant.json();
+  assert.strictEqual(dataPostSystemNoTenant.error, 'MISSING_COMPANY_ID');
+  console.log('✓ PASS 3e: SYSTEM Provider accepts valid company_id with secret and fails closed when missing');
+
+  // ============================================================================
+  // SECTION 4: ELIMINATION OF DEFAULT TENANT FALLBACK (FAIL-CLOSED VERIFICATION)
+  // Tuân thủ Lỗi P1 (Mục 10): Xóa bỏ hoàn toàn DEFAULT_INBOX_COMPANY_ID fallback
+  // ============================================================================
+  console.log('\n--- Section 4: Elimination of DEFAULT_INBOX_COMPANY_ID Fallback ---');
+
+  // 4a. addInboundMessage without company_id must throw Fail-Closed error immediately
+  let errorAddNoTenant: Error | null = null;
+  try {
+    await InboxService.addInboundMessage({
+      channel: 'facebook',
+      senderId: 'fb-user-fail-closed',
+      content: 'Tin nhắn không kèm company_id',
+    } as any);
+  } catch (err) {
+    errorAddNoTenant = err as Error;
+  }
+  assert(errorAddNoTenant !== null, 'addInboundMessage must throw error when company_id is missing');
+  assert.strictEqual(
+    errorAddNoTenant.message,
+    'company_id là bắt buộc để xử lý tin nhắn và bảo vệ cách ly tenant (Fail-Closed).'
+  );
+  console.log('✓ PASS 4a: addInboundMessage without company_id throws Fail-Closed exception (no default tenant fallback)');
+
+  // 4b. addInboundMessage with invalid UUID company_id must throw Fail-Closed error
+  let errorAddInvalidUuid: Error | null = null;
+  try {
+    await InboxService.addInboundMessage({
+      channel: 'facebook',
+      senderId: 'fb-user-fail-closed',
+      company_id: 'invalid-not-uuid',
+      content: 'Tin nhắn với invalid company_id',
+    });
+  } catch (err) {
+    errorAddInvalidUuid = err as Error;
+  }
+  assert(errorAddInvalidUuid !== null, 'addInboundMessage must throw error when company_id is invalid UUID');
+  assert.strictEqual(
+    errorAddInvalidUuid.message,
+    'company_id là bắt buộc để xử lý tin nhắn và bảo vệ cách ly tenant (Fail-Closed).'
+  );
+  console.log('✓ PASS 4b: addInboundMessage with invalid UUID company_id throws Fail-Closed exception');
+
+  // 4c. ingestNormalizedEvent without company_id returns MISSING_COMPANY_ID
+  const resultIngestNoTenant = await InboxIngressService.ingestNormalizedEvent({
+    provider: 'FACEBOOK',
+    company_id: '',
+    external_user_id: 'fb-user-direct-999',
+    message_id: 'msg-direct-no-tenant',
+    content: 'Tin nhắn thiếu company_id trong normalized event',
+    timestamp: new Date().toISOString(),
+  });
+  assert.strictEqual(resultIngestNoTenant.success, false);
+  assert.strictEqual(resultIngestNoTenant.error, 'MISSING_COMPANY_ID');
+  console.log('✓ PASS 4c: ingestNormalizedEvent with empty company_id returns MISSING_COMPANY_ID');
+
+  // 4d. FacebookAdapter & ZaloAdapter deriveTenant must NOT fall back to DEFAULT_COMPANY_ID
+  process.env.FB_PAGE_ID = 'page-test-no-tenant';
+  delete process.env.FB_COMPANY_ID;
+  (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
+  await assert.rejects(
+    async () => FacebookAdapter.deriveTenant({ page_id: 'page-test-no-tenant' }),
+    (err: any) => err.code === 'TENANT_NOT_CONFIGURED',
+    'FacebookAdapter must throw TENANT_NOT_CONFIGURED and NOT fall back to DEFAULT_COMPANY_ID'
+  );
+  assert.strictEqual(deriveFacebookTenant('page-test-no-tenant'), null);
+  delete (process.env as any).DEFAULT_COMPANY_ID;
+  delete process.env.FB_PAGE_ID;
+
+  process.env.ZALO_OA_ID = 'oa-test-no-tenant';
+  delete process.env.ZALO_COMPANY_ID;
+  (process.env as any).DEFAULT_COMPANY_ID = '99999999-9999-9999-9999-999999999999';
+  await assert.rejects(
+    async () => ZaloAdapter.deriveTenant({ oa_id: 'oa-test-no-tenant' }),
+    (err: any) => err.code === 'TENANT_NOT_CONFIGURED',
+    'ZaloAdapter must throw TENANT_NOT_CONFIGURED and NOT fall back to DEFAULT_COMPANY_ID'
+  );
+  assert.strictEqual(deriveZaloTenant('oa-test-no-tenant'), null);
+  delete (process.env as any).DEFAULT_COMPANY_ID;
+  delete process.env.ZALO_OA_ID;
+  console.log('✓ PASS 4d: FacebookAdapter & ZaloAdapter deriveTenant never fall back to DEFAULT_COMPANY_ID');
+
+  // 4e. ProviderAdapterRegistry: Verifying Port & Registry Architecture
+  assert(ProviderAdapterRegistry.has('FACEBOOK'), 'Registry must have FACEBOOK adapter registered');
+  assert(ProviderAdapterRegistry.has('ZALO'), 'Registry must have ZALO adapter registered');
+  assert(ProviderAdapterRegistry.has('SYSTEM'), 'Registry must have SYSTEM adapter registered');
+  assert.strictEqual(ProviderAdapterRegistry.get('FACEBOOK'), FacebookAdapter);
+  assert.strictEqual(ProviderAdapterRegistry.get('ZALO'), ZaloAdapter);
+  console.log('✓ PASS 4e: ProviderAdapterRegistry dynamically resolves ports with clean Member 2/3/4 boundaries');
+
+  // ============================================================================
+  // SECTION 5: ATOMIC INBOUND PERSISTENCE & TRANSACTION ROLLBACK (P0 - Item 2)
+  // Tuân thủ Lỗi P0 số 2: record_inbound_interaction_atomic & Transaction Rollback
+  // ============================================================================
+  console.log('\n--- Section 5: Atomic Inbound Persistence & Transaction Rollback ---');
+
+  delete process.env.DEMO_MODE; // Non-demo production mode
+
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  const mockDbState = {
+    conversations: [] as any[],
+    interactions: [] as any[],
+    raw_contents: [] as any[],
+    identities: [] as any[],
+    customers: [] as any[],
+    stage_histories: [] as any[],
+  };
+
+  let simulateRawInsertError = false;
+  let customerInsertAttempted = false;
+  const testAtomicCustomerId = 'c0000001-0000-4000-8000-000000000001';
+
+  const mockAtomicClient: any = {
+    from: (table: string) => {
+      const createQueryBuilder = (filters: Record<string, string> = {}) => {
+        const builder: any = {
+          eq: (col: string, val: string) => {
+            return createQueryBuilder({ ...filters, [col]: val });
+          },
+          maybeSingle: async () => {
+            if (table === 'identities') {
+              const found = mockDbState.identities.find(
+                (i) =>
+                  (!filters.company_id || i.company_id === filters.company_id) &&
+                  (!filters.channel || i.channel === filters.channel) &&
+                  (!filters.external_id || i.external_id === filters.external_id)
+              );
+              return { data: found || null, error: null };
+            }
+            if (table === 'interactions') {
+              const found = mockDbState.interactions.find(
+                (i) =>
+                  (!filters.company_id || i.company_id === filters.company_id) &&
+                  (!filters.channel || i.channel === filters.channel) &&
+                  (!filters.external_ref || i.external_ref === filters.external_ref)
+              );
+              return { data: found || null, error: null };
+            }
+            if (table === 'customers') {
+              const found = mockDbState.customers.find((c) => !filters.id || c.id === filters.id);
+              if (found) {
+                return { data: found, error: null };
+              }
+              if (filters.id && filters.id !== testAtomicCustomerId) {
+                return { data: null, error: null };
+              }
+              return {
+                data: { id: testAtomicCustomerId, name: 'Khách Test Atomic', customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+                error: null,
+              };
+            }
+            return { data: null, error: null };
+          },
+        };
+        return builder;
+      };
+
+      return {
+        select: (_cols?: string) => createQueryBuilder(),
+        insert: (record: any) => {
+          if (table === 'customers') {
+            customerInsertAttempted = true;
+            mockDbState.customers.push(record);
+          } else if (table === 'identities') {
+            mockDbState.identities.push(record);
+          } else if (table === 'customer_stage_histories') {
+            mockDbState.stage_histories.push(record);
+          }
+          return {
+            select: () => ({
+              maybeSingle: async () => ({
+                data: { id: record.id || testAtomicCustomerId, name: record.name, customer_code: 'KH-000001', stage: 'LEAD_NEW' },
+                error: null,
+              }),
+            }),
+            then: (resolve: any) => resolve({ error: null, data: record }),
+          };
+        },
+      };
+    },
+    rpc: async (fnName: string, params: any) => {
+      assert(
+        fnName === 'ingest_provider_message_atomic' || fnName === 'record_inbound_interaction_atomic',
+        `Must call RPC ingest_provider_message_atomic (called ${fnName})`
+      );
+      assert.strictEqual(params.p_company_id, testCompanyA);
+
+      // 1. Kiểm tra duplicate external_ref
+      if (params.p_external_ref) {
+        const existing = mockDbState.interactions.find(
+          (i) => i.company_id === params.p_company_id && i.channel === params.p_channel && i.external_ref === params.p_external_ref
+        );
+        if (existing) {
+          // Trả về duplicate = true, KHÔNG tăng unread_count, KHÔNG thay đổi conversations
+          return {
+            data: [{
+              conversation_id: existing.conversation_id,
+              interaction_id: existing.id,
+              customer_id: existing.customer_id,
+              is_duplicate: true,
+            }],
+            error: null,
+          };
+        }
+      }
+
+      // 2. Mô phỏng Transaction Rollback nếu raw content insert gặp lỗi
+      if (simulateRawInsertError) {
+        // Rollback: Zero changes to conversations, interactions, raw_contents
+        return {
+          data: null,
+          error: new Error('Postgres raw_contents disk space full (Database Transaction Rollback)'),
+        };
+      }
+
+      // 3. Định danh khách hàng 4 bậc bên trong RPC
+      let resolvedCustomerId = params.p_customer_id;
+      if (!resolvedCustomerId && params.p_external_user_id) {
+        const existingIdentity = mockDbState.identities.find(
+          (i) => i.company_id === params.p_company_id && i.channel === params.p_channel && i.external_id === params.p_external_user_id
+        );
+        if (existingIdentity) {
+          resolvedCustomerId = existingIdentity.customer_id;
+        } else {
+          // Khách mới qua social channel chưa có SĐT
+          resolvedCustomerId = crypto.randomUUID();
+          customerInsertAttempted = true;
+          mockDbState.customers.push({
+            id: resolvedCustomerId,
+            company_id: params.p_company_id,
+            name: params.p_sender_name || 'Khách hàng ' + params.p_channel,
+            customer_code: 'KH-000001',
+            stage: 'LEAD_NEW',
+          });
+          mockDbState.identities.push({
+            id: `id-${Date.now()}-${mockDbState.identities.length}`,
+            company_id: params.p_company_id,
+            customer_id: resolvedCustomerId,
+            channel: params.p_channel,
+            external_id: params.p_external_user_id,
+            verified: false,
+          });
+        }
+      } else if (!resolvedCustomerId && params.p_sender_phone) {
+        resolvedCustomerId = crypto.randomUUID();
+        customerInsertAttempted = true;
+        mockDbState.customers.push({
+          id: resolvedCustomerId,
+          company_id: params.p_company_id,
+          name: params.p_sender_name || 'Khách hàng ' + params.p_channel,
+          phone: params.p_sender_phone,
+        });
+      }
+
+      if (!resolvedCustomerId) {
+        return {
+          data: null,
+          error: { message: 'Inbound customer resolution failed: Fail-Closed' },
+        };
+      }
+
+      // 4. Khởi tạo/cập nhật conversation & interaction atomically
+      let conv = mockDbState.conversations.find(
+        (c) => c.company_id === params.p_company_id && c.channel === params.p_channel && c.customer_id === resolvedCustomerId
+      );
+      if (!conv) {
+        conv = {
+          id: `conv-atomic-${mockDbState.conversations.length + 1}`,
+          company_id: params.p_company_id,
+          customer_id: resolvedCustomerId,
+          channel: params.p_channel,
+          unread_count: 1,
+          status: 'OPEN',
+          last_message_at: new Date().toISOString(),
+        };
+        mockDbState.conversations.push(conv);
+      } else {
+        conv.unread_count += 1;
+        conv.last_message_at = new Date().toISOString();
+      }
+
+      const intId = `int-${Date.now()}-${mockDbState.interactions.length + 1}`;
+      const interaction = {
+        id: intId,
+        company_id: params.p_company_id,
+        customer_id: resolvedCustomerId,
+        conversation_id: conv.id,
+        channel: params.p_channel,
+        external_ref: params.p_external_ref,
+        sanitized_content: params.p_sanitized_content,
+        direction: 'INBOUND',
+      };
+      mockDbState.interactions.push(interaction);
+
+      mockDbState.raw_contents.push({
+        interaction_id: intId,
+        company_id: params.p_company_id,
+        raw_content: params.p_raw_content,
+      });
+
+      return {
+        data: [{
+          conversation_id: conv.id,
+          interaction_id: intId,
+          customer_id: resolvedCustomerId,
+          is_duplicate: false,
+        }],
+        error: null,
+      };
+    },
+  };
+
+  // 5a. Happy path inbound message via atomic RPC
+  const inboundRes1 = await InboxService.addInboundMessage(
+    {
+      channel: 'facebook',
+      senderId: 'fb-user-atomic-001',
+      company_id: testCompanyA,
+      content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
+      externalMessageId: 'msg-ext-atomic-001',
+      customerId: testAtomicCustomerId,
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(inboundRes1.isNewConversation, true);
+  assert.strictEqual(mockDbState.conversations.length, 1);
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1);
+  assert.strictEqual(mockDbState.interactions.length, 1);
+  assert.strictEqual(mockDbState.raw_contents.length, 1);
+  console.log('✓ PASS 5a: Happy path inbound message commits conversation, interaction, and raw_content atomically');
+
+  // 5b. Duplicate concurrent/durable inbound webhook: RPC recognizes duplicate and does NOT increment unread_count
+  const inboundRes2 = await InboxService.addInboundMessage(
+    {
+      channel: 'facebook',
+      senderId: 'fb-user-atomic-001',
+      company_id: testCompanyA,
+      content: 'Tin nhắn inbound kiểm thử atomic 0912345678',
+      externalMessageId: 'msg-ext-atomic-001', // Cùng external_ref
+      customerId: testAtomicCustomerId,
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(inboundRes2.isNewConversation, false);
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1, 'unread_count must NOT be incremented on duplicate');
+  assert.strictEqual(mockDbState.interactions.length, 1, 'No duplicate interaction record inserted');
+  assert.strictEqual(mockDbState.raw_contents.length, 1, 'No duplicate raw content record inserted');
+  console.log('✓ PASS 5b: Duplicate external_ref returns is_duplicate = true without mutating conversations or unread_count');
+
+  // 5c. Atomic Rollback: When raw content insert fails, entire transaction rolls back
+  simulateRawInsertError = true;
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'facebook',
+          senderId: 'fb-user-atomic-002',
+          company_id: testCompanyA,
+          content: 'Tin nhắn gây lỗi rollback',
+          externalMessageId: 'msg-ext-atomic-fail',
+          customerId: testAtomicCustomerId,
+        },
+        mockAtomicClient
+      );
+    },
+    /Không thể tiếp nhận tin nhắn inbound: Thao tác Atomic RPC thất bại \(Fail-Closed\)/,
+    'Must fail closed when RPC transaction rolls back'
+  );
+
+  // Assert zero changes left behind
+  assert.strictEqual(mockDbState.conversations[0].unread_count, 1, 'unread_count remains unchanged on failure');
+  assert.strictEqual(mockDbState.interactions.length, 1, 'Zero orphan interaction committed');
+  assert.strictEqual(mockDbState.raw_contents.length, 1, 'Zero raw content committed');
+  console.log('✓ PASS 5c: Inbound atomic transaction rollback leaves zero partial records committed');
+  simulateRawInsertError = false;
+
+  // 5d. Customer Resolution Fail-Closed: Fail immediately when customer cannot be resolved (no direct insert fallback)
+  customerInsertAttempted = false;
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'facebook',
+          senderId: 'fb-user-atomic-no-cust',
+          company_id: testCompanyA,
+          content: 'Tin nhắn không có khách hàng hợp lệ',
+          externalMessageId: 'msg-ext-atomic-no-cust',
+        },
+        mockAtomicClient
+      );
+    },
+    /Inbound customer resolution failed: Fail-Closed/,
+    'Must fail closed immediately when customer cannot be resolved'
+  );
+  assert.strictEqual(customerInsertAttempted, false, 'Must NOT attempt direct insert into customers table in production');
+  console.log('✓ PASS 5d: Inbound customer resolution fails closed with zero direct customer inserts');
+
+  // 5e. Ingress Idempotency Authority: Must NEVER query private schema (interaction_raw_contents)
+  let schemaCalled = false;
+  const mockIngressClient: any = {
+    from: (_table: string) => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  id: 'int-existing-1',
+                  conversation_id: 'conv-existing-1',
+                  customer_id: testAtomicCustomerId,
+                  channel: 'facebook',
+                  external_ref: 'msg-ext-dup-ingress',
+                },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+    schema: (schemaName: string) => {
+      schemaCalled = true;
+      throw new Error(`Forbidden: Direct access to schema ${schemaName} is prohibited.`);
+    },
+    rpc: async () => ({ data: null, error: null }),
+  };
+
+  const ingressDupResult = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb-user-dup-ingress',
+      message_id: 'msg-ext-dup-ingress',
+      content: 'Tin nhắn idempotency check',
+      timestamp: new Date().toISOString(),
+    },
+    mockIngressClient
+  );
+  assert.strictEqual(ingressDupResult.duplicate, true);
+  assert.strictEqual(schemaCalled, false, 'Must NOT call adminClient.schema() in findExistingInteractionDurable');
+  console.log('✓ PASS 5e: Ingress idempotency checks public.interactions without querying private schema');
+
+  // 5f. Webhook Error Boundary Sanitization: 500 response with trace_id and NO internal error leakage
+  const faultyRequest = {
+    headers: new Headers({
+      'content-type': 'application/json',
+    }),
+    text: () => Promise.reject(new Error('Internal database socket crash / sensitive credential stack trace')),
+  } as unknown as NextRequest;
+
+  const resErrorSanitized = await webhookPostHandler(faultyRequest);
+  assert.strictEqual(resErrorSanitized.status, 500);
+  const jsonErrorSanitized = await resErrorSanitized.json();
+  assert.strictEqual(jsonErrorSanitized.success, false);
+  assert.strictEqual(jsonErrorSanitized.error, 'WEBHOOK_PROCESSING_FAILED');
+  assert.strictEqual(jsonErrorSanitized.message, 'Không thể xử lý dữ liệu webhook.');
+  assert(typeof jsonErrorSanitized.trace_id === 'string' && jsonErrorSanitized.trace_id.length > 0, 'Must return trace_id');
+  assert(!JSON.stringify(jsonErrorSanitized).includes('Internal database socket crash'), 'Must NOT leak internal error message');
+  console.log('✓ PASS 5f: Webhook Error Boundary sanitizes 500 errors and returns trace_id');
+
+  // 5g. First-contact Facebook/Zalo without phone creates customer, identity and ingests message
+  customerInsertAttempted = false;
+  const firstContactRes = await InboxService.addInboundMessage(
+    {
+      channel: 'FACEBOOK' as any,
+      senderId: 'fb_user_first_contact_999',
+      externalUserId: 'fb_user_first_contact_999',
+      senderName: 'Nguyễn Văn Test',
+      company_id: testCompanyA,
+      content: 'Chào shop tư vấn giúp tôi cửa chống ngập',
+    },
+    mockAtomicClient
+  );
+
+  assert(firstContactRes.conversation.customer_id, 'Must return valid customer_id');
+  assert(UUID_REGEX.test(firstContactRes.conversation.customer_id), 'Returned customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Must create new customer in customers table');
+
+  const createdIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_user_first_contact_999');
+  assert(createdIdentity, 'Must create identity record for first contact');
+  assert.strictEqual(createdIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdIdentity.customer_id, firstContactRes.conversation.customer_id, 'Identity customer_id must match resolved customer');
+  assert.strictEqual(createdIdentity.channel, 'FACEBOOK');
+  assert.strictEqual(createdIdentity.company_id, testCompanyA);
+
+  const createdConv = mockDbState.conversations.find((c) => c.customer_id === firstContactRes.conversation.customer_id);
+  assert(createdConv, 'Must create conversation for first-contact customer');
+  assert.strictEqual(createdConv.channel, 'FACEBOOK');
+
+  const createdInteraction = mockDbState.interactions.find((i) => i.customer_id === firstContactRes.conversation.customer_id);
+  assert(createdInteraction, 'Must create interaction for first-contact message');
+  console.log('✓ PASS 5g: First-contact Facebook/Zalo without phone creates customer, identity and ingests message');
+
+  // 5h. Inbound message with unknown identity and no identifier fails closed
+  await assert.rejects(
+    async () => {
+      await InboxService.addInboundMessage(
+        {
+          channel: 'FACEBOOK' as any,
+          senderId: 'anonymous_sender_no_ident',
+          company_id: testCompanyA,
+          content: 'Tin nhắn không có bất kỳ thông tin định danh nào',
+        },
+        mockAtomicClient
+      );
+    },
+    /Inbound customer resolution failed: Fail-Closed/,
+    'Payload without customerId, externalUserId, and senderPhone must fail closed'
+  );
+  console.log('✓ PASS 5h: Inbound message with unknown identity and no identifier fails closed');
+
+  // 5i. Ingress wiring test: ingestNormalizedEvent forwards external_user_id to addInboundMessage
+  customerInsertAttempted = false;
+  const ingressFirstContact = await InboxIngressService.ingestNormalizedEvent(
+    {
+      provider: 'FACEBOOK',
+      company_id: testCompanyA,
+      external_user_id: 'fb_user_via_ingress_777',
+      sender_name: 'Khách Ingress Mới',
+      message_id: 'msg-ingress-first-contact-777',
+      content: 'Chào shop từ Facebook Ingress',
+      timestamp: new Date().toISOString(),
+    },
+    mockAtomicClient
+  );
+
+  assert.strictEqual(ingressFirstContact.success, true);
+  assert(ingressFirstContact.customer_id, 'Ingress must resolve and return customer_id');
+  assert(UUID_REGEX.test(ingressFirstContact.customer_id), 'customer_id must be valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Must create customer record via ingress wiring');
+  const ingressIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_user_via_ingress_777');
+  assert(ingressIdentity, 'Must create identity record from external_user_id passed via ingestNormalizedEvent');
+  assert.strictEqual(ingressIdentity.verified, false);
+  assert.strictEqual(ingressIdentity.customer_id, ingressFirstContact.customer_id);
+  console.log('✓ PASS 5i: ingestNormalizedEvent wires external_user_id to addInboundMessage, successfully resolving first-contact');
+
+  // 5j. Integration: ingestNormalizedEvent for first-contact Facebook & Zalo without phone successfully creates customer, identity and interaction
+  // Facebook first-contact
+  customerInsertAttempted = false;
+  const fbFirstContactEvent: NormalizedIngressEvent = {
+    provider: 'FACEBOOK',
+    company_id: testCompanyA,
+    external_user_id: 'fb_psid_real_first_contact_888',
+    message_id: 'fb_mid_888',
+    sender_name: 'Khách Hàng Facebook Mới',
+    sender_phone: undefined,
+    content: 'Chào shop, tư vấn giúp em',
+    timestamp: new Date().toISOString(),
+  };
+
+  const fbRes = await InboxIngressService.ingestNormalizedEvent(fbFirstContactEvent, mockAtomicClient);
+  assert.strictEqual(fbRes.success, true, 'Facebook first contact must succeed');
+  assert(fbRes.customer_id, 'Facebook customer_id must be resolved');
+  assert(UUID_REGEX.test(fbRes.customer_id), 'Facebook customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Facebook first contact must create new customer in mock state');
+
+  const createdFbIdentity = mockDbState.identities.find((i) => i.external_id === 'fb_psid_real_first_contact_888');
+  assert(createdFbIdentity, 'Must create identity record for Facebook first contact');
+  assert.strictEqual(createdFbIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdFbIdentity.customer_id, fbRes.customer_id, 'Identity customer_id must match returned customer_id');
+  assert.strictEqual(createdFbIdentity.channel, 'FACEBOOK');
+  assert.strictEqual(createdFbIdentity.company_id, testCompanyA);
+
+  const createdFbConv = mockDbState.conversations.find((c) => c.customer_id === fbRes.customer_id);
+  assert(createdFbConv, 'Must create conversation for Facebook first contact');
+  assert.strictEqual(createdFbConv.channel, 'FACEBOOK');
+
+  const createdFbInteraction = mockDbState.interactions.find((i) => i.customer_id === fbRes.customer_id);
+  assert(createdFbInteraction, 'Must create interaction for Facebook first contact');
+
+  // Zalo first-contact
+  customerInsertAttempted = false;
+  const zaloFirstContactEvent: NormalizedIngressEvent = {
+    provider: 'ZALO',
+    company_id: testCompanyA,
+    external_user_id: 'zalo_uid_real_first_contact_999',
+    message_id: 'zalo_mid_999',
+    sender_name: 'Khách Hàng Zalo Mới',
+    sender_phone: undefined,
+    content: 'Chào shop, em cần tư vấn lắp cửa chống ngập',
+    timestamp: new Date().toISOString(),
+  };
+
+  const zaloRes = await InboxIngressService.ingestNormalizedEvent(zaloFirstContactEvent, mockAtomicClient);
+  assert.strictEqual(zaloRes.success, true, 'Zalo first contact must succeed');
+  assert(zaloRes.customer_id, 'Zalo customer_id must be resolved');
+  assert(UUID_REGEX.test(zaloRes.customer_id), 'Zalo customer_id must be a valid UUID');
+  assert.strictEqual(customerInsertAttempted, true, 'Zalo first contact must create new customer in mock state');
+
+  const createdZaloIdentity = mockDbState.identities.find((i) => i.external_id === 'zalo_uid_real_first_contact_999');
+  assert(createdZaloIdentity, 'Must create identity record for Zalo first contact');
+  assert.strictEqual(createdZaloIdentity.verified, false, 'Identity verified must be false');
+  assert.strictEqual(createdZaloIdentity.customer_id, zaloRes.customer_id, 'Identity customer_id must match returned customer_id');
+  assert.strictEqual(createdZaloIdentity.channel, 'ZALO');
+  assert.strictEqual(createdZaloIdentity.company_id, testCompanyA);
+
+  const createdZaloConv = mockDbState.conversations.find((c) => c.customer_id === zaloRes.customer_id);
+  assert(createdZaloConv, 'Must create conversation for Zalo first contact');
+  assert.strictEqual(createdZaloConv.channel, 'ZALO');
+
+  const createdZaloInteraction = mockDbState.interactions.find((i) => i.customer_id === zaloRes.customer_id);
+  assert(createdZaloInteraction, 'Must create interaction for Zalo first contact');
+
+  console.log('✓ PASS 5j: Integration: ingestNormalizedEvent for first-contact Facebook & Zalo without phone successfully creates customer, identity and interaction');
+
+  // Restore DEMO_MODE for downstream
+  process.env.DEMO_MODE = 'true';
+
+  console.log('\n======================================================================');
+  console.log('ALL P0 & P1 WEBHOOK FAIL-CLOSED TESTS PASSED SUCCESSFULLY! (100%)');
+  console.log('======================================================================\n');
+}
+
+runWebhookFailClosedTests().catch((err) => {
+  console.error('TEST SUITE FAILED:', err);
+  process.exit(1);
+});
