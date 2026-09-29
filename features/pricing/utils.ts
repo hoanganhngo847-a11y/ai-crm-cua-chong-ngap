@@ -1,41 +1,56 @@
-export function calculatePrice(measurements: { width?: number; height?: number; [key: string]: any }, pricingPolicy: any) {
+export interface PriceCalculationResult {
+  status: 'CALCULATED' | 'NEED_INFO';
+  amount: number | null;
+  missing_fields: string[];
+}
+
+/**
+ * Pure price calculation engine deriving strictly from policy price_rules.
+ * Invariant: Never guesses missing dimensions or pricing rules.
+ */
+export function calculatePrice(
+  measurements: Record<string, unknown>,
+  pricingPolicy: {
+    price_rules?: Record<string, unknown>;
+    conditions?: Record<string, unknown>;
+  } | null | undefined
+): PriceCalculationResult {
   const missingFields: string[] = [];
-  
-  if (measurements.width === undefined || measurements.width === null) {
+
+  const width = measurements?.width;
+  if (width === undefined || width === null || typeof width !== 'number' || width <= 0) {
     missingFields.push('width');
   }
-  if (measurements.height === undefined || measurements.height === null) {
+
+  const height = measurements?.height;
+  if (height === undefined || height === null || typeof height !== 'number' || height <= 0) {
     missingFields.push('height');
   }
 
-  // Nếu thiếu thông số quan trọng, tuyệt đối không tự đoán giá hay tính bừa.
+  const basePricePerSqm = pricingPolicy?.price_rules?.base_price_per_sqm;
+  if (
+    basePricePerSqm === undefined ||
+    basePricePerSqm === null ||
+    typeof basePricePerSqm !== 'number' ||
+    basePricePerSqm <= 0
+  ) {
+    missingFields.push('base_price_per_sqm');
+  }
+
   if (missingFields.length > 0) {
     return {
       status: 'NEED_INFO',
       amount: null,
-      missing_fields: missingFields
+      missing_fields: missingFields,
     };
   }
 
-  const basePricePerSqm = pricingPolicy?.price_rules?.base_price_per_sqm;
-  
-  if (basePricePerSqm === undefined || basePricePerSqm === null) {
-    missingFields.push('base_price_per_sqm');
-    return {
-      status: 'NEED_INFO',
-      amount: null,
-      missing_fields: missingFields
-    };
-  }
-  
-  const widthInMeters = measurements.width;
-  const heightInMeters = measurements.height;
-  const area = widthInMeters * heightInMeters;
-  const totalAmount = area * basePricePerSqm;
+  const area = (width as number) * (height as number);
+  const totalAmount = Math.round(area * (basePricePerSqm as number) * 100) / 100;
 
   return {
     status: 'CALCULATED',
     amount: totalAmount,
-    missing_fields: []
+    missing_fields: [],
   };
 }
