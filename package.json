@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
-    "test:zalo": "tsx --conditions=react-server tests/zalo/quick_run_all.ts",
-    "test:zalo:inbox": "tsx --conditions=react-server tests/zalo/demo_webhook_and_reply.ts",
+    "test:zalo": "tsx --conditions=react-server tests/zalo/zalo_pglite.test.ts",
     "test:survey": "tsx --test features/survey/__tests__/survey.service.test.ts features/survey/__tests__/hardening.test.ts features/survey/__tests__/database.test.ts",
     "test:ai-analysis": "tsx --conditions=react-server tests/ai-analysis/ai-analysis.test.ts",
     "test:sales-style": "tsx --conditions=react-server tests/sales-style/sales-style.test.ts",
@@ -23,7 +22,8 @@
     "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
-    "test": "npm run test:auth && npm run test:security && npm run test:survey"
+    "test": "npm run test:auth && npm run test:security && npm run test:survey",
+    "test:zalo:db": "tsx --conditions=react-server tests/zalo/zalo_supabase.integration.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
@@ -36,6 +36,7 @@
     "zod": "^4.6.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.16",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

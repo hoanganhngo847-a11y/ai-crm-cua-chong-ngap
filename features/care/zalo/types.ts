@@ -18,13 +18,15 @@ export type CareAudienceGroup =
 
 export type CareDeliveryStatus =
   | 'PENDING'
+  | 'SENDING'
   | 'SENT'
   | 'DELIVERED'
   | 'READ'
   | 'FAILED'
   | 'RESPONDED'
   | 'CONVERTED_TO_SALE'
-  | 'SKIPPED';
+  | 'SKIPPED'
+  | 'UNCERTAIN';
 
 export interface CreateCareCampaignParams {
   companyId: string;

@@ -193,7 +193,7 @@ export class ZaloCareAnalyticsService {
     if (deliveryId) {
       query = query.eq('id', deliveryId);
     } else {
-      query = query.in('status', ['SENT', 'DELIVERED', 'RESPONDED']);
+      query = query.in('status', ['SENT', 'DELIVERED', 'READ', 'RESPONDED']);
     }
 
     const { data: updated, error } = await query.select('campaign_id');

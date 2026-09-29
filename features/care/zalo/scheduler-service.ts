@@ -1,11 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient, ZaloClientFactory } from '../../omnichannel/zalo/zalo-client';
+import { ZaloClient, ZaloClientFactory, ZaloSendResult } from '../../omnichannel/zalo/zalo-client';
+import { detectCareOptOut } from '../../omnichannel/zalo/opt-out';
 import { CareScheduleDTO } from './types';
+import { renderCareTemplate } from './template';
+
+export type CareClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
 
 export interface ZaloCareSchedulerServiceOptions {
   supabase?: SupabaseClient;
-  zaloClient?: ZaloClient;
+  /** Overrides per-OA client resolution (tests). Production uses ZaloClientFactory. */
+  clientProvider?: CareClientProvider;
+  fetchFn?: typeof fetch;
 }
 
 export interface CreateScheduleParams {
@@ -13,353 +19,331 @@ export interface CreateScheduleParams {
   customerId: string;
   frequencyMonths?: number;
   nextSendAt?: string;
+  /**
+   * Required to turn a STOPPED schedule back on (PROJECT_MASTER §13: never re-enable silently).
+   */
+  reactivation?: { actorUserId: string; reason: string };
 }
 
 export interface ProcessDueSchedulesResult {
   processed: number;
   advanced: number;
   failed: number;
+  uncertain: number;
   skipped: number;
 }
 
-const OPT_OUT_KEYWORDS = [
-  'dung lam phien',
-  'dừng làm phiền',
-  'ngung gui',
-  'ngừng gửi',
-  'khong co nhu cau',
-  'không có nhu cầu',
-  'huy',
-  'hủy',
-  'stop',
-  'tu choi',
-  'từ chối',
-];
+export class CareScheduleStoppedError extends Error {
+  readonly stopReason: string | null;
+
+  constructor(stopReason: string | null) {
+    super(`Care schedule is stopped (${stopReason || 'UNKNOWN'}); explicit reactivation is required.`);
+    this.name = 'CareScheduleStoppedError';
+    this.stopReason = stopReason;
+  }
+}
+
+interface ScheduleClaimRow {
+  claim_status:
+    | 'CLAIMED'
+    | 'NOT_FOUND'
+    | 'STOPPED'
+    | 'NOT_DUE'
+    | 'OA_NOT_CONFIGURED'
+    | 'NO_ZALO_IDENTITY'
+    | 'ALREADY_RESOLVED'
+    | 'BUSY'
+    | 'UNCERTAIN'
+    | 'EXHAUSTED';
+  delivery_id: string | null;
+  claim_token: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  recipient_zalo_uid: string | null;
+  oa_id: string | null;
+  message_template: string | null;
+  attempt_count: number;
+}
+
+interface ScheduleRow {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  channel: 'ZALO';
+  frequency_months: number;
+  next_send_at: string;
+  enabled: boolean;
+  stop_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const DEFAULT_PERIODIC_TEMPLATE =
+  'Chào {name}, Cửa Chống Ngập xin gửi lời hỏi thăm định kỳ. Nếu gia đình cần bảo dưỡng hoặc tư vấn kỹ thuật, hãy nhắn lại cho chúng tôi nhé!';
 
 /**
- * Helper to calculate the next date after adding months.
+ * Month arithmetic with end-of-month clamping (Jan 31 + 1 month → Feb 28/29).
  */
 export function addMonths(date: Date, months: number): Date {
   const result = new Date(date.getTime());
-  const expectedMonth = (result.getMonth() + months) % 12;
+  const day = result.getDate();
+  result.setDate(1);
   result.setMonth(result.getMonth() + months);
-
-  // Handle month overflow (e.g. Jan 31 + 1 month -> Feb 28)
-  if (result.getMonth() !== expectedMonth && result.getMonth() !== (expectedMonth + 12) % 12) {
-    result.setDate(0);
-  }
+  const lastDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(day, lastDay));
   return result;
 }
 
+function toDto(rec: ScheduleRow): CareScheduleDTO {
+  return {
+    id: rec.id,
+    companyId: rec.company_id,
+    customerId: rec.customer_id,
+    channel: rec.channel,
+    frequencyMonths: rec.frequency_months,
+    nextSendAt: rec.next_send_at,
+    enabled: rec.enabled,
+    stopReason: rec.stop_reason,
+    createdAt: rec.created_at,
+    updatedAt: rec.updated_at,
+  };
+}
+
 /**
- * Service managing periodic Care Schedules (1 month / cycle) for Zalo.
+ * Periodic (default monthly) Zalo care schedules.
  *
- * Invariants & Reliability:
- * - Schedule creation and updating.
- * - Due schedule processing via care_deliveries state management.
- * - next_send_at is ONLY advanced when delivery is successfully SENT.
- * - On failure or network error: next_send_at remains unchanged for safe worker retry.
- * - Automatic stop on customer opt-out.
+ * Worker invariants (#9):
+ * - A send happens only after care_claim_schedule_delivery returns CLAIMED with a claim token;
+ *   concurrent workers get BUSY. The claim row is keyed per (schedule, target date).
+ * - FAILED (provider definitively rejected) re-claims the SAME delivery row with attempt_count+1
+ *   up to maxAttempts; the schedule stays due until then.
+ * - UNCERTAIN (timeout / crash mid-send) is never resent: the cycle is consumed to avoid a
+ *   duplicate care message, and the delivery stays UNCERTAIN for review.
+ * - next_send_at advances inside care_complete_delivery, in the same transaction as SENT.
+ * - Stopped schedules (opt-out, unfollow, business decision) are never re-enabled implicitly.
  */
 export class ZaloCareSchedulerService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient?: ZaloClient;
+  private readonly clientProvider: CareClientProvider;
 
   constructor(options: ZaloCareSchedulerServiceOptions = {}) {
-    this.zaloClient = options.zaloClient;
-
-    if (options.supabase) {
-      this.supabase = options.supabase;
-    } else {
-      this.supabase = createAdminClient();
-    }
+    const supabase = options.supabase ?? createAdminClient();
+    this.supabase = supabase;
+    this.clientProvider =
+      options.clientProvider ??
+      ((companyId, oaId) => ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
   }
 
-  /**
-   * Creates or updates a customer care schedule with 1 month frequency default.
-   */
   async createOrUpdateSchedule(params: CreateScheduleParams): Promise<CareScheduleDTO> {
     const { companyId, customerId, frequencyMonths = 1 } = params;
-
+    if (!Number.isInteger(frequencyMonths) || frequencyMonths < 1) {
+      throw new Error('frequencyMonths must be a positive integer');
+    }
     const nextSendAt = params.nextSendAt || addMonths(new Date(), frequencyMonths).toISOString();
 
-    const { data: existing } = await this.supabase
+    const { data: existing, error: existingError } = await this.supabase
       .from('care_schedules')
-      .select('id')
+      .select('id, enabled, stop_reason')
       .eq('company_id', companyId)
       .eq('customer_id', customerId)
       .eq('channel', 'ZALO')
       .maybeSingle();
-
-    let record: Record<string, unknown>;
+    if (existingError) {
+      throw new Error(`Failed to load care schedule: ${existingError.message}`);
+    }
 
     if (existing) {
+      const isStopped = existing.enabled === false;
+      if (isStopped && !params.reactivation) {
+        throw new CareScheduleStoppedError(existing.stop_reason ?? null);
+      }
+      if (isStopped && params.reactivation && !params.reactivation.reason.trim()) {
+        throw new Error('A reactivation reason is required');
+      }
+
       const { data, error } = await this.supabase
         .from('care_schedules')
         .update({
           frequency_months: frequencyMonths,
           next_send_at: nextSendAt,
-          enabled: true,
-          stop_reason: null,
-          updated_at: new Date().toISOString(),
+          ...(isStopped ? { enabled: true, stop_reason: null } : {}),
         })
         .eq('id', existing.id)
         .select('*')
         .single();
-
       if (error || !data) {
         throw new Error(`Failed to update care schedule: ${error?.message}`);
       }
-      record = data;
-    } else {
-      const { data, error } = await this.supabase
-        .from('care_schedules')
-        .insert({
-          company_id: companyId,
-          customer_id: customerId,
-          channel: 'ZALO',
-          frequency_months: frequencyMonths,
-          next_send_at: nextSendAt,
-          enabled: true,
-          stop_reason: null,
-        })
-        .select('*')
-        .single();
 
-      if (error || !data) {
-        throw new Error(`Failed to insert care schedule: ${error?.message}`);
+      if (isStopped && params.reactivation) {
+        await this.audit(companyId, customerId, existing.id, 'CARE_SCHEDULE_REACTIVATED', params.reactivation.actorUserId, {
+          previous_stop_reason: existing.stop_reason ?? null,
+          reason: params.reactivation.reason.trim().slice(0, 300),
+        });
       }
-      record = data;
+      return toDto(data as ScheduleRow);
     }
 
-    const rec = record as {
-      id: string;
-      company_id: string;
-      customer_id: string;
-      channel: 'ZALO';
-      frequency_months: number;
-      next_send_at: string;
-      enabled: boolean;
-      stop_reason?: string | null;
-      created_at: string;
-      updated_at: string;
-    };
-
-    return {
-      id: rec.id,
-      companyId: rec.company_id,
-      customerId: rec.customer_id,
-      channel: rec.channel,
-      frequencyMonths: rec.frequency_months,
-      nextSendAt: rec.next_send_at,
-      enabled: rec.enabled,
-      stopReason: rec.stop_reason,
-      createdAt: rec.created_at,
-      updatedAt: rec.updated_at,
-    };
+    const { data, error } = await this.supabase
+      .from('care_schedules')
+      .insert({
+        company_id: companyId,
+        customer_id: customerId,
+        channel: 'ZALO',
+        frequency_months: frequencyMonths,
+        next_send_at: nextSendAt,
+        enabled: true,
+        stop_reason: null,
+      })
+      .select('*')
+      .single();
+    if (error || !data) {
+      throw new Error(`Failed to insert care schedule: ${error?.message}`);
+    }
+    return toDto(data as ScheduleRow);
   }
 
-  /**
-   * Processes all active due schedules (next_send_at <= asOfDate).
-   * Manages lifecycle via care_deliveries (PENDING -> SENDING -> SENT / FAILED).
-   * CRITICAL: next_send_at is ONLY incremented when status is SENT.
-   * On failure: schedule is NOT advanced, allowing subsequent worker ticks to retry.
-   */
   async processDueSchedules(options: {
     companyId: string;
     asOfDate?: Date;
     defaultMessage?: string;
+    limit?: number;
+    maxAttempts?: number;
   }): Promise<ProcessDueSchedulesResult> {
-    const asOfIso = (options.asOfDate || new Date()).toISOString();
-    const defaultTemplate =
-      options.defaultMessage ||
-      'Chào bạn, Cửa Chống Ngập xin gửi lời chào thăm định kỳ. Nếu gia đình có nhu cầu bảo dưỡng hoặc tư vấn kỹ thuật, hãy nhắn lại cho chúng tôi nhé!';
+    const asOf = options.asOfDate || new Date();
 
-    // Query active due schedules
     const { data: dueSchedules, error } = await this.supabase
       .from('care_schedules')
-      .select('id, company_id, customer_id, channel, frequency_months, next_send_at, enabled')
+      .select('id')
       .eq('company_id', options.companyId)
       .eq('channel', 'ZALO')
       .eq('enabled', true)
-      .lte('next_send_at', asOfIso);
-
+      .lte('next_send_at', asOf.toISOString())
+      .order('next_send_at', { ascending: true })
+      .limit(options.limit ?? 200);
     if (error) {
       throw new Error(`Failed to fetch due care schedules: ${error.message}`);
     }
 
-    if (!dueSchedules || dueSchedules.length === 0) {
-      return { processed: 0, advanced: 0, failed: 0, skipped: 0 };
-    }
+    const result: ProcessDueSchedulesResult = { processed: 0, advanced: 0, failed: 0, uncertain: 0, skipped: 0 };
 
-    let advanced = 0;
-    let failed = 0;
-    let skipped = 0;
+    for (const schedule of (dueSchedules || []) as { id: string }[]) {
+      result.processed++;
 
-    for (const schedule of dueSchedules) {
-      // 1. Fetch customer's Zalo identity
-      const { data: identity } = await this.supabase
-        .from('identities')
-        .select('external_id')
-        .eq('company_id', schedule.company_id)
-        .eq('customer_id', schedule.customer_id)
-        .eq('channel', 'ZALO')
-        .maybeSingle();
-
-      if (!identity?.external_id) {
-        skipped++;
+      const { data: claimData, error: claimError } = await this.supabase.rpc('care_claim_schedule_delivery', {
+        p_company_id: options.companyId,
+        p_schedule_id: schedule.id,
+        p_default_template: options.defaultMessage || DEFAULT_PERIODIC_TEMPLATE,
+        p_as_of: asOf.toISOString(),
+        p_max_attempts: options.maxAttempts ?? 3,
+      });
+      if (claimError) {
+        console.error(`[CareScheduler] Claim failed for schedule ${schedule.id}: ${claimError.message}`);
+        result.skipped++;
         continue;
       }
 
-      // 2. ATOMIC CLAIM: care_scheduler_claim_delivery RPC (Fix Lỗi 9)
-      const targetDate = schedule.next_send_at.split('T')[0];
-
-      const { data: claimResult, error: claimError } = await this.supabase.rpc(
-        'care_scheduler_claim_delivery',
-        {
-          p_company_id: schedule.company_id,
-          p_schedule_id: schedule.id,
-          p_customer_id: schedule.customer_id,
-          p_target_date: targetDate,
-          p_message_content: defaultTemplate,
+      const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as ScheduleClaimRow | undefined;
+      if (!claim || claim.claim_status !== 'CLAIMED' || !claim.delivery_id || !claim.claim_token) {
+        if (claim?.claim_status === 'OA_NOT_CONFIGURED') {
+          console.warn(`[CareScheduler] Schedule ${schedule.id}: no ACTIVE Zalo OA resolvable; left due.`);
         }
-      );
-
-      const deliveryId = claimResult;
-
-      // FAIL-CLOSED: Only worker who successfully claimed delivery ID is allowed to dispatch to provider
-      if (claimError || !deliveryId) {
-        skipped++;
+        result.skipped++;
         continue;
       }
 
-      // 3. Send message via ZaloClient with explicit error handling (NO empty catch)
-      let sendSuccess = false;
-      let providerMessageId: string | null = null;
-      let failureError = '';
+      const message = renderCareTemplate(claim.message_template || DEFAULT_PERIODIC_TEMPLATE, {
+        name: claim.customer_name || 'Quý khách',
+      });
+      const outcome = await this.send(options.companyId, claim.oa_id as string, claim.recipient_zalo_uid as string, message);
 
-      try {
-        let client = this.zaloClient;
-        if (!client) {
-          const { data: oaConfig } = await this.supabase
-            .from('zalo_oa_configs')
-            .select('oa_id')
-            .eq('company_id', schedule.company_id)
-            .eq('status', 'ACTIVE')
-            .limit(1)
-            .maybeSingle();
-
-          const oaId = oaConfig?.oa_id || '';
-          client = await ZaloClientFactory.getClientForOa(schedule.company_id, oaId, { supabase: this.supabase });
-        }
-
-        const sendRes = await client.sendTextMessage(identity.external_id, defaultTemplate);
-        if (sendRes.error === 0) {
-          sendSuccess = true;
-          providerMessageId = sendRes.data?.message_id || `msg_care_${Date.now()}`;
-        } else {
-          failureError = `Zalo API error [${sendRes.error}]: ${sendRes.message}`;
-        }
-      } catch (err: unknown) {
-        failureError = err instanceof Error ? err.message : 'Network/Provider error during care send';
+      const { error: completeError } = await this.supabase.rpc('care_complete_delivery', {
+        p_delivery_id: claim.delivery_id,
+        p_claim_token: claim.claim_token,
+        p_outcome: outcome.outcome,
+        p_provider_msg_id: outcome.providerMsgId ?? null,
+        p_error_code: outcome.errorCode ?? null,
+        p_error_message: outcome.errorMessage ?? null,
+      });
+      if (completeError) {
+        // Lease will expire → next tick classifies the delivery UNCERTAIN (never resent).
+        console.error(`[CareScheduler] Could not record outcome for delivery ${claim.delivery_id}: ${completeError.message}`);
+        result.uncertain++;
+        continue;
       }
 
-      // 4. Update delivery record & conditionally advance schedule
-      if (sendSuccess) {
-        if (deliveryId) {
-          await this.supabase
-            .from('care_deliveries')
-            .update({
-              status: 'SENT',
-              sent_at: new Date().toISOString(),
-              provider_msg_id: providerMessageId,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', deliveryId);
-        }
-
-        // Advance next_send_at to next cycle
-        const currentNextSend = new Date(schedule.next_send_at);
-        const newNextSend = addMonths(currentNextSend, schedule.frequency_months || 1);
-
-        await this.supabase
-          .from('care_schedules')
-          .update({
-            next_send_at: newNextSend.toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', schedule.id);
-
-        advanced++;
-      } else {
-        // Record FAILED status in care_deliveries
-        if (deliveryId) {
-          await this.supabase
-            .from('care_deliveries')
-            .update({
-              status: 'FAILED',
-              error_code: 'PROVIDER_ERROR',
-              error_message: failureError,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', deliveryId);
-        }
-
-        // LOG ALERT: Do NOT advance next_send_at. Schedule remains due for next retry tick.
-        console.warn(
-          `[CareScheduler Warning] Failed to send care check-in for schedule ${schedule.id}: ${failureError}. Schedule next_send_at preserved.`
-        );
-        failed++;
-      }
+      if (outcome.outcome === 'ACCEPTED') result.advanced++;
+      else if (outcome.outcome === 'REJECTED') result.failed++;
+      else result.uncertain++;
     }
 
-    return {
-      processed: dueSchedules.length,
-      advanced,
-      failed,
-      skipped,
-    };
+    return result;
+  }
+
+  private async send(companyId: string, oaId: string, recipient: string, message: string): Promise<ZaloSendResult> {
+    try {
+      const client = await this.clientProvider(companyId, oaId);
+      return await client.sendTextMessageWithOutcome(recipient, message);
+    } catch (err: unknown) {
+      return {
+        outcome: 'REJECTED',
+        errorCode: 'CLIENT_UNAVAILABLE',
+        errorMessage: err instanceof Error ? err.message : 'Zalo client unavailable',
+      };
+    }
   }
 
   /**
-   * Explicitly stops a care schedule for a customer.
+   * Stops a schedule and records the reason. Idempotent.
    */
-  async stopSchedule(companyId: string, customerId: string, reason: string): Promise<boolean> {
-    const { error } = await this.supabase
+  async stopSchedule(companyId: string, customerId: string, reason: string, actorUserId: string | null = null): Promise<boolean> {
+    const { data, error } = await this.supabase
       .from('care_schedules')
-      .update({
-        enabled: false,
-        stop_reason: reason,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ enabled: false, stop_reason: reason })
       .eq('company_id', companyId)
       .eq('customer_id', customerId)
-      .eq('channel', 'ZALO');
-
+      .eq('channel', 'ZALO')
+      .select('id');
     if (error) {
       throw new Error(`Failed to stop care schedule: ${error.message}`);
     }
-
+    for (const row of (data || []) as { id: string }[]) {
+      await this.audit(companyId, customerId, row.id, 'CARE_SCHEDULE_STOPPED', actorUserId, { stop_reason: reason, channel: 'ZALO' });
+    }
     return true;
   }
 
   /**
-   * Scans an incoming message for customer refusal/opt-out intent.
-   * If detected, automatically disables the care schedule.
+   * Stops the schedule when the message expresses an opt-out (whole-word matching).
    */
-  async checkAndHandleOptOut(
+  async checkAndHandleOptOut(companyId: string, customerId: string, messageText: string): Promise<boolean> {
+    if (!detectCareOptOut(messageText)) {
+      return false;
+    }
+    await this.stopSchedule(companyId, customerId, 'CUSTOMER_OPT_OUT');
+    return true;
+  }
+
+  private async audit(
     companyId: string,
     customerId: string,
-    messageText: string
-  ): Promise<boolean> {
-    const normalized = messageText.toLowerCase().trim();
-    const isOptOut = OPT_OUT_KEYWORDS.some((kw) => normalized.includes(kw));
-
-    if (isOptOut) {
-      await this.stopSchedule(companyId, customerId, 'CUSTOMER_OPT_OUT');
-      return true;
+    scheduleId: string,
+    action: string,
+    actorUserId: string | null,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const { error } = await this.supabase.from('audit_logs').insert({
+      company_id: companyId,
+      user_id: actorUserId,
+      action,
+      resource_type: 'CARE_SCHEDULE',
+      resource_id: scheduleId,
+      customer_id: customerId,
+      result: 'SUCCESS',
+      metadata,
+    });
+    if (error) {
+      throw new Error(`Failed to write care schedule audit: ${error.message}`);
     }
-
-    return false;
   }
 }

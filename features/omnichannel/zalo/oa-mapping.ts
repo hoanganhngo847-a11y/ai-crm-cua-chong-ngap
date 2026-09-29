@@ -1,8 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
- * Custom Error for Tenant Resolution Failures.
- * Fails closed with standard HTTP-compatible status codes.
+ * Tenant resolution failure for an unknown / inactive OA. Fails closed (403 by default).
  */
 export class TenantResolutionError extends Error {
   readonly code = 'TENANT_NOT_FOUND';
@@ -15,108 +14,97 @@ export class TenantResolutionError extends Error {
   }
 }
 
+/**
+ * The tenant lookup itself failed (DB unavailable). Not a verdict on the OA: the webhook must
+ * answer 503 so Zalo retries, instead of 403 which would drop the event permanently.
+ */
+export class TenantLookupUnavailableError extends Error {
+  readonly code = 'TENANT_LOOKUP_UNAVAILABLE';
+  readonly httpStatus = 503;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'TenantLookupUnavailableError';
+  }
+}
+
+export interface ZaloOATenant {
+  companyId: string;
+  oaId: string;
+  appId: string | null;
+  webhookSecret: string | null;
+}
+
 export interface IZaloOAMappingResolver {
+  resolveTenant(oaId: string | undefined | null): Promise<ZaloOATenant>;
   resolveCompanyId(oaId: string | undefined | null): Promise<string>;
 }
 
-export interface ZaloOAMappingServiceOptions {
-  customMapping?: Record<string, string>;
-  supabase?: SupabaseClient;
-  allowTestMockFallback?: boolean;
+interface ResolveTenantRow {
+  company_id: string;
+  app_id: string | null;
+  webhook_secret: string | null;
 }
 
 /**
- * Zalo OA to Company Mapping Service.
+ * Zalo OA → Company mapping.
  *
  * CRITICAL SECURITY INVARIANT - TENANT ISOLATION:
- * - Webhooks from external providers (Zalo OA) must NEVER trust company_id from client payload,
- *   query parameters, or headers.
- * - Multi-tenant isolation is enforced server-side by mapping the verified Zalo Official Account ID (OA ID)
- *   to the corresponding tenant (company_id).
- * - If an event arrives with an unmapped, unknown, or empty OA ID, the system MUST FAIL CLOSED (throw TenantResolutionError).
- * - No DEFAULT_COMPANY_ID fallback in production flows.
+ * - company_id is NEVER taken from the payload, query string or headers.
+ * - The verified OA id is mapped server-side via zalo_oa_configs (ACTIVE OA, ACTIVE company).
+ * - Unknown / empty OA fails closed (TenantResolutionError). There is no default company.
  */
 export class ZaloOAMappingService implements IZaloOAMappingResolver {
-  private readonly mapping: Map<string, string>;
-  private readonly supabase?: SupabaseClient;
-  private readonly allowTestMockFallback: boolean;
-
-  constructor(options: ZaloOAMappingServiceOptions | Record<string, string> = {}) {
-    if ('customMapping' in options || 'supabase' in options || 'allowTestMockFallback' in options) {
-      const opts = options as ZaloOAMappingServiceOptions;
-      this.mapping = new Map(Object.entries(opts.customMapping || {}));
-      this.supabase = opts.supabase;
-      this.allowTestMockFallback = opts.allowTestMockFallback ?? false;
-    } else {
-      this.mapping = new Map(Object.entries(options));
-      this.allowTestMockFallback = false;
-    }
-  }
+  private readonly staticTenants: Map<string, ZaloOATenant>;
 
   /**
-   * Registers or updates an OA ID to Company mapping in memory.
+   * @param supabase service-role client used for the zalo_resolve_oa_tenant RPC.
+   * @param staticTenants optional explicit OA → tenant entries (tests / fixtures only).
    */
-  registerMapping(oaId: string, companyId: string): void {
-    if (!oaId || !oaId.trim()) {
-      throw new TenantResolutionError('OA ID is required to register mapping', 400);
-    }
-    if (!companyId || !companyId.trim()) {
-      throw new TenantResolutionError('companyId is required to register mapping', 400);
-    }
-    this.mapping.set(oaId.trim(), companyId.trim());
+  constructor(
+    private readonly supabase: SupabaseClient | null,
+    staticTenants: ZaloOATenant[] = []
+  ) {
+    this.staticTenants = new Map(staticTenants.map((t) => [t.oaId, t]));
   }
 
-  /**
-   * Resolves the companyId for a given Zalo OA ID.
-   * Fails closed if the OA ID is not recognized or not associated with any active company.
-   */
-  async resolveCompanyId(oaId: string | undefined | null): Promise<string> {
+  async resolveTenant(oaId: string | undefined | null): Promise<ZaloOATenant> {
     if (!oaId || typeof oaId !== 'string' || !oaId.trim()) {
+      throw new TenantResolutionError('Tenant isolation error: Missing or empty Zalo OA ID in webhook event', 400);
+    }
+    const cleanOaId = oaId.trim();
+
+    const staticTenant = this.staticTenants.get(cleanOaId);
+    if (staticTenant) {
+      return staticTenant;
+    }
+
+    if (!this.supabase) {
+      throw new TenantResolutionError(`Zalo OA "${cleanOaId}" is not associated with any active company`, 403);
+    }
+
+    const { data, error } = await this.supabase.rpc('zalo_resolve_oa_tenant', { p_oa_id: cleanOaId });
+    if (error) {
+      throw new TenantLookupUnavailableError(`Zalo OA tenant lookup failed: ${error.message}`);
+    }
+
+    const row = (Array.isArray(data) ? data[0] : data) as ResolveTenantRow | undefined;
+    if (!row?.company_id) {
       throw new TenantResolutionError(
-        'Tenant isolation error: Missing or empty Zalo OA ID in webhook event',
-        400
+        `Tenant isolation violation: Zalo OA ID "${cleanOaId}" is not associated with any active company`,
+        403
       );
     }
 
-    const cleanOaId = oaId.trim();
+    return {
+      companyId: row.company_id,
+      oaId: cleanOaId,
+      appId: row.app_id,
+      webhookSecret: row.webhook_secret,
+    };
+  }
 
-    // 1. Check in-memory registered mapping
-    const mappedCompanyId = this.mapping.get(cleanOaId);
-    if (mappedCompanyId) {
-      return mappedCompanyId;
-    }
-
-    // 2. Query persistent database table (zalo_oa_configs) if Supabase client is available
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase
-          .from('zalo_oa_configs')
-          .select('company_id')
-          .eq('oa_id', cleanOaId)
-          .eq('status', 'ACTIVE')
-          .maybeSingle();
-
-        if (!error && data?.company_id) {
-          this.mapping.set(cleanOaId, data.company_id);
-          return data.company_id;
-        }
-      } catch {
-        // DB query error falls through to fail-closed check
-      }
-    }
-
-    // 3. ONLY allow test fallback if explicitly configured in an automated test container
-    const isTestRuntime =
-      process.env.NODE_ENV === 'test' && process.env.IS_TEST_SUITE === 'true';
-
-    if (isTestRuntime && this.allowTestMockFallback && this.mapping.has('__test_fallback__')) {
-      return this.mapping.get('__test_fallback__')!;
-    }
-
-    // FAIL-CLOSED: Reject unknown or unmapped OA to prevent cross-tenant leakage or spoofing
-    throw new TenantResolutionError(
-      `Tenant isolation violation: Zalo OA ID "${cleanOaId}" is not associated with any active company`,
-      403
-    );
+  async resolveCompanyId(oaId: string | undefined | null): Promise<string> {
+    return (await this.resolveTenant(oaId)).companyId;
   }
 }

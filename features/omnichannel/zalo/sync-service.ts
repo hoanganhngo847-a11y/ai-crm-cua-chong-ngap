@@ -1,13 +1,14 @@
+import crypto from 'crypto';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { ZaloClient, ZaloClientFactory } from './zalo-client';
 import { ZaloWebhookPayload } from './types';
 import { sanitizeMessageContent } from './sanitizer';
-import { IZaloOAMappingResolver, ZaloOAMappingService } from './oa-mapping';
-
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { detectCareOptOut } from './opt-out';
+import { IZaloOAMappingResolver, ZaloOAMappingService, ZaloOATenant } from './oa-mapping';
 
 export interface SyncResult {
-  status: 'synced' | 'duplicate' | 'ignored' | 'error' | 'busy';
+  status: 'synced' | 'duplicate' | 'ignored' | 'busy';
   interactionId?: string;
   conversationId?: string;
   customerId?: string;
@@ -15,295 +16,308 @@ export interface SyncResult {
   message?: string;
 }
 
+export type ZaloClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
+
 export interface ZaloSyncServiceOptions {
   supabase?: SupabaseClient;
-  zaloClient?: ZaloClient;
   oaMappingResolver?: IZaloOAMappingResolver;
-  defaultCompanyId?: string;
+  /** Overrides per-OA client resolution (tests). Production uses ZaloClientFactory. */
+  clientProvider?: ZaloClientProvider;
+  fetchFn?: typeof fetch;
 }
 
-const OPT_OUT_KEYWORDS = [
-  'dung lam phien',
-  'dừng làm phiền',
-  'ngung gui',
-  'ngừng gửi',
-  'khong co nhu cau',
-  'không có nhu cầu',
-  'huy',
-  'hủy',
-  'stop',
-  'tu choi',
-  'từ chối',
-];
+type StatusKind = 'DELIVERED' | 'READ' | 'FOLLOW' | 'UNFOLLOW';
+
+type ClassifiedEvent =
+  | { kind: 'MESSAGE'; inbound: boolean; oaId: string; userId: string }
+  | { kind: 'STATUS'; status: StatusKind; oaId: string; userId: string }
+  | { kind: 'IGNORED' };
+
+interface ClaimRow {
+  claim_status: 'CLAIMED' | 'DUPLICATE' | 'BUSY';
+  event_id: string;
+  retry_count: number;
+  claim_token: string | null;
+}
+
+interface IngressResult {
+  duplicate: boolean;
+  customer_id: string | null;
+  conversation_id: string | null;
+  interaction_id: string | null;
+  is_new_customer: boolean;
+}
 
 /**
- * Service to synchronize incoming Zalo events to the Core CRM Data Model.
+ * Maps a Zalo webhook payload to (OA id, Zalo user id) and an ingestion kind.
+ * The OA id is only a lookup key: the company is always resolved server-side from it.
+ */
+export function classifyZaloEvent(event: ZaloWebhookPayload): ClassifiedEvent {
+  const name = event.event_name || '';
+
+  if (name.startsWith('user_send_')) {
+    return { kind: 'MESSAGE', inbound: true, oaId: event.oa_id || event.recipient?.id || '', userId: event.sender?.id || '' };
+  }
+  if (name.startsWith('oa_send_')) {
+    return { kind: 'MESSAGE', inbound: false, oaId: event.oa_id || event.sender?.id || '', userId: event.recipient?.id || '' };
+  }
+  if (name === 'user_received_message' || name === 'user_seen_message') {
+    return {
+      kind: 'STATUS',
+      status: name === 'user_received_message' ? 'DELIVERED' : 'READ',
+      oaId: event.oa_id || event.sender?.id || '',
+      userId: event.recipient?.id || '',
+    };
+  }
+  if (name === 'follow' || name === 'unfollow') {
+    return {
+      kind: 'STATUS',
+      status: name === 'follow' ? 'FOLLOW' : 'UNFOLLOW',
+      oaId: event.oa_id || event.recipient?.id || '',
+      userId: event.follower?.id || event.sender?.id || '',
+    };
+  }
+  return { kind: 'IGNORED' };
+}
+
+function parseEventTime(timestamp: number | string | undefined): string {
+  const ms = Number(timestamp);
+  if (Number.isFinite(ms) && ms > 0) {
+    return new Date(ms).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+/**
+ * Canonical provider reference shared by ingress, outbound finalize and dedupe:
+ *   zalo:{companyId}:{oaId}:{providerMessageId}
+ */
+export function canonicalZaloExternalRef(companyId: string, oaId: string, providerRef: string): string {
+  return `zalo:${companyId}:${oaId}:${providerRef}`;
+}
+
+/**
+ * Synchronizes incoming Zalo webhook events into the CRM core model.
  *
- * Security & Data Invariants:
- * 1. Provider Verification & Tenant Isolation:
- *    Maps company_id server-side via verified OA ID. Fails closed if OA ID is unmapped.
- * 2. Durable Idempotency Claim Invariant:
- *    Uses zalo_ingress_events table with state machine ('CLAIMED', 'PROCESSED', 'FAILED').
- *    Atomic claim via zalo_claim_ingress_event RPC.
- * 3. Atomic Ingress Pipeline & Zero JS Rollback:
- *    Postgres RPC (zalo_process_ingress_message) executes complete CRM mutation atomically.
- *    No manual JS compensation deletes. PostgreSQL rolls back automatically on error.
- * 4. Zero-Phone Sanitization:
- *    Sanitizes public text before recording; sets sanitization_status = 'SUCCEEDED' for SALE.
+ * Invariants:
+ * 1. Tenant isolation — company is derived from the verified OA id; unknown OA fails closed.
+ * 2. Durable claim — zalo_claim_ingress_event (PROCESSED → duplicate, FAILED/stale → re-claim,
+ *    active lease → busy). Only the holder of the claim token can process or fail the event.
+ * 3. Atomic ingress — zalo_process_ingress_message performs customer/identity, conversation,
+ *    interaction, private raw, care response/opt-out and PROCESSED in ONE DB transaction.
+ *    There is no JS compensation: on error PostgreSQL rolls back and the event is marked FAILED
+ *    so the provider retry re-claims it.
+ * 4. Zero-phone — only sanitized text reaches public.interactions.
  */
 export class ZaloSyncService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient?: ZaloClient;
   private readonly oaMappingResolver: IZaloOAMappingResolver;
+  private readonly clientProvider: ZaloClientProvider;
 
   constructor(options: ZaloSyncServiceOptions = {}) {
-    // 1. Initialize supabase client first (Fix Lỗi 1)
+    // The tenant resolver MUST share the same (service-role) client: it looks up zalo_oa_configs.
     const supabase = options.supabase ?? createAdminClient();
     this.supabase = supabase;
-
-    // 2. Only mock client allowed from test suite (Fix Lỗi 7)
-    this.zaloClient = options.zaloClient;
-
-    // 3. Inject initialized supabase instance into ZaloOAMappingService
-    if (options.oaMappingResolver) {
-      this.oaMappingResolver = options.oaMappingResolver;
-    } else {
-      const customMapping: Record<string, string> = {};
-      if (options.defaultCompanyId) {
-        customMapping['__test_fallback__'] = options.defaultCompanyId;
-        if (this.zaloClient?.oaId) {
-          customMapping[this.zaloClient.oaId] = options.defaultCompanyId;
-        }
-      }
-      this.oaMappingResolver = new ZaloOAMappingService({
-        customMapping,
-        supabase: this.supabase,
-        allowTestMockFallback: Boolean(options.defaultCompanyId),
-      });
-    }
+    this.oaMappingResolver = options.oaMappingResolver ?? new ZaloOAMappingService(supabase);
+    this.clientProvider =
+      options.clientProvider ??
+      ((companyId, oaId) =>
+        ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
   }
 
   /**
-   * Main webhook event ingestion pipeline.
-   * Atomically claims event, processes data entities, and records private raw payload via DB RPC.
+   * @param tenant pre-resolved tenant (the webhook handler resolves it to pick the signing secret).
    */
-  async handleWebhookEvent(event: ZaloWebhookPayload): Promise<SyncResult> {
-    const eventName = event.event_name;
-    const isUserMessage = eventName.startsWith('user_send_');
-    const isOaMessage = eventName.startsWith('oa_send_');
-
-    if (!isUserMessage && !isOaMessage) {
-      return { status: 'ignored', message: `Unhandled event type: ${eventName}` };
+  async handleWebhookEvent(event: ZaloWebhookPayload, tenant?: ZaloOATenant): Promise<SyncResult> {
+    const classified = classifyZaloEvent(event);
+    if (classified.kind === 'IGNORED') {
+      return { status: 'ignored', message: `Unhandled event type: ${event.event_name}` };
     }
 
-    // 1. TENANT ISOLATION: Derive company_id server-side from verified OA ID
-    const oaId =
-      event.oa_id ||
-      (isUserMessage ? event.recipient?.id : event.sender?.id) ||
-      '';
+    const resolvedTenant =
+      tenant && tenant.oaId === classified.oaId ? tenant : await this.oaMappingResolver.resolveTenant(classified.oaId);
+    const companyId = resolvedTenant.companyId;
+    const oaId = resolvedTenant.oaId;
 
-    const companyId = await this.oaMappingResolver.resolveCompanyId(oaId);
-
-    // 2. RESOLVE CLIENT: Dynamic tenant client via ZaloClientFactory in production runtime (Fix Lỗi 7)
-    const client =
-      this.zaloClient ??
-      (await ZaloClientFactory.getClientForOa(companyId, oaId, { supabase: this.supabase }));
-
-    const senderId = event.sender?.id;
-    const recipientId = event.recipient?.id;
-    const rawMsgId = event.message?.msg_id || `${eventName}_${event.timestamp}_${senderId}`;
-
-    if (!senderId) {
-      return { status: 'error', message: 'Missing sender ID in webhook payload' };
+    if (!classified.userId) {
+      return { status: 'ignored', message: 'Missing Zalo user id in webhook payload' };
     }
 
-    const isInbound = isUserMessage;
-    const zaloUserUid = isInbound ? senderId : recipientId;
+    const providerRef = this.providerRefFor(event, classified);
+    const externalRef = canonicalZaloExternalRef(companyId, oaId, providerRef);
 
-    if (!zaloUserUid) {
-      return { status: 'error', message: 'Missing Zalo user UID in webhook payload' };
-    }
-
-    // Extract raw text content
-    let rawContent = event.message?.text || '';
-    if (!rawContent && event.message?.attachments && event.message.attachments.length > 0) {
-      const firstAttachment = event.message.attachments[0];
-      rawContent = `[Tệp đính kèm: ${firstAttachment.type}]`;
-    }
-    if (!rawContent) {
-      rawContent = `[Tin nhắn ${eventName}]`;
-    }
-
-    // 3. DURABLE IDEMPOTENCY CLAIM INVARIANT (Fix Lỗi 2, 13)
-    // Namespaced idempotency key: zalo:companyId:oaId:rawMsgId
-    const namespacedExternalRef = `zalo:${companyId}:${oaId}:${rawMsgId}`;
-
-    // Atomically claim via zalo_claim_ingress_event RPC
-    const { data: claimData, error: claimRpcError } = await this.supabase.rpc('zalo_claim_ingress_event', {
+    const { data: claimData, error: claimError } = await this.supabase.rpc('zalo_claim_ingress_event', {
       p_company_id: companyId,
       p_oa_id: oaId,
-      p_external_ref: namespacedExternalRef,
-      p_event_name: eventName,
-      p_sender_id: senderId,
-      p_recipient_id: recipientId,
+      p_external_ref: externalRef,
+      p_event_name: event.event_name,
+      p_sender_id: event.sender?.id ?? null,
+      p_recipient_id: event.recipient?.id ?? null,
     });
-
-    if (claimRpcError) {
-      throw new Error(`Failed to claim webhook ingress event: ${claimRpcError.message}`);
+    if (claimError) {
+      throw new Error(`Failed to claim webhook ingress event: ${claimError.message}`);
     }
 
-    const claimResult = Array.isArray(claimData) ? claimData[0] : claimData;
-    const claimStatus = claimResult?.claim_status || 'CLAIMED';
-
-    if (claimStatus === 'DUPLICATE') {
-      const { data: existingInteraction } = await this.supabase
-        .from('interactions')
-        .select('id, conversation_id, customer_id')
-        .eq('company_id', companyId)
-        .eq('channel', 'ZALO')
-        .in('external_ref', [rawMsgId, namespacedExternalRef])
-        .maybeSingle();
-
-      return {
-        status: 'duplicate',
-        interactionId: existingInteraction?.id,
-        conversationId: existingInteraction?.conversation_id,
-        customerId: existingInteraction?.customer_id,
-        message: 'Duplicate event skipped by idempotency claim invariant',
-      };
+    const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as ClaimRow | undefined;
+    if (!claim) {
+      throw new Error('Ingress claim returned no result');
+    }
+    if (claim.claim_status === 'DUPLICATE') {
+      return { status: 'duplicate', message: 'Event already processed' };
+    }
+    if (claim.claim_status === 'BUSY') {
+      return { status: 'busy', message: 'Event is being processed by another worker (lease active). Retry later.' };
     }
 
-    if (claimStatus === 'BUSY') {
-      return {
-        status: 'busy',
-        message: 'Event is currently being processed by another worker (lease active). Retry later.',
-      };
-    }
+    const claimToken = claim.claim_token as string;
 
-    // 4. ATOMIC CRM INGRESS MUTATION (Zero JS Compensation, Fix Lỗi 3, 13)
-    let customerName = `Khách Zalo ${zaloUserUid.slice(-4)}`;
     try {
-      const profile = await client.getUserProfile(zaloUserUid);
-      if (profile?.user_name) {
-        customerName = profile.user_name;
+      if (classified.kind === 'STATUS') {
+        await this.processStatusEvent(event, classified.status, classified.userId, {
+          eventId: claim.event_id,
+          claimToken,
+          companyId,
+          oaId,
+          externalRef,
+        });
+        return { status: 'synced', message: `Status event ${classified.status} recorded` };
       }
-    } catch {
-      // Fallback to placeholder name
-    }
 
-    const { sanitizedText } = sanitizeMessageContent(rawContent);
-
-    try {
-      const { data: mutationData, error: mutationError } = await this.supabase.rpc('zalo_process_ingress_message', {
-        p_company_id: companyId,
-        p_oa_id: oaId,
-        p_external_ref: namespacedExternalRef, // Fix Lỗi 13: namespaced external ref
-        p_raw_msg_id: rawMsgId,                // Provider message ID in source_metadata
-        p_zalo_user_uid: zaloUserUid,
-        p_user_name: customerName,
-        p_event_name: eventName,
-        p_sender_id: senderId,
-        p_recipient_id: recipientId,
-        p_is_inbound: isInbound,
-        p_sanitized_content: sanitizedText,
-        p_raw_content: rawContent,
-        p_raw_payload: event as unknown as Record<string, unknown>,
-        p_timestamp: typeof event.timestamp === 'number' ? event.timestamp : Date.now(),
+      const result = await this.processMessageEvent(event, classified.inbound, classified.userId, providerRef, {
+        eventId: claim.event_id,
+        claimToken,
+        companyId,
+        oaId,
+        externalRef,
       });
 
-      if (mutationError || !mutationData) {
-        throw new Error(
-          mutationError?.message || 'Atomic ingress mutation failed at database level'
-        );
-      }
-
-      const res = mutationData as {
-        customer_id: string;
-        conversation_id: string;
-        interaction_id: string;
-        is_new_customer: boolean;
-      };
-
-      // 5. POST-INGESTION CARE ACTIONS
-      if (isInbound) {
-        await this.handlePostMessageCareActions(companyId, res.customer_id, rawContent);
-      }
-
       return {
-        status: 'synced',
-        interactionId: res.interaction_id,
-        conversationId: res.conversation_id,
-        customerId: res.customer_id,
-        isNewCustomer: res.is_new_customer,
-        message: 'Message processed and recorded successfully',
+        status: result.duplicate ? 'duplicate' : 'synced',
+        interactionId: result.interaction_id ?? undefined,
+        conversationId: result.conversation_id ?? undefined,
+        customerId: result.customer_id ?? undefined,
+        isNewCustomer: result.is_new_customer,
+        message: result.duplicate ? 'Message already recorded under the canonical reference' : 'Message recorded',
       };
     } catch (pipelineError: unknown) {
-      // ZERO JS ROLLBACK: PostgreSQL transaction already rolled back atomic state.
-      // Update ingress event to FAILED with last_error.
-      const errorMsg = pipelineError instanceof Error ? pipelineError.message : 'Pipeline error';
-      await this.supabase
-        .from('zalo_ingress_events')
-        .update({
-          status: 'FAILED',
-          last_error: errorMsg,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('company_id', companyId)
-        .eq('oa_id', oaId)
-        .eq('external_ref', namespacedExternalRef);
-
+      const message = pipelineError instanceof Error ? pipelineError.message : 'Ingress pipeline error';
+      // Only the claim holder can fail the event; a lost claim is a no-op here.
+      const { error: failError } = await this.supabase.rpc('zalo_fail_ingress_event', {
+        p_event_id: claim.event_id,
+        p_claim_token: claimToken,
+        p_error: message,
+      });
+      if (failError) {
+        console.error(`[ZaloSync] Could not mark ingress event FAILED (lease will expire): ${failError.message}`);
+      }
       throw pipelineError;
     }
   }
 
-  /**
-   * Handles post-inbound care automation:
-   * 1. Detects customer opt-out keywords and disables care schedule.
-   * 2. Flags any recent care deliveries as responded.
-   */
-  private async handlePostMessageCareActions(
-    companyId: string,
-    customerId: string,
-    content: string
-  ): Promise<void> {
-    const normalizedText = content.toLowerCase().trim();
+  private providerRefFor(event: ZaloWebhookPayload, classified: Exclude<ClassifiedEvent, { kind: 'IGNORED' }>): string {
+    if (classified.kind === 'MESSAGE' && event.message?.msg_id) {
+      return event.message.msg_id;
+    }
+    // Receipts/follow events carry no message id: derive a deterministic, collision-resistant ref.
+    const material = JSON.stringify([
+      event.event_name,
+      String(event.timestamp),
+      classified.userId,
+      [...(event.message?.msg_ids || [])].sort(),
+    ]);
+    const digest = crypto.createHash('sha256').update(material).digest('hex').slice(0, 32);
+    return `${event.event_name}:${digest}`;
+  }
 
-    // Check Opt-out intent
-    const isOptOut = OPT_OUT_KEYWORDS.some((kw) => normalizedText.includes(kw));
-    if (isOptOut) {
-      await this.supabase
-        .from('care_schedules')
-        .update({
-          enabled: false,
-          stop_reason: 'CUSTOMER_OPT_OUT',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('company_id', companyId)
-        .eq('customer_id', customerId)
-        .eq('channel', 'ZALO');
+  private async processMessageEvent(
+    event: ZaloWebhookPayload,
+    inbound: boolean,
+    zaloUserUid: string,
+    providerMsgId: string,
+    claim: { eventId: string; claimToken: string; companyId: string; oaId: string; externalRef: string }
+  ): Promise<IngressResult> {
+    let rawContent = event.message?.text || '';
+    if (!rawContent && event.message?.attachments?.length) {
+      rawContent = `[Tệp đính kèm: ${event.message.attachments[0].type}]`;
+    }
+    if (!rawContent) {
+      rawContent = `[Tin nhắn ${event.event_name}]`;
     }
 
-    // Check if there is an active recent CareDelivery awaiting response
-    const { data: pendingDelivery } = await this.supabase
-      .from('care_deliveries')
+    const userName = inbound ? await this.lookupDisplayNameForNewUser(claim.companyId, claim.oaId, zaloUserUid) : '';
+    const { sanitizedText } = sanitizeMessageContent(rawContent);
+
+    const { data, error } = await this.supabase.rpc('zalo_process_ingress_message', {
+      p_event_id: claim.eventId,
+      p_claim_token: claim.claimToken,
+      p_company_id: claim.companyId,
+      p_oa_id: claim.oaId,
+      p_external_ref: claim.externalRef,
+      p_raw_msg_id: providerMsgId,
+      p_zalo_user_uid: zaloUserUid,
+      p_user_name: userName,
+      p_event_name: event.event_name,
+      p_sender_id: event.sender?.id ?? null,
+      p_recipient_id: event.recipient?.id ?? null,
+      p_is_inbound: inbound,
+      p_sanitized_content: sanitizedText,
+      p_raw_content: rawContent,
+      p_raw_payload: event as unknown as Record<string, unknown>,
+      p_event_at: parseEventTime(event.timestamp),
+      p_opt_out: inbound && detectCareOptOut(rawContent),
+    });
+
+    if (error || !data) {
+      throw new Error(error?.message || 'Atomic ingress transaction returned no result');
+    }
+    return data as IngressResult;
+  }
+
+  private async processStatusEvent(
+    event: ZaloWebhookPayload,
+    status: StatusKind,
+    zaloUserUid: string,
+    claim: { eventId: string; claimToken: string; companyId: string; oaId: string; externalRef: string }
+  ): Promise<void> {
+    const { error } = await this.supabase.rpc('zalo_process_ingress_status_event', {
+      p_event_id: claim.eventId,
+      p_claim_token: claim.claimToken,
+      p_company_id: claim.companyId,
+      p_oa_id: claim.oaId,
+      p_external_ref: claim.externalRef,
+      p_kind: status,
+      p_zalo_user_uid: zaloUserUid,
+      p_provider_msg_ids: event.message?.msg_ids || [],
+      p_event_at: parseEventTime(event.timestamp),
+    });
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
+
+  /**
+   * Fetches the Zalo display name only when the user has no identity yet (first message).
+   * Profile failures never block ingestion; the DB falls back to "Khách Zalo xxxx".
+   */
+  private async lookupDisplayNameForNewUser(companyId: string, oaId: string, zaloUserUid: string): Promise<string> {
+    const { data: identity } = await this.supabase
+      .from('identities')
       .select('id')
       .eq('company_id', companyId)
-      .eq('customer_id', customerId)
       .eq('channel', 'ZALO')
-      .in('status', ['SENT', 'DELIVERED'])
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .eq('external_id', zaloUserUid)
       .maybeSingle();
+    if (identity) {
+      return '';
+    }
 
-    if (pendingDelivery) {
-      await this.supabase
-        .from('care_deliveries')
-        .update({
-          status: 'RESPONDED',
-          responded_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', pendingDelivery.id);
+    try {
+      const client = await this.clientProvider(companyId, oaId);
+      const profile = await client.getUserProfile(zaloUserUid);
+      // A display name is user-controlled text: strip anything that looks like a phone number.
+      return profile?.user_name ? sanitizeMessageContent(profile.user_name).sanitizedText.slice(0, 120) : '';
+    } catch {
+      return '';
     }
   }
 }

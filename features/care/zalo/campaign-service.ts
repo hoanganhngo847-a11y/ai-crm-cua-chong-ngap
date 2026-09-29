@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient, ZaloClientFactory } from '../../omnichannel/zalo/zalo-client';
+import { ZaloClient, ZaloClientFactory, ZaloSendResult } from '../../omnichannel/zalo/zalo-client';
 import {
   AudienceCustomerInfo,
   CARE_AUDIENCE_GROUPS,
@@ -9,62 +9,86 @@ import {
   CreateCareCampaignParams,
 } from './types';
 import { ZaloCareAnalyticsService } from './analytics-service';
+import { renderCareTemplate } from './template';
+
+export type CampaignClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
 
 export interface ZaloCareCampaignServiceOptions {
   supabase?: SupabaseClient;
-  zaloClient?: ZaloClient;
+  /** Overrides per-OA client resolution (tests). Production uses ZaloClientFactory. */
+  clientProvider?: CampaignClientProvider;
+  fetchFn?: typeof fetch;
   analyticsService?: ZaloCareAnalyticsService;
 }
 
+export interface ExecuteCampaignResult {
+  sent: number;
+  failed: number;
+  uncertain: number;
+  skipped: number;
+  totalAudience: number;
+}
+
+interface CampaignClaimRow {
+  claim_status: 'CLAIMED' | 'SKIPPED' | 'BUSY' | 'UNCERTAIN' | 'EXHAUSTED' | 'ALREADY_RESOLVED';
+  delivery_id: string | null;
+  claim_token: string | null;
+  customer_name: string | null;
+  recipient_zalo_uid: string | null;
+  oa_id: string | null;
+  message_template: string | null;
+  attempt_count: number;
+}
+
+const AUDIENCE_STAGES: Record<CareAudienceGroup, string[]> = {
+  [CARE_AUDIENCE_GROUPS.UNREACHABLE_3_TIMES]: ['UNREACHABLE'],
+  [CARE_AUDIENCE_GROUPS.CONSIDERING]: ['NEGOTIATING', 'PRICE_OFFERED'],
+  [CARE_AUDIENCE_GROUPS.QUOTED_NOT_CLOSED]: ['PRICE_CALCULATED', 'SURVEY_COMPLETED'],
+  [CARE_AUDIENCE_GROUPS.OLD_CUSTOMER]: ['HANDOVER_COMPLETED', 'WARRANTY_ACTIVE'],
+};
+
 /**
- * Service managing Bulk Care Campaigns via Zalo OA.
- * Target audience: 4 groups ('UNREACHABLE_3_TIMES', 'CONSIDERING', 'QUOTED_NOT_CLOSED', 'OLD_CUSTOMER').
+ * Bulk Zalo care campaigns for the 4 business audience segments.
  *
- * Reliability & Policy Invariants:
- * 1. Opt-out & Suppression: Checks customer opt-out state before sending; skips suppressed customers.
- * 2. Send Idempotency: Enforced by deterministic idempotency_key (campaign_id:customer_id:channel).
- * 3. Delivery State Tracking: Records state in care_deliveries (PENDING -> SENT -> DELIVERED / FAILED / SKIPPED).
- * 4. Retry Policy: Retries up to 2 times for transient sending errors before marking FAILED.
+ * Invariants:
+ * 1. Suppression: opt-out / unfollow is re-checked inside the claim transaction (SKIPPED row kept
+ *    as compliance evidence).
+ * 2. Idempotency: one care_deliveries row per (campaign, customer); only the claim-token holder
+ *    may call the provider. Re-running a campaign resumes it: FAILED rows are re-claimed up to
+ *    maxAttempts, SENT/UNCERTAIN rows are never sent again.
+ * 3. No blind retries: a timeout/5xx is UNCERTAIN and is not resent automatically.
+ * 4. Metrics are recomputed from care_deliveries (never incremented ad hoc).
  */
 export class ZaloCareCampaignService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient?: ZaloClient;
+  private readonly clientProvider: CampaignClientProvider;
   private readonly analyticsService: ZaloCareAnalyticsService;
 
   constructor(options: ZaloCareCampaignServiceOptions = {}) {
-    this.zaloClient = options.zaloClient;
-
-    if (options.supabase) {
-      this.supabase = options.supabase;
-    } else {
-      this.supabase = createAdminClient();
-    }
-
-    this.analyticsService =
-      options.analyticsService || new ZaloCareAnalyticsService({ supabase: this.supabase });
+    const supabase = options.supabase ?? createAdminClient();
+    this.supabase = supabase;
+    this.clientProvider =
+      options.clientProvider ??
+      ((companyId, oaId) => ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
+    this.analyticsService = options.analyticsService || new ZaloCareAnalyticsService({ supabase });
   }
 
-  /**
-   * Creates a new Care Campaign record in care_campaigns.
-   */
   async createCampaign(params: CreateCareCampaignParams): Promise<CareCampaignDTO> {
-    const startedAt = params.startedAt || new Date().toISOString();
+    if (!AUDIENCE_STAGES[params.audienceGroup]) {
+      throw new Error(`Unknown care audience group: ${params.audienceGroup}`);
+    }
+    if (!params.messageTemplate?.trim()) {
+      throw new Error('messageTemplate is required');
+    }
 
     const { data, error } = await this.supabase
       .from('care_campaigns')
       .insert({
         company_id: params.companyId,
         channel: 'ZALO',
-        audience_rule: {
-          audienceGroup: params.audienceGroup,
-          title: params.title,
-        },
-        message_template: params.messageTemplate,
-        started_at: startedAt,
-        sent_count: 0,
-        delivered_count: 0,
-        response_count: 0,
-        converted_to_sale_count: 0,
+        audience_rule: { audienceGroup: params.audienceGroup, title: params.title },
+        message_template: params.messageTemplate.trim(),
+        started_at: params.startedAt || new Date().toISOString(),
       })
       .select('*')
       .single();
@@ -90,294 +114,152 @@ export class ZaloCareCampaignService {
   }
 
   /**
-   * Resolves target audience customers based on the 4 business segments.
-   * Excludes customers without Zalo Identity or customers who have opted out (CareSchedule enabled = false).
+   * Customers of the segment that have a Zalo identity and have not opted out.
    */
-  async getAudienceCustomers(
-    companyId: string,
-    audienceGroup: CareAudienceGroup
-  ): Promise<AudienceCustomerInfo[]> {
-    let stages: string[];
-
-    switch (audienceGroup) {
-      case CARE_AUDIENCE_GROUPS.UNREACHABLE_3_TIMES:
-        stages = ['UNREACHABLE'];
-        break;
-      case CARE_AUDIENCE_GROUPS.CONSIDERING:
-        stages = ['NEGOTIATING', 'PRICE_OFFERED'];
-        break;
-      case CARE_AUDIENCE_GROUPS.QUOTED_NOT_CLOSED:
-        stages = ['PRICE_CALCULATED', 'SURVEY_COMPLETED'];
-        break;
-      case CARE_AUDIENCE_GROUPS.OLD_CUSTOMER:
-        stages = ['HANDOVER_COMPLETED', 'WARRANTY_ACTIVE'];
-        break;
-      default:
-        stages = [];
+  async getAudienceCustomers(companyId: string, audienceGroup: CareAudienceGroup): Promise<AudienceCustomerInfo[]> {
+    const stages = AUDIENCE_STAGES[audienceGroup] || [];
+    if (stages.length === 0) {
+      return [];
     }
 
-    // 1. Fetch matching customers in stage
     const { data: customers, error: custError } = await this.supabase
       .from('customers')
       .select('id, name, stage')
       .eq('company_id', companyId)
       .in('stage', stages);
-
     if (custError) {
       throw new Error(`Failed to fetch audience customers: ${custError.message}`);
     }
 
-    interface CustomerRecord {
-      id: string;
-      name: string;
-      stage: string;
-    }
-    interface IdentityRecord {
-      customer_id: string;
-      external_id: string;
-    }
-    interface CareScheduleRecord {
-      customer_id: string;
-    }
-
-    const customerList = (customers || []) as unknown as CustomerRecord[];
+    const customerList = (customers || []) as { id: string; name: string; stage: string }[];
     const customerIds = customerList.map((c) => c.id);
-
     if (customerIds.length === 0) {
       return [];
     }
 
-    // 2. Fetch Zalo identities for these customers
-    const { data: identities, error: idError } = await this.supabase
-      .from('identities')
-      .select('customer_id, external_id')
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .in('customer_id', customerIds);
-
+    const [{ data: identities, error: idError }, { data: stopped, error: stopError }] = await Promise.all([
+      this.supabase
+        .from('identities')
+        .select('customer_id, external_id')
+        .eq('company_id', companyId)
+        .eq('channel', 'ZALO')
+        .in('customer_id', customerIds),
+      this.supabase
+        .from('care_schedules')
+        .select('customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', 'ZALO')
+        .eq('enabled', false)
+        .in('customer_id', customerIds),
+    ]);
     if (idError) {
       throw new Error(`Failed to fetch Zalo identities: ${idError.message}`);
     }
-
-    const zaloIdMap = new Map<string, string>();
-    const identityList = (identities || []) as unknown as IdentityRecord[];
-    identityList.forEach((i) => {
-      zaloIdMap.set(i.customer_id, i.external_id);
-    });
-
-    // 3. Fetch disabled care schedules to respect customer opt-outs & suppressions
-    const { data: disabledSchedules } = await this.supabase
-      .from('care_schedules')
-      .select('customer_id')
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .eq('enabled', false)
-      .in('customer_id', customerIds);
-
-    const optOutSet = new Set<string>();
-    const disabledList = (disabledSchedules || []) as unknown as CareScheduleRecord[];
-    disabledList.forEach((s) => {
-      optOutSet.add(s.customer_id);
-    });
-
-    // 4. Combine and filter eligible audience (Strict suppression of opted-out users)
-    const result: AudienceCustomerInfo[] = [];
-
-    for (const cust of customerList) {
-      const zaloUid = zaloIdMap.get(cust.id);
-      const isOptedOut = optOutSet.has(cust.id);
-
-      if (zaloUid && !isOptedOut) {
-        result.push({
-          customerId: cust.id,
-          customerName: cust.name,
-          customerStage: cust.stage,
-          zaloUid,
-        });
-      }
+    if (stopError) {
+      throw new Error(`Failed to fetch care suppressions: ${stopError.message}`);
     }
 
-    return result;
+    const zaloIdMap = new Map(
+      ((identities || []) as { customer_id: string; external_id: string }[]).map((i) => [i.customer_id, i.external_id])
+    );
+    const optOutSet = new Set(((stopped || []) as { customer_id: string }[]).map((s) => s.customer_id));
+
+    return customerList
+      .filter((c) => zaloIdMap.has(c.id) && !optOutSet.has(c.id))
+      .map((c) => ({
+        customerId: c.id,
+        customerName: c.name,
+        customerStage: c.stage,
+        zaloUid: zaloIdMap.get(c.id) as string,
+      }));
   }
 
   /**
-   * Executes campaign sending with batching, rate limiting, and idempotency protection.
+   * Sends (or resumes) a campaign. `companyId` must come from the verified caller and must own
+   * the campaign.
    */
   async executeCampaign(
     campaignId: string,
-    options: { batchSize?: number; delayMsBetweenBatches?: number; maxRetries?: number } = {}
-  ): Promise<{
-    sent: number;
-    failed: number;
-    skipped: number;
-    totalAudience: number;
-  }> {
+    options: { companyId: string; batchSize?: number; delayMsBetweenBatches?: number; maxAttempts?: number }
+  ): Promise<ExecuteCampaignResult> {
     const batchSize = options.batchSize || 20;
     const delayMs = options.delayMsBetweenBatches ?? 500;
-    const maxRetries = options.maxRetries ?? 2;
 
-    // Fetch campaign details
     const { data: campaign, error: campError } = await this.supabase
       .from('care_campaigns')
-      .select('*')
+      .select('id, company_id, audience_rule')
       .eq('id', campaignId)
-      .single();
-
+      .eq('company_id', options.companyId)
+      .maybeSingle();
     if (campError || !campaign) {
       throw new Error(`Care campaign ${campaignId} not found`);
     }
 
     const audienceGroup = campaign.audience_rule?.audienceGroup as CareAudienceGroup;
-    const template = campaign.message_template;
     const audience = await this.getAudienceCustomers(campaign.company_id, audienceGroup);
+    const result: ExecuteCampaignResult = { sent: 0, failed: 0, uncertain: 0, skipped: 0, totalAudience: audience.length };
 
-    let client = this.zaloClient;
-    if (!client) {
-      const { data: oaConfig } = await this.supabase
-        .from('zalo_oa_configs')
-        .select('oa_id')
-        .eq('company_id', campaign.company_id)
-        .eq('status', 'ACTIVE')
-        .limit(1)
-        .maybeSingle();
-
-      const oaId = oaConfig?.oa_id || '';
-      client = await ZaloClientFactory.getClientForOa(campaign.company_id, oaId, { supabase: this.supabase });
-    }
-
-    let sent = 0;
-    let failed = 0;
-    let skipped = 0;
-
-    // Process in batches
     for (let i = 0; i < audience.length; i += batchSize) {
-      const batch = audience.slice(i, i + batchSize);
-
-      for (const target of batch) {
-        const idempotencyKey = `${campaignId}:${target.customerId}:ZALO`;
-
-        // 1. IDEMPOTENCY CHECK: Check if delivery already exists
-        const { data: existingDelivery } = await this.supabase
-          .from('care_deliveries')
-          .select('id, status')
-          .eq('company_id', campaign.company_id)
-          .eq('idempotency_key', idempotencyKey)
-          .maybeSingle();
-
-        if (existingDelivery) {
-          skipped++;
+      for (const target of audience.slice(i, i + batchSize)) {
+        const { data: claimData, error: claimError } = await this.supabase.rpc('care_claim_campaign_delivery', {
+          p_campaign_id: campaignId,
+          p_customer_id: target.customerId,
+          p_max_attempts: options.maxAttempts ?? 3,
+        });
+        if (claimError) {
+          console.error(`[CareCampaign] Claim failed for customer ${target.customerId}: ${claimError.message}`);
+          result.skipped++;
           continue;
         }
 
-        // 2. REAL-TIME OPT-OUT / SUPPRESSION CHECK (Fail-safe against recent opt-outs)
-        const { data: optOutCheck } = await this.supabase
-          .from('care_schedules')
-          .select('id, enabled')
-          .eq('company_id', campaign.company_id)
-          .eq('customer_id', target.customerId)
-          .eq('channel', 'ZALO')
-          .maybeSingle();
-
-        if (optOutCheck && optOutCheck.enabled === false) {
-          // Record SKIPPED delivery to document suppression compliance
-          await this.supabase.from('care_deliveries').insert({
-            company_id: campaign.company_id,
-            campaign_id: campaignId,
-            customer_id: target.customerId,
-            idempotency_key: idempotencyKey,
-            channel: 'ZALO',
-            status: 'SKIPPED',
-          });
-          skipped++;
+        const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as CampaignClaimRow | undefined;
+        if (!claim || claim.claim_status !== 'CLAIMED' || !claim.delivery_id || !claim.claim_token) {
+          if (claim?.claim_status === 'UNCERTAIN') result.uncertain++;
+          else result.skipped++;
           continue;
         }
 
-        // 3. Insert PENDING delivery record BEFORE calling external provider (Durable state tracking)
-        const { data: delivery, error: insertError } = await this.supabase
-          .from('care_deliveries')
-          .insert({
-            company_id: campaign.company_id,
-            campaign_id: campaignId,
-            customer_id: target.customerId,
-            idempotency_key: idempotencyKey,
-            channel: 'ZALO',
-            status: 'PENDING',
-          })
-          .select('id')
-          .single();
+        const message = renderCareTemplate(claim.message_template || '', { name: claim.customer_name || target.customerName });
+        const outcome = await this.send(campaign.company_id, claim.oa_id as string, claim.recipient_zalo_uid as string, message);
 
-        if (insertError || !delivery) {
-          skipped++;
+        const { error: completeError } = await this.supabase.rpc('care_complete_delivery', {
+          p_delivery_id: claim.delivery_id,
+          p_claim_token: claim.claim_token,
+          p_outcome: outcome.outcome,
+          p_provider_msg_id: outcome.providerMsgId ?? null,
+          p_error_code: outcome.errorCode ?? null,
+          p_error_message: outcome.errorMessage ?? null,
+        });
+        if (completeError) {
+          console.error(`[CareCampaign] Could not record outcome for delivery ${claim.delivery_id}: ${completeError.message}`);
+          result.uncertain++;
           continue;
         }
 
-        // 4. Personalize message template
-        const renderedMessage = template.replace(/\{name\}/g, target.customerName);
-
-        // 5. Send message via Zalo OpenAPI with Retry Policy
-        let isSuccess = false;
-        let messageId = '';
-
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            const sendRes = await client.sendTextMessage(target.zaloUid, renderedMessage);
-
-            if (sendRes.error === 0) {
-              isSuccess = true;
-              messageId = sendRes.data?.message_id || `msg_${Date.now()}`;
-              break;
-            }
-          } catch {
-            // Transient failure caught for retry attempt
-          }
-
-          if (attempt < maxRetries) {
-            // Brief exponential backoff
-            await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
-          }
-        }
-
-        const nowIso = new Date().toISOString();
-        if (isSuccess) {
-          await this.supabase
-            .from('care_deliveries')
-            .update({
-              status: 'SENT',
-              sent_at: nowIso,
-              delivered_at: nowIso,
-              external_message_ref: messageId,
-              updated_at: nowIso,
-            })
-            .eq('id', delivery.id);
-
-          sent++;
-        } else {
-          await this.supabase
-            .from('care_deliveries')
-            .update({
-              status: 'FAILED',
-              updated_at: nowIso,
-            })
-            .eq('id', delivery.id);
-
-          failed++;
-        }
+        if (outcome.outcome === 'ACCEPTED') result.sent++;
+        else if (outcome.outcome === 'REJECTED') result.failed++;
+        else result.uncertain++;
       }
 
-      // Delay between batches to respect rate limits if more batches remain
       if (i + batchSize < audience.length && delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
 
-    // 6. Update Campaign metrics from care_deliveries rollup
     await this.analyticsService.calculateCampaignMetrics(campaignId);
+    return result;
+  }
 
-    return {
-      sent,
-      failed,
-      skipped,
-      totalAudience: audience.length,
-    };
+  private async send(companyId: string, oaId: string, recipient: string, message: string): Promise<ZaloSendResult> {
+    try {
+      const client = await this.clientProvider(companyId, oaId);
+      return await client.sendTextMessageWithOutcome(recipient, message);
+    } catch (err: unknown) {
+      return {
+        outcome: 'REJECTED',
+        errorCode: 'CLIENT_UNAVAILABLE',
+        errorMessage: err instanceof Error ? err.message : 'Zalo client unavailable',
+      };
+    }
   }
 }

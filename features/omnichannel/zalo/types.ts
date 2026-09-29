@@ -36,6 +36,8 @@ export type ZaloWebhookEventType =
   | 'user_send_video'
   | 'user_send_file'
   | 'oa_send_text'
+  | 'user_received_message'
+  | 'user_seen_message'
   | 'follow'
   | 'unfollow'
   | string;
@@ -61,7 +63,9 @@ export interface ZaloWebhookAttachment {
 }
 
 export interface ZaloWebhookMessage {
-  msg_id: string;
+  msg_id?: string;
+  /** Present on user_received_message / user_seen_message receipts. */
+  msg_ids?: string[];
   text?: string;
   attachments?: ZaloWebhookAttachment[];
   [key: string]: unknown;
@@ -71,8 +75,10 @@ export interface ZaloWebhookPayload {
   event_name: ZaloWebhookEventType;
   app_id?: string;
   oa_id?: string;
-  sender: ZaloWebhookSender;
-  recipient: ZaloWebhookRecipient;
+  sender?: ZaloWebhookSender;
+  recipient?: ZaloWebhookRecipient;
+  /** Present on follow / unfollow events. */
+  follower?: { id: string };
   message?: ZaloWebhookMessage;
   timestamp: number | string;
   user_id_by_app?: string;
@@ -128,12 +134,28 @@ export interface ZaloMessageItem {
 export interface SendZaloReplyParams {
   conversationId: string;
   content: string;
-  commandId?: string;
+  /**
+   * Stable command id generated ONCE at the trusted request boundary (e.g. by the composer when
+   * the sale presses "Gửi") and reused on every retry of the same send. Required: a retry with a
+   * new id would be a new message.
+   */
+  commandId: string;
   oaId?: string;
 }
 
+export type SendZaloReplyStatus =
+  | 'SENT'
+  | 'ALREADY_SENT'
+  | 'PENDING_FINALIZE'
+  | 'BUSY'
+  | 'UNCERTAIN'
+  | 'FAILED'
+  | 'CONFLICT';
+
 export interface SendZaloReplyResult {
   success: boolean;
+  status: SendZaloReplyStatus;
+  deliveryId?: string;
   interactionId?: string;
   externalMessageId?: string;
   error?: string;

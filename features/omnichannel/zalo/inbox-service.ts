@@ -1,9 +1,10 @@
 import crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClient, ZaloClientFactory } from './zalo-client';
-import { sanitizeMessageContent } from './sanitizer';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
+import type { TrustedActorContext } from '../../../lib/server-auth/sensitive-context';
+import { ZaloClient, ZaloClientFactory, ZaloSendResult } from './zalo-client';
+import { sanitizeMessageContent } from './sanitizer';
 import {
   SendZaloReplyParams,
   SendZaloReplyResult,
@@ -28,8 +29,6 @@ interface InteractionDbRow {
   id: string;
   conversation_id: string;
   customer_id: string;
-  channel: 'ZALO';
-  type: 'MESSAGE';
   direction: 'INBOUND' | 'OUTBOUND';
   sanitized_content?: string | null;
   external_ref: string | null;
@@ -38,23 +37,34 @@ interface InteractionDbRow {
   created_at: string;
 }
 
-interface OutboundDeliveryDbRow {
-  id: string;
-  company_id: string;
-  conversation_id: string;
-  customer_id: string;
+interface OutboundClaimRow {
+  claim_status: 'CLAIMED' | 'ALREADY_SENT' | 'PENDING_FINALIZE' | 'BUSY' | 'UNCERTAIN' | 'CONFLICT';
+  delivery_id: string;
+  claim_token: string | null;
+  oa_id: string | null;
   recipient_zalo_uid: string;
-  content: string;
+  customer_id: string;
   provider_msg_id: string | null;
-  status: string;
+  interaction_id: string | null;
 }
+
+interface FinalizeResult {
+  interaction_id: string;
+  already_finalized: boolean;
+  provider_msg_id: string | null;
+}
+
+export type ZaloOutboundClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
 
 export interface ZaloInboxServiceOptions {
   supabase?: SupabaseClient;
-  zaloClient?: ZaloClient;
+  /** Overrides per-OA client resolution (tests). Production uses ZaloClientFactory. */
+  clientProvider?: ZaloOutboundClientProvider;
+  fetchFn?: typeof fetch;
 }
 
 export interface GetZaloConversationsParams {
+  /** Must come from a server-verified actor, never from the browser. */
   companyId: string;
   status?: string;
   limit?: number;
@@ -62,66 +72,62 @@ export interface GetZaloConversationsParams {
 }
 
 export interface GetZaloMessagesParams {
+  /** Must come from a server-verified actor, never from the browser. */
   companyId: string;
   conversationId: string;
   limit?: number;
   offset?: number;
 }
 
-export interface AuthenticatedActor {
-  userId: string;
+/**
+ * Trusted machine principal for automated sends (AI auto-reply after the 5-minute rule,
+ * system notifications). It is a separate entry point: a user request can never become a
+ * system send by omitting the actor.
+ */
+export interface ZaloSystemPrincipal {
+  kind: 'SYSTEM_WORKER';
   companyId: string;
-  role: string;
+  actorType: 'AI' | 'SYSTEM';
+  workerName: string;
 }
 
-export interface SendZaloReplyContext {
-  actor: AuthenticatedActor;
-}
+const HUMAN_SENDER_ROLES = new Set(['SALE', 'BOSS_ADMIN']);
 
-export interface SendSystemZaloReplyContext {
-  principal: 'SYSTEM';
-  systemUserId?: string;
+function mapClaimError(message: string): Error {
+  if (message.includes('ZALO_OUTBOUND_ACTOR_FORBIDDEN')) {
+    return new ServerAuthError('Bạn không có quyền gửi tin nhắn Zalo.', 403, 'ROLE_FORBIDDEN');
+  }
+  if (message.includes('ZALO_CONVERSATION_NOT_FOUND')) {
+    return new ServerAuthError('Không tìm thấy hội thoại Zalo.', 404, 'RESOURCE_NOT_FOUND');
+  }
+  return new Error(`Durable outbox claim failed (send halted, fail-closed): ${message}`);
 }
-
-const ALLOWED_ACTOR_ROLES = ['SALE', 'BOSS_ADMIN'];
 
 /**
- * Service providing the standardized interface for Member 2 (Unified Inbox).
+ * Unified-inbox facade for Zalo (consumed by Member 2).
  *
- * Security Invariants & Outbound Safety:
- * 1. Actor Authentication & Authorization (Fix Lỗi 4):
- *    - Enforces context.actor presence, active tenant match, and whitelist role ('SALE' | 'BOSS_ADMIN').
- *    - Rejects unauthorized or cross-tenant outbound requests with 401/403.
- * 2. Durable Outbox & Stable Idempotency (Fix Lỗi 5):
- *    - Generates or receives deterministic UUIDv4/caller command_id (No Math.random()).
- *    - Pre-records outbox entry in PENDING before provider call.
- *    - Fail-closed: Halts immediately if outbox insertion fails.
- * 3. Provider Call & Finalize Transaction (Fix Lỗi 6):
- *    - Updates outbox to SENDING with lease_until.
- *    - Calls Zalo Provider API.
- *    - On provider success: updates provider_msg_id and calls atomic finalize RPC.
- *    - If DB finalize fails: marks outbox as PROVIDER_SENT_PENDING_FINALIZE (NEVER resends to provider).
+ * Outbound pipeline (every step durable, provider called at most once per command_id):
+ *   1. zalo_claim_outbound_delivery — verifies actor membership/role + tenant in the DB, derives
+ *      recipient and OA from the conversation, writes the outbox row (SENDING + lease + claim
+ *      token) keyed by UNIQUE(company_id, channel, command_id). Any failure → no provider call.
+ *   2. Zalo API call, outcome classified ACCEPTED / REJECTED / UNCERTAIN.
+ *   3. zalo_record_outbound_provider_result — provider_msg_id persisted right after success.
+ *   4. zalo_finalize_outbound_delivery — interaction + private raw + conversation + SENT in one
+ *      transaction; idempotent and retried by reconcilePendingDeliveries() without resending.
  */
 export class ZaloInboxService {
   private readonly supabase: SupabaseClient;
-  private readonly zaloClient?: ZaloClient;
+  private readonly clientProvider: ZaloOutboundClientProvider;
 
   constructor(options: ZaloInboxServiceOptions = {}) {
-    this.zaloClient = options.zaloClient;
-
-    if (options.supabase) {
-      this.supabase = options.supabase;
-    } else {
-      this.supabase = createAdminClient();
-    }
+    const supabase = options.supabase ?? createAdminClient();
+    this.supabase = supabase;
+    this.clientProvider =
+      options.clientProvider ??
+      ((companyId, oaId) => ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
   }
 
-  /**
-   * Fetches Zalo conversations for the unified inbox.
-   */
-  async getZaloConversations(
-    params: GetZaloConversationsParams
-  ): Promise<ZaloConversationItem[]> {
+  async getZaloConversations(params: GetZaloConversationsParams): Promise<ZaloConversationItem[]> {
     const { companyId, status, limit = 50, offset = 0 } = params;
 
     let query = this.supabase
@@ -155,17 +161,12 @@ export class ZaloInboxService {
     }));
   }
 
-  /**
-   * Fetches message interactions for a specific Zalo conversation.
-   */
-  async getZaloMessagesByConversation(
-    params: GetZaloMessagesParams
-  ): Promise<ZaloMessageItem[]> {
+  async getZaloMessagesByConversation(params: GetZaloMessagesParams): Promise<ZaloMessageItem[]> {
     const { companyId, conversationId, limit = 100, offset = 0 } = params;
 
     const { data, error } = await this.supabase
       .from('interactions')
-      .select('id, conversation_id, customer_id, channel, type, direction, sanitized_content, external_ref, actor_type, actor_user_id, created_at')
+      .select('id, conversation_id, customer_id, direction, sanitized_content, external_ref, actor_type, actor_user_id, created_at')
       .eq('company_id', companyId)
       .eq('conversation_id', conversationId)
       .eq('channel', 'ZALO')
@@ -192,377 +193,234 @@ export class ZaloInboxService {
   }
 
   /**
-   * Sends a reply message from the Unified Inbox directly to Zalo OpenAPI (User / Sale Actor).
-   * Context with authenticated actor is strictly required.
+   * Human send from the unified inbox. `actor` MUST be produced by the trusted server
+   * authorization chain (verifyActorForCompany / resolveTrustedActor) — it is not optional.
    */
-  async sendZaloReply(
-    params: SendZaloReplyParams,
-    context: SendZaloReplyContext
-  ): Promise<SendZaloReplyResult> {
-    if (!context || !context.actor || !context.actor.userId || !context.actor.companyId) {
-      throw new ServerAuthError(
-        'Authentication required: Missing authenticated actor for reply',
-        401,
-        'UNAUTHENTICATED'
-      );
+  async sendZaloReply(params: SendZaloReplyParams, actor: TrustedActorContext): Promise<SendZaloReplyResult> {
+    if (!actor || actor.isTrustedServerVerified !== true || !actor.userId || !actor.companyId) {
+      throw new ServerAuthError('Authentication required: missing verified actor for Zalo reply', 401, 'UNAUTHENTICATED');
+    }
+    if (actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      throw new ServerAuthError('Membership is not active', 403, 'MEMBERSHIP_INACTIVE');
+    }
+    if (!HUMAN_SENDER_ROLES.has(actor.role)) {
+      throw new ServerAuthError(`Role "${actor.role}" is not authorized to send Zalo replies`, 403, 'ROLE_FORBIDDEN');
     }
 
-    return this.executeSendReply(params, {
-      actorType: 'SALE',
-      userId: context.actor.userId,
-      companyId: context.actor.companyId,
-      role: context.actor.role,
-    });
+    return this.executeSend(params, actor.companyId, 'SALE', actor.userId);
   }
 
   /**
-   * Sends an automated system reply using System Principal.
+   * Automated send by a trusted system worker. Separate entry point with an explicit principal.
    */
-  async sendSystemZaloReply(
-    params: SendZaloReplyParams,
-    context: SendSystemZaloReplyContext = { principal: 'SYSTEM' }
-  ): Promise<SendZaloReplyResult> {
-    if (!context || context.principal !== 'SYSTEM') {
-      throw new ServerAuthError(
-        'System authorization required for system reply',
-        403,
-        'ROLE_FORBIDDEN'
-      );
+  async sendSystemZaloReply(params: SendZaloReplyParams, principal: ZaloSystemPrincipal): Promise<SendZaloReplyResult> {
+    if (!principal || principal.kind !== 'SYSTEM_WORKER' || !principal.companyId || !principal.workerName) {
+      throw new ServerAuthError('System worker principal required for automated Zalo reply', 403, 'ROLE_FORBIDDEN');
+    }
+    if (principal.actorType !== 'AI' && principal.actorType !== 'SYSTEM') {
+      throw new ServerAuthError('Invalid system actor type', 403, 'ROLE_FORBIDDEN');
     }
 
-    return this.executeSendReply(params, {
-      actorType: 'SYSTEM',
-      userId: context.systemUserId || null,
-      companyId: null,
-      role: 'SYSTEM',
-    });
+    return this.executeSend(params, principal.companyId, principal.actorType, null);
   }
 
-  /**
-   * Core Outbound Reply Execution Pipeline:
-   * 1. Validate permissions & tenant ownership
-   * 2. Fail-closed outbox claim
-   * 3. Provider invocation
-   * 4. Atomic DB finalization / reconciliation flagging
-   */
-  private async executeSendReply(
+  private async executeSend(
     params: SendZaloReplyParams,
-    actorInfo: {
-      actorType: 'SALE' | 'SYSTEM';
-      userId: string | null;
-      companyId: string | null;
-      role: string;
-    }
+    companyId: string,
+    actorType: 'SALE' | 'AI' | 'SYSTEM',
+    actorUserId: string | null
   ): Promise<SendZaloReplyResult> {
-    const { conversationId, content } = params;
-
-    if (!content || !content.trim()) {
-      return { success: false, error: 'Message content cannot be empty' };
+    const content = (params.content || '').trim();
+    if (!content) {
+      return { success: false, status: 'FAILED', error: 'Message content cannot be empty' };
+    }
+    if (!params.conversationId) {
+      return { success: false, status: 'FAILED', error: 'conversationId is required' };
+    }
+    if (!params.commandId || !params.commandId.trim()) {
+      return { success: false, status: 'FAILED', error: 'commandId is required (stable idempotency key)' };
     }
 
-    if (!conversationId) {
-      return { success: false, error: 'conversationId is required' };
-    }
+    const { sanitizedText } = sanitizeMessageContent(content);
+    const contentHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 
-    // 1. TRUSTED LOOKUP: Fetch conversation from DB
-    const { data: convData, error: convErr } = await this.supabase
-      .from('conversations')
-      .select('id, company_id, customer_id, channel, external_conversation_id')
-      .eq('id', conversationId)
-      .maybeSingle();
+    // 1. Durable claim (fail-closed)
+    const { data: claimData, error: claimError } = await this.supabase.rpc('zalo_claim_outbound_delivery', {
+      p_company_id: companyId,
+      p_conversation_id: params.conversationId,
+      p_command_id: params.commandId.trim(),
+      p_actor_type: actorType,
+      p_actor_user_id: actorUserId,
+      p_raw_content: content,
+      p_sanitized_content: sanitizedText,
+      p_content_sha256: contentHash,
+      p_oa_id: params.oaId ?? null,
+    });
 
-    if (convErr || !convData) {
-      return { success: false, error: 'Conversation not found' };
-    }
-
-    const conversation = convData as {
-      id: string;
-      company_id: string;
-      customer_id: string;
-      channel: string;
-      external_conversation_id: string;
-    };
-
-    // 2. TENANT ISOLATION & ROLE AUTHORIZATION (Fix Lỗi 4)
-    if (actorInfo.actorType === 'SALE') {
-      if (actorInfo.companyId !== conversation.company_id) {
-        throw new ServerAuthError(
-          'Access forbidden: User tenant does not match conversation company',
-          403,
-          'RESOURCE_FORBIDDEN'
-        );
+    if (claimError) {
+      if (claimError.message.includes('ZALO_OA_NOT_CONFIGURED')) {
+        return { success: false, status: 'FAILED', error: 'Zalo OA chưa được cấu hình cho hội thoại này.' };
       }
-
-      if (!ALLOWED_ACTOR_ROLES.includes(actorInfo.role)) {
-        throw new ServerAuthError(
-          `Access forbidden: Role "${actorInfo.role}" is not authorized to send Zalo replies`,
-          403,
-          'ROLE_FORBIDDEN'
-        );
-      }
+      throw mapClaimError(claimError.message);
     }
 
-    const effectiveCompanyId = conversation.company_id;
-    const effectiveCustomerId = conversation.customer_id;
-
-    // 3. RESOLVE TRUSTED RECIPIENT ZALO UID FROM IDENTITIES TABLE
-    let recipientZaloId = conversation.external_conversation_id;
-
-    const { data: identity } = await this.supabase
-      .from('identities')
-      .select('external_id')
-      .eq('company_id', effectiveCompanyId)
-      .eq('customer_id', effectiveCustomerId)
-      .eq('channel', 'ZALO')
-      .maybeSingle();
-
-    if (identity?.external_id) {
-      recipientZaloId = identity.external_id;
+    const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as OutboundClaimRow | undefined;
+    if (!claim) {
+      throw new Error('Durable outbox claim returned no row (send halted, fail-closed)');
     }
 
-    if (!recipientZaloId) {
-      return {
-        success: false,
-        error: 'Trusted Zalo recipient identity not found for this conversation',
-      };
+    switch (claim.claim_status) {
+      case 'ALREADY_SENT':
+        return {
+          success: true,
+          status: 'ALREADY_SENT',
+          deliveryId: claim.delivery_id,
+          interactionId: claim.interaction_id ?? undefined,
+          externalMessageId: claim.provider_msg_id ?? undefined,
+        };
+      case 'PENDING_FINALIZE':
+        return this.finalize(claim.delivery_id);
+      case 'BUSY':
+        return { success: false, status: 'BUSY', deliveryId: claim.delivery_id, error: 'Tin nhắn này đang được gửi.' };
+      case 'CONFLICT':
+        return { success: false, status: 'CONFLICT', deliveryId: claim.delivery_id, error: 'commandId đã dùng cho nội dung khác.' };
+      case 'UNCERTAIN':
+        return {
+          success: false,
+          status: 'UNCERTAIN',
+          deliveryId: claim.delivery_id,
+          error: 'Không xác định được tin đã tới Zalo hay chưa; cần kiểm tra thủ công, hệ thống không tự gửi lại.',
+        };
+      case 'CLAIMED':
+        break;
+      default:
+        throw new Error(`Unexpected outbox claim status ${String(claim.claim_status)}`);
     }
 
-    // 4. DURABLE OUTBOX & STABLE IDEMPOTENCY (Fix Lỗi 5)
-    // Deterministic command ID: Caller-provided or generated UUIDv4 (NO Date.now() + Math.random())
-    const commandId = params.commandId || crypto.randomUUID();
-    const idempotencyKey = `outbound:${effectiveCompanyId}:${conversationId}:${commandId}`;
-    const nowIso = new Date().toISOString();
+    const claimToken = claim.claim_token as string;
 
-    const { data: deliveryRecord, error: deliveryErr } = await this.supabase
-      .from('zalo_outbound_deliveries')
-      .insert({
-        company_id: effectiveCompanyId,
-        conversation_id: conversationId,
-        customer_id: effectiveCustomerId,
-        recipient_zalo_uid: recipientZaloId,
-        channel: 'ZALO',
-        command_id: commandId,
-        idempotency_key: idempotencyKey,
-        content: content.trim(),
-        status: 'PENDING',
-        attempts: 0,
-        created_at: nowIso,
-        updated_at: nowIso,
-      })
-      .select('id')
-      .maybeSingle();
-
-    // FAIL-CLOSED: If outbox insert fails or cannot claim, STOP IMMEDIATELY! NEVER call Zalo API without outbox record.
-    if (deliveryErr || !deliveryRecord?.id) {
-      throw new Error(
-        `Durable outbox claim failed: ${deliveryErr?.message || 'Unable to record outbox delivery'}. Send halted (fail-closed).`
-      );
-    }
-
-    const deliveryId = deliveryRecord.id;
-
-    // 5. MARK OUTBOX DELIVERY AS SENDING WITH LEASE (Fix Lỗi 6)
-    const leaseUntilIso = new Date(Date.now() + 2 * 60 * 1000).toISOString();
-    await this.supabase
-      .from('zalo_outbound_deliveries')
-      .update({
-        status: 'SENDING',
-        lease_until: leaseUntilIso,
-        attempts: 1,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', deliveryId);
-
-    // Resolve client
-    let oaId = params.oaId || '';
-    if (!oaId) {
-      const { data: oaConfig } = await this.supabase
-        .from('zalo_oa_configs')
-        .select('oa_id')
-        .eq('company_id', effectiveCompanyId)
-        .eq('status', 'ACTIVE')
-        .limit(1)
-        .maybeSingle();
-      if (oaConfig?.oa_id) {
-        oaId = oaConfig.oa_id;
-      }
-    }
-
-    const client =
-      this.zaloClient ??
-      (await ZaloClientFactory.getClientForOa(effectiveCompanyId, oaId, { supabase: this.supabase }));
-
-    // 6. CALL ZALO OPENAPI OUTBOUND ENDPOINT
-    let zaloRes;
+    // 2. Provider call (at most once per successful claim)
+    let sendResult: ZaloSendResult;
     try {
-      zaloRes = await client.sendTextMessage(recipientZaloId, content.trim());
-    } catch (apiError: unknown) {
-      const errorMsg = apiError instanceof Error ? apiError.message : 'Zalo OpenAPI communication failure';
-
-      // Update delivery record to FAILED
-      await this.supabase
-        .from('zalo_outbound_deliveries')
-        .update({
-          status: 'FAILED',
-          error_code: 'PROVIDER_EXCEPTION',
-          error_message: errorMsg,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', deliveryId);
-
-      return {
-        success: false,
-        error: errorMsg,
+      const client = await this.clientProvider(companyId, claim.oa_id as string);
+      sendResult = await client.sendTextMessageWithOutcome(claim.recipient_zalo_uid, content);
+    } catch (err: unknown) {
+      // Client construction failed before any request left the process: definitely not sent.
+      sendResult = {
+        outcome: 'REJECTED',
+        errorCode: 'CLIENT_UNAVAILABLE',
+        errorMessage: err instanceof Error ? err.message : 'Zalo client unavailable',
       };
     }
 
-    // 7. PROCESS PROVIDER RESPONSE
-    if (zaloRes.error !== 0) {
-      const errorMsg = `Zalo API error [${zaloRes.error}]: ${zaloRes.message}`;
-
-      await this.supabase
-        .from('zalo_outbound_deliveries')
-        .update({
-          status: 'FAILED',
-          error_code: String(zaloRes.error),
-          error_message: zaloRes.message || errorMsg,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', deliveryId);
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    const providerMsgId = zaloRes.data?.message_id || `zalo_out_${Date.now()}`;
-
-    // Update provider_msg_id on outbox record immediately
-    await this.supabase
-      .from('zalo_outbound_deliveries')
-      .update({
-        provider_msg_id: providerMsgId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', deliveryId);
-
-    // 8. ATOMIC DATABASE FINALIZE (Fix Lỗi 6)
-    const { sanitizedText } = sanitizeMessageContent(content.trim());
-
-    try {
-      const { data: finalizeInteractionId, error: finalizeErr } = await this.supabase.rpc(
-        'zalo_finalize_outbound_reply',
-        {
-          p_company_id: effectiveCompanyId,
-          p_delivery_id: deliveryId,
-          p_conversation_id: conversationId,
-          p_customer_id: effectiveCustomerId,
-          p_recipient_zalo_uid: recipientZaloId,
-          p_content: content.trim(),
-          p_sanitized_content: sanitizedText,
-          p_provider_msg_id: providerMsgId,
-          p_actor_type: actorInfo.actorType,
-          p_actor_user_id: actorInfo.userId,
-          p_raw_payload: {
-            recipient: { user_id: recipientZaloId },
-            message: { text: content.trim() },
-            response: zaloRes,
-          },
-        }
+    // 3. Persist the provider outcome immediately
+    const { error: recordError } = await this.supabase.rpc('zalo_record_outbound_provider_result', {
+      p_delivery_id: claim.delivery_id,
+      p_claim_token: claimToken,
+      p_outcome: sendResult.outcome,
+      p_provider_msg_id: sendResult.providerMsgId ?? null,
+      p_error_code: sendResult.errorCode ?? null,
+      p_error_message: sendResult.errorMessage ?? null,
+    });
+    if (recordError) {
+      console.error(
+        `[ZaloInbox] Provider outcome ${sendResult.outcome} for delivery ${claim.delivery_id} could not be recorded: ${recordError.message}`
       );
+      return {
+        success: sendResult.outcome === 'ACCEPTED',
+        status: 'UNCERTAIN',
+        deliveryId: claim.delivery_id,
+        externalMessageId: sendResult.providerMsgId,
+        error: 'Kết quả gửi chưa được ghi nhận; hệ thống sẽ không tự gửi lại.',
+      };
+    }
 
-      if (finalizeErr || !finalizeInteractionId) {
-        throw new Error(finalizeErr?.message || 'Finalize RPC failed');
-      }
+    if (sendResult.outcome === 'REJECTED') {
+      return {
+        success: false,
+        status: 'FAILED',
+        deliveryId: claim.delivery_id,
+        error: `Zalo từ chối tin nhắn [${sendResult.errorCode}]: ${sendResult.errorMessage}`,
+      };
+    }
+    if (sendResult.outcome === 'UNCERTAIN') {
+      return {
+        success: false,
+        status: 'UNCERTAIN',
+        deliveryId: claim.delivery_id,
+        error: 'Không xác định được tin đã tới Zalo hay chưa; hệ thống không tự gửi lại.',
+      };
+    }
 
+    // 4. Atomic finalize
+    return this.finalize(claim.delivery_id);
+  }
+
+  private async finalize(deliveryId: string): Promise<SendZaloReplyResult> {
+    const { data, error } = await this.supabase.rpc('zalo_finalize_outbound_delivery', { p_delivery_id: deliveryId });
+    if (error || !data) {
+      // Provider already accepted the message. Stay in PROVIDER_SENT_PENDING_FINALIZE for reconcile.
+      console.error(`[ZaloInbox] Finalize failed for delivery ${deliveryId}: ${error?.message || 'no result'}`);
       return {
         success: true,
-        interactionId: finalizeInteractionId,
-        externalMessageId: providerMsgId,
+        status: 'PENDING_FINALIZE',
+        deliveryId,
+        error: 'Tin đã gửi tới Zalo; bản ghi CRM sẽ được đồng bộ lại tự động.',
       };
-    } catch (finalizeError: unknown) {
-      // CRITICAL: Provider already sent! Do NOT mark FAILED or resend to Zalo!
-      // Mark outbox status as PROVIDER_SENT_PENDING_FINALIZE for reconciliation!
-      const errDetail =
-        finalizeError instanceof Error ? finalizeError.message : 'DB finalize failed after provider dispatch';
-
-      await this.supabase
-        .from('zalo_outbound_deliveries')
-        .update({
-          status: 'PROVIDER_SENT_PENDING_FINALIZE',
-          error_message: errDetail,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', deliveryId);
-
-      throw new Error(
-        `Outbound message sent by provider (${providerMsgId}) but DB finalize failed. Marked as PROVIDER_SENT_PENDING_FINALIZE for reconciliation.`
-      );
     }
+    const result = data as FinalizeResult;
+    return {
+      success: true,
+      status: result.already_finalized ? 'ALREADY_SENT' : 'SENT',
+      deliveryId,
+      interactionId: result.interaction_id,
+      externalMessageId: result.provider_msg_id ?? undefined,
+    };
   }
 
   /**
-   * Reconciles deliveries in PROVIDER_SENT_PENDING_FINALIZE state.
-   * CRITICAL ARCHITECTURE RULE (Fix Lỗi 6):
-   * NEVER calls Zalo API again (the message was already dispatched by the provider).
-   * Only retries the atomic DB finalization via zalo_finalize_outbound_reply RPC.
+   * Retries DB finalization for deliveries the provider already accepted. Never calls Zalo.
+   * Also reports PROVIDER_UNCERTAIN deliveries that need a human decision.
    */
-  async reconcilePendingDeliveries(options?: {
-    companyId?: string;
-    limit?: number;
-  }): Promise<{ reconciled: number; failed: number }> {
-    let query = this.supabase
+  async reconcilePendingDeliveries(options: { companyId?: string; limit?: number } = {}): Promise<{
+    reconciled: number;
+    failed: number;
+    uncertain: number;
+  }> {
+    let pendingQuery = this.supabase
       .from('zalo_outbound_deliveries')
-      .select('*')
-      .eq('status', 'PROVIDER_SENT_PENDING_FINALIZE');
+      .select('id')
+      .eq('status', 'PROVIDER_SENT_PENDING_FINALIZE')
+      .order('updated_at', { ascending: true })
+      .limit(options.limit ?? 100);
+    let uncertainQuery = this.supabase
+      .from('zalo_outbound_deliveries')
+      .select('id')
+      .eq('status', 'PROVIDER_UNCERTAIN')
+      .limit(1000);
 
-    if (options?.companyId) {
-      query = query.eq('company_id', options.companyId);
-    }
-    if (options?.limit) {
-      query = query.limit(options.limit);
+    if (options.companyId) {
+      pendingQuery = pendingQuery.eq('company_id', options.companyId);
+      uncertainQuery = uncertainQuery.eq('company_id', options.companyId);
     }
 
-    const { data: pendingDeliveries, error } = await query;
-    if (error || !pendingDeliveries) {
-      return { reconciled: 0, failed: 0 };
+    const [{ data: pending, error }, { data: uncertainRows }] = await Promise.all([pendingQuery, uncertainQuery]);
+    if (error) {
+      throw new Error(`Failed to list pending outbound deliveries: ${error.message}`);
     }
 
     let reconciled = 0;
     let failed = 0;
-
-    for (const delivery of pendingDeliveries as OutboundDeliveryDbRow[]) {
-      const { sanitizedText } = sanitizeMessageContent(delivery.content || '');
-      const { data: finalizeId, error: finalizeErr } = await this.supabase.rpc(
-        'zalo_finalize_outbound_reply',
-        {
-          p_company_id: delivery.company_id,
-          p_delivery_id: delivery.id,
-          p_conversation_id: delivery.conversation_id,
-          p_customer_id: delivery.customer_id,
-          p_recipient_zalo_uid: delivery.recipient_zalo_uid,
-          p_content: delivery.content,
-          p_sanitized_content: sanitizedText,
-          p_provider_msg_id: delivery.provider_msg_id,
-          p_actor_type: 'SALE',
-          p_actor_user_id: null,
-          p_raw_payload: {
-            recipient: { user_id: delivery.recipient_zalo_uid },
-            message: { text: delivery.content },
-            reconciled: true,
-          },
-        }
-      );
-
-      if (finalizeErr || !finalizeId) {
+    for (const row of (pending || []) as { id: string }[]) {
+      const { error: finalizeError } = await this.supabase.rpc('zalo_finalize_outbound_delivery', { p_delivery_id: row.id });
+      if (finalizeError) {
         failed++;
+        console.error(`[ZaloInbox] Reconcile finalize failed for delivery ${row.id}: ${finalizeError.message}`);
       } else {
         reconciled++;
       }
     }
 
-    return { reconciled, failed };
+    return { reconciled, failed, uncertain: (uncertainRows || []).length };
   }
 }
-
