@@ -215,7 +215,10 @@ async function runP1BackendRegressionTests() {
     id: POLICY_ID,
     company_id: COMPANY_A,
     version: `v1_${RUN_ID}`,
-    conditions: { deposit_percentage: 50 },
+    conditions: {
+      deposit_percentage: 50,
+      standard_materials: { aluminum: '6063-T5', gasket: 'EPDM' },
+    },
     price_rules: { base_price_per_sqm: 5000000 },
     effective_at: new Date().toISOString(),
     status: 'ACTIVE',
@@ -359,12 +362,20 @@ async function runP1BackendRegressionTests() {
   testPass('P1-002: Forged material value strictly rejected with INVALID_TECHNICAL_INPUT');
 
   // 7. Authoritative calculation-derived values successfully create production order;
-  // recognized-key forged spec values are ignored/overridden, client materials authoritative: NO
+  // Attack test: client supplies forged dimensions, width, thickness_mm, tolerance_mm.
+  // Expected: dimensions=canonical, width=canonical, thickness_mm/tolerance_mm are NOT client-forged values,
+  // and do NOT appear in the snapshot if no canonical source exists; client materials authoritative: NO.
   const { data: prodSuccess, error: prodSuccessErr } = await adminClient.rpc('create_production_order_atomic', {
     p_company_id: COMPANY_A,
     p_order_id: ORDER_A,
     p_actor_id: BOSS_A,
-    p_specs: { dimensions: '999x999cm', width: 9999, notes: 'Priority production' },
+    p_specs: {
+      dimensions: '999x999cm',
+      width: 9999,
+      thickness_mm: 1,
+      tolerance_mm: 999,
+      notes: 'Priority production',
+    },
     p_materials: { aluminum: '6063-T5' },
     p_deadline: new Date(Date.now() + 86400000).toISOString(),
   });
@@ -381,11 +392,79 @@ async function runP1BackendRegressionTests() {
   // Client forged dimensions and width were stripped and strictly overridden by canonical record
   assert.strictEqual(dbProd.specs.dimensions, '200x120cm', 'Recognized-key forged spec dimensions must be ignored/overridden');
   assert.strictEqual(dbProd.specs.width, 2.0, 'Recognized-key forged spec width must be ignored/overridden');
+  // Client forged thickness_mm and tolerance_mm MUST NOT survive into production snapshot
+  assert.notStrictEqual(dbProd.specs.thickness_mm, 1, 'Client forged thickness_mm (1) must not survive');
+  assert.strictEqual(dbProd.specs.thickness_mm, undefined, 'Missing canonical thickness must not appear in production snapshot');
+  assert.notStrictEqual(dbProd.specs.tolerance_mm, 999, 'Client forged tolerance_mm (999) must not survive');
+  assert.strictEqual(dbProd.specs.tolerance_mm, undefined, 'Missing canonical tolerance must not appear in production snapshot');
   assert.strictEqual(dbProd.specs.notes, 'Priority production', 'Non-canonical auxiliary note preserved');
   // Client materials are NOT authoritative; canonical materials snapshot is persisted
   assert.strictEqual(dbProd.materials.aluminum, '6063-T5');
   assert.strictEqual(dbProd.materials.gasket, 'EPDM', 'Authoritative standard materials persisted even if omitted by client');
   testPass('P1-002: Recognized-key forged spec ignored/overridden; client materials authoritative: NO');
+
+  // 7b. Canonical thickness and tolerance derived from authoritative record; client forged values cannot override
+  const POLICY_AUTH_SPECS_ID = crypto.randomUUID();
+  await adminClient.from('pricing_policies').insert({
+    id: POLICY_AUTH_SPECS_ID,
+    company_id: COMPANY_A,
+    version: `v_authspecs_${RUN_ID}`,
+    conditions: {
+      deposit_percentage: 50,
+      standard_materials: { aluminum: '6063-T5' },
+      thickness_mm: 12,
+      tolerance_mm: 3,
+    },
+    price_rules: { base_price_per_sqm: 5000000 },
+    effective_at: new Date().toISOString(),
+    status: 'ACTIVE',
+  });
+  const { data: calcAuthSpecs } = await adminClient.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_AUTH_SPECS_ID,
+    p_policy_version: `v_authspecs_${RUN_ID}`,
+    p_input_data: { width: 2.0, height: 1.0 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { data: orderAuthSpecs } = await adminClient.rpc('create_order_from_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_price_calculation_id: calcAuthSpecs.id,
+    p_payment_reference: `DH-P1-AUTHSPECS-${RUN_ID}`,
+    p_actor_user_id: BOSS_A,
+  });
+  await adminClient.from('orders').update({ deposit_status: 'CONFIRMED', order_status: 'DEPOSIT_CONFIRMED' }).eq('id', orderAuthSpecs.orderId);
+  const contractAuthSpecsId = crypto.randomUUID();
+  await adminClient.from('contracts').insert({
+    id: contractAuthSpecsId,
+    company_id: COMPANY_A,
+    order_id: orderAuthSpecs.orderId,
+    status: 'SIGNED',
+    contract_value: 10000000,
+    signed_file_ref: `${COMPANY_A}/contracts/${contractAuthSpecsId}/revision-1/signed.pdf`,
+    template_version: 'v1',
+    generated_file_ref: `${COMPANY_A}/contracts/${contractAuthSpecsId}/revision-1/gen.pdf`,
+  });
+  const { data: prodAuthSpecs, error: prodAuthSpecsErr } = await adminClient.rpc('create_production_order_atomic', {
+    p_company_id: COMPANY_A,
+    p_order_id: orderAuthSpecs.orderId,
+    p_actor_id: BOSS_A,
+    p_specs: { dimensions: '999x999cm', thickness_mm: 1, tolerance_mm: 999 },
+    p_materials: { aluminum: '6063-T5' },
+    p_deadline: new Date(Date.now() + 86400000).toISOString(),
+  });
+  assert(!prodAuthSpecsErr && prodAuthSpecs?.id, `Production creation failed: ${prodAuthSpecsErr?.message}`);
+  const dbProdAuthSpecs = queryRawJson<Array<{ specs: Record<string, unknown> }>>(`
+    SELECT specs FROM public.production_orders WHERE id = '${prodAuthSpecs.id}';
+  `)[0];
+  assert.strictEqual(dbProdAuthSpecs.specs.dimensions, '200x100cm', 'Canonical dimensions override client forged dimensions');
+  assert.strictEqual(Number(dbProdAuthSpecs.specs.thickness_mm), 12, 'Canonical thickness_mm (12) overrides client forged value (1)');
+  assert.strictEqual(Number(dbProdAuthSpecs.specs.tolerance_mm), 3, 'Canonical tolerance_mm (3) overrides client forged value (999)');
+  testPass('P1-002: Canonical thickness and tolerance derived from authoritative record; client forged values cannot override');
 
   // 8. Missing canonical technical input (missing dimensions in calculation): fail closed
   const { data: calcNoDims } = await adminClient.rpc('save_price_calculation_rpc', {
@@ -429,17 +508,33 @@ async function runP1BackendRegressionTests() {
   assert.ok(missingDimsErr && (missingDimsErr.message.includes('NEED_INFO') || missingDimsErr.message.includes('INVALID_TECHNICAL_INPUT')));
   testPass('P1-002: Missing canonical dimensions in authoritative record fails closed with NEED_INFO');
 
-  // 9. Missing canonical materials in authoritative records fails closed
+  // 9. Pricing policy without materials + calculation without materials + survey without materials
+  // -> create_production_order_atomic fails closed, and prove no trigger secretly injects materials
   const POLICY_NO_MAT_ID = crypto.randomUUID();
   await adminClient.from('pricing_policies').insert({
     id: POLICY_NO_MAT_ID,
     company_id: COMPANY_A,
     version: `v_nomat_${RUN_ID}`,
-    conditions: { standard_materials: null }, // explicitly no materials
+    conditions: { deposit_percentage: 50 }, // plain conditions with NO materials
     price_rules: { base_price_per_sqm: 5000000 },
     effective_at: new Date().toISOString(),
     status: 'ACTIVE',
   });
+
+  // Verify no trigger secretly injected materials into the pricing policy
+  const insertedPolicy = queryRawJson<Array<{ conditions: Record<string, unknown> }>>(`
+    SELECT conditions FROM public.pricing_policies WHERE id = '${POLICY_NO_MAT_ID}';
+  `)[0];
+  assert.strictEqual(insertedPolicy.conditions.standard_materials, undefined, 'No trigger may inject standard_materials');
+  assert.strictEqual(insertedPolicy.conditions.materials, undefined, 'No trigger may inject materials');
+
+  // Verify trigger trg_pricing_policies_default_materials is completely ABSENT
+  const triggerCheck = queryRawJson<Array<{ count: string }>>(`
+    SELECT count(*)::text as count FROM information_schema.triggers
+    WHERE trigger_name = 'trg_pricing_policies_default_materials';
+  `)[0];
+  assert.strictEqual(triggerCheck.count, '0', 'trg_pricing_policies_default_materials trigger must not exist');
+
   const { data: calcNoMat } = await adminClient.rpc('save_price_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
@@ -479,7 +574,13 @@ async function runP1BackendRegressionTests() {
     p_deadline: new Date(Date.now() + 86400000).toISOString(),
   });
   assert.ok(missingMatErr && missingMatErr.message.includes('INVALID_TECHNICAL_INPUT'));
-  testPass('P1-002: Missing canonical materials in authoritative record fails closed with INVALID_TECHNICAL_INPUT');
+
+  // Prove production order was NOT created and order did NOT become RELEASED_TO_FACTORY
+  const noProdRows = queryRawJson<Array<{ count: string }>>(`
+    SELECT count(*)::text as count FROM public.production_orders WHERE order_id = '${orderNoMat.orderId}';
+  `)[0];
+  assert.strictEqual(noProdRows.count, '0', 'Production order must not be created when materials missing');
+  testPass('P1-002: Missing canonical materials in authoritative record fails closed with INVALID_TECHNICAL_INPUT (no secret trigger)');
 
   // ----------------------------------------------------------------------------
   // P1-003: Atomic Audited Warranty Ticket Creation

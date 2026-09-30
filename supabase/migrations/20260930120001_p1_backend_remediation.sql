@@ -31,31 +31,10 @@ GRANT EXECUTE ON FUNCTION public.complete_voice_media_job(uuid, uuid, uuid) TO s
 -- 2. P1-002: CANONICAL PRODUCTION SPECIFICATIONS & MATERIALS DERIVATION
 -- ------------------------------------------------------------------------------
 
--- Ensure pricing policies have authoritative standard materials defined
-CREATE OR REPLACE FUNCTION public.set_default_pricing_policy_materials()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-BEGIN
-  IF NEW.conditions IS NULL THEN
-    NEW.conditions := '{}'::jsonb;
-  END IF;
-  IF NOT (NEW.conditions ? 'standard_materials') AND NOT (NEW.conditions ? 'materials') THEN
-    NEW.conditions := NEW.conditions || jsonb_build_object(
-      'standard_materials', jsonb_build_object('aluminum', '6063-T5', 'gasket', 'EPDM')
-    );
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
+-- Ensure any legacy default materials triggers or functions are completely removed.
+-- Manufacturing business facts must NOT be guessed, invented, or defaulted.
 DROP TRIGGER IF EXISTS trg_pricing_policies_default_materials ON public.pricing_policies;
-CREATE TRIGGER trg_pricing_policies_default_materials
-  BEFORE INSERT ON public.pricing_policies
-  FOR EACH ROW
-  EXECUTE FUNCTION public.set_default_pricing_policy_materials();
+DROP FUNCTION IF EXISTS public.set_default_pricing_policy_materials();
 
 CREATE OR REPLACE FUNCTION public.create_production_order_atomic(
   p_company_id uuid,
@@ -97,7 +76,7 @@ BEGIN
     RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
   END IF;
 
-  -- 3. Reject arbitrary client-only specs keys (must be domain-recognized technical fields)
+  -- 3. Reject arbitrary client-only specs keys (must be domain-recognized technical fields or notes)
   FOR v_key IN SELECT jsonb_object_keys(p_specs) LOOP
     IF v_key NOT IN (
       'dimensions', 'clear_width_mm', 'barrier_height_mm', 'width', 'height',
@@ -159,7 +138,8 @@ BEGIN
 
   -- Check calculation status: fail closed if input missing or incomplete
   IF pc.status = 'NEED_INFO' THEN
-    RAISE EXCEPTION 'NEED_INFO';
+    RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'
+      USING ERRCODE = 'NEED_INFO';
   END IF;
   IF pc.status <> 'CALCULATED' THEN
     RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
@@ -215,14 +195,16 @@ BEGIN
 
   -- Fail-closed if authoritative materials are missing
   IF v_canonical_materials IS NULL OR jsonb_typeof(v_canonical_materials) = 'null' OR v_canonical_materials = '{}'::jsonb THEN
-    RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
+    RAISE EXCEPTION 'Cannot release to production: canonical materials specification is missing'
+      USING ERRCODE = 'INVALID_TECHNICAL_INPUT';
   END IF;
 
   -- Detect and reject material tampering / client forgery
   FOR v_key IN SELECT jsonb_object_keys(p_materials) LOOP
     IF v_canonical_materials ? v_key THEN
       IF (p_materials->>v_key) <> (v_canonical_materials->>v_key) THEN
-        RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
+        RAISE EXCEPTION 'Production order material specification cannot contradict canonical policy/survey materials'
+          USING ERRCODE = 'INVALID_TECHNICAL_INPUT';
       END IF;
     END IF;
   END LOOP;
@@ -235,7 +217,8 @@ BEGIN
     v_cw_mm := NULLIF(s.measurements->>'clear_width_mm', '')::numeric;
     v_bh_mm := NULLIF(s.measurements->>'barrier_height_mm', '')::numeric;
     IF v_cw_mm IS NULL OR v_bh_mm IS NULL OR v_cw_mm <= 0 OR v_bh_mm <= 0 THEN
-      RAISE EXCEPTION 'NEED_INFO';
+      RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'
+        USING ERRCODE = 'NEED_INFO';
     END IF;
     v_canonical_dim := v_cw_mm::text || 'x' || v_bh_mm::text || 'mm';
     v_canonical_specs := jsonb_build_object(
@@ -247,11 +230,31 @@ BEGIN
       'clear_width_mm', v_cw_mm,
       'barrier_height_mm', v_bh_mm
     );
-    IF s.measurements ? 'gate_type' THEN
+    IF s.measurements ? 'gate_type' AND NULLIF(btrim(s.measurements->>'gate_type'), '') IS NOT NULL THEN
       v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', s.measurements->>'gate_type');
+    ELSIF pc.input_data ? 'gate_type' AND NULLIF(btrim(pc.input_data->>'gate_type'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', pc.input_data->>'gate_type');
     END IF;
-    IF s.measurements ? 'mounting_method' THEN
+    IF s.measurements ? 'mounting_method' AND NULLIF(btrim(s.measurements->>'mounting_method'), '') IS NOT NULL THEN
       v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', s.measurements->>'mounting_method');
+    ELSIF pc.input_data ? 'mounting_method' AND NULLIF(btrim(pc.input_data->>'mounting_method'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', pc.input_data->>'mounting_method');
+    END IF;
+    -- Canonical thickness from survey -> calculation -> policy
+    IF s.measurements ? 'thickness_mm' AND NULLIF(btrim(s.measurements->>'thickness_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (s.measurements->>'thickness_mm')::numeric);
+    ELSIF pc.input_data ? 'thickness_mm' AND NULLIF(btrim(pc.input_data->>'thickness_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pc.input_data->>'thickness_mm')::numeric);
+    ELSIF pp.conditions ? 'thickness_mm' AND NULLIF(btrim(pp.conditions->>'thickness_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pp.conditions->>'thickness_mm')::numeric);
+    END IF;
+    -- Canonical tolerance from survey -> calculation -> policy
+    IF s.measurements ? 'tolerance_mm' AND NULLIF(btrim(s.measurements->>'tolerance_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (s.measurements->>'tolerance_mm')::numeric);
+    ELSIF pc.input_data ? 'tolerance_mm' AND NULLIF(btrim(pc.input_data->>'tolerance_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pc.input_data->>'tolerance_mm')::numeric);
+    ELSIF pp.conditions ? 'tolerance_mm' AND NULLIF(btrim(pp.conditions->>'tolerance_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pp.conditions->>'tolerance_mm')::numeric);
     END IF;
   ELSE
     v_w := NULLIF(pc.input_data->>'width', '')::numeric;
@@ -289,23 +292,38 @@ BEGIN
       );
     ELSE
       -- Incomplete or missing canonical technical input: fail closed
-      RAISE EXCEPTION 'NEED_INFO';
+      RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'
+        USING ERRCODE = 'NEED_INFO';
     END IF;
 
-    IF pc.input_data ? 'gate_type' THEN
+    IF pc.input_data ? 'gate_type' AND NULLIF(btrim(pc.input_data->>'gate_type'), '') IS NOT NULL THEN
       v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', pc.input_data->>'gate_type');
     END IF;
-    IF pc.input_data ? 'mounting_method' THEN
+    IF pc.input_data ? 'mounting_method' AND NULLIF(btrim(pc.input_data->>'mounting_method'), '') IS NOT NULL THEN
       v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', pc.input_data->>'mounting_method');
+    END IF;
+    -- Canonical thickness from calculation -> policy
+    IF pc.input_data ? 'thickness_mm' AND NULLIF(btrim(pc.input_data->>'thickness_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pc.input_data->>'thickness_mm')::numeric);
+    ELSIF pp.conditions ? 'thickness_mm' AND NULLIF(btrim(pp.conditions->>'thickness_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pp.conditions->>'thickness_mm')::numeric);
+    END IF;
+    -- Canonical tolerance from calculation -> policy
+    IF pc.input_data ? 'tolerance_mm' AND NULLIF(btrim(pc.input_data->>'tolerance_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pc.input_data->>'tolerance_mm')::numeric);
+    ELSIF pp.conditions ? 'tolerance_mm' AND NULLIF(btrim(pp.conditions->>'tolerance_mm'), '') IS NOT NULL THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pp.conditions->>'tolerance_mm')::numeric);
     END IF;
   END IF;
 
-  -- Client values are stripped of canonical fields and strictly overridden by canonical technical facts.
-  -- Recognized-key forged spec values (e.g. forged dimensions, width, height, gate_type) are ignored and overridden.
-  v_final_specs := (p_specs - ARRAY[
-    'dimensions', 'canonical_dimensions', 'canonical_source', 'calculation_id', 'survey_id',
-    'width', 'height', 'clear_width_mm', 'barrier_height_mm', 'gate_type', 'mounting_method'
-  ]) || v_canonical_specs;
+  -- Technical specifications are strictly server-authoritative.
+  -- Every technical field must come from an authoritative persisted source.
+  -- Client cannot inject or override technical facts (dimensions, thickness_mm, tolerance_mm, width, height, gate_type, mounting_method).
+  -- Only non-technical operational note is accepted from client input (bounded to 1000 characters).
+  v_final_specs := v_canonical_specs;
+  IF p_specs ? 'notes' AND NULLIF(btrim(p_specs->>'notes'), '') IS NOT NULL THEN
+    v_final_specs := v_final_specs || jsonb_build_object('notes', left(btrim(p_specs->>'notes'), 1000));
+  END IF;
 
   -- 12. Insert production order
   INSERT INTO public.production_orders(

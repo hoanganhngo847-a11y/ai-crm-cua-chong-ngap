@@ -245,7 +245,7 @@ async function runP0SecurityRegressionTests() {
     id: policyId,
     company_id: COMPANY_A,
     version: 'v1',
-    conditions: { deposit_percentage: 30 },
+    conditions: { deposit_percentage: 30, standard_materials: { aluminum: '6063-T5' } },
     price_rules: { base_price_per_sqm: 5000000 },
     effective_at: new Date().toISOString(),
     status: 'ACTIVE',

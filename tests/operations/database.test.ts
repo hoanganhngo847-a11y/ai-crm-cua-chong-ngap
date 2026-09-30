@@ -48,7 +48,7 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
  try {
  sql(`INSERT INTO public.companies(id,name) VALUES(${q(c)},'Operations integration fixture'),(${q(other)},'Other test tenant');
  INSERT INTO public.customers(id,company_id,name,source,stage) VALUES(${q(customer)},${q(c)},'Test only','MANUAL','LEAD_NEW');
- INSERT INTO public.pricing_policies(id,company_id,version,conditions,price_rules,effective_at,status) VALUES(${q(policy)},${q(c)},'test','{}','{}',now(),'ACTIVE');
+ INSERT INTO public.pricing_policies(id,company_id,version,conditions,price_rules,effective_at,status) VALUES(${q(policy)},${q(c)},'test','{"standard_materials": {"aluminum": "6063-T5"}}','{}',now(),'ACTIVE');
  INSERT INTO public.price_calculations(id,company_id,customer_id,pricing_policy_id,policy_version,input_data,amount,status) VALUES(${q(price)},${q(c)},${q(customer)},${q(policy)},'test','{"width": 2, "height": 1}',100,'CALCULATED');`);
  for(const [id,role] of [[boss,'BOSS_ADMIN'],[tech,'TECHNICIAN'],[tech2,'TECHNICIAN']]) sql(`INSERT INTO auth.users(id) VALUES(${q(id)}); INSERT INTO public.user_profiles(id,full_name,status) VALUES(${q(id)},'Test only','ACTIVE') ON CONFLICT(id) DO UPDATE SET status='ACTIVE'; INSERT INTO public.company_members(company_id,user_id,role,status) VALUES(${q(c)},${q(id)},${q(role)},'ACTIVE');`);
  await t.test('migration applied; bucket private, constrained and RPC grants restricted',async()=>{
