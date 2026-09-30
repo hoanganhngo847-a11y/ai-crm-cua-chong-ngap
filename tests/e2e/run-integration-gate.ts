@@ -5,6 +5,7 @@
  * 1. Environment & Preconditions Check
  * 2. Database Migration Integrity Guard
  * 3. Auth & Sensitive Security Suites (Foundation)
+ * 3c. CRM Security & Multi-tenant Integrity Suite
  * 4. Response SLA Gate (Unit & DB Concurrency)
  * 4c. Facebook SLA Real Runtime Gate
  * 5. AI Customer Analysis Gate
@@ -74,6 +75,13 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:security'],
     description: 'Verify RLS foundation, sensitive data masking, and trusted server boundaries',
+  },
+  {
+    id: 'GATE_03C_CRM_SECURITY',
+    name: '3c. CRM Security & Multi-tenant Integrity Suite',
+    command: 'npm',
+    args: ['run', 'test:crm'],
+    description: 'Verify CRM fail-closed security, atomic compensation, zero-phone sanitization, and tenant isolation',
   },
   {
     id: 'GATE_04_RESPONSE_SLA_UNIT',

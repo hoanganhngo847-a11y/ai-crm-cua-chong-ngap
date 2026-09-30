@@ -37,7 +37,7 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
  const reject=async(name: string,args: Record<string,unknown>,message='INVALID_STATE_TRANSITION')=>{
   const {error}=await admin.rpc(name,args);assert.ok(error,'expected RPC rejection');assert.equal(error.message,message);
  };
- const create=(id: string,company=c)=>({p_company_id:company,p_order_id:id,p_actor_id:boss,p_specs:{},p_materials:{},p_deadline:'2026-10-01T00:00:00Z'});
+ const create=(id: string,company=c)=>({p_company_id:company,p_order_id:id,p_actor_id:boss,p_specs:{dimensions:'200x100cm'},p_materials:{aluminum:'6063-T5'},p_deadline:'2026-10-01T00:00:00Z'});
  const progress=(id: string,status: string)=>({p_company_id:c,p_production_order_id:id,p_actor_id:boss,p_status:status});
  const qc=(id: string)=>({p_company_id:c,p_production_order_id:id,p_inspector_id:boss,p_qc_status:'PASSED'});
  const schedule=(id: string,a: string)=>({p_company_id:c,p_order_id:id,p_customer_id:customer,p_appointment_id:a,p_crew:['Test crew'],p_actor_id:boss});
@@ -49,7 +49,7 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
  sql(`INSERT INTO public.companies(id,name) VALUES(${q(c)},'Operations integration fixture'),(${q(other)},'Other test tenant');
  INSERT INTO public.customers(id,company_id,name,source,stage) VALUES(${q(customer)},${q(c)},'Test only','MANUAL','LEAD_NEW');
  INSERT INTO public.pricing_policies(id,company_id,version,conditions,price_rules,effective_at,status) VALUES(${q(policy)},${q(c)},'test','{}','{}',now(),'ACTIVE');
- INSERT INTO public.price_calculations(id,company_id,customer_id,pricing_policy_id,policy_version,input_data,amount,status) VALUES(${q(price)},${q(c)},${q(customer)},${q(policy)},'test','{}',100,'CALCULATED');`);
+ INSERT INTO public.price_calculations(id,company_id,customer_id,pricing_policy_id,policy_version,input_data,amount,status) VALUES(${q(price)},${q(c)},${q(customer)},${q(policy)},'test','{"width": 2, "height": 1}',100,'CALCULATED');`);
  for(const [id,role] of [[boss,'BOSS_ADMIN'],[tech,'TECHNICIAN'],[tech2,'TECHNICIAN']]) sql(`INSERT INTO auth.users(id) VALUES(${q(id)}); INSERT INTO public.user_profiles(id,full_name,status) VALUES(${q(id)},'Test only','ACTIVE') ON CONFLICT(id) DO UPDATE SET status='ACTIVE'; INSERT INTO public.company_members(company_id,user_id,role,status) VALUES(${q(c)},${q(id)},${q(role)},'ACTIVE');`);
  await t.test('migration applied; bucket private, constrained and RPC grants restricted',async()=>{
   assert.equal(sql("SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version='20260928000001'"),'1');

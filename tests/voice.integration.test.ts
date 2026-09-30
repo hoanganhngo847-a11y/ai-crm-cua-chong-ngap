@@ -570,7 +570,12 @@ async function runTests() {
   assert.ok(claimedJob);
   assert.ok(claimedJob.lock_token, 'Worker lease must issue an explicit lock_token');
   const token1 = claimedJob.lock_token;
-  console.log('✓ Media worker lease claim with lock_token passed');
+
+  const { data: dbClaimedJob } = await adminClient.from('voice_media_jobs').select('status, lock_token, lease_expires_at').eq('id', jobId).single();
+  assert.strictEqual(dbClaimedJob?.status, 'PROCESSING');
+  assert.strictEqual(dbClaimedJob?.lock_token, token1);
+  assert.ok(dbClaimedJob?.lease_expires_at, 'lease_expires_at must be populated on claimed job');
+  console.log('✓ Media worker lease claim with lock_token and lease_expires_at passed');
 
   // Test D2: Stale lease reclaim issues new token and increments retry_count
   await adminClient.from('voice_media_jobs').update({

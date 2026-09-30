@@ -11,6 +11,7 @@
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
     "test:p0-security": "tsx --conditions=react-server tests/security/p0_security_regression.test.ts",
+    "test:p1-backend": "tsx --conditions=react-server tests/security/p1_backend_regression.test.ts",
     "test:zalo": "tsx --conditions=react-server tests/zalo/zalo_pglite.test.ts",
     "test:survey": "tsx --test features/survey/__tests__/survey.service.test.ts features/survey/__tests__/hardening.test.ts features/survey/__tests__/database.test.ts",
     "test:ai-analysis": "tsx --conditions=react-server tests/ai-analysis/ai-analysis.test.ts",
