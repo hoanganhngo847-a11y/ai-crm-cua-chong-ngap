@@ -512,6 +512,7 @@ async function run() {
     p_missing_fields: [],
   });
   assert(!calcBErr && calcB?.id, `calcB error: ${calcBErr?.message}`);
+  const CALC_B_ID = calcB.id;
 
   const PAYMENT_REF_B = `DH-TESTB${RUN_ID.toUpperCase()}`;
   const { data: orderBData, error: orderBErr } = await admin.rpc('create_order_from_calculation_rpc', {
@@ -1091,6 +1092,178 @@ async function run() {
   assert.strictEqual(stageHistSign.to_stage, 'CONTRACT_SIGNED');
 
   testPass('Contract signing: pre-upload resolution, dynamic revision 2 path, state machine, and customer stage integrity verified');
+
+  // --------------------------------------------------------------------------
+  // Test 14b: Failure recovery - upload succeeds, DB finalize fails before commit
+  // --------------------------------------------------------------------------
+  {
+    const { data: orderRecovData } = await admin.rpc('create_order_from_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_price_calculation_id: CALC_B_ID,
+      p_payment_reference: `DH-RECOV-B-${Date.now()}`,
+      p_actor_user_id: USER_BOSS_B,
+    });
+    const orderRecovId = orderRecovData.orderId;
+
+    const { data: recovContract, error: recovErr } = await admin.from('contracts').insert({
+      company_id: COMPANY_B,
+      order_id: orderRecovId,
+      revision_no: 1,
+      template_version: 'v1',
+      generated_file_ref: `${COMPANY_B}/contracts/recov-b/revision-1/generated.pdf`,
+      status: 'GENERATED',
+      contract_value: 12000000,
+      is_current: true,
+    }).select('id').single();
+    assert(!recovErr && recovContract, `Insert recovContract failed: ${recovErr?.message}`);
+
+    const recovContractId = recovContract.id;
+    const recovCanonicalSignedPath = `${COMPANY_B}/contracts/${recovContractId}/revision-1/signed.pdf`;
+
+    // Simulate RPC failure before commit
+    const failingRpcAdmin = new Proxy(admin, {
+      get(target, prop) {
+        if (prop === 'rpc') {
+          return async (fnName: string, args: any) => {
+            if (fnName === 'finalize_contract_signing_rpc') {
+              return { data: null, error: new Error('SIMULATED_FINALIZE_RPC_NETWORK_FAILURE') };
+            }
+            return (target as any).rpc(fnName, args);
+          };
+        }
+        return (target as any)[prop];
+      },
+    });
+
+    let threwExpected = false;
+    try {
+      await signContract({
+        companyId: COMPANY_B,
+        contractId: recovContractId,
+        signedPdfBuffer: validPdfBytes,
+      }, BOSS_B_CLIENT, failingRpcAdmin as any);
+    } catch (err: any) {
+      threwExpected = true;
+      assert(err.message.includes('SIMULATED_FINALIZE_RPC_NETWORK_FAILURE'));
+    }
+    assert(threwExpected, 'Must throw original finalization failure');
+
+    // Storage object must be removed by cleanup
+    const { data: fileData, error: fileErr } = await admin.storage
+      .from(STORAGE_BUCKET_MAP.CONTRACT)
+      .download(recovCanonicalSignedPath);
+    assert(fileErr || !fileData, 'Storage object must be removed after DB finalize failure');
+
+    // DB still GENERATED, signed_file_ref still null
+    const { data: contractAfterFail } = await admin
+      .from('contracts')
+      .select('status, signed_file_ref')
+      .eq('id', recovContractId)
+      .single();
+    assert.strictEqual(contractAfterFail?.status, 'GENERATED');
+    assert.strictEqual(contractAfterFail?.signed_file_ref, null);
+
+    // Retry signing with normal finalize behavior MUST SUCCEED (not blocked by STORAGE_OBJECT_ALREADY_EXISTS)
+    const retryResult = await signContract({
+      companyId: COMPANY_B,
+      contractId: recovContractId,
+      signedPdfBuffer: validPdfBytes,
+    }, BOSS_B_CLIENT, admin as any);
+
+    assert.strictEqual(retryResult.status, 'SIGNED');
+
+    // Verify DB is now SIGNED
+    const { data: contractAfterRetry } = await admin
+      .from('contracts')
+      .select('status, signed_file_ref')
+      .eq('id', recovContractId)
+      .single();
+    assert.strictEqual(contractAfterRetry?.status, 'SIGNED');
+    assert.strictEqual(contractAfterRetry?.signed_file_ref, recovCanonicalSignedPath);
+
+    // Verify storage object now exists
+    const { data: storedAfterRetry, error: storedErr } = await admin.storage
+      .from(STORAGE_BUCKET_MAP.CONTRACT)
+      .download(recovCanonicalSignedPath);
+    assert(!storedErr && storedAfterRetry, 'Storage object must exist after successful retry');
+
+    testPass('Failure recovery: upload succeeds + DB finalize fails -> storage cleaned up and retry succeeds');
+  }
+
+  // --------------------------------------------------------------------------
+  // Test 14c: Ambiguous commit recovery - DB finalize committed but response lost
+  // --------------------------------------------------------------------------
+  {
+    const { data: orderAmbigData } = await admin.rpc('create_order_from_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_price_calculation_id: CALC_B_ID,
+      p_payment_reference: `DH-AMBIG-B-${Date.now()}`,
+      p_actor_user_id: USER_BOSS_B,
+    });
+    const orderAmbigId = orderAmbigData.orderId;
+
+    const { data: ambigContract, error: ambigErr } = await admin.from('contracts').insert({
+      company_id: COMPANY_B,
+      order_id: orderAmbigId,
+      revision_no: 1,
+      template_version: 'v1',
+      generated_file_ref: `${COMPANY_B}/contracts/ambig-b/revision-1/generated.pdf`,
+      status: 'GENERATED',
+      contract_value: 12000000,
+      is_current: true,
+    }).select('id').single();
+    assert(!ambigErr && ambigContract, `Insert ambigContract failed: ${ambigErr?.message}`);
+
+    const ambigContractId = ambigContract.id;
+    const ambigCanonicalSignedPath = `${COMPANY_B}/contracts/${ambigContractId}/revision-1/signed.pdf`;
+
+    // Simulate DB committed but response lost
+    const droppedResponseAdmin = new Proxy(admin, {
+      get(target, prop) {
+        if (prop === 'rpc') {
+          return async (fnName: string, args: any) => {
+            if (fnName === 'finalize_contract_signing_rpc') {
+              await (target as any).rpc(fnName, args);
+              return { data: null, error: new Error('SIMULATED_NETWORK_CONNECTION_LOST_AFTER_COMMIT') };
+            }
+            return (target as any).rpc(fnName, args);
+          };
+        }
+        return (target as any)[prop];
+      },
+    });
+
+    const resAmbig = await signContract({
+      companyId: COMPANY_B,
+      contractId: ambigContractId,
+      signedPdfBuffer: validPdfBytes,
+    }, BOSS_B_CLIENT, droppedResponseAdmin as any);
+
+    assert.strictEqual(resAmbig.success, true);
+    assert.strictEqual(resAmbig.status, 'SIGNED');
+    assert.strictEqual(resAmbig.alreadyProcessed, true);
+
+    // Invariants: ZERO storage deletion, PDF bytes intact
+    const { data: storedAmbigData, error: storedAmbigErr } = await admin.storage
+      .from(STORAGE_BUCKET_MAP.CONTRACT)
+      .download(ambigCanonicalSignedPath);
+    assert(!storedAmbigErr && storedAmbigData, 'Storage object must NOT be deleted in Case A');
+    const storedBuf = Buffer.from(await storedAmbigData.arrayBuffer());
+    assert.deepStrictEqual(storedBuf, validPdfBytes, 'Stored PDF bytes must remain strictly identical');
+
+    // DB state is SIGNED with canonical signed_file_ref
+    const { data: contractAmbig } = await admin
+      .from('contracts')
+      .select('status, signed_file_ref')
+      .eq('id', ambigContractId)
+      .single();
+    assert.strictEqual(contractAmbig?.status, 'SIGNED');
+    assert.strictEqual(contractAmbig?.signed_file_ref, ambigCanonicalSignedPath);
+
+    testPass('Ambiguous commit recovery: DB committed but RPC response lost -> re-read discovers SIGNED, zero storage deletion');
+  }
 
   // --------------------------------------------------------------------------
   // Test 15: TV8 Production Handoff integration

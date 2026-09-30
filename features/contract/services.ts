@@ -253,7 +253,8 @@ export async function signContract(
     contractId: string;
     signedPdfBuffer: Buffer;
   },
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  adminClientOverride?: SupabaseClient
 ) {
   const { companyId, contractId, signedPdfBuffer } = params;
 
@@ -263,7 +264,7 @@ export async function signContract(
     throw new Error('AAL2_REQUIRED: Ký hợp đồng yêu cầu xác thực MFA AAL2');
   }
 
-  const adminSupabase = createAdminClient();
+  const adminSupabase = adminClientOverride ?? createAdminClient();
 
   // 2. Trusted DB lookup: verify contract belongs to company before upload
   const { data: contract, error: contractErr } = await adminSupabase
@@ -337,20 +338,119 @@ export async function signContract(
   }
 
   // 10. Finalize contract signing atomically in DB with strict actor.aal (no synthesized level)
-  const { data, error } = await adminSupabase.rpc('finalize_contract_signing_rpc', {
-    p_company_id: companyId,
-    p_contract_id: contractId,
-    p_actor_user_id: actor.userId,
-    p_signed_file_ref: canonicalSignedPath,
-    p_aal_level: actor.aal,
-  });
-
-  if (error || !data?.success) {
-    console.error('Lỗi khi cập nhật trạng thái hợp đồng đã ký:', error);
-    throw error || new Error('Không thể hoàn tất ký hợp đồng');
+  interface ContractSigningResult {
+    success?: boolean;
+    status?: string;
+    contractId?: string;
+    orderId?: string;
+    [key: string]: unknown;
   }
 
-  return data;
+  let rpcData: ContractSigningResult | null = null;
+  let rpcError: Error | { message?: string } | null = null;
+
+  try {
+    const rpcRes = await adminSupabase.rpc('finalize_contract_signing_rpc', {
+      p_company_id: companyId,
+      p_contract_id: contractId,
+      p_actor_user_id: actor.userId,
+      p_signed_file_ref: canonicalSignedPath,
+      p_aal_level: actor.aal,
+    });
+    rpcData = rpcRes.data as unknown as ContractSigningResult;
+    rpcError = rpcRes.error;
+  } catch (err: unknown) {
+    rpcError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  if (rpcError || !rpcData?.success) {
+    console.error('Lỗi hoặc không chắc chắn khi gọi finalize_contract_signing_rpc:', rpcError);
+
+    // Section 2: Reconcile before cleanup: re-read canonical contract row
+    const { data: latestContract, error: rereadErr } = await adminSupabase
+      .from('contracts')
+      .select('id, company_id, order_id, revision_no, status, is_current, signed_file_ref, signed_at')
+      .eq('id', contractId)
+      .eq('company_id', companyId)
+      .maybeSingle();
+
+    if (rereadErr || !latestContract) {
+      console.error('CONTRACT_SIGNING_RECONCILIATION_REQUIRED:', {
+        contractId,
+        companyId,
+        revisionNo,
+        operation: 'reconcile_reread',
+        error: rereadErr?.message,
+      });
+      throw new Error('CONTRACT_SIGNING_RECONCILIATION_REQUIRED');
+    }
+
+    // Case A — Finalization actually committed (DB committed but RPC/network response was lost)
+    if (
+      latestContract.status === 'SIGNED' &&
+      latestContract.signed_file_ref === canonicalSignedPath
+    ) {
+      return {
+        success: true,
+        contractId: latestContract.id,
+        orderId: latestContract.order_id,
+        status: 'SIGNED',
+        alreadyProcessed: true,
+      };
+    }
+
+    // Case B — DB did NOT finalize: status remains an unsigned allowed state and signed_file_ref is null
+    if (
+      ['GENERATED', 'SENT_TO_CUSTOMER'].includes(latestContract.status) &&
+      !latestContract.signed_file_ref &&
+      latestContract.is_current
+    ) {
+      // Remove ONLY the exact canonical object uploaded by this operation
+      let removeError: Error | { message?: string } | null = null;
+      try {
+        const removeRes = await adminSupabase.storage
+          .from(STORAGE_BUCKET_MAP.CONTRACT)
+          .remove([canonicalSignedPath]);
+        if (removeRes.error) {
+          removeError = removeRes.error;
+        }
+      } catch (err: unknown) {
+        removeError = err instanceof Error ? err : new Error(String(err));
+      }
+
+      if (removeError) {
+        // Section 3: Cleanup failure must not be silent
+        console.error('CONTRACT_SIGNING_CLEANUP_FAILED:', {
+          contractId,
+          companyId,
+          revisionNo,
+          operation: 'storage_cleanup',
+          error: (removeError as { message?: string })?.message,
+        });
+        throw new Error('CONTRACT_SIGNING_RECONCILIATION_REQUIRED');
+      }
+
+      // After successful cleanup, rethrow the original finalization failure so retry can proceed cleanly
+      if (rpcError instanceof Error) {
+        throw rpcError;
+      }
+      throw new Error((rpcError as { message?: string })?.message || 'Không thể hoàn tất ký hợp đồng');
+    }
+
+    // Case C — DB is in an unexpected / inconsistent state (e.g. SIGNED with another ref, SUPERSEDED, REJECTED, non-current)
+    console.error('CONTRACT_SIGNING_INCONSISTENT_STATE:', {
+      contractId,
+      companyId,
+      revisionNo,
+      operation: 'reconciliation_state_check',
+      status: latestContract.status,
+      signedFileRef: latestContract.signed_file_ref,
+      isCurrent: latestContract.is_current,
+    });
+    throw new Error('CONTRACT_SIGNING_RECONCILIATION_REQUIRED');
+  }
+
+  return rpcData;
 }
 
 /**
