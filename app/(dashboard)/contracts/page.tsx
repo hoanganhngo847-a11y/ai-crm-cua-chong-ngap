@@ -17,6 +17,7 @@ export default async function ContractsPage() {
               <th className="py-3 px-4 text-right text-sm font-semibold text-gray-700">Công Nợ Còn Lại</th>
               <th className="py-3 px-4 text-center text-sm font-semibold text-gray-700">Trạng thái Ký</th>
               <th className="py-3 px-4 text-center text-sm font-semibold text-gray-700">Trạng thái Hợp đồng</th>
+              <th className="py-3 px-4 text-center text-sm font-semibold text-gray-700">Thao tác</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
@@ -58,12 +59,22 @@ export default async function ContractsPage() {
                       {contract.status || 'DRAFT'}
                     </span>
                   </td>
+                  <td className="py-3 px-4 text-sm text-center">
+                    <a 
+                      href={`/api/contracts/${contract.id}/download`} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="text-indigo-600 hover:text-indigo-900 font-medium text-xs"
+                    >
+                      Tải File
+                    </a>
+                  </td>
                 </tr>
               );
             })}
             {(!contracts || contracts.length === 0) && (
               <tr>
-                <td colSpan={6} className="py-8 text-center text-gray-500">
+                <td colSpan={7} className="py-8 text-center text-gray-500">
                   Chưa có dữ liệu hợp đồng nào.
                 </td>
               </tr>

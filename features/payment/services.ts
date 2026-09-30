@@ -13,7 +13,7 @@ export async function processPaymentWebhook(payload: {
 
   // 1. Trích xuất mã đối soát (payment_reference) từ nội dung chuyển khoản
   // Ví dụ chuẩn: DH-12345, DH-ABCDE
-  const paymentRefMatch = transfer_content.match(/DH-[A-Z0-9]+/i);
+  const paymentRefMatch = transfer_content.match(/\bDH-[A-Z0-9]+\b/i);
   const matchedPaymentRef = paymentRefMatch ? paymentRefMatch[0].toUpperCase() : '';
 
   if (!matchedPaymentRef) {
@@ -34,6 +34,15 @@ export async function processPaymentWebhook(payload: {
   if (error) {
     console.error('Lỗi khi gọi RPC process_payment_webhook_rpc:', error);
     throw error;
+  }
+
+  // 3. Automation Trigger: Tự động sinh hợp đồng nếu đơn hàng VỪA đủ cọc
+  if (data?.deposit_state === 'DEPOSIT_JUST_CONFIRMED' && data?.orderId) {
+    // Need customer_id for generateContractForOrder. We can fetch it or just change the function to not require it if it queries inside.
+    const { generateContractForOrder } = await import('@/features/contract/services');
+    await generateContractForOrder(data.orderId).catch(err => {
+      console.error('Failed to generate contract on payment webhook:', err);
+    });
   }
 
   return data;

@@ -28,7 +28,11 @@ export async function updateOrderDepositAndDebt(orderId: string, depositAmount: 
   }
 
   // 3. Tự động sinh hợp đồng (Automation Trigger)
-  await generateContractForOrder(orderId, order.customer_id);
+  if (data?.deposit_state === 'DEPOSIT_JUST_CONFIRMED') {
+    await generateContractForOrder(orderId).catch(err => {
+      console.error('Failed to generate contract on manual deposit update:', err);
+    });
+  }
 
-  return { success: true };
+  return { success: true, transactionId: data?.transactionId };
 }

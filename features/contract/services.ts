@@ -7,20 +7,25 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
  * LUẬT NGHIỆP VỤ BẮT BUỘC: Hợp đồng sinh ra phải bám sát 100% dữ liệu từ đơn hàng và bảng giá.
  * Tuyệt đối không cho phép AI tự động giảm giá, tự tạo cam kết, hay thay đổi điều khoản.
  */
-export async function generateContractForOrder(orderId: string, customerId: string) {
+export async function generateContractForOrder(orderId: string) {
   // Use Service Role to act as Trusted Server
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   const adminSupabase = createSupabaseClient(supabaseUrl, supabaseServiceKey);
 
-  // Lấy thông tin công ty và trạng thái đơn hàng
-  const { data: orderData } = await adminSupabase
+  // Lấy thông tin công ty, khách hàng và trạng thái đơn hàng
+  const { data: orderData, error: orderError } = await adminSupabase
     .from('orders')
-    .select('company_id, final_amount, deposit_status')
+    .select(`
+      company_id, final_amount, deposit_status,
+      companies ( name, tax_id, address ),
+      customers ( name, phone, address ),
+      finance_summaries ( collected_amount )
+    `)
     .eq('id', orderId)
     .single();
 
-  if (!orderData) {
+  if (orderError || !orderData) {
     throw new Error('Không tìm thấy thông tin đơn hàng để tạo hợp đồng');
   }
 
@@ -28,21 +33,42 @@ export async function generateContractForOrder(orderId: string, customerId: stri
     throw new Error('Chỉ được tạo hợp đồng khi đơn hàng đã xác nhận cọc');
   }
 
+  // Find current max revision
+  const { data: existingContracts } = await adminSupabase
+    .from('contracts')
+    .select('revision_no')
+    .eq('order_id', orderId)
+    .order('revision_no', { ascending: false })
+    .limit(1);
+    
+  const nextRevision = (existingContracts?.[0]?.revision_no || 0) + 1;
+
   // 2. Sinh Document Generator & Upload lên Storage (Trusted Server) bằng pdf-lib
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage();
   const { width, height } = page.getSize();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  page.drawText(`Hop dong cho Don hang ${orderId}`, {
-    x: 50,
-    y: height - 100,
-    size: 20,
-    font,
-    color: rgb(0, 0, 0),
-  });
+  
+  // Vẽ dữ liệu thực tế (dynamic) thay cho chuỗi dummy
+  page.drawText(`HOP DONG CUNG CAP DICH VU`, { x: 50, y: height - 50, size: 20, font, color: rgb(0, 0, 0) });
+  page.drawText(`Ma Don Hang: ${orderId}`, { x: 50, y: height - 80, size: 12, font });
+  
+  // Customer info
+  const customerInfo = orderData.customers ? (Array.isArray(orderData.customers) ? orderData.customers[0] : orderData.customers) : null;
+  page.drawText(`Ben A (Khach Hang): ${customerInfo?.name || ''} - Sdt: ${customerInfo?.phone || ''}`, { x: 50, y: height - 110, size: 12, font });
+  
+  // Company info
+  const companyInfo = orderData.companies ? (Array.isArray(orderData.companies) ? orderData.companies[0] : orderData.companies) : null;
+  page.drawText(`Ben B (Cong ty): ${companyInfo?.name || ''} - MST: ${companyInfo?.tax_id || ''}`, { x: 50, y: height - 130, size: 12, font });
+  
+  page.drawText(`Gia Tri HD: ${orderData.final_amount} VND`, { x: 50, y: height - 150, size: 12, font });
+  
+  const collectedAmount = orderData.finance_summaries ? (Array.isArray(orderData.finance_summaries) ? orderData.finance_summaries[0]?.collected_amount : orderData.finance_summaries?.collected_amount) : 0;
+  page.drawText(`Da Dat Coc: ${collectedAmount || 0} VND`, { x: 50, y: height - 170, size: 12, font });
+
   const pdfBytes = await pdfDoc.save();
   const pdfBuffer = Buffer.from(pdfBytes);
-  const filePath = `contracts/${orderId}/contract_v1_${Date.now()}.pdf`;
+  const filePath = `contracts/${orderData.company_id}/${orderId}/revision-${nextRevision}.pdf`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from('secure-documents')
@@ -58,14 +84,13 @@ export async function generateContractForOrder(orderId: string, customerId: stri
   }
 
   // 3. Tạo bản ghi Hợp đồng (Contract) liên kết chặt chẽ với Order
-  // Sử dụng upsert (có thể dựa trên unique constraint của order_id) để tránh race condition
   const { data: newContract, error } = await adminSupabase
     .from('contracts')
     .upsert({
       company_id: orderData.company_id,
       order_id: orderId,
       status: 'GENERATED',
-      revision_no: 1,
+      revision_no: nextRevision,
       template_version: 'v1',
       generated_file_ref: filePath, // Dùng đường dẫn thực tế từ upload thành công
       contract_value: orderData.final_amount,
