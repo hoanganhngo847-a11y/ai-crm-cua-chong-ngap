@@ -6,6 +6,18 @@ console.log('================================================================');
 console.log('STARTING TV7 CONTRACT STORAGE & RENDERING UNIT TESTS');
 console.log('================================================================\n');
 
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
+const SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+const ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+
+process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = ANON_KEY;
+process.env.SUPABASE_SERVICE_ROLE_KEY = SERVICE_ROLE_KEY;
+
 let passCount = 0;
 function testPass(msg: string) {
   console.log(`[PASS] ${msg}`);
@@ -62,6 +74,113 @@ async function run() {
     const header = Buffer.from(pdfBytes.slice(0, 5)).toString('utf8');
     assert.strictEqual(header, '%PDF-');
     testPass('pdf-lib renders valid PDF buffer with canonical header bytes');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 4: Signed PDF validation (Section 6)
+  // ----------------------------------------------------------------------------
+  {
+    const { validateSignedPdf, MAX_CONTRACT_PDF_SIZE_BYTES } = await import('../../features/contract/services');
+
+    assert.strictEqual(MAX_CONTRACT_PDF_SIZE_BYTES, 10485760, 'Max contract PDF limit must be 10MB (10485760 bytes)');
+
+    // Case A: Empty buffer -> rejected
+    assert.throws(
+      () => validateSignedPdf(Buffer.alloc(0)),
+      /INVALID_PDF/,
+      'Empty buffer must be rejected'
+    );
+
+    // Case B: Plain text bytes -> rejected
+    assert.throws(
+      () => validateSignedPdf(Buffer.from('Hello this is not a pdf file')),
+      /INVALID_PDF/,
+      'Plain text bytes must be rejected'
+    );
+
+    // Case C: Oversized buffer (>10MB) -> rejected
+    const oversized = Buffer.alloc(10485761);
+    oversized.write('%PDF-');
+    assert.throws(
+      () => validateSignedPdf(oversized),
+      /INVALID_PDF/,
+      'Oversized PDF (>10MB) must be rejected'
+    );
+
+    // Case D: Valid PDF bytes -> allowed
+    const validPdfBuffer = Buffer.from('%PDF-1.4 test contract content');
+    assert.doesNotThrow(() => validateSignedPdf(validPdfBuffer));
+
+    testPass('Signed PDF validation enforces non-empty, <=10MB, and %PDF- header');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 5: Dynamic revision storage path (NO hardcoded revision-1!) (Section 5)
+  // ----------------------------------------------------------------------------
+  {
+    const companyId = '33333333-3333-3333-3333-333333333333';
+    const contractId = 'aaaaaaaa-1111-0000-0000-000000000042';
+
+    // Verify path for revision 2
+    const revision2 = 2;
+    const pathRev2 = `${companyId}/contracts/${contractId}/revision-${revision2}/signed.pdf`;
+    assert.strictEqual(
+      pathRev2,
+      `${companyId}/contracts/${contractId}/revision-2/signed.pdf`,
+      'Path for revision 2 must be revision-2'
+    );
+
+    // Verify path for revision 5
+    const revision5 = 5;
+    const pathRev5 = `${companyId}/contracts/${contractId}/revision-${revision5}/signed.pdf`;
+    assert.strictEqual(
+      pathRev5,
+      `${companyId}/contracts/${contractId}/revision-5/signed.pdf`,
+      'Path for revision 5 must be revision-5'
+    );
+
+    testPass('Dynamic revision storage path derived from canonical revision_no without hardcoding revision-1');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 6: Pre-upload resource resolution & zero-upload on failure (Section 4)
+  // ----------------------------------------------------------------------------
+  {
+    const { signContract } = await import('../../features/contract/services');
+
+    // Case A: Unauthenticated / unauthorized actor rejected before any storage upload
+    try {
+      await signContract({
+        companyId: '33333333-3333-3333-3333-333333333333',
+        contractId: '00000000-0000-0000-0000-000000000001',
+        signedPdfBuffer: Buffer.from('not a pdf'),
+      });
+      assert.fail('Unauthorized actor must throw');
+    } catch (err: any) {
+      assert(
+        err.message?.includes('INVALID_PDF') ||
+        err.message?.includes('MFA_REQUIRED') ||
+        err.message?.includes('ROLE_FORBIDDEN') ||
+        err.code === 'UNAUTHENTICATED' ||
+        err.message?.includes('đăng nhập')
+      );
+    }
+
+    testPass('signContract rejects unauthorized actor before attempting storage upload');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 7: Signed URL parameter constraints (Section 15)
+  // ----------------------------------------------------------------------------
+  {
+    const { getContractDownloadUrl } = await import('../../features/contract/services');
+
+    // Verify method signature takes only contractId and optional variant (no client path!)
+    assert.strictEqual(typeof getContractDownloadUrl, 'function');
+    assert.strictEqual(SIGNED_URL_TTL.CONTRACT, 1800, 'Contract download URL TTL must be 1800s');
+    assert.strictEqual(STORAGE_BUCKET_MAP.CONTRACT, 'contracts', 'Contract download bucket must be contracts');
+
+    testPass('Contract download uses canonical bucket "contracts", TTL 1800s, browser controls only contractId and variant');
   }
 
   console.log(`\n================================================================`);

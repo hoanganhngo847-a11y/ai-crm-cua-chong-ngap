@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
+import { createClient } from '@supabase/supabase-js';
 import { POST as paymentWebhookHandler } from '../../app/api/webhooks/payment/route';
 
 console.log('================================================================');
@@ -11,6 +12,18 @@ function testPass(msg: string) {
   console.log(`[PASS] ${msg}`);
   passCount++;
 }
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
+const SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+const ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+
+process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = ANON_KEY;
+process.env.SUPABASE_SERVICE_ROLE_KEY = SERVICE_ROLE_KEY;
 
 const TEST_SECRET = 'test-webhook-secret-key-12345';
 process.env.WEBHOOK_SECRET = TEST_SECRET;
@@ -150,6 +163,104 @@ async function run() {
     assert.strictEqual(match3, null);
 
     testPass('Payment reference regex extracts canonical order payment reference accurately');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 7: Unknown provider account returns HTTP 422 (Unprocessable Entity)
+  // ----------------------------------------------------------------------------
+  {
+    const body = JSON.stringify({
+      provider: 'VIETQR',
+      provider_account: `NON_EXISTENT_ACC_${Date.now()}`,
+      provider_ref: `tx_unknown_acc_${Date.now()}`,
+      amount: 5000000,
+      occurred_at: new Date().toISOString(),
+      transfer_content: 'DH-UNKNOWN',
+    });
+    const sig = computeSignature(body);
+    const req = new Request('http://localhost:3000/api/webhooks/payment', {
+      method: 'POST',
+      body,
+      headers: {
+        'content-type': 'application/json',
+        'x-provider-signature': sig,
+      },
+    });
+
+    const res = await paymentWebhookHandler(req);
+    assert.strictEqual(res.status, 422, 'Unknown provider account must return HTTP 422');
+    const data = await res.json();
+    assert(data.error.includes('UNKNOWN_PROVIDER_ACCOUNT'));
+    testPass('Webhook with unknown provider account returns HTTP 422 (Unprocessable Entity)');
+  }
+
+  // ----------------------------------------------------------------------------
+  // Test 8: Idempotency payload mismatch returns HTTP 409 (Conflict)
+  // ----------------------------------------------------------------------------
+  {
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321',
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU'
+    );
+
+    const testCompanyId = crypto.randomUUID();
+    const testAccount = `ACC_PAYMENT_HTTP_${Date.now()}`;
+    const testTxRef = `tx_http_dup_${Date.now()}`;
+
+    await admin.from('companies').insert({ id: testCompanyId, name: 'Payment Route Test Co', status: 'ACTIVE' });
+    await admin.from('company_bank_accounts').insert({
+      company_id: testCompanyId,
+      provider: 'VIETQR',
+      provider_account: testAccount,
+    });
+
+    // 1st request: valid initial transaction
+    const body1 = JSON.stringify({
+      provider: 'VIETQR',
+      provider_account: testAccount,
+      provider_ref: testTxRef,
+      amount: 2000000,
+      occurred_at: new Date().toISOString(),
+      transfer_content: 'DH-TESTMEMO',
+    });
+    const sig1 = computeSignature(body1);
+    const req1 = new Request('http://localhost:3000/api/webhooks/payment', {
+      method: 'POST',
+      body: body1,
+      headers: {
+        'content-type': 'application/json',
+        'x-provider-signature': sig1,
+      },
+    });
+
+    const res1 = await paymentWebhookHandler(req1);
+    assert.strictEqual(res1.status, 200, 'Initial transaction must return HTTP 200');
+
+    // 2nd request: same provider_ref but changed amount (payload mismatch)
+    const body2 = JSON.stringify({
+      provider: 'VIETQR',
+      provider_account: testAccount,
+      provider_ref: testTxRef,
+      amount: 9999999, // Changed amount!
+      occurred_at: new Date().toISOString(),
+      transfer_content: 'DH-TESTMEMO',
+    });
+    const sig2 = computeSignature(body2);
+    const req2 = new Request('http://localhost:3000/api/webhooks/payment', {
+      method: 'POST',
+      body: body2,
+      headers: {
+        'content-type': 'application/json',
+        'x-provider-signature': sig2,
+      },
+    });
+
+    const res2 = await paymentWebhookHandler(req2);
+    assert.strictEqual(res2.status, 409, 'Reused key with changed payload must return HTTP 409 Conflict');
+    const data2 = await res2.json();
+    assert(data2.error.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'));
+    testPass('Webhook with idempotency payload mismatch returns HTTP 409 (Conflict)');
   }
 
   console.log(`\n================================================================`);

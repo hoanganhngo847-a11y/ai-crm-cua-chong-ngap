@@ -35,12 +35,22 @@ BEGIN
         RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Customer does not belong to company';
     END IF;
 
-    -- Validate pricing policy belongs to company
+    -- Validate survey if provided: must belong to same company and customer
+    IF p_survey_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.surveys
+            WHERE id = p_survey_id AND company_id = p_company_id AND customer_id = p_customer_id
+        ) THEN
+            RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Survey does not belong to company and customer';
+        END IF;
+    END IF;
+
+    -- Validate pricing policy belongs to company, version matches, and is ACTIVE
     IF NOT EXISTS (
         SELECT 1 FROM public.pricing_policies 
-        WHERE id = p_pricing_policy_id AND company_id = p_company_id AND version = p_policy_version
+        WHERE id = p_pricing_policy_id AND company_id = p_company_id AND version = p_policy_version AND status = 'ACTIVE'
     ) THEN
-        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Pricing policy not found or version mismatch';
+        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Active pricing policy not found or version mismatch';
     END IF;
 
     INSERT INTO public.price_calculations (
@@ -79,7 +89,7 @@ CREATE OR REPLACE FUNCTION public.create_order_from_calculation_rpc(
     p_customer_id uuid,
     p_price_calculation_id uuid,
     p_payment_reference text,
-    p_actor_user_id uuid DEFAULT NULL
+    p_actor_user_id uuid
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -92,6 +102,24 @@ DECLARE
     v_order_code text;
     v_current_customer_stage text;
 BEGIN
+    -- Validate actor user ID is provided (no arbitrary or NULL human actor allowed)
+    IF p_actor_user_id IS NULL THEN
+        RAISE EXCEPTION 'ACTOR_REQUIRED: Actor user ID must be provided';
+    END IF;
+
+    -- Validate actor is ACTIVE and has allowed commercial role (BOSS_ADMIN or SALE) in company
+    IF NOT EXISTS (
+        SELECT 1 FROM public.company_members cm
+        JOIN public.user_profiles up ON cm.user_id = up.id
+        WHERE cm.company_id = p_company_id
+          AND cm.user_id = p_actor_user_id
+          AND cm.status = 'ACTIVE'
+          AND up.status = 'ACTIVE'
+          AND cm.role IN ('BOSS_ADMIN', 'SALE')
+    ) THEN
+        RAISE EXCEPTION 'UNAUTHORIZED_ROLE: Actor must be active BOSS_ADMIN or SALE in company';
+    END IF;
+
     -- Validate calculation exists and belongs to company & customer
     SELECT * INTO v_calc
     FROM public.price_calculations
@@ -157,7 +185,7 @@ BEGIN
         0
     );
 
-    -- Update Customer stage to ORDER_CREATED if allowed
+    -- Update Customer stage to ORDER_CREATED only if customer is in earlier stage
     IF v_current_customer_stage IN ('LEAD_NEW', 'LEAD', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'NEGOTIATING') THEN
         UPDATE public.customers
         SET stage = 'ORDER_CREATED', updated_at = now()
@@ -169,6 +197,24 @@ BEGIN
             p_company_id, p_customer_id, v_current_customer_stage, 'ORDER_CREATED', 'USER', p_actor_user_id, 'Order created from calculation'
         );
     END IF;
+
+    -- Mandatory audit log inserted atomically (failure rolls back mutation)
+    INSERT INTO public.audit_logs (
+        company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata
+    ) VALUES (
+        p_company_id,
+        p_actor_user_id,
+        'ORDER_CREATED',
+        'orders',
+        v_order_id,
+        p_customer_id,
+        'SUCCESS',
+        jsonb_build_object(
+            'order_code', v_order_code,
+            'price_calculation_id', v_calc.id,
+            'final_amount', v_calc.amount
+        )
+    );
 
     RETURN jsonb_build_object(
         'orderId', v_order_id,

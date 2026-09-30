@@ -18,6 +18,21 @@ export interface ContractListItemDTO {
   createdAt: string;
 }
 
+export const MAX_CONTRACT_PDF_SIZE_BYTES = 10 * 1024 * 1024; // 10MB canonical limit
+
+export function validateSignedPdf(buffer: Buffer): void {
+  if (!buffer || buffer.length === 0) {
+    throw new Error('INVALID_PDF: Tệp ký rỗng');
+  }
+  if (buffer.length > MAX_CONTRACT_PDF_SIZE_BYTES) {
+    throw new Error('INVALID_PDF: Dung lượng tệp vượt quá giới hạn 10MB');
+  }
+  // Validate magic header %PDF- (0x25, 0x50, 0x44, 0x46, 0x2D)
+  if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new Error('INVALID_PDF: Tệp không có định dạng PDF hợp lệ (thiếu header %PDF-)');
+  }
+}
+
 /**
  * Generates contract for an order after deposit has been confirmed.
  * Uses atomic DB claim to prevent duplicate revisions under concurrent calls.
@@ -26,8 +41,9 @@ export interface ContractListItemDTO {
 export async function generateContractForOrder(params: {
   companyId: string;
   orderId: string;
+  forceRevision?: boolean;
 }) {
-  const { companyId, orderId } = params;
+  const { companyId, orderId, forceRevision = false } = params;
   const adminSupabase = createAdminClient();
 
   // 1. Claim contract generation atomically in DB
@@ -36,6 +52,7 @@ export async function generateContractForOrder(params: {
     {
       p_company_id: companyId,
       p_order_id: orderId,
+      p_force_revision: forceRevision,
     }
   );
 
@@ -220,7 +237,15 @@ export async function getContractsWithOrderDetails(
 
 /**
  * Signs a contract with uploaded signed PDF.
- * STRICT SECURITY: Requires BOSS_ADMIN with verified MFA AAL2.
+ * STRICT SECURITY ORDER:
+ * 1. requirePrivilegedBoss(companyId) -> verifies active profile, active membership, BOSS_ADMIN, MFA AAL2
+ * 2. validate PDF bounds (non-empty, <=10MB, %PDF- magic header)
+ * 3. trusted DB lookup: contracts.id = contractId AND contracts.company_id = companyId
+ * 4. validate current contract and allowed source status
+ * 5. read revision_no from canonical contract row
+ * 6. derive canonical storage path: <companyId>/contracts/<contractId>/revision-<revisionNo>/signed.pdf
+ * 7. upload to storage bucket 'contracts'
+ * 8. finalize signing transaction in DB (p_aal_level = actor.aal)
  */
 export async function signContract(
   params: {
@@ -232,19 +257,52 @@ export async function signContract(
 ) {
   const { companyId, contractId, signedPdfBuffer } = params;
 
-  // 1. Authorize actor: BOSS_ADMIN + AAL2 enforced
+  // 1. Authorize actor: BOSS_ADMIN + strict AAL2 enforcement (no fallback)
   const actor = await requirePrivilegedBoss(companyId, client);
-
-  if (!signedPdfBuffer || signedPdfBuffer.length === 0) {
-    throw new Error('Tệp ký không hợp lệ');
+  if (actor.aal !== 'aal2') {
+    throw new Error('AAL2_REQUIRED: Ký hợp đồng yêu cầu xác thực MFA AAL2');
   }
 
   const adminSupabase = createAdminClient();
 
-  // 2. Server-derived signed storage path
-  const canonicalSignedPath = `${companyId}/contracts/${contractId}/revision-1/signed.pdf`;
+  // 2. Trusted DB lookup: verify contract belongs to company before upload
+  const { data: contract, error: contractErr } = await adminSupabase
+    .from('contracts')
+    .select('id, company_id, order_id, revision_no, status, is_current, generated_file_ref, signed_file_ref')
+    .eq('id', contractId)
+    .eq('company_id', companyId)
+    .maybeSingle();
 
-  // 3. Upload to canonical 'contracts' bucket
+  if (contractErr || !contract) {
+    throw new Error('RESOURCE_NOT_FOUND: Contract not found');
+  }
+
+  // 3. Validate current contract
+  if (!contract.is_current) {
+    throw new Error('INVALID_CONTRACT_STATE: Không thể ký hợp đồng không còn hiệu lực');
+  }
+
+  // 4. Validate allowed status
+  if (contract.status === 'SIGNED') {
+    // If already signed, will be handled deterministically by atomic RPC
+  } else if (!['GENERATED', 'SENT_TO_CUSTOMER'].includes(contract.status)) {
+    throw new Error(`INVALID_CONTRACT_STATE: Không thể ký hợp đồng ở trạng thái ${contract.status}`);
+  }
+
+  if (!contract.generated_file_ref || contract.generated_file_ref === 'CLAIMED') {
+    throw new Error('CONTRACT_NOT_READY: Bản nháp hợp đồng chưa sẵn sàng');
+  }
+
+  // 5. Read actual revision_no from canonical contract row (NO HARDCODED revision-1!)
+  const revisionNo = contract.revision_no;
+
+  // 6. Derive canonical storage path using actual revision_no
+  const canonicalSignedPath = `${companyId}/contracts/${contractId}/revision-${revisionNo}/signed.pdf`;
+
+  // 7. Validate PDF format and bounds BEFORE upload
+  validateSignedPdf(signedPdfBuffer);
+
+  // 8. Upload to canonical 'contracts' bucket
   const { error: uploadError } = await adminSupabase.storage
     .from(STORAGE_BUCKET_MAP.CONTRACT)
     .upload(canonicalSignedPath, signedPdfBuffer, {
@@ -257,13 +315,13 @@ export async function signContract(
     throw new Error('Không thể lưu trữ tệp hợp đồng đã ký');
   }
 
-  // 4. Finalize contract signing atomically in DB
+  // 9. Finalize contract signing atomically in DB with strict actor.aal (no synthesized level)
   const { data, error } = await adminSupabase.rpc('finalize_contract_signing_rpc', {
     p_company_id: companyId,
     p_contract_id: contractId,
     p_actor_user_id: actor.userId,
     p_signed_file_ref: canonicalSignedPath,
-    p_aal_level: actor.aal || 'aal2',
+    p_aal_level: actor.aal,
   });
 
   if (error || !data?.success) {

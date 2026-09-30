@@ -29,3 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_payment_reference_company
 
 CREATE INDEX IF NOT EXISTS idx_contracts_company_order
     ON public.contracts (company_id, order_id, is_current);
+
+-- 2. Add payload_hash and payment_reference to payment_transactions for full logical idempotency validation
+ALTER TABLE public.payment_transactions
+    ADD COLUMN IF NOT EXISTS payload_hash text,
+    ADD COLUMN IF NOT EXISTS payment_reference text;
