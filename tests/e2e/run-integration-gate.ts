@@ -5,6 +5,7 @@
  * 1. Environment & Preconditions Check
  * 2. Database Migration Integrity Guard
  * 3. Auth & Sensitive Security Suites (Foundation)
+ * 3c. CRM Security & Multi-tenant Integrity Suite
  * 4. Response SLA Gate (Unit & DB Concurrency)
  * 4c. Facebook SLA Real Runtime Gate
  * 5. AI Customer Analysis Gate
@@ -15,6 +16,7 @@
  * 8. Analytics Data Layer Gate
  * 9. Analytics UI & Static Security Gate
  * 11a. P0 Security Authorization Regression Gate
+ * 11a2. P1 Backend Workflow & Security Gate
  * 11d. TV3 Zalo OA & Care Unit Gate (PGlite)
  * 11e. TV3 Zalo OA & Care DB Integration Gate
  * 11f. TV7 Commercial Pricing, Payment & Contract Unit Gate
@@ -74,6 +76,13 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:security'],
     description: 'Verify RLS foundation, sensitive data masking, and trusted server boundaries',
+  },
+  {
+    id: 'GATE_03C_CRM_SECURITY',
+    name: '3c. CRM Security & Multi-tenant Integrity Suite',
+    command: 'npm',
+    args: ['run', 'test:crm'],
+    description: 'Verify CRM fail-closed security, atomic compensation, zero-phone sanitization, and tenant isolation',
   },
   {
     id: 'GATE_04_RESPONSE_SLA_UNIT',
@@ -165,6 +174,13 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:p0-security'],
     description: 'Verify P0-001 Facebook trusted-RPC ACL and P0-002 contract signing forgery prevention regressions',
+  },
+  {
+    id: 'GATE_11A2_P1_BACKEND',
+    name: '11a2. P1 Backend Security & Workflow Regression Gate',
+    command: 'npm',
+    args: ['run', 'test:p1-backend'],
+    description: 'Verify P1-001 voice legacy overload removal, P1-002 canonical production specs & materials, and P1-003 atomic audited warranty creation',
   },
   {
     id: 'GATE_11B_INBOX_DB',

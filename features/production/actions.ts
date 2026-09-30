@@ -21,8 +21,12 @@ import type {
 // ==============================================================================
 const createProductionOrderSchema = z.object({
     orderId: z.uuid(),
-    specs: z.record(z.string(), z.unknown()),
-    materials: z.record(z.string(), z.unknown()),
+    specs: z.record(z.string(), z.unknown()).refine((val) => Object.keys(val).length > 0, {
+        message: 'Thông số kỹ thuật không được rỗng',
+    }),
+    materials: z.record(z.string(), z.unknown()).refine((val) => Object.keys(val).length > 0, {
+        message: 'Thông tin vật tư không được rỗng',
+    }),
     deadline: z.iso.datetime({ offset: true }),
 });
 

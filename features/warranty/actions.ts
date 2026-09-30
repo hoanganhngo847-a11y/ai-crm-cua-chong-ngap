@@ -82,7 +82,7 @@ export async function createWarrantyTicketAction(
             APPLICATION_ROLES.SALE,
         ]);
 
-        const data = await createWarrantyTicket(actor.companyId, parsed.data);
+        const data = await createWarrantyTicket(actor.companyId, parsed.data, undefined, actor.userId);
         return { success: true, data };
     } catch (err: unknown) {
         return { success: false, error: sanitizeErrorMessage(err, 'Lỗi tạo phiếu bảo hành.') };
