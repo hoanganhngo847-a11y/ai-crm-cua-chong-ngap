@@ -263,6 +263,74 @@ async function run() {
     testPass('Webhook with idempotency payload mismatch returns HTTP 409 (Conflict)');
   }
 
+  // ----------------------------------------------------------------------------
+  // Test 9: Cross-company identical provider_ref accepted independently (Section 1)
+  // ----------------------------------------------------------------------------
+  {
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321',
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU'
+    );
+
+    const companyAId = crypto.randomUUID();
+    const companyBId = crypto.randomUUID();
+    const accountA = `ACC_A_${Date.now()}`;
+    const accountB = `ACC_B_${Date.now()}`;
+    const sharedRef = `TX_SHARED_${Date.now()}`;
+
+    await admin.from('companies').insert([
+      { id: companyAId, name: 'Cross Company A', status: 'ACTIVE' },
+      { id: companyBId, name: 'Cross Company B', status: 'ACTIVE' },
+    ]);
+    await admin.from('company_bank_accounts').insert([
+      { company_id: companyAId, provider: 'VIETQR', provider_account: accountA },
+      { company_id: companyBId, provider: 'VIETQR', provider_account: accountB },
+    ]);
+
+    // Send for Company A
+    const bodyA = JSON.stringify({
+      provider: 'VIETQR',
+      provider_account: accountA,
+      provider_ref: sharedRef,
+      amount: 1500000,
+      occurred_at: new Date().toISOString(),
+      transfer_content: 'DH-MEMOA',
+    });
+    const reqA = new Request('http://localhost:3000/api/webhooks/payment', {
+      method: 'POST',
+      body: bodyA,
+      headers: {
+        'content-type': 'application/json',
+        'x-provider-signature': computeSignature(bodyA),
+      },
+    });
+    const resA = await paymentWebhookHandler(reqA);
+    assert.strictEqual(resA.status, 200, 'Company A transaction must succeed');
+
+    // Send for Company B with EXACT SAME provider_ref
+    const bodyB = JSON.stringify({
+      provider: 'VIETQR',
+      provider_account: accountB,
+      provider_ref: sharedRef,
+      amount: 2500000,
+      occurred_at: new Date().toISOString(),
+      transfer_content: 'DH-MEMOB',
+    });
+    const reqB = new Request('http://localhost:3000/api/webhooks/payment', {
+      method: 'POST',
+      body: bodyB,
+      headers: {
+        'content-type': 'application/json',
+        'x-provider-signature': computeSignature(bodyB),
+      },
+    });
+    const resB = await paymentWebhookHandler(reqB);
+    assert.strictEqual(resB.status, 200, 'Company B transaction with same provider_ref must succeed independently');
+
+    testPass('Cross-company identical provider_ref accepted independently via HTTP webhook');
+  }
+
   console.log(`\n================================================================`);
   console.log(`PAYMENT UNIT TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
   console.log(`================================================================\n`);

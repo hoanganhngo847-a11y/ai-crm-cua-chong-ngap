@@ -47,7 +47,8 @@ BEGIN
     END IF;
 
     -- Concurrency & Idempotency: Advisory lock per provider event reference
-    PERFORM pg_advisory_xact_lock(hashtext('PAYMENT:' || p_provider || ':' || p_provider_ref));
+    -- Section 1: Lock scoped strictly to company_id + provider + provider_ref
+    PERFORM pg_advisory_xact_lock(hashtext(v_company_id::text || ':PAYMENT:' || p_provider || ':' || p_provider_ref));
 
     -- Deterministic request fingerprint binding full logical payload
     v_payload_hash := encode(sha256(
@@ -61,10 +62,12 @@ BEGIN
         )::bytea
     ), 'hex');
 
-    -- Check if existing payment transaction exists for provider and provider_ref
+    -- Check if existing payment transaction exists for company_id, provider, and provider_ref
     SELECT * INTO v_existing_tx
     FROM public.payment_transactions
-    WHERE provider = p_provider AND provider_ref = p_provider_ref
+    WHERE company_id = v_company_id
+      AND provider = p_provider
+      AND provider_ref = p_provider_ref
     LIMIT 1;
 
     IF v_existing_tx.id IS NOT NULL THEN

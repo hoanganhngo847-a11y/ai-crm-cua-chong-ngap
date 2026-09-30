@@ -183,6 +183,114 @@ async function run() {
     testPass('Contract download uses canonical bucket "contracts", TTL 1800s, browser controls only contractId and variant');
   }
 
+  // ----------------------------------------------------------------------------
+  // Test 8: Signed contract immutability: already SIGNED contract returns ALREADY_PROCESSED (Section 2)
+  // ----------------------------------------------------------------------------
+  {
+    const { signContract } = await import('../../features/contract/services');
+    const { createClient } = await import('@supabase/supabase-js');
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+    const testCo = crypto.randomUUID();
+    const testContractId = crypto.randomUUID();
+    const testCustomer = crypto.randomUUID();
+    const userEmail = `boss_immut_${Date.now()}@test.local`;
+
+    const { data: userData, error: userErr } = await admin.auth.admin.createUser({
+      email: userEmail,
+      password: 'Password123!@#',
+      email_confirm: true,
+      user_metadata: { full_name: 'Boss Immut' },
+    });
+    assert(!userErr && userData.user);
+    const testUser = userData.user.id;
+
+    await admin.from('companies').insert({ id: testCo, name: 'Immutability Co', status: 'ACTIVE' });
+    await admin.from('customers').insert({ id: testCustomer, company_id: testCo, name: 'Customer Immut', source: 'MANUAL', stage: 'CONTRACT_SIGNED' });
+    await admin.from('user_profiles').upsert({ id: testUser, full_name: 'Boss Immut', status: 'ACTIVE' });
+    await admin.from('company_members').insert({ company_id: testCo, user_id: testUser, role: 'BOSS_ADMIN', status: 'ACTIVE' });
+
+    const policyId = crypto.randomUUID();
+    const { error: pErr } = await admin.from('pricing_policies').insert({
+      id: policyId,
+      company_id: testCo,
+      version: 'v1',
+      conditions: { deposit_percentage: 30 },
+      price_rules: { base_price_per_sqm: 5000000 },
+      effective_at: new Date().toISOString(),
+      status: 'ACTIVE',
+    });
+    assert(!pErr, `policy insert: ${pErr?.message}`);
+
+    const { data: calcData, error: calcErr } = await admin.rpc('save_price_calculation_rpc', {
+      p_company_id: testCo,
+      p_customer_id: testCustomer,
+      p_survey_id: null,
+      p_pricing_policy_id: policyId,
+      p_policy_version: 'v1',
+      p_input_data: { width: 2, height: 1 },
+      p_amount: 10000000,
+      p_status: 'CALCULATED',
+      p_missing_fields: [],
+    });
+    assert(!calcErr && calcData?.id, `calc error: ${calcErr?.message}`);
+
+    const { data: orderData, error: orderErr } = await admin.rpc('create_order_from_calculation_rpc', {
+      p_company_id: testCo,
+      p_customer_id: testCustomer,
+      p_price_calculation_id: calcData.id,
+      p_payment_reference: `DH-IMMUT-${Date.now()}`,
+      p_actor_user_id: testUser,
+    });
+    assert(!orderErr && orderData?.orderId, `order error: ${orderErr?.message}`);
+    const testOrderId = orderData.orderId;
+
+    const canonicalPath = `${testCo}/contracts/${testContractId}/revision-1/signed.pdf`;
+    const { error: kErr } = await admin.from('contracts').insert({
+      id: testContractId,
+      company_id: testCo,
+      order_id: testOrderId,
+      revision_no: 1,
+      template_version: 'v1',
+      generated_file_ref: `${testCo}/contracts/${testContractId}/revision-1/generated.pdf`,
+      signed_file_ref: canonicalPath,
+      status: 'SIGNED',
+      contract_value: 10000000,
+      is_current: true,
+    });
+    assert(!kErr, `contract insert: ${kErr?.message}`);
+
+    const mockBossClient = {
+      auth: {
+        getUser: async () => ({
+          data: { user: { id: testUser, email: 'boss@immut.local' } },
+          error: null,
+        }),
+        mfa: {
+          getAuthenticatorAssuranceLevel: async () => ({
+            data: { currentLevel: 'aal2', nextLevel: 'aal2', currentAuthenticationMethods: [] },
+            error: null,
+          }),
+          listFactors: async () => ({
+            data: { totp: [{ id: 'factor-boss-totp', status: 'verified' }] },
+            error: null,
+          }),
+        },
+      },
+      from: (table: string) => admin.from(table),
+    } as any;
+
+    const res = await signContract({
+      companyId: testCo,
+      contractId: testContractId,
+      signedPdfBuffer: Buffer.from('%PDF-1.4 new arbitrary content'),
+    }, mockBossClient);
+
+    assert.strictEqual(res.status, 'ALREADY_PROCESSED');
+    assert.strictEqual(res.alreadyProcessed, true);
+    testPass('signContract on already SIGNED contract returns ALREADY_PROCESSED before any storage upload');
+  }
+
   console.log(`\n================================================================`);
   console.log(`CONTRACT UNIT TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
   console.log(`================================================================\n`);

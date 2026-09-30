@@ -498,6 +498,130 @@ async function run() {
   testPass('Full logical payment payload validated: amount, provider_account, and payment_reference mismatch fail closed');
 
   // --------------------------------------------------------------------------
+  // Test 8b: Cross-Company Payment Provider Ref Idempotency (Section 1)
+  // --------------------------------------------------------------------------
+  const { data: calcB, error: calcBErr } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_B,
+    p_customer_id: CUSTOMER_B,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_B_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 12000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calcBErr && calcB?.id, `calcB error: ${calcBErr?.message}`);
+
+  const PAYMENT_REF_B = `DH-TESTB${RUN_ID.toUpperCase()}`;
+  const { data: orderBData, error: orderBErr } = await admin.rpc('create_order_from_calculation_rpc', {
+    p_company_id: COMPANY_B,
+    p_customer_id: CUSTOMER_B,
+    p_price_calculation_id: calcB.id,
+    p_payment_reference: PAYMENT_REF_B,
+    p_actor_user_id: USER_BOSS_B,
+  });
+  assert(!orderBErr && orderBData?.orderId, `Order B creation failed: ${orderBErr?.message}`);
+  const ORDER_B_ID = orderBData.orderId;
+
+  // Dedicated order for Company A to test cross-tenant payment reference without mutating ORDER_A_ID
+  const PAYMENT_REF_A_CROSS = `DH-TESTAX${RUN_ID.toUpperCase()}`;
+  const { data: orderACrossData, error: orderACrossErr } = await admin.rpc('create_order_from_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_price_calculation_id: CALCULATION_ID,
+    p_payment_reference: PAYMENT_REF_A_CROSS,
+    p_actor_user_id: USER_BOSS_A,
+  });
+  assert(!orderACrossErr && orderACrossData?.orderId);
+  const ORDER_A_CROSS_ID = orderACrossData.orderId;
+
+  // Use the EXACT same provider_ref across Company A and Company B
+  const CROSS_COMPANY_REF = `REF_CROSS_${RUN_ID}`;
+  const CROSS_OCCURRED = new Date().toISOString();
+
+  // Send payment 1: Company A with CROSS_COMPANY_REF to ACC_A1
+  const payA = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_A1,
+    provider_ref: CROSS_COMPANY_REF,
+    amount: 500000,
+    occurred_at: CROSS_OCCURRED,
+    transfer_content: PAYMENT_REF_A_CROSS,
+  });
+  assert.strictEqual(payA.status, 'MATCHED', 'Payment A must match Order A');
+
+  // Send payment 2: Company B with EXACT SAME provider_ref to ACC_B
+  const payB = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_B,
+    provider_ref: CROSS_COMPANY_REF,
+    amount: 500000,
+    occurred_at: CROSS_OCCURRED,
+    transfer_content: PAYMENT_REF_B,
+  });
+  assert.strictEqual(payB.status, 'MATCHED', 'Company B must accept payment independently with same provider_ref');
+
+  // Verify Company A has 1 transaction with CROSS_COMPANY_REF
+  const { data: txListA } = await admin.from('payment_transactions')
+    .select('id, company_id, provider_ref')
+    .eq('company_id', COMPANY_A)
+    .eq('provider_ref', CROSS_COMPANY_REF);
+  assert.strictEqual(txListA?.length, 1, 'Company A must have exactly 1 payment transaction');
+
+  // Verify Company B has 1 transaction with CROSS_COMPANY_REF
+  const { data: txListB } = await admin.from('payment_transactions')
+    .select('id, company_id, provider_ref')
+    .eq('company_id', COMPANY_B)
+    .eq('provider_ref', CROSS_COMPANY_REF);
+  assert.strictEqual(txListB?.length, 1, 'Company B must have exactly 1 payment transaction');
+
+  // Verify no finance mutation across tenants
+  const { data: finRowA } = await admin.from('finance_summaries').select('collected_amount').eq('order_id', ORDER_A_CROSS_ID).single();
+  const { data: finRowB } = await admin.from('finance_summaries').select('collected_amount').eq('order_id', ORDER_B_ID).single();
+  assert(finRowA, 'finRowA must exist');
+  assert(finRowB, 'finRowB must exist');
+  assert.strictEqual(Number(finRowA.collected_amount), 500000, 'Company A collected amount matches payment');
+  assert.strictEqual(Number(finRowB.collected_amount), 500000, 'Company B collected amount matches payment');
+
+  // Verify within SAME company, same key with changed payload fails closed
+  try {
+    await processPaymentWebhook({
+      provider: PROVIDER,
+      provider_account: ACC_B,
+      provider_ref: CROSS_COMPANY_REF,
+      amount: 9999999, // Changed amount for Company B!
+      occurred_at: CROSS_OCCURRED,
+      transfer_content: PAYMENT_REF_B,
+    });
+    assert.fail('Changed payload on same provider_ref within same company must fail closed');
+  } catch (err: any) {
+    assert(err.message.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'));
+  }
+
+  // Verify within SAME company, same key with exact same payload returns ALREADY_PROCESSED
+  const dupB = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_B,
+    provider_ref: CROSS_COMPANY_REF,
+    amount: 500000,
+    occurred_at: CROSS_OCCURRED,
+    transfer_content: PAYMENT_REF_B,
+  });
+  assert.strictEqual(dupB.status, 'ALREADY_PROCESSED');
+
+  // Verify database constraint remains UNIQUE(company_id, provider, provider_ref)
+  const { execSync: execPsql } = await import('node:child_process');
+  const checkUniqueConstraintSql = `SELECT conname, pg_get_constraintdef(oid) as def FROM pg_constraint WHERE conrelid = 'public.payment_transactions'::regclass AND conname = 'uq_pt_company_provider_ref';`;
+  const uqDef = execPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "${checkUniqueConstraintSql}"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert(uqDef.includes('UNIQUE (company_id, provider, provider_ref)'), `Constraint must be UNIQUE (company_id, provider, provider_ref), found: ${uqDef}`);
+
+  testPass('Cross-company payment provider_ref: independent acceptance across tenants, company-scoped idempotency, and canonical UNIQUE constraint verified');
+
+  // --------------------------------------------------------------------------
   // Test 9: Partial payments & cumulative deposit threshold & Customer Stage History
   // --------------------------------------------------------------------------
   // Required deposit = 30% of 10,000,000 = 3,000,000
@@ -875,17 +999,47 @@ async function run() {
   const expectedRev2Path = `${COMPANY_A}/contracts/${CONTRACT_REV2_ID}/revision-2/signed.pdf`;
   assert.strictEqual(rev2SignedRow.signed_file_ref, expectedRev2Path, 'Signed path for revision 2 must be revision-2/signed.pdf');
 
-  // Case G: Idempotent re-sign with SAME file ref returns ALREADY_PROCESSED
-  const dupSignResult = await admin.rpc('finalize_contract_signing_rpc', {
-    p_company_id: COMPANY_A,
-    p_contract_id: CONTRACT_REV2_ID,
-    p_actor_user_id: USER_BOSS_A,
-    p_signed_file_ref: expectedRev2Path,
-    p_aal_level: 'aal2',
-  });
-  assert.strictEqual(dupSignResult.data.status, 'ALREADY_PROCESSED');
+  // Verify PDF_A stored in storage
+  const { data: storedDownloadA, error: dlAErr } = await admin.storage
+    .from(STORAGE_BUCKET_MAP.CONTRACT)
+    .download(expectedRev2Path);
+  assert(!dlAErr && storedDownloadA, 'Must be able to download stored signed contract');
+  const storedPdfABytes = Buffer.from(await storedDownloadA.arrayBuffer());
+  const storedPdfAHash = crypto.createHash('sha256').update(storedPdfABytes).digest('hex');
+  const expectedPdfAHash = crypto.createHash('sha256').update(validPdfBytes).digest('hex');
+  assert.strictEqual(storedPdfAHash, expectedPdfAHash, 'Stored PDF must match initial signed PDF_A hash');
 
-  // Case H: Signed contract cannot be overwritten with different file ref -> rejected
+  // Case G: Service-level physical immutability: call signContract again with a DIFFERENT valid PDF (PDF_B)
+  const validPdfDocB = await (await import('pdf-lib')).PDFDocument.create();
+  validPdfDocB.addPage([500, 500]);
+  const validPdfBytesB = Buffer.from(await validPdfDocB.save());
+  const pdfBHash = crypto.createHash('sha256').update(validPdfBytesB).digest('hex');
+  assert.notStrictEqual(storedPdfAHash, pdfBHash, 'PDF_B must be distinct from PDF_A');
+
+  const reSignResult = await signContract({
+    companyId: COMPANY_A,
+    contractId: CONTRACT_REV2_ID,
+    signedPdfBuffer: validPdfBytesB, // Different valid PDF!
+  }, BOSS_A_CLIENT);
+
+  assert.strictEqual(reSignResult.status, 'ALREADY_PROCESSED', 'Re-signing already signed contract must return ALREADY_PROCESSED');
+  assert.strictEqual(reSignResult.contractId, CONTRACT_REV2_ID);
+
+  // Verify stored object in storage was NOT overwritten (PDF_A remains completely intact)
+  const { data: storedDownloadAfterB, error: dlBErr } = await admin.storage
+    .from(STORAGE_BUCKET_MAP.CONTRACT)
+    .download(expectedRev2Path);
+  assert(!dlBErr && storedDownloadAfterB);
+  const finalPdfBytes = Buffer.from(await storedDownloadAfterB.arrayBuffer());
+  const finalPdfHash = crypto.createHash('sha256').update(finalPdfBytes).digest('hex');
+  assert.strictEqual(finalPdfHash, storedPdfAHash, 'Stored PDF in storage bucket MUST NOT be overwritten; must still match PDF_A hash');
+
+  // Verify DB signed_file_ref and status remain intact
+  const { data: contractStillSigned } = await admin.from('contracts').select('status, signed_file_ref').eq('id', CONTRACT_REV2_ID).single();
+  assert.strictEqual(contractStillSigned?.status, 'SIGNED');
+  assert.strictEqual(contractStillSigned?.signed_file_ref, expectedRev2Path);
+
+  // Case H: Signed contract cannot be overwritten with different file ref in DB RPC -> rejected
   const { error: overwriteErr } = await admin.rpc('finalize_contract_signing_rpc', {
     p_company_id: COMPANY_A,
     p_contract_id: CONTRACT_REV2_ID,
@@ -894,6 +1048,36 @@ async function run() {
     p_aal_level: 'aal2',
   });
   assert(overwriteErr?.message.includes('INVALID_SIGNED_FILE_REF') || overwriteErr?.message.includes('CONTRACT_ALREADY_SIGNED_WITH_DIFFERENT_FILE'));
+
+  // Case I: Storage upload with upsert: false fails closed if canonical object already exists before DB signing
+  const { data: contractDummyB } = await admin.from('contracts').insert({
+    company_id: COMPANY_B,
+    order_id: ORDER_B_ID,
+    revision_no: 1,
+    template_version: 'v1',
+    generated_file_ref: `${COMPANY_B}/contracts/dummy-b/revision-1/generated.pdf`,
+    status: 'GENERATED',
+    contract_value: 12000000,
+    is_current: true,
+  }).select('id').single();
+
+  const dummyCanonicalSignedPath = `${COMPANY_B}/contracts/${contractDummyB!.id}/revision-1/signed.pdf`;
+  // Pre-upload an unexpected object
+  await admin.storage.from(STORAGE_BUCKET_MAP.CONTRACT).upload(dummyCanonicalSignedPath, validPdfBytes, { upsert: false });
+
+  try {
+    await signContract({
+      companyId: COMPANY_B,
+      contractId: contractDummyB!.id,
+      signedPdfBuffer: validPdfBytes,
+    }, BOSS_B_CLIENT);
+    assert.fail('Signing with unexpected existing storage object must fail closed');
+  } catch (err: any) {
+    assert(err.message.includes('STORAGE_OBJECT_ALREADY_EXISTS'), 'Must throw STORAGE_OBJECT_ALREADY_EXISTS');
+  }
+
+  // Clean up dummy storage object
+  await admin.storage.from(STORAGE_BUCKET_MAP.CONTRACT).remove([dummyCanonicalSignedPath]);
 
   // Section 3: Customer stage history after contract signing: DEPOSIT_CONFIRMED -> CONTRACT_SIGNED
   const { data: stageHistSign } = await admin

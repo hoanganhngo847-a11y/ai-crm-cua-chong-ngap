@@ -282,10 +282,28 @@ export async function signContract(
     throw new Error('INVALID_CONTRACT_STATE: Không thể ký hợp đồng không còn hiệu lực');
   }
 
-  // 4. Validate allowed status
+  // 4. Read actual revision_no from canonical contract row (NO HARDCODED revision-1!)
+  const revisionNo = contract.revision_no;
+
+  // 5. Derive canonical storage path using actual revision_no
+  const canonicalSignedPath = `${companyId}/contracts/${contractId}/revision-${revisionNo}/signed.pdf`;
+
+  // 6. Section 2: If already SIGNED, return deterministic idempotent result BEFORE any Storage upload or mutation
   if (contract.status === 'SIGNED') {
-    // If already signed, will be handled deterministically by atomic RPC
-  } else if (!['GENERATED', 'SENT_TO_CUSTOMER'].includes(contract.status)) {
+    if (contract.signed_file_ref && contract.signed_file_ref === canonicalSignedPath) {
+      return {
+        success: true,
+        contractId: contract.id,
+        orderId: contract.order_id,
+        status: 'ALREADY_PROCESSED',
+        alreadyProcessed: true,
+      };
+    }
+    throw new Error('INVALID_CONTRACT_STATE: Hợp đồng đã ở trạng thái SIGNED nhưng đường dẫn lưu trữ không khớp');
+  }
+
+  // 7. Validate allowed source status for signing
+  if (!['GENERATED', 'SENT_TO_CUSTOMER'].includes(contract.status)) {
     throw new Error(`INVALID_CONTRACT_STATE: Không thể ký hợp đồng ở trạng thái ${contract.status}`);
   }
 
@@ -293,29 +311,32 @@ export async function signContract(
     throw new Error('CONTRACT_NOT_READY: Bản nháp hợp đồng chưa sẵn sàng');
   }
 
-  // 5. Read actual revision_no from canonical contract row (NO HARDCODED revision-1!)
-  const revisionNo = contract.revision_no;
-
-  // 6. Derive canonical storage path using actual revision_no
-  const canonicalSignedPath = `${companyId}/contracts/${contractId}/revision-${revisionNo}/signed.pdf`;
-
-  // 7. Validate PDF format and bounds BEFORE upload
+  // 8. Validate PDF format and bounds BEFORE upload
   validateSignedPdf(signedPdfBuffer);
 
-  // 8. Upload to canonical 'contracts' bucket
+  // 9. Section 3: Upload to canonical 'contracts' bucket with upsert: false (create-only, no silent overwrite!)
   const { error: uploadError } = await adminSupabase.storage
     .from(STORAGE_BUCKET_MAP.CONTRACT)
     .upload(canonicalSignedPath, signedPdfBuffer, {
       contentType: 'application/pdf',
-      upsert: true,
+      upsert: false,
     });
 
   if (uploadError) {
     console.error('Lỗi khi upload bản hợp đồng đã ký:', uploadError);
+    const errObj = uploadError as unknown as Record<string, unknown>;
+    if (
+      errObj.statusCode === '409' ||
+      errObj.status === 409 ||
+      errObj.error === 'Duplicate' ||
+      uploadError.message?.toLowerCase().includes('already exists')
+    ) {
+      throw new Error('STORAGE_OBJECT_ALREADY_EXISTS: Tệp hợp đồng đã ký đã tồn tại trong kho lưu trữ');
+    }
     throw new Error('Không thể lưu trữ tệp hợp đồng đã ký');
   }
 
-  // 9. Finalize contract signing atomically in DB with strict actor.aal (no synthesized level)
+  // 10. Finalize contract signing atomically in DB with strict actor.aal (no synthesized level)
   const { data, error } = await adminSupabase.rpc('finalize_contract_signing_rpc', {
     p_company_id: companyId,
     p_contract_id: contractId,
