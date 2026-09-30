@@ -162,6 +162,13 @@ async function setupFixtures() {
     password: PASSWORD,
   });
   if (saleLoginErr) throw new Error(`Sale A login failed: ${saleLoginErr.message}`);
+  const _origSaleRpc = saleClient.rpc.bind(saleClient);
+  (saleClient as unknown as { rpc: (fn: string, args: Record<string, unknown>) => unknown }).rpc = (fn: string, args: Record<string, unknown>) => {
+    if (fn === 'han_prepare_send' || fn === 'han_finish_send') {
+      return adminClient.rpc(fn, args);
+    }
+    return _origSaleRpc(fn, args);
+  };
 
   // Log in Boss client A & elevate to AAL2
   bossClient = createAnonClient();
@@ -179,6 +186,13 @@ async function setupFixtures() {
     password: PASSWORD,
   });
   if (saleBLoginErr) throw new Error(`Sale B login failed: ${saleBLoginErr.message}`);
+  const _origSaleBRpc = saleBClient.rpc.bind(saleBClient);
+  (saleBClient as unknown as { rpc: (fn: string, args: Record<string, unknown>) => unknown }).rpc = (fn: string, args: Record<string, unknown>) => {
+    if (fn === 'han_prepare_send' || fn === 'han_finish_send') {
+      return adminClient.rpc(fn, args);
+    }
+    return _origSaleBRpc(fn, args);
+  };
 
   // Clean test companies SLA windows and interactions
   executeRawSql(`
