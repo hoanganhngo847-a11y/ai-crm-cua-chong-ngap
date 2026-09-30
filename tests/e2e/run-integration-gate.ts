@@ -14,8 +14,10 @@
  * 7b. Sales Style Runtime Context Gate
  * 8. Analytics Data Layer Gate
  * 9. Analytics UI & Static Security Gate
- * 10. Cross-Module E2E Integration Scenarios (A–P)
- * 11. Security Boundaries & Tenant Isolation Matrix Gate
+ * 11d. TV3 Zalo OA & Care Unit Gate (PGlite)
+ * 11e. TV3 Zalo OA & Care DB Integration Gate
+ * 11f. TV7 Commercial Pricing, Payment & Contract Unit Gate
+ * 11g. TV7 Commercial Real DB Integration & TV8 Production Handoff Gate
  * 12. TypeScript Typecheck Gate
  * 13. ESLint Gate
  *
@@ -183,6 +185,20 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:zalo:db'],
     description: 'Verify Zalo DB concurrency, RLS isolation, token rotation, and TV2 outbox dispatch on real Supabase stack',
+  },
+  {
+    id: 'GATE_11F_COMMERCIAL_UNIT',
+    name: '11f. TV7 Commercial Pricing, Payment & Contract Unit Gate',
+    command: 'npm',
+    args: ['run', 'test:commercial'],
+    description: 'Verify pure pricing calculation, webhook signature verification, and contract rendering',
+  },
+  {
+    id: 'GATE_11G_COMMERCIAL_DB',
+    name: '11g. TV7 Commercial Real DB Integration & TV8 Production Handoff Gate',
+    command: 'npm',
+    args: ['run', 'test:commercial:db'],
+    description: 'Verify pricing snapshot, order creation, payment webhook, manual deposit, contract generation & signing with AAL2, contracts bucket RLS, and TV8 production handoff',
   },
   {
     id: 'GATE_12_TYPECHECK',
