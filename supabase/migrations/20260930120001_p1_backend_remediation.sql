@@ -28,8 +28,34 @@ REVOKE ALL ON FUNCTION public.complete_voice_media_job(uuid, uuid, uuid) FROM PU
 GRANT EXECUTE ON FUNCTION public.complete_voice_media_job(uuid, uuid, uuid) TO service_role;
 
 -- ------------------------------------------------------------------------------
--- 2. P1-002: CANONICAL PRODUCTION SPECIFICATIONS DERIVATION & VALIDATION
+-- 2. P1-002: CANONICAL PRODUCTION SPECIFICATIONS & MATERIALS DERIVATION
 -- ------------------------------------------------------------------------------
+
+-- Ensure pricing policies have authoritative standard materials defined
+CREATE OR REPLACE FUNCTION public.set_default_pricing_policy_materials()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.conditions IS NULL THEN
+    NEW.conditions := '{}'::jsonb;
+  END IF;
+  IF NOT (NEW.conditions ? 'standard_materials') AND NOT (NEW.conditions ? 'materials') THEN
+    NEW.conditions := NEW.conditions || jsonb_build_object(
+      'standard_materials', jsonb_build_object('aluminum', '6063-T5', 'gasket', 'EPDM')
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_pricing_policies_default_materials ON public.pricing_policies;
+CREATE TRIGGER trg_pricing_policies_default_materials
+  BEFORE INSERT ON public.pricing_policies
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_default_pricing_policy_materials();
 
 CREATE OR REPLACE FUNCTION public.create_production_order_atomic(
   p_company_id uuid,
@@ -49,22 +75,25 @@ DECLARE
   c public.contracts;
   p public.production_orders;
   pc public.price_calculations;
+  pp public.pricing_policies;
   s public.surveys;
   v_canonical_specs jsonb;
+  v_canonical_materials jsonb;
   v_final_specs jsonb;
   v_final_materials jsonb;
+  v_canonical_dim text;
   v_cw_mm numeric;
   v_bh_mm numeric;
   v_w numeric;
   v_h numeric;
   v_key text;
-  v_has_authoritative_dims boolean := false;
 BEGIN
   -- 1. Validate actor: BOSS_ADMIN only
   PERFORM public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN']);
 
   -- 2. Reject empty or null client specs / materials
-  IF p_specs IS NULL OR p_specs = '{}'::jsonb OR p_materials IS NULL OR p_materials = '{}'::jsonb THEN
+  IF p_specs IS NULL OR jsonb_typeof(p_specs) = 'null' OR p_specs = '{}'::jsonb
+     OR p_materials IS NULL OR jsonb_typeof(p_materials) = 'null' OR p_materials = '{}'::jsonb THEN
     RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
   END IF;
 
@@ -139,7 +168,17 @@ BEGIN
     RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
   END IF;
 
-  -- 9. Validate survey if bound to calculation
+  -- 9. Fetch and validate authoritative pricing policy
+  SELECT * INTO pp FROM public.pricing_policies
+  WHERE id = pc.pricing_policy_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';
+  END IF;
+  IF pp.company_id <> p_company_id THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED';
+  END IF;
+
+  -- 10. Validate survey if bound to calculation
   IF pc.survey_id IS NOT NULL THEN
     SELECT * INTO s FROM public.surveys
     WHERE id = pc.survey_id FOR UPDATE;
@@ -157,60 +196,116 @@ BEGIN
     END IF;
   END IF;
 
-  -- 10. Check authoritative technical dimensions existence
-  IF s.id IS NOT NULL THEN
-    v_cw_mm := NULLIF(s.measurements->>'clear_width_mm', '')::numeric;
-    v_bh_mm := NULLIF(s.measurements->>'barrier_height_mm', '')::numeric;
-    IF (v_cw_mm IS NOT NULL AND v_bh_mm IS NOT NULL) OR (s.measurements ? 'dimensions') THEN
-      v_has_authoritative_dims := true;
-    END IF;
+  -- 11. Derive authoritative canonical materials from persisted records
+  IF s.id IS NOT NULL AND jsonb_typeof(s.measurements->'materials') = 'object' AND s.measurements->'materials' <> '{}'::jsonb THEN
+    v_canonical_materials := s.measurements->'materials';
+  ELSIF jsonb_typeof(pc.input_data->'materials') = 'object' AND pc.input_data->'materials' <> '{}'::jsonb THEN
+    v_canonical_materials := pc.input_data->'materials';
+  ELSIF jsonb_typeof(pp.conditions->'materials') = 'object' AND pp.conditions->'materials' <> '{}'::jsonb THEN
+    v_canonical_materials := pp.conditions->'materials';
+  ELSIF jsonb_typeof(pp.conditions->'standard_materials') = 'object' AND pp.conditions->'standard_materials' <> '{}'::jsonb THEN
+    v_canonical_materials := pp.conditions->'standard_materials';
+  ELSIF jsonb_typeof(pp.price_rules->'materials') = 'object' AND pp.price_rules->'materials' <> '{}'::jsonb THEN
+    v_canonical_materials := pp.price_rules->'materials';
+  ELSIF jsonb_typeof(pp.price_rules->'standard_materials') = 'object' AND pp.price_rules->'standard_materials' <> '{}'::jsonb THEN
+    v_canonical_materials := pp.price_rules->'standard_materials';
   ELSE
-    IF (pc.input_data ? 'width' AND pc.input_data ? 'height')
-       OR (pc.input_data ? 'clear_width_mm' AND pc.input_data ? 'barrier_height_mm')
-       OR (pc.input_data ? 'dimensions') THEN
-      v_has_authoritative_dims := true;
-    END IF;
+    v_canonical_materials := NULL;
   END IF;
 
-  IF NOT v_has_authoritative_dims THEN
+  -- Fail-closed if authoritative materials are missing
+  IF v_canonical_materials IS NULL OR jsonb_typeof(v_canonical_materials) = 'null' OR v_canonical_materials = '{}'::jsonb THEN
     RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
   END IF;
 
-  -- 11. Derive canonical production specifications (server-authoritative; client cannot override)
+  -- Detect and reject material tampering / client forgery
+  FOR v_key IN SELECT jsonb_object_keys(p_materials) LOOP
+    IF v_canonical_materials ? v_key THEN
+      IF (p_materials->>v_key) <> (v_canonical_materials->>v_key) THEN
+        RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- Client materials are NOT authoritative; canonical materials are strictly persisted
+  v_final_materials := v_canonical_materials;
+
+  -- 12. Derive authoritative canonical specifications (server-authoritative; client cannot override)
   IF s.id IS NOT NULL THEN
+    v_cw_mm := NULLIF(s.measurements->>'clear_width_mm', '')::numeric;
+    v_bh_mm := NULLIF(s.measurements->>'barrier_height_mm', '')::numeric;
+    IF v_cw_mm IS NULL OR v_bh_mm IS NULL OR v_cw_mm <= 0 OR v_bh_mm <= 0 THEN
+      RAISE EXCEPTION 'NEED_INFO';
+    END IF;
+    v_canonical_dim := v_cw_mm::text || 'x' || v_bh_mm::text || 'mm';
     v_canonical_specs := jsonb_build_object(
+      'dimensions', v_canonical_dim,
+      'canonical_dimensions', v_canonical_dim,
       'canonical_source', 'SURVEY',
       'calculation_id', pc.id,
       'survey_id', s.id,
-      'measurements', s.measurements
+      'clear_width_mm', v_cw_mm,
+      'barrier_height_mm', v_bh_mm
     );
-    IF v_cw_mm IS NOT NULL AND v_bh_mm IS NOT NULL THEN
-      v_canonical_specs := v_canonical_specs || jsonb_build_object(
-        'canonical_dimensions', (v_cw_mm::text || 'x' || v_bh_mm::text || 'mm')
-      );
+    IF s.measurements ? 'gate_type' THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', s.measurements->>'gate_type');
+    END IF;
+    IF s.measurements ? 'mounting_method' THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', s.measurements->>'mounting_method');
     END IF;
   ELSE
     v_w := NULLIF(pc.input_data->>'width', '')::numeric;
     v_h := NULLIF(pc.input_data->>'height', '')::numeric;
-    v_canonical_specs := jsonb_build_object(
-      'canonical_source', 'PRICE_CALCULATION',
-      'calculation_id', pc.id,
-      'input_data', pc.input_data
-    );
-    IF v_w IS NOT NULL AND v_h IS NOT NULL THEN
-      v_canonical_specs := v_canonical_specs || jsonb_build_object(
-        'canonical_dimensions', (round(v_w * 100)::text || 'x' || round(v_h * 100)::text || 'cm')
+    v_cw_mm := NULLIF(pc.input_data->>'clear_width_mm', '')::numeric;
+    v_bh_mm := NULLIF(pc.input_data->>'barrier_height_mm', '')::numeric;
+
+    IF v_w IS NOT NULL AND v_h IS NOT NULL AND v_w > 0 AND v_h > 0 THEN
+      v_canonical_dim := (round(v_w * 100)::text || 'x' || round(v_h * 100)::text || 'cm');
+      v_canonical_specs := jsonb_build_object(
+        'dimensions', v_canonical_dim,
+        'canonical_dimensions', v_canonical_dim,
+        'canonical_source', 'PRICE_CALCULATION',
+        'calculation_id', pc.id,
+        'width', v_w,
+        'height', v_h
       );
-    ELSIF pc.input_data ? 'dimensions' THEN
-      v_canonical_specs := v_canonical_specs || jsonb_build_object(
-        'canonical_dimensions', pc.input_data->>'dimensions'
+    ELSIF v_cw_mm IS NOT NULL AND v_bh_mm IS NOT NULL AND v_cw_mm > 0 AND v_bh_mm > 0 THEN
+      v_canonical_dim := (v_cw_mm::text || 'x' || v_bh_mm::text || 'mm');
+      v_canonical_specs := jsonb_build_object(
+        'dimensions', v_canonical_dim,
+        'canonical_dimensions', v_canonical_dim,
+        'canonical_source', 'PRICE_CALCULATION',
+        'calculation_id', pc.id,
+        'clear_width_mm', v_cw_mm,
+        'barrier_height_mm', v_bh_mm
       );
+    ELSIF pc.input_data ? 'dimensions' AND NULLIF(btrim(pc.input_data->>'dimensions'), '') IS NOT NULL THEN
+      v_canonical_dim := pc.input_data->>'dimensions';
+      v_canonical_specs := jsonb_build_object(
+        'dimensions', v_canonical_dim,
+        'canonical_dimensions', v_canonical_dim,
+        'canonical_source', 'PRICE_CALCULATION',
+        'calculation_id', pc.id
+      );
+    ELSE
+      -- Incomplete or missing canonical technical input: fail closed
+      RAISE EXCEPTION 'NEED_INFO';
+    END IF;
+
+    IF pc.input_data ? 'gate_type' THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', pc.input_data->>'gate_type');
+    END IF;
+    IF pc.input_data ? 'mounting_method' THEN
+      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', pc.input_data->>'mounting_method');
     END IF;
   END IF;
 
-  -- Client values are augmented by canonical facts; canonical facts strictly override client values
-  v_final_specs := p_specs || v_canonical_specs;
-  v_final_materials := p_materials;
+  -- Client values are stripped of canonical fields and strictly overridden by canonical technical facts.
+  -- Recognized-key forged spec values (e.g. forged dimensions, width, height, gate_type) are ignored and overridden.
+  v_final_specs := (p_specs - ARRAY[
+    'dimensions', 'canonical_dimensions', 'canonical_source', 'calculation_id', 'survey_id',
+    'width', 'height', 'clear_width_mm', 'barrier_height_mm', 'gate_type', 'mounting_method'
+  ]) || v_canonical_specs;
 
   -- 12. Insert production order
   INSERT INTO public.production_orders(

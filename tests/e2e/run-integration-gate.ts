@@ -16,6 +16,7 @@
  * 8. Analytics Data Layer Gate
  * 9. Analytics UI & Static Security Gate
  * 11a. P0 Security Authorization Regression Gate
+ * 11a2. P1 Backend Workflow & Security Gate
  * 11d. TV3 Zalo OA & Care Unit Gate (PGlite)
  * 11e. TV3 Zalo OA & Care DB Integration Gate
  * 11f. TV7 Commercial Pricing, Payment & Contract Unit Gate
@@ -173,6 +174,13 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:p0-security'],
     description: 'Verify P0-001 Facebook trusted-RPC ACL and P0-002 contract signing forgery prevention regressions',
+  },
+  {
+    id: 'GATE_11A2_P1_BACKEND',
+    name: '11a2. P1 Backend Security & Workflow Regression Gate',
+    command: 'npm',
+    args: ['run', 'test:p1-backend'],
+    description: 'Verify P1-001 voice legacy overload removal, P1-002 canonical production specs & materials, and P1-003 atomic audited warranty creation',
   },
   {
     id: 'GATE_11B_INBOX_DB',

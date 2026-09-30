@@ -346,12 +346,25 @@ async function runP1BackendRegressionTests() {
   assert.ok(crossTenantOrderErr && (crossTenantOrderErr.message.includes('PERMISSION_DENIED') || crossTenantOrderErr.message.includes('RESOURCE_NOT_FOUND')));
   testPass('P1-002: Cross-tenant production creation strictly rejected');
 
-  // 7. Authoritative calculation-derived values successfully create production order
-  const { data: prodSuccess, error: prodSuccessErr } = await adminClient.rpc('create_production_order_atomic', {
+  // 6b. Forged material value rejected (material tampering)
+  const { error: tamperedMatErr } = await adminClient.rpc('create_production_order_atomic', {
     p_company_id: COMPANY_A,
     p_order_id: ORDER_A,
     p_actor_id: BOSS_A,
     p_specs: { dimensions: '200x120cm' },
+    p_materials: { aluminum: 'cheap_scrap_plastic' },
+    p_deadline: new Date(Date.now() + 86400000).toISOString(),
+  });
+  assert.ok(tamperedMatErr && tamperedMatErr.message.includes('INVALID_TECHNICAL_INPUT'));
+  testPass('P1-002: Forged material value strictly rejected with INVALID_TECHNICAL_INPUT');
+
+  // 7. Authoritative calculation-derived values successfully create production order;
+  // recognized-key forged spec values are ignored/overridden, client materials authoritative: NO
+  const { data: prodSuccess, error: prodSuccessErr } = await adminClient.rpc('create_production_order_atomic', {
+    p_company_id: COMPANY_A,
+    p_order_id: ORDER_A,
+    p_actor_id: BOSS_A,
+    p_specs: { dimensions: '999x999cm', width: 9999, notes: 'Priority production' },
     p_materials: { aluminum: '6063-T5' },
     p_deadline: new Date(Date.now() + 86400000).toISOString(),
   });
@@ -365,7 +378,108 @@ async function runP1BackendRegressionTests() {
   assert.strictEqual(dbProd.specs.canonical_source, 'PRICE_CALCULATION');
   assert.strictEqual(dbProd.specs.calculation_id, calcA.id);
   assert.strictEqual(dbProd.specs.canonical_dimensions, '200x120cm');
-  testPass('P1-002: Authoritative technical specifications accepted and anchored to canonical record');
+  // Client forged dimensions and width were stripped and strictly overridden by canonical record
+  assert.strictEqual(dbProd.specs.dimensions, '200x120cm', 'Recognized-key forged spec dimensions must be ignored/overridden');
+  assert.strictEqual(dbProd.specs.width, 2.0, 'Recognized-key forged spec width must be ignored/overridden');
+  assert.strictEqual(dbProd.specs.notes, 'Priority production', 'Non-canonical auxiliary note preserved');
+  // Client materials are NOT authoritative; canonical materials snapshot is persisted
+  assert.strictEqual(dbProd.materials.aluminum, '6063-T5');
+  assert.strictEqual(dbProd.materials.gasket, 'EPDM', 'Authoritative standard materials persisted even if omitted by client');
+  testPass('P1-002: Recognized-key forged spec ignored/overridden; client materials authoritative: NO');
+
+  // 8. Missing canonical technical input (missing dimensions in calculation): fail closed
+  const { data: calcNoDims } = await adminClient.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_ID,
+    p_policy_version: `v1_${RUN_ID}`,
+    p_input_data: { color: 'blue' }, // no dimensions
+    p_amount: 1000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { data: orderNoDims } = await adminClient.rpc('create_order_from_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_price_calculation_id: calcNoDims.id,
+    p_payment_reference: `DH-P1-NODIM-${RUN_ID}`,
+    p_actor_user_id: BOSS_A,
+  });
+  await adminClient.from('orders').update({ deposit_status: 'CONFIRMED', order_status: 'DEPOSIT_CONFIRMED' }).eq('id', orderNoDims.orderId);
+  const contractNoDimsId = crypto.randomUUID();
+  await adminClient.from('contracts').insert({
+    id: contractNoDimsId,
+    company_id: COMPANY_A,
+    order_id: orderNoDims.orderId,
+    status: 'SIGNED',
+    contract_value: 1000000,
+    signed_file_ref: `${COMPANY_A}/contracts/${contractNoDimsId}/revision-1/signed.pdf`,
+    template_version: 'v1',
+    generated_file_ref: `${COMPANY_A}/contracts/${contractNoDimsId}/revision-1/gen.pdf`,
+  });
+  const { error: missingDimsErr } = await adminClient.rpc('create_production_order_atomic', {
+    p_company_id: COMPANY_A,
+    p_order_id: orderNoDims.orderId,
+    p_actor_id: BOSS_A,
+    p_specs: { dimensions: '200x120cm' },
+    p_materials: { aluminum: '6063-T5' },
+    p_deadline: new Date(Date.now() + 86400000).toISOString(),
+  });
+  assert.ok(missingDimsErr && (missingDimsErr.message.includes('NEED_INFO') || missingDimsErr.message.includes('INVALID_TECHNICAL_INPUT')));
+  testPass('P1-002: Missing canonical dimensions in authoritative record fails closed with NEED_INFO');
+
+  // 9. Missing canonical materials in authoritative records fails closed
+  const POLICY_NO_MAT_ID = crypto.randomUUID();
+  await adminClient.from('pricing_policies').insert({
+    id: POLICY_NO_MAT_ID,
+    company_id: COMPANY_A,
+    version: `v_nomat_${RUN_ID}`,
+    conditions: { standard_materials: null }, // explicitly no materials
+    price_rules: { base_price_per_sqm: 5000000 },
+    effective_at: new Date().toISOString(),
+    status: 'ACTIVE',
+  });
+  const { data: calcNoMat } = await adminClient.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_NO_MAT_ID,
+    p_policy_version: `v_nomat_${RUN_ID}`,
+    p_input_data: { width: 2.0, height: 1.0 }, // dimensions exist, but no materials
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { data: orderNoMat } = await adminClient.rpc('create_order_from_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_price_calculation_id: calcNoMat.id,
+    p_payment_reference: `DH-P1-NOMAT-${RUN_ID}`,
+    p_actor_user_id: BOSS_A,
+  });
+  await adminClient.from('orders').update({ deposit_status: 'CONFIRMED', order_status: 'DEPOSIT_CONFIRMED' }).eq('id', orderNoMat.orderId);
+  const contractNoMatId = crypto.randomUUID();
+  await adminClient.from('contracts').insert({
+    id: contractNoMatId,
+    company_id: COMPANY_A,
+    order_id: orderNoMat.orderId,
+    status: 'SIGNED',
+    contract_value: 10000000,
+    signed_file_ref: `${COMPANY_A}/contracts/${contractNoMatId}/revision-1/signed.pdf`,
+    template_version: 'v1',
+    generated_file_ref: `${COMPANY_A}/contracts/${contractNoMatId}/revision-1/gen.pdf`,
+  });
+  const { error: missingMatErr } = await adminClient.rpc('create_production_order_atomic', {
+    p_company_id: COMPANY_A,
+    p_order_id: orderNoMat.orderId,
+    p_actor_id: BOSS_A,
+    p_specs: { dimensions: '200x100cm' },
+    p_materials: { aluminum: '6063-T5' },
+    p_deadline: new Date(Date.now() + 86400000).toISOString(),
+  });
+  assert.ok(missingMatErr && missingMatErr.message.includes('INVALID_TECHNICAL_INPUT'));
+  testPass('P1-002: Missing canonical materials in authoritative record fails closed with INVALID_TECHNICAL_INPUT');
 
   // ----------------------------------------------------------------------------
   // P1-003: Atomic Audited Warranty Ticket Creation
