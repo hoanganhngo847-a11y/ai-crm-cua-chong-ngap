@@ -108,7 +108,7 @@ async function setupDatabaseFixtures() {
     companyId: string,
     role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
   ) {
-    const { data: list } = await adminClient.auth.admin.listUsers();
+    const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
     const existing = list?.users.find((u) => u.email === config.email);
 
     let userId = existing?.id;
@@ -1050,7 +1050,9 @@ async function runTests() {
 
     INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
     VALUES ('${INT_NON_HAN_SALE}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'OUTBOUND', 'SALE', '${nonHanSaleCreatedAt}')
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE SET created_at = '${nonHanSaleCreatedAt}';
+
+    DELETE FROM public.response_sla_windows WHERE conversation_id = '${CONVO_NON_HAN_ID}';
   `);
 
   await openResponseSlaWindow({

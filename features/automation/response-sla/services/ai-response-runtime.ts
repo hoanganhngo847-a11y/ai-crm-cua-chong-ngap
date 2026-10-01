@@ -647,6 +647,18 @@ async function executeZaloCanonicalPath(params: {
       };
     }
 
+    if (guard.reason === 'SALE_DISPATCHING') {
+      return {
+        success: false,
+        claimed: true,
+        decision,
+        windowId,
+        conversationId,
+        providerStatus: 'UNKNOWN',
+        error: 'Dispatch denied: Sale is currently dispatching a reply (SALE_DISPATCHING)',
+        provenance,
+      };
+    }
     if (guard.reason === 'BUSY') {
       return {
         success: false,
@@ -868,6 +880,18 @@ async function executeFacebookCanonicalPath(params: {
         provenance,
       };
     }
+    if (guard.reason === 'SALE_DISPATCHING') {
+      return {
+        success: false,
+        claimed: true,
+        decision,
+        windowId,
+        conversationId,
+        providerStatus: 'UNKNOWN',
+        error: 'Dispatch denied: Sale is currently dispatching a reply (SALE_DISPATCHING)',
+        provenance,
+      };
+    }
     if (guard.reason === 'BUSY') {
       return {
         success: false,
@@ -1085,6 +1109,18 @@ async function executeWithAiOutbox(params: {
         deliveryId: guard.delivery_id ?? undefined,
         providerStatus: 'UNCERTAIN',
         error: 'Dispatch denied: Outbound delivery is in UNCERTAIN state',
+        provenance,
+      };
+    }
+    if (guard.reason === 'SALE_DISPATCHING') {
+      return {
+        success: false,
+        claimed: true,
+        decision,
+        windowId,
+        conversationId,
+        providerStatus: 'UNKNOWN',
+        error: 'Dispatch denied: Sale is currently dispatching a reply (SALE_DISPATCHING)',
         provenance,
       };
     }

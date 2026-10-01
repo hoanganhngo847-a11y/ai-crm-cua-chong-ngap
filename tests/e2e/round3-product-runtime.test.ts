@@ -61,6 +61,18 @@ function expireClaimDirectSql(windowId: string): void {
   );
 }
 
+function expireDispatchFenceDirectSql(windowId: string): void {
+  execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "UPDATE public.response_sla_windows SET dispatch_fenced_until = clock_timestamp() - interval '5 seconds', ai_dispatch_fenced_until = clock_timestamp() - interval '5 seconds', updated_at = clock_timestamp() WHERE id = '${windowId}';"`
+  );
+}
+
+function setWindowDispatchTokenDirectSql(windowId: string, token: string): void {
+  execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "UPDATE public.response_sla_windows SET dispatch_token = '${token}', ai_dispatch_token = '${token}', updated_at = clock_timestamp() WHERE id = '${windowId}';"`
+  );
+}
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -1231,112 +1243,555 @@ async function run() {
   assert.strictEqual(t4WinRow?.state, 'AI_RESPONDED');
   pass('Zalo PENDING_FINALIZE: controlled canonical client crash recovery: provider invocation count remains 1');
 
-  // Test 5A: Concurrency race: Sale replies during gap between guard_ai_pre_dispatch and provider call (Item 1)
-  // AI guard acquires dispatch fence; Sale resolver yields; AI completes and wins; provider invocation count = 1
-  const t5AWin = await createDueSlaWindow('t5a_sale_gap_race');
-  let t5AProviderCalls = 0;
-  const t5AMid = `mid_fence_win_${RUN_ID}_${Date.now()}`;
+  // Helper to execute real Facebook Sale send path enforcing han_prepare_send -> provider -> han_finish_send contract
+  async function executeSaleFacebookSend({
+    companyId,
+    conversationId,
+    actorId,
+    content,
+    requestId = crypto.randomUUID(),
+    providerSender,
+  }: {
+    companyId: string;
+    conversationId: string;
+    actorId: string;
+    content: string;
+    requestId?: string;
+    providerSender: () => Promise<{ status: 'SENT' | 'FAILED' | 'UNKNOWN'; mid: string | null }>;
+  }) {
+    // 1. Pre-provider DB guard & dispatch claim (Linearization check BEFORE external send)
+    const { data: prepData, error: prepErr } = await admin.rpc('han_prepare_send' as never, {
+      p_company: companyId,
+      p_conversation: conversationId,
+      p_actor: actorId,
+      p_request: requestId,
+      p_content: content,
+      p_safe: content,
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: null,
+    } as never);
 
-  const t5AResult = await executeAiResponseRuntime({
+    if (prepErr) {
+      return { success: false, error: prepErr.message, claimed: false };
+    }
+
+    const prep = prepData as any;
+    if (!prep?.claimed) {
+      return { success: false, status: prep?.status, error: prep?.status, claimed: false };
+    }
+
+    // 2. Pre-provider boundary passed: invoke external provider
+    const provRes = await providerSender();
+
+    // 3. Post-provider resolution
+    await admin.rpc('han_finish_send' as never, {
+      p_company: companyId,
+      p_request: requestId,
+      p_status: provRes.status,
+      p_mid: provRes.mid,
+    } as never);
+
+    return {
+      success: provRes.status === 'SENT',
+      status: provRes.status,
+      mid: provRes.mid,
+      claimed: true,
+    };
+  }
+
+  // Scenario A (Facebook): AI obtains response-dispatch ownership -> Sale attempts send -> Sale pre-guard denies (AI_DISPATCH_FENCED)
+  // Counts: Sale provider calls = 0, AI provider calls = 1, Total = 1, SLA = AI_RESPONDED
+  const tScenAWin = await createDueSlaWindow('scen_a_ai_wins');
+  let tScenAAiCalls = 0;
+  let tScenASaleCalls = 0;
+  let tScenASaleResult: any = null;
+  const tScenAMid = `mid_scen_a_${RUN_ID}_${Date.now()}`;
+
+  const tScenAResult = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
-    windowId: t5AWin.windowId,
-    conversationId: t5AWin.convoId,
+    windowId: tScenAWin.windowId,
+    conversationId: tScenAWin.convoId,
     customerId: CUSTOMER_ID,
     model: new CompliantModel(),
     providerSender: async () => {
-      t5AProviderCalls++;
+      tScenAAiCalls++;
 
-      // Real concurrency gap: Sale replies AFTER guard_ai_pre_dispatch committed, BEFORE provider returns
-      const saleIntId = crypto.randomUUID();
-      await admin.from('interactions').insert({
-        id: saleIntId,
-        company_id: COMPANY_ID,
-        customer_id: CUSTOMER_ID,
-        conversation_id: t5AWin.convoId,
-        channel: 'FACEBOOK',
-        type: 'MESSAGE',
-        direction: 'OUTBOUND',
-        sanitized_content: 'Chào anh, sale hỗ trợ anh ngay!',
-        sanitization_status: 'SUCCEEDED',
-        actor_type: 'SALE',
-        actor_user_id: sale.id,
-        created_at: new Date().toISOString(),
+      // Real concurrency: Sale attempts to send during AI in-flight provider dispatch
+      tScenASaleResult = await executeSaleFacebookSend({
+        companyId: COMPANY_ID,
+        conversationId: tScenAWin.convoId,
+        actorId: sale.id,
+        content: 'Sale cố vấn can thiệp',
+        providerSender: async () => {
+          tScenASaleCalls++;
+          return { status: 'SENT', mid: 'mid_sale_should_not_run' };
+        },
       });
 
-      // Sale resolver attempts to resolve SLA on sale reply
-      const { data: saleResRows } = await admin.rpc('resolve_response_sla_on_sale_reply' as never, {
-        p_company_id: COMPANY_ID,
-        p_conversation_id: t5AWin.convoId,
-        p_sale_interaction_id: saleIntId,
-      } as never);
-
-      // Because AI acquired the pre-dispatch linearization fence, Sale resolver must observe active fence and yield!
-      assert.strictEqual(((saleResRows as any[]) || []).length, 0, 'Sale resolver must yield when AI holds active dispatch fence');
-
-      return { status: 'SENT', externalMessageId: t5AMid };
+      return { status: 'SENT', externalMessageId: tScenAMid };
     },
     client: admin,
   });
 
-  assert.strictEqual(t5AProviderCalls, 1, 'AI provider invocation count must be 1');
-  assert.strictEqual(t5AResult.success, true, 'AI dispatch must succeed as fence winner');
-  const { data: t5AWinRow } = await bossRealClient.from('response_sla_windows')
-    .select('state, ai_response_interaction_id, sale_response_interaction_id')
-    .eq('id', t5AWin.windowId)
+  assert.strictEqual(tScenAAiCalls, 1, 'AI provider invocation count must be 1');
+  assert.strictEqual(tScenASaleCalls, 0, 'Sale provider invocation count MUST be 0 when AI holds dispatch ownership');
+  assert.strictEqual(tScenAAiCalls + tScenASaleCalls, 1, 'Total external provider invocations must be exactly 1');
+  assert.strictEqual(tScenASaleResult?.claimed, false, 'Sale pre-provider guard must deny claim');
+  assert.ok(
+    tScenASaleResult?.error?.includes('AI_DISPATCH_FENCED'),
+    `Sale guard error must be AI_DISPATCH_FENCED, got: ${tScenASaleResult?.error}`
+  );
+  assert.strictEqual(tScenAResult.success, true, 'AI dispatch must succeed as winner');
+
+  const { data: tScenAWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state, ai_response_interaction_id, sale_response_interaction_id')
+    .eq('id', tScenAWin.windowId)
     .single();
-  assert.strictEqual(t5AWinRow?.state, 'AI_RESPONDED', 'Window state must resolve to AI_RESPONDED');
-  assert.ok(t5AWinRow?.ai_response_interaction_id, 'ai_response_interaction_id must be populated');
-  assert.strictEqual(t5AWinRow?.sale_response_interaction_id, null, 'sale_response_interaction_id must remain null');
-  pass('Fix Sale-vs-AI dispatch race: AI pre-dispatch fence protects in-flight provider dispatch; SLA resolves AI_RESPONDED');
+  assert.strictEqual(tScenAWinRow?.state, 'AI_RESPONDED', 'Window state must resolve to AI_RESPONDED');
+  assert.strictEqual(tScenAWinRow?.dispatch_owner, 'AI');
+  assert.strictEqual(tScenAWinRow?.dispatch_state, 'PROVIDER_ACCEPTED');
+  assert.ok(tScenAWinRow?.ai_response_interaction_id, 'ai_response_interaction_id must be set');
+  assert.strictEqual(tScenAWinRow?.sale_response_interaction_id, null, 'sale_response_interaction_id must remain null');
+  pass('Scenario A (Facebook): AI owns dispatch -> Sale pre-guard denies (calls: Sale=0, AI=1, Total=1, SLA=AI_RESPONDED)');
 
-  // Test 5B: Sale replies BEFORE guard_ai_pre_dispatch: provider invocation count = 0, winner = Sale
-  const t5BWin = await createDueSlaWindow('t5b_sale_wins_first');
-  const t5BClaim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t5BWin.windowId });
+  // Scenario B (Facebook): Sale obtains response-dispatch ownership -> Hold Sale provider at barrier -> AI worker attempts dispatch -> AI denied
+  // Counts: AI provider calls = 0, Sale provider calls = 1, Total = 1, SLA = SALE_RESPONDED
+  const tScenBWin = await createDueSlaWindow('scen_b_sale_wins');
+  let tScenBAiCalls = 0;
+  let tScenBSaleCalls = 0;
+  let tScenBAiResult: any = null;
+  const tScenBMid = `mid_sale_scen_b_${RUN_ID}_${Date.now()}`;
 
-  const t5BSaleReplyId = crypto.randomUUID();
-  await admin.from('interactions').insert({
-    id: t5BSaleReplyId,
-    company_id: COMPANY_ID,
-    customer_id: CUSTOMER_ID,
-    conversation_id: t5BWin.convoId,
-    channel: 'FACEBOOK',
-    type: 'MESSAGE',
-    direction: 'OUTBOUND',
-    sanitized_content: 'Chào anh, sale phụ trách hỗ trợ trước!',
-    sanitization_status: 'SUCCEEDED',
-    actor_type: 'SALE',
-    actor_user_id: sale.id,
-    created_at: new Date().toISOString(),
+  const tScenBSaleResult = await executeSaleFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: tScenBWin.convoId,
+    actorId: sale.id,
+    content: 'Chào anh, Sale hỗ trợ trước!',
+    providerSender: async () => {
+      tScenBSaleCalls++;
+
+      // Controlled barrier: while Sale provider is in-flight, AI worker attempts dispatch
+      tScenBAiResult = await executeAiResponseRuntime({
+        companyId: COMPANY_ID,
+        windowId: tScenBWin.windowId,
+        conversationId: tScenBWin.convoId,
+        customerId: CUSTOMER_ID,
+        model: new CompliantModel(),
+        providerSender: async () => {
+          tScenBAiCalls++;
+          return { status: 'SENT', externalMessageId: 'mid_ai_should_not_run' };
+        },
+        client: admin,
+      });
+
+      return { status: 'SENT', mid: tScenBMid };
+    },
   });
 
-  // Sale resolves before AI guard runs
-  await admin.rpc('resolve_response_sla_on_sale_reply' as never, {
-    p_company_id: COMPANY_ID,
-    p_conversation_id: t5BWin.convoId,
-    p_sale_interaction_id: t5BSaleReplyId,
-  } as never);
+  assert.strictEqual(tScenBSaleCalls, 1, 'Sale provider invocation count must be 1');
+  assert.strictEqual(tScenBAiCalls, 0, 'AI provider invocation count MUST be 0 when Sale holds dispatch ownership');
+  assert.strictEqual(tScenBAiCalls + tScenBSaleCalls, 1, 'Total external provider invocations must be exactly 1');
+  assert.strictEqual(tScenBAiResult?.success, false, 'AI dispatch must be denied');
+  assert.ok(
+    tScenBAiResult?.error?.includes('SALE_DISPATCHING') || tScenBAiResult?.error?.includes('Sale is currently dispatching'),
+    `AI guard error must indicate Sale is dispatching, got: ${tScenBAiResult?.error}`
+  );
+  assert.strictEqual(tScenBSaleResult.success, true, 'Sale send must succeed');
 
-  let t5BProviderCalls = 0;
-  const t5BResult = await executeAiResponseRuntime({
+  const { data: tScenBWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state, ai_response_interaction_id, sale_response_interaction_id')
+    .eq('id', tScenBWin.windowId)
+    .single();
+  assert.strictEqual(tScenBWinRow?.state, 'SALE_RESPONDED', 'Window state must resolve to SALE_RESPONDED');
+  assert.strictEqual(tScenBWinRow?.dispatch_owner, 'SALE');
+  assert.strictEqual(tScenBWinRow?.dispatch_state, 'PROVIDER_ACCEPTED');
+  assert.ok(tScenBWinRow?.sale_response_interaction_id, 'sale_response_interaction_id must be populated');
+  assert.strictEqual(tScenBWinRow?.ai_response_interaction_id, null, 'ai_response_interaction_id must remain null');
+  pass('Scenario B (Facebook): Sale owns dispatch -> AI pre-guard denies (calls: AI=0, Sale=1, Total=1, SLA=SALE_RESPONDED)');
+
+  // Scenario C (Facebook): Sale obtains dispatch ownership -> Sale provider returns UNKNOWN -> AI worker runs after lease boundary
+  // Result: AI provider calls = 0, state becomes/stays UNCERTAIN, no automatic send
+  const tScenCWin = await createDueSlaWindow('scen_c_sale_unknown');
+  let tScenCSaleCalls = 0;
+  let tScenCAiCalls = 0;
+
+  const tScenCSaleResult = await executeSaleFacebookSend({
     companyId: COMPANY_ID,
-    windowId: t5BWin.windowId,
-    claimId: t5BClaim.claimId!,
-    conversationId: t5BWin.convoId,
+    conversationId: tScenCWin.convoId,
+    actorId: sale.id,
+    content: 'Tin nhắn gặp sự cố mạng',
+    providerSender: async () => {
+      tScenCSaleCalls++;
+      return { status: 'UNKNOWN', mid: null };
+    },
+  });
+
+  assert.strictEqual(tScenCSaleCalls, 1, 'Sale provider invocation count = 1');
+  assert.strictEqual(tScenCSaleResult.status, 'UNKNOWN');
+
+  // Verify window dispatch_state transitioned to UNCERTAIN
+  const { data: tScenCWinAfterSale } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state')
+    .eq('id', tScenCWin.windowId)
+    .single();
+  assert.strictEqual(tScenCWinAfterSale?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must be UNCERTAIN after Sale UNKNOWN');
+  assert.strictEqual(tScenCWinAfterSale?.state, 'OPEN', 'Window remains OPEN awaiting manual resolution');
+
+  // Simulate passing lease boundary
+  expireDispatchFenceDirectSql(tScenCWin.windowId);
+
+  // AI worker attempts to dispatch after lease expiry
+  const tScenCAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tScenCWin.windowId,
+    conversationId: tScenCWin.convoId,
     customerId: CUSTOMER_ID,
     model: new CompliantModel(),
     providerSender: async () => {
-      t5BProviderCalls++;
+      tScenCAiCalls++;
+      return { status: 'SENT', externalMessageId: 'should_never_run' };
+    },
+    client: admin,
+  });
+
+  assert.strictEqual(tScenCAiCalls, 0, 'AI provider invocation count MUST remain 0 on UNCERTAIN window');
+  assert.strictEqual(tScenCAiResult.success, false, 'AI dispatch must be denied fail-closed');
+  assert.ok(
+    tScenCAiResult.error?.includes('UNCERTAIN'),
+    `AI error must indicate UNCERTAIN state, got: ${tScenCAiResult.error}`
+  );
+
+  const { data: tScenCWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state')
+    .eq('id', tScenCWin.windowId)
+    .single();
+  assert.strictEqual(tScenCWinFinal?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must stay UNCERTAIN');
+  pass('Scenario C (Facebook): Sale returns UNKNOWN -> AI provider calls = 0, state stays UNCERTAIN (Fail-Safe)');
+
+  // Scenario D (Facebook): AI obtains dispatch ownership -> Simulate lease expiry while unresolved -> Sale attempts send -> Sale denied (DISPATCH_UNCERTAIN)
+  // Result: Sale provider calls = 0, state stays UNCERTAIN
+  const tScenDWin = await createDueSlaWindow('scen_d_ai_lease_expired');
+  const tScenDClaim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: tScenDWin.windowId });
+
+  // AI acquires dispatch authority
+  const { data: tScenDGuard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: tScenDWin.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: tScenDWin.windowId,
+    p_ai_claim_id: tScenDClaim.claimId,
+    p_channel: 'FACEBOOK',
+  } as never);
+  assert.strictEqual((tScenDGuard as any)?.[0]?.granted, true, 'AI must have acquired dispatch authority');
+
+  // Simulate dispatch lease expiry while unresolved
+  expireDispatchFenceDirectSql(tScenDWin.windowId);
+
+  let tScenDSaleCalls = 0;
+  const tScenDSaleResult = await executeSaleFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: tScenDWin.convoId,
+    actorId: sale.id,
+    content: 'Sale can thiệp khi hết hạn',
+    providerSender: async () => {
+      tScenDSaleCalls++;
+      return { status: 'SENT', mid: 'should_not_run' };
+    },
+  });
+
+  assert.strictEqual(tScenDSaleCalls, 0, 'Sale provider invocation count MUST be 0 when AI dispatch expired mid-flight');
+  assert.strictEqual(tScenDSaleResult.claimed, false, 'Sale pre-provider guard must deny send');
+  assert.ok(
+    tScenDSaleResult.error?.includes('DISPATCH_UNCERTAIN'),
+    `Sale guard error must be DISPATCH_UNCERTAIN, got: ${tScenDSaleResult.error}`
+  );
+
+  const { data: tScenDWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state')
+    .eq('id', tScenDWin.windowId)
+    .single();
+  assert.strictEqual(tScenDWinFinal?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must become UNCERTAIN');
+  pass('Scenario D (Facebook): AI in-flight lease expired -> Sale pre-guard denies with DISPATCH_UNCERTAIN (calls: Sale=0, state=UNCERTAIN)');
+
+  // Zalo Scenario A: AI acquires dispatch fence -> Sale attempts sendZaloReply -> Sale denied (BUSY / AI_DISPATCH_FENCED)
+  // Counts: Sale provider calls = 0, AI provider calls = 1, Total = 1, SLA = AI_RESPONDED
+  const tZaloAConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloAConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_za_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloATriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloATriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloAConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo tư vấn cửa chống ngập',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloAWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloAConvoId,
+    triggerInteractionId: tZaloATriggerId,
+  });
+
+  const saleActorContext: any = {
+    userId: sale.id,
+    email: sale.email,
+    fullName: 'User SALE',
+    profileStatus: 'ACTIVE',
+    companyId: COMPANY_ID,
+    memberId: `${sale.id}-m`,
+    role: 'SALE',
+    membershipStatus: 'ACTIVE',
+    aal: 'aal1',
+    isMfaEnrolled: false,
+    isTrustedServerVerified: true,
+  };
+
+  let tZaloAAiCalls = 0;
+  let tZaloASaleCalls = 0;
+  let tZaloASaleResult: any = null;
+
+  const zaloInboxServiceA = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloASaleCalls++;
+        return { outcome: 'ACCEPTED', providerMsgId: 'msg_sale_zalo_a' };
+      },
+    } as any),
+  });
+
+  const tZaloAResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tZaloAWin.id,
+    conversationId: tZaloAConvoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    zaloServiceOptions: {
+      clientProvider: async () => ({
+        sendTextMessageWithOutcome: async () => {
+          tZaloAAiCalls++;
+
+          // Real concurrency: Sale attempts sendZaloReply while AI provider call is in-flight
+          tZaloASaleResult = await zaloInboxServiceA.sendZaloReply(
+            {
+              conversationId: tZaloAConvoId,
+              content: 'Sale can thiệp trên Zalo',
+              commandId: `sale-zalo-a-${RUN_ID}`,
+              oaId: t4OaId,
+            },
+            saleActorContext
+          );
+
+          return { outcome: 'ACCEPTED', providerMsgId: `zalo_mid_a_${RUN_ID}` };
+        },
+      } as any),
+    },
+    client: admin,
+  });
+
+  assert.strictEqual(tZaloAAiCalls, 1, 'Zalo AI provider invocation count must be 1');
+  assert.strictEqual(tZaloASaleCalls, 0, 'Zalo Sale provider invocation count MUST be 0 when AI holds dispatch fence');
+  assert.strictEqual(tZaloAAiCalls + tZaloASaleCalls, 1, 'Total external Zalo provider invocations must be exactly 1');
+  assert.strictEqual(tZaloASaleResult?.success, false, 'Sale sendZaloReply must be rejected');
+  assert.strictEqual(tZaloASaleResult?.status, 'BUSY', 'Sale sendZaloReply status must be BUSY (AI_DISPATCH_FENCED)');
+  assert.strictEqual(tZaloAResult.success, true, 'AI Zalo dispatch must succeed');
+
+  const { data: tZaloAWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state')
+    .eq('id', tZaloAWin.id)
+    .single();
+  assert.strictEqual(tZaloAWinRow?.state, 'AI_RESPONDED', 'Window state must resolve to AI_RESPONDED');
+  pass('Scenario A (Zalo): AI owns dispatch -> Sale sendZaloReply denied (calls: Sale=0, AI=1, Total=1, SLA=AI_RESPONDED)');
+
+  // Zalo Scenario B: Sale obtains dispatch ownership -> AI worker attempts dispatch -> AI denied (SALE_DISPATCHING)
+  // Counts: AI provider calls = 0, Sale provider calls = 1, Total = 1, SLA = SALE_RESPONDED
+  const tZaloBConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloBConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_zb_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloBTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloBTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloBConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo tư vấn lắp đặt',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloBWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloBConvoId,
+    triggerInteractionId: tZaloBTriggerId,
+  });
+
+  let tZaloBAiCalls = 0;
+  let tZaloBSaleCalls = 0;
+  let tZaloBAiResult: any = null;
+
+  const zaloInboxServiceB = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloBSaleCalls++;
+
+        // Controlled barrier: while Sale provider is in-flight, AI attempts dispatch
+        tZaloBAiResult = await executeAiResponseRuntime({
+          companyId: COMPANY_ID,
+          windowId: tZaloBWin.id,
+          conversationId: tZaloBConvoId,
+          customerId: CUSTOMER_ID,
+          model: new CompliantModel(),
+          providerSender: async () => {
+            tZaloBAiCalls++;
+            return { status: 'SENT', externalMessageId: 'should_not_run' };
+          },
+          client: admin,
+        });
+
+        return { outcome: 'ACCEPTED', providerMsgId: `msg_sale_zalo_b_${RUN_ID}` };
+      },
+    } as any),
+  });
+
+  const tZaloBSaleResult = await zaloInboxServiceB.sendZaloReply(
+    {
+      conversationId: tZaloBConvoId,
+      content: 'Chào anh trên Zalo, Sale phản hồi!',
+      commandId: `sale-zalo-b-${RUN_ID}`,
+      oaId: t4OaId,
+    },
+    saleActorContext
+  );
+
+  assert.strictEqual(tZaloBSaleCalls, 1, 'Zalo Sale provider invocation count must be 1');
+  assert.strictEqual(tZaloBAiCalls, 0, 'Zalo AI provider invocation count MUST be 0 when Sale holds dispatch fence');
+  assert.strictEqual(tZaloBAiCalls + tZaloBSaleCalls, 1, 'Total external Zalo provider invocations must be exactly 1');
+  assert.strictEqual(tZaloBAiResult?.success, false, 'AI dispatch must be denied');
+  assert.ok(
+    tZaloBAiResult?.error?.includes('SALE_DISPATCHING') || tZaloBAiResult?.error?.includes('Sale is currently dispatching'),
+    `AI error must indicate Sale dispatching, got: ${tZaloBAiResult?.error}`
+  );
+  assert.strictEqual(tZaloBSaleResult.success, true, 'Sale sendZaloReply must succeed');
+
+  const { data: tZaloBWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state')
+    .eq('id', tZaloBWin.id)
+    .single();
+  assert.strictEqual(tZaloBWinRow?.state, 'SALE_RESPONDED', 'Window state must resolve to SALE_RESPONDED');
+  pass('Scenario B (Zalo): Sale owns dispatch -> AI pre-guard denies (calls: AI=0, Sale=1, Total=1, SLA=SALE_RESPONDED)');
+
+  // Zalo Scenario C: Sale provider returns UNCERTAIN -> AI worker runs -> AI denied (calls: AI=0, state=UNCERTAIN)
+  const tZaloCConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloCConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_zc_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloCTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloCTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloCConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo kiểm tra lỗi mạng',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloCWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloCConvoId,
+    triggerInteractionId: tZaloCTriggerId,
+  });
+
+  let tZaloCSaleCalls = 0;
+  let tZaloCAiCalls = 0;
+
+  const zaloInboxServiceC = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloCSaleCalls++;
+        return { outcome: 'UNCERTAIN', errorCode: 'TIMEOUT', errorMessage: 'Network timeout' };
+      },
+    } as any),
+  });
+
+  const tZaloCSaleResult = await zaloInboxServiceC.sendZaloReply(
+    {
+      conversationId: tZaloCConvoId,
+      content: 'Tin nhắn Zalo lỗi mạng',
+      commandId: `sale-zalo-c-${RUN_ID}`,
+      oaId: t4OaId,
+    },
+    saleActorContext
+  );
+
+  assert.strictEqual(tZaloCSaleCalls, 1, 'Sale provider invocation count = 1');
+  assert.strictEqual(tZaloCSaleResult.status, 'UNCERTAIN');
+
+  // AI attempts dispatch
+  const tZaloCAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tZaloCWin.id,
+    conversationId: tZaloCConvoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      tZaloCAiCalls++;
       return { status: 'SENT', externalMessageId: 'should_not_run' };
     },
     client: admin,
   });
 
-  assert.strictEqual(t5BProviderCalls, 0, 'Provider invocation count MUST be zero when Sale won window first');
-  assert.strictEqual(t5BResult.success, false);
-  const { data: t5BWinRow } = await bossRealClient.from('response_sla_windows').select('state, sale_response_interaction_id').eq('id', t5BWin.windowId).single();
-  assert.strictEqual(t5BWinRow?.state, 'SALE_RESPONDED');
-  assert.strictEqual(t5BWinRow?.sale_response_interaction_id, t5BSaleReplyId);
-  pass('Sale replies before AI guard: provider invocation count = 0; SLA ends SALE_RESPONDED');
+  assert.strictEqual(tZaloCAiCalls, 0, 'AI provider invocation count MUST remain 0 on UNCERTAIN window');
+  assert.strictEqual(tZaloCAiResult.success, false, 'AI dispatch must be denied fail-closed');
+
+  const { data: tZaloCWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state')
+    .eq('id', tZaloCWin.id)
+    .single();
+  assert.strictEqual(tZaloCWinFinal?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must stay UNCERTAIN');
+  pass('Scenario C (Zalo): Sale returns UNCERTAIN -> AI provider calls = 0, state stays UNCERTAIN (Fail-Safe)');
 
   // Test 6: Mandatory claim ID for new dispatch (Item 5)
   // guard_ai_pre_dispatch with p_ai_claim_id = null must fail-closed (no NULL bypass)
@@ -1602,7 +2057,7 @@ async function run() {
   assert.ok(t13ZaloErr && (t13ZaloErr as any).message?.includes('INTERACTION_ACTOR_MISMATCH'), 'Unrelated interaction with actor SALE must fail with INTERACTION_ACTOR_MISMATCH');
   pass('Harden finalize_ai_zalo_sla_atomic: unrelated interaction rejected with INTERACTION_ACTOR_MISMATCH');
 
-  // Test 14: Dispatch ownership to provider-result persistence (Item 7)
+  // Test 14: Dispatch ownership to provider-result persistence: validates BOTH delivery and SLA-window dispatch tokens (Item 9)
   const t14Win = await createDueSlaWindow('t14_dispatch_ownership');
   const t14Claim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t14Win.windowId });
   const { data: t14Guard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
@@ -1617,7 +2072,7 @@ async function run() {
   const t14Token = (t14Guard as any)?.[0]?.dispatch_token;
   assert.ok(t14Token, 'guard_ai_pre_dispatch must return durable dispatch_token');
 
-  // Attempt to persist provider result with wrong dispatch token
+  // 1. Attempt to persist provider result with wrong dispatch token (fails delivery check)
   const { error: t14WrongTokenErr } = await admin.rpc('record_ai_outbound_provider_result' as never, {
     p_company_id: COMPANY_ID,
     p_delivery_id: t14DelId,
@@ -1627,7 +2082,21 @@ async function run() {
   } as never);
   assert.ok(t14WrongTokenErr && (t14WrongTokenErr as any).message?.includes('DISPATCH_TOKEN_MISMATCH'), 'Wrong dispatch token must fail with DISPATCH_TOKEN_MISMATCH');
 
-  // Persist with matching dispatch token
+  // 2. Tamper with window's dispatch token (fails window check even when delivery token matches)
+  setWindowDispatchTokenDirectSql(t14Win.windowId, crypto.randomUUID());
+  const { error: t14TamperedWinErr } = await admin.rpc('record_ai_outbound_provider_result' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t14DelId,
+    p_outcome: 'SENT',
+    p_dispatch_token: t14Token,
+    p_provider_msg_id: 'mid_t14',
+  } as never);
+  assert.ok(t14TamperedWinErr && (t14TamperedWinErr as any).message?.includes('DISPATCH_TOKEN_MISMATCH'), 'Tampered window dispatch token must fail DISPATCH_TOKEN_MISMATCH');
+
+  // Restore matching window token
+  setWindowDispatchTokenDirectSql(t14Win.windowId, t14Token);
+
+  // 3. Persist with matching dispatch tokens on both delivery and window
   const { data: t14SuccessStatus } = await admin.rpc('record_ai_outbound_provider_result' as never, {
     p_company_id: COMPANY_ID,
     p_delivery_id: t14DelId,
@@ -1636,7 +2105,7 @@ async function run() {
     p_provider_msg_id: 'mid_t14',
   } as never);
   assert.strictEqual(t14SuccessStatus, 'PROVIDER_SENT_PENDING_FINALIZE');
-  pass('Dispatch ownership: record_ai_outbound_provider_result validates matching dispatch_token');
+  pass('Dispatch ownership: record_ai_outbound_provider_result validates both delivery and window dispatch_tokens');
 
   // Test 15: Make two-worker test truly end-to-end (Item 4)
   // Competing runtime executions against the same SLA logical operation with a controlled provider mock + barrier.
@@ -1739,22 +2208,55 @@ async function run() {
   assert.notStrictEqual(t17Meta?.command_id, undefined, 'Provenance must include command_id');
   pass('Zalo production AI path persists all 9 mandatory provenance fields');
 
-  // Test 18: Synthetic message ID scan across all production outbound modules (Item 10)
-  const modulesToScan = [
-    'features/automation/response-sla/services/ai-response-runtime.ts',
-    'features/omnichannel/zalo/inbox-service.ts',
-    'features/omnichannel/facebook/facebook-sender.service.ts',
+  // Test 18: Recursive synthetic message ID scan across all production outbound modules (Item 10)
+  const targetPaths = [
+    'features/automation/response-sla/services',
+    'features/omnichannel/facebook/server.ts',
+    'features/omnichannel/facebook/transport.ts',
+    'features/omnichannel/zalo',
   ];
-  for (const modulePath of modulesToScan) {
-    if (fs.existsSync(modulePath)) {
-      const code = fs.readFileSync(modulePath, 'utf8');
-      assert.strictEqual(/msg_\$\{crypto\.randomUUID\(\)\}/.test(code), false, `Module ${modulePath} must not contain synthetic message ID pattern`);
-      assert.strictEqual(/externalMessageId:\s*['"`]msg_/.test(code), false, `Module ${modulePath} must not synthesize externalMessageId`);
+
+  function collectOutboundFiles(p: string): string[] {
+    assert.ok(fs.existsSync(p), `Required production module path must physically exist: ${p}`);
+    const st = fs.statSync(p);
+    if (st.isFile()) return [p];
+    const out: string[] = [];
+    const entries = fs.readdirSync(p, { withFileTypes: true });
+    for (const e of entries) {
+      const full = `${p}/${e.name}`;
+      if (e.isDirectory()) {
+        out.push(...collectOutboundFiles(full));
+      } else if (e.isFile() && (e.name.endsWith('.ts') || e.name.endsWith('.js'))) {
+        out.push(full);
+      }
     }
+    return out;
   }
+
+  const allScannedFiles = targetPaths.flatMap(collectOutboundFiles);
+  assert.ok(allScannedFiles.length >= 15, `Must find multiple production files to scan, found: ${allScannedFiles.length}`);
+
+  for (const file of allScannedFiles) {
+    const code = fs.readFileSync(file, 'utf8');
+    assert.strictEqual(
+      /msg_\$\{crypto\.randomUUID\(\)\}/.test(code),
+      false,
+      `Module ${file} must not contain synthetic message ID pattern msg_\${crypto.randomUUID()}`
+    );
+    assert.strictEqual(
+      /externalMessageId:\s*['"`]msg_/.test(code),
+      false,
+      `Module ${file} must not synthesize externalMessageId`
+    );
+  }
+
   const runtimeCode = fs.readFileSync('features/automation/response-sla/services/ai-response-runtime.ts', 'utf8');
-  assert.strictEqual(/status:\s*'SENT'/.test(runtimeCode), false, 'Production code must not hardcode synthetic SENT status outside type checks');
-  pass('No synthetic message ID anywhere across production outbound modules');
+  assert.strictEqual(
+    /status:\s*'SENT'/.test(runtimeCode),
+    false,
+    'Production runtime code must not hardcode synthetic SENT status outside type checks'
+  );
+  pass(`Recursive scan of ${allScannedFiles.length} files across outbound modules: zero synthetic message IDs`);
 
   // Test 19: UNKNOWN and UNCERTAIN are never downgraded to FAILED
   const t19Win = await createDueSlaWindow('t19_uncertain');

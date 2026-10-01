@@ -83,7 +83,7 @@ const fakeZaloFetch = (async (input: string | URL | Request, init?: RequestInit)
 }) as typeof fetch;
 
 async function ensureUser(cfg: { email: string; password: string }, role: 'SALE' | 'BOSS_ADMIN'): Promise<string> {
-  const { data: list } = await admin.auth.admin.listUsers();
+  const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 });
   let userId = list?.users.find((u) => u.email === cfg.email)?.id;
   if (!userId) {
     const { data, error } = await admin.auth.admin.createUser({ email: cfg.email, password: cfg.password, email_confirm: true });

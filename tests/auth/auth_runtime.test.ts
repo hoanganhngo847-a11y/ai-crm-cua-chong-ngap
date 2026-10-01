@@ -107,7 +107,7 @@ async function setupTestData() {
   ]);
 
   // Clean up any existing test users and their factors
-  const { data: userList } = await adminClient.auth.admin.listUsers();
+  const { data: userList } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
   for (const user of userList?.users || []) {
     if (user.email?.endsWith('@crm.local')) {
       try {

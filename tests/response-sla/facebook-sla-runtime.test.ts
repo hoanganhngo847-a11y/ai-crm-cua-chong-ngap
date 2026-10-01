@@ -92,7 +92,7 @@ async function setupFixtures() {
     password: PASSWORD,
     email_confirm: true,
   }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers();
+    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
     return { data: { user: users.users.find((u) => u.email === SALE_A_EMAIL) } };
   });
 
@@ -115,7 +115,7 @@ async function setupFixtures() {
     password: PASSWORD,
     email_confirm: true,
   }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers();
+    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
     return { data: { user: users.users.find((u) => u.email === BOSS_A_EMAIL) } };
   });
 
@@ -138,7 +138,7 @@ async function setupFixtures() {
     password: PASSWORD,
     email_confirm: true,
   }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers();
+    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
     return { data: { user: users.users.find((u) => u.email === SALE_B_EMAIL) } };
   });
 
