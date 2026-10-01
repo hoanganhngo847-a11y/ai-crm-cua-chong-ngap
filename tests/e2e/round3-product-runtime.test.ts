@@ -49,9 +49,17 @@ import {
   type AiResponseModel,
 } from '../../features/automation/response-sla/services/ai-response-runtime';
 import fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import { processDueResponseSlaWindows } from '../../features/automation/response-sla/services/sla-automation-worker';
 import { openResponseSlaWindow, claimResponseSlaForAi } from '../../features/automation/response-sla/services/response-sla-store';
 import { buildRuntimeSalesStyleContext } from '../../features/sales-style/services/runtime-style-context';
+import { ZaloInboxService } from '../../features/omnichannel/zalo/inbox-service';
+
+function expireClaimDirectSql(windowId: string): void {
+  execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "UPDATE public.response_sla_windows SET ai_claimed_at = clock_timestamp() - interval '3 minutes', ai_claim_expires_at = clock_timestamp() - interval '1 second', updated_at = clock_timestamp() WHERE id = '${windowId}';"`
+  );
+}
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY =
@@ -995,10 +1003,8 @@ async function run() {
   const stableCmd1 = t1Win.windowId;
   const zaloStableCmd1 = `ai-sla-win-${t1Win.windowId}`;
 
-  // Expire claim lease in DB
-  await admin.rpc('test_expire_response_sla_claim' as never, {
-    p_window_id: t1Win.windowId,
-  } as never);
+  // Expire claim lease in DB via direct SQL (Item 8)
+  expireClaimDirectSql(t1Win.windowId);
 
   // Reclaim window
   const t1Claim2 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t1Win.windowId });
@@ -1010,34 +1016,51 @@ async function run() {
   assert.strictEqual(zaloStableCmd1, zaloStableCmd2, 'Zalo stable command ID must be identical across claims');
   pass('Stable SLA command identity remains identical across CLAIM -> RECLAIM');
 
-  // Test 2: Provider accepted message, DB finalization deliberately fails, lease expires, worker runs again:
-  // provider mock invocation count MUST remain exactly 1
+  // Test 2: Provider accepted message, DB finalization crash recovery (Item 9 end-to-end controlled runtime test)
+  // Flow: provider mock invoked once -> provider returns SENT -> provider outcome persistence succeeds ->
+  // force DB finalization failure -> rerun worker/reclaim -> reconciliation succeeds -> provider invocation count remains exactly 1.
   const t2Win = await createDueSlaWindow('t2_crash_worker');
   let t2InvocationCount = 0;
   const t2Mid = `mid_accepted_${RUN_ID}_${Date.now()}`;
 
-  // Run 1: provider succeeds and records outcome, but we simulate crash before finalization
-  const { data: t2DelId } = await admin.rpc('create_ai_outbound_delivery_pending' as never, {
-    p_company_id: COMPANY_ID,
-    p_conversation_id: t2Win.convoId,
-    p_channel: 'FACEBOOK',
-    p_client_command_id: t2Win.windowId,
-    p_request_fingerprint: `${COMPANY_ID}:${t2Win.convoId}:${t2Win.windowId}`,
-  } as never);
-  t2InvocationCount++;
-  await admin.rpc('record_ai_outbound_provider_result' as never, {
-    p_company_id: COMPANY_ID,
-    p_delivery_id: t2DelId,
-    p_outcome: 'SENT',
-    p_provider_msg_id: t2Mid,
-  } as never);
+  // Controlled failing client: simulates crash during DB finalization
+  const t2FailingClient = {
+    ...admin,
+    rpc: async (fn: string, args: any) => {
+      if (fn === 'finalize_ai_outbound_delivery_atomic') {
+        return { data: null, error: { message: 'SIMULATED_DB_FINALIZATION_CRASH' } };
+      }
+      return (admin.rpc as any)(fn, args);
+    },
+    from: (table: string) => admin.from(table),
+  } as unknown as SupabaseClient;
 
-  // Expire any lease on the window
-  await admin.rpc('test_expire_response_sla_claim' as never, {
-    p_window_id: t2Win.windowId,
-  } as never);
+  // Run 1: provider succeeds, outcome recorded in DB as PROVIDER_SENT_PENDING_FINALIZE, but finalizer fails
+  const t2Run1Result = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: t2Win.windowId,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      t2InvocationCount++;
+      return { status: 'SENT', externalMessageId: t2Mid };
+    },
+    client: t2FailingClient,
+  });
+  assert.strictEqual(t2InvocationCount, 1, 'Provider invocation count must be 1 after Run 1');
+  assert.strictEqual(t2Run1Result.success, false, 'Run 1 must fail due to simulated finalization crash');
 
-  // Worker runs again with providerSender: providerSender MUST NOT be called again
+  // Verify delivery is durably in PROVIDER_SENT_PENDING_FINALIZE
+  const { data: t2DelRow } = await admin.from('outbound_deliveries')
+    .select('delivery_status, provider_message_id')
+    .eq('client_command_id', t2Win.windowId)
+    .single();
+  assert.strictEqual(t2DelRow?.delivery_status, 'PROVIDER_SENT_PENDING_FINALIZE');
+  assert.strictEqual(t2DelRow?.provider_message_id, t2Mid);
+
+  // Expire claim lease in DB via direct SQL
+  expireClaimDirectSql(t2Win.windowId);
+
+  // Run 2: Reclaim/rerun worker with normal client and SAME providerSender: providerSender MUST NOT be called again
   const t2RetryResult = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
     windowId: t2Win.windowId,
@@ -1049,9 +1072,11 @@ async function run() {
     client: admin,
   });
 
-  assert.strictEqual(t2InvocationCount, 1, 'Provider invocation count must remain exactly 1');
+  assert.strictEqual(t2InvocationCount, 1, 'Provider invocation count must remain exactly 1 after reconciliation');
   assert.strictEqual(t2RetryResult.success, true);
   assert.strictEqual(t2RetryResult.externalMessageId, t2Mid);
+  const { data: t2WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t2Win.windowId).single();
+  assert.strictEqual(t2WinRow?.state, 'AI_RESPONDED');
   pass('Provider accepted message, DB finalization crash recovery: provider invocation count remains 1');
 
   // Test 3: Facebook UNKNOWN result: durable state = UNCERTAIN; after lease/retry worker runs, provider invocation count remains 1
@@ -1075,10 +1100,8 @@ async function run() {
     .single();
   assert.strictEqual(t3DelRow?.delivery_status, 'UNCERTAIN', 'Delivery status must be UNCERTAIN, not FAILED');
 
-  // Expire claim lease
-  await admin.rpc('test_expire_response_sla_claim' as never, {
-    p_window_id: t3Win.windowId,
-  } as never);
+  // Expire claim lease via direct SQL
+  expireClaimDirectSql(t3Win.windowId);
 
   // Worker runs again: UNCERTAIN must never be automatically resent
   const t3Res2 = await executeAiResponseRuntime({
@@ -1095,7 +1118,8 @@ async function run() {
   assert.strictEqual(t3InvocationCount, 1, 'Provider must never be called again after UNCERTAIN');
   pass('Facebook UNKNOWN result: durable state = UNCERTAIN; provider invocation count remains 1');
 
-  // Test 4: Zalo PENDING_FINALIZE: subsequent worker only finalizes DB; provider invocation count remains 1
+  // Test 4: Zalo end-to-end controlled client crash recovery (Item 9 Zalo)
+  // Exercise sendSystemZaloReply with a controlled canonical client and force post-provider DB finalization failure
   const t4ConvoId = crypto.randomUUID();
   await admin.from('conversations').insert({
     id: t4ConvoId,
@@ -1125,31 +1149,66 @@ async function run() {
     conversationId: t4ConvoId,
     triggerInteractionId: t4TriggerId,
   });
-  const t4ZaloMid = `zalo_mid_pending_${RUN_ID}`;
-  const t4ZaloDelId = crypto.randomUUID();
-  await admin.from('zalo_outbound_deliveries').insert({
-    id: t4ZaloDelId,
+  const t4OaId = `oa_${RUN_ID}`;
+  await admin.from('zalo_oa_configs').insert({
     company_id: COMPANY_ID,
-    conversation_id: t4ConvoId,
-    customer_id: CUSTOMER_ID,
-    recipient_zalo_uid: `zalo_user_${RUN_ID}`,
-    idempotency_key: `zalo_out:${COMPANY_ID}:ai-sla-win-${t4Win.id}`,
-    command_id: `ai-sla-win-${t4Win.id}`,
-    channel: 'ZALO',
-    content: 'Tư vấn cửa chống ngập',
-    content_sha256: crypto.createHash('sha256').update('Tư vấn cửa chống ngập').digest('hex'),
-    status: 'PROVIDER_SENT_PENDING_FINALIZE',
-    provider_msg_id: t4ZaloMid,
-    attempts: 1,
-    actor_type: 'AI',
-  });
-  await admin.from('zalo_outbound_payloads').insert({
-    delivery_id: t4ZaloDelId,
-    company_id: COMPANY_ID,
-    raw_content: 'Tư vấn cửa chống ngập',
+    oa_id: t4OaId,
+    app_id: `app_${RUN_ID}`,
+    status: 'ACTIVE',
   });
 
+  const t4ZaloMid = `zalo_mid_crash_${RUN_ID}`;
   let t4ZaloClientCalls = 0;
+
+  const controlledZaloClient = {
+    sendTextMessageWithOutcome: async () => {
+      t4ZaloClientCalls++;
+      return { outcome: 'ACCEPTED' as const, providerMsgId: t4ZaloMid };
+    },
+  };
+
+  const failingZaloAdminClient = {
+    ...admin,
+    rpc: async (fn: string, args: any) => {
+      if (fn === 'zalo_finalize_outbound_delivery') {
+        return { data: null, error: { message: 'SIMULATED_ZALO_FINALIZE_FAILURE' } };
+      }
+      return (admin.rpc as any)(fn, args);
+    },
+    from: (table: string) => admin.from(table),
+  } as unknown as SupabaseClient;
+
+  // Run 1: sendSystemZaloReply with failing finalization
+  const zaloServiceFailing = new ZaloInboxService({
+    supabase: failingZaloAdminClient,
+    clientProvider: async () => controlledZaloClient as any,
+  });
+
+  const t4ZaloRes1 = await zaloServiceFailing.sendSystemZaloReply(
+    {
+      conversationId: t4ConvoId,
+      content: 'Tư vấn cửa chống ngập',
+      commandId: `ai-sla-win-${t4Win.id}`,
+      oaId: t4OaId,
+    },
+    {
+      kind: 'SYSTEM_WORKER',
+      companyId: COMPANY_ID,
+      actorType: 'AI',
+      workerName: 'ai-response-runtime',
+    }
+  );
+  assert.strictEqual(t4ZaloClientCalls, 1, 'Zalo client called once in Run 1');
+  assert.strictEqual(t4ZaloRes1.status, 'PENDING_FINALIZE', 'Status must be PENDING_FINALIZE after finalizer failure');
+
+  // Verify delivery is durably in PROVIDER_SENT_PENDING_FINALIZE in DB
+  const { data: t4ZaloDelRow } = await admin.from('zalo_outbound_deliveries')
+    .select('status, provider_msg_id')
+    .eq('id', t4ZaloRes1.deliveryId)
+    .single();
+  assert.strictEqual(t4ZaloDelRow?.status, 'PROVIDER_SENT_PENDING_FINALIZE');
+
+  // Run 2: executeAiResponseRuntime reconciles Zalo PENDING_FINALIZE delivery without calling provider
   const t4Result = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
     windowId: t4Win.id,
@@ -1159,296 +1218,594 @@ async function run() {
       clientProvider: () => ({
         sendTextMessageWithOutcome: async () => {
           t4ZaloClientCalls++;
-          return { outcome: 'ACCEPTED', providerMsgId: 'unexpected' };
+          return { outcome: 'ACCEPTED', providerMsgId: 'SHOULD_NOT_BE_CALLED' };
         },
       } as any),
     },
   });
 
-  assert.strictEqual(t4ZaloClientCalls, 0, 'Zalo client must NOT be called for PENDING_FINALIZE');
+  assert.strictEqual(t4ZaloClientCalls, 1, 'Zalo provider must NOT be called again during reconciliation');
   assert.strictEqual(t4Result.success, true);
   assert.strictEqual(t4Result.externalMessageId, t4ZaloMid);
   const { data: t4WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t4Win.id).single();
   assert.strictEqual(t4WinRow?.state, 'AI_RESPONDED');
-  pass('Zalo PENDING_FINALIZE: subsequent worker only finalizes DB; provider invocation count remains 0/1');
+  pass('Zalo PENDING_FINALIZE: controlled canonical client crash recovery: provider invocation count remains 1');
 
-  // Test 5: Sale replies after AI claim but before provider dispatch: provider invocation count = 0; SLA ends SALE_RESPONDED
-  const t5Win = await createDueSlaWindow('t5_sale_race');
-  const t5Claim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t5Win.windowId });
+  // Test 5A: Concurrency race: Sale replies during gap between guard_ai_pre_dispatch and provider call (Item 1)
+  // AI guard acquires dispatch fence; Sale resolver yields; AI completes and wins; provider invocation count = 1
+  const t5AWin = await createDueSlaWindow('t5a_sale_gap_race');
+  let t5AProviderCalls = 0;
+  const t5AMid = `mid_fence_win_${RUN_ID}_${Date.now()}`;
 
-  // Sale sends reply after window.started_at
-  const t5SaleReplyId = crypto.randomUUID();
+  const t5AResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: t5AWin.windowId,
+    conversationId: t5AWin.convoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      t5AProviderCalls++;
+
+      // Real concurrency gap: Sale replies AFTER guard_ai_pre_dispatch committed, BEFORE provider returns
+      const saleIntId = crypto.randomUUID();
+      await admin.from('interactions').insert({
+        id: saleIntId,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: t5AWin.convoId,
+        channel: 'FACEBOOK',
+        type: 'MESSAGE',
+        direction: 'OUTBOUND',
+        sanitized_content: 'Chào anh, sale hỗ trợ anh ngay!',
+        sanitization_status: 'SUCCEEDED',
+        actor_type: 'SALE',
+        actor_user_id: sale.id,
+        created_at: new Date().toISOString(),
+      });
+
+      // Sale resolver attempts to resolve SLA on sale reply
+      const { data: saleResRows } = await admin.rpc('resolve_response_sla_on_sale_reply' as never, {
+        p_company_id: COMPANY_ID,
+        p_conversation_id: t5AWin.convoId,
+        p_sale_interaction_id: saleIntId,
+      } as never);
+
+      // Because AI acquired the pre-dispatch linearization fence, Sale resolver must observe active fence and yield!
+      assert.strictEqual(((saleResRows as any[]) || []).length, 0, 'Sale resolver must yield when AI holds active dispatch fence');
+
+      return { status: 'SENT', externalMessageId: t5AMid };
+    },
+    client: admin,
+  });
+
+  assert.strictEqual(t5AProviderCalls, 1, 'AI provider invocation count must be 1');
+  assert.strictEqual(t5AResult.success, true, 'AI dispatch must succeed as fence winner');
+  const { data: t5AWinRow } = await bossRealClient.from('response_sla_windows')
+    .select('state, ai_response_interaction_id, sale_response_interaction_id')
+    .eq('id', t5AWin.windowId)
+    .single();
+  assert.strictEqual(t5AWinRow?.state, 'AI_RESPONDED', 'Window state must resolve to AI_RESPONDED');
+  assert.ok(t5AWinRow?.ai_response_interaction_id, 'ai_response_interaction_id must be populated');
+  assert.strictEqual(t5AWinRow?.sale_response_interaction_id, null, 'sale_response_interaction_id must remain null');
+  pass('Fix Sale-vs-AI dispatch race: AI pre-dispatch fence protects in-flight provider dispatch; SLA resolves AI_RESPONDED');
+
+  // Test 5B: Sale replies BEFORE guard_ai_pre_dispatch: provider invocation count = 0, winner = Sale
+  const t5BWin = await createDueSlaWindow('t5b_sale_wins_first');
+  const t5BClaim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t5BWin.windowId });
+
+  const t5BSaleReplyId = crypto.randomUUID();
   await admin.from('interactions').insert({
-    id: t5SaleReplyId,
+    id: t5BSaleReplyId,
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
-    conversation_id: t5Win.convoId,
+    conversation_id: t5BWin.convoId,
     channel: 'FACEBOOK',
     type: 'MESSAGE',
     direction: 'OUTBOUND',
-    sanitized_content: 'Em chào anh, em là Sale phụ trách hỗ trợ anh ngay ạ.',
+    sanitized_content: 'Chào anh, sale phụ trách hỗ trợ trước!',
     sanitization_status: 'SUCCEEDED',
     actor_type: 'SALE',
     actor_user_id: sale.id,
     created_at: new Date().toISOString(),
   });
 
-  let t5ProviderCalls = 0;
-  const t5Result = await executeAiResponseRuntime({
+  // Sale resolves before AI guard runs
+  await admin.rpc('resolve_response_sla_on_sale_reply' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t5BWin.convoId,
+    p_sale_interaction_id: t5BSaleReplyId,
+  } as never);
+
+  let t5BProviderCalls = 0;
+  const t5BResult = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
-    windowId: t5Win.windowId,
-    claimId: t5Claim.claimId!,
-    conversationId: t5Win.convoId,
+    windowId: t5BWin.windowId,
+    claimId: t5BClaim.claimId!,
+    conversationId: t5BWin.convoId,
     customerId: CUSTOMER_ID,
     model: new CompliantModel(),
     providerSender: async () => {
-      t5ProviderCalls++;
+      t5BProviderCalls++;
       return { status: 'SENT', externalMessageId: 'should_not_run' };
     },
     client: admin,
   });
 
-  assert.strictEqual(t5ProviderCalls, 0, 'Provider invocation count MUST be zero when Sale already responded');
-  assert.strictEqual(t5Result.success, false);
-  assert.strictEqual(t5Result.decision, 'SALE_ALREADY_RESPONDED');
-  const { data: t5WinRow } = await bossRealClient.from('response_sla_windows').select('state, sale_response_interaction_id').eq('id', t5Win.windowId).single();
-  assert.strictEqual(t5WinRow?.state, 'SALE_RESPONDED');
-  assert.strictEqual(t5WinRow?.sale_response_interaction_id, t5SaleReplyId);
-  pass('Sale replies after AI claim but before provider dispatch: provider invocation count = 0; SLA ends SALE_RESPONDED');
+  assert.strictEqual(t5BProviderCalls, 0, 'Provider invocation count MUST be zero when Sale won window first');
+  assert.strictEqual(t5BResult.success, false);
+  const { data: t5BWinRow } = await bossRealClient.from('response_sla_windows').select('state, sale_response_interaction_id').eq('id', t5BWin.windowId).single();
+  assert.strictEqual(t5BWinRow?.state, 'SALE_RESPONDED');
+  assert.strictEqual(t5BWinRow?.sale_response_interaction_id, t5BSaleReplyId);
+  pass('Sale replies before AI guard: provider invocation count = 0; SLA ends SALE_RESPONDED');
 
-  // Test 6: Stale ai_claim_id cannot dispatch/finalize
-  const t6Win = await createDueSlaWindow('t6_stale_claim');
-  const t6Claim1 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t6Win.windowId });
-  await admin.rpc('test_expire_response_sla_claim' as never, {
-    p_window_id: t6Win.windowId,
-  } as never);
-  const t6Claim2 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t6Win.windowId });
-
-  const { data: t6StaleGuard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+  // Test 6: Mandatory claim ID for new dispatch (Item 5)
+  // guard_ai_pre_dispatch with p_ai_claim_id = null must fail-closed (no NULL bypass)
+  const t6Win = await createDueSlaWindow('t6_null_claim');
+  const { data: t6NullGuard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
     p_company_id: COMPANY_ID,
     p_conversation_id: t6Win.convoId,
     p_customer_id: CUSTOMER_ID,
     p_window_id: t6Win.windowId,
-    p_ai_claim_id: t6Claim1.claimId,
+    p_ai_claim_id: null,
     p_channel: 'FACEBOOK',
   } as never);
-  assert.strictEqual((t6StaleGuard as any)?.[0]?.granted, false);
-  assert.strictEqual((t6StaleGuard as any)?.[0]?.reason, 'CLAIM_MISMATCH');
-  pass('Stale ai_claim_id cannot dispatch/finalize');
+  assert.strictEqual((t6NullGuard as any)?.[0]?.granted, false);
+  assert.strictEqual((t6NullGuard as any)?.[0]?.reason, 'CLAIM_ID_MANDATORY');
+  pass('Mandatory claim ID: NULL claim cannot acquire dispatch authority (no NULL authorization bypass)');
 
-  // Test 7: Wrong window cannot finalize
-  const { error: t7Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+  // Test 7A: Stale claim rejected by finalize_ai_outbound_delivery_atomic (Item 2 Facebook)
+  // Call finalizer with real existing delivery in PROVIDER_SENT_PENDING_FINALIZE, but stale claim
+  const t7AWin = await createDueSlaWindow('t7a_stale_fin');
+  const t7AClaim1 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t7AWin.windowId });
+  expireClaimDirectSql(t7AWin.windowId);
+  const t7AClaim2 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t7AWin.windowId });
+
+  // Grant dispatch under active claim2
+  const { data: t7AGuard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
     p_company_id: COMPANY_ID,
-    p_delivery_id: crypto.randomUUID(),
-    p_conversation_id: t6Win.convoId,
+    p_conversation_id: t7AWin.convoId,
     p_customer_id: CUSTOMER_ID,
-    p_window_id: crypto.randomUUID(),
-    p_ai_claim_id: t6Claim2.claimId,
-    p_provider_msg_id: 'mid_test',
-    p_sanitized_content: 'test',
-    p_raw_content: 'test',
-  } as never);
-  assert.ok(t7Err, 'Wrong window must be rejected fail-closed');
-  pass('Wrong window cannot finalize');
-
-  // Test 8: Wrong customer cannot finalize
-  const { error: t8Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
-    p_company_id: COMPANY_ID,
-    p_delivery_id: crypto.randomUUID(),
-    p_conversation_id: t6Win.convoId,
-    p_customer_id: crypto.randomUUID(),
-    p_window_id: t6Win.windowId,
-    p_ai_claim_id: t6Claim2.claimId,
-    p_provider_msg_id: 'mid_test',
-    p_sanitized_content: 'test',
-    p_raw_content: 'test',
-  } as never);
-  assert.ok(t8Err, 'Wrong customer must be rejected fail-closed');
-  pass('Wrong customer cannot finalize');
-
-  // Test 9: Wrong conversation cannot finalize
-  const { error: t9Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
-    p_company_id: COMPANY_ID,
-    p_delivery_id: crypto.randomUUID(),
-    p_conversation_id: crypto.randomUUID(),
-    p_customer_id: CUSTOMER_ID,
-    p_window_id: t6Win.windowId,
-    p_ai_claim_id: t6Claim2.claimId,
-    p_provider_msg_id: 'mid_test',
-    p_sanitized_content: 'test',
-    p_raw_content: 'test',
-  } as never);
-  assert.ok(t9Err, 'Wrong conversation must be rejected fail-closed');
-  pass('Wrong conversation cannot finalize');
-
-  // Test 10: Wrong company cannot finalize
-  const { error: t10Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
-    p_company_id: OTHER_COMPANY_ID,
-    p_delivery_id: crypto.randomUUID(),
-    p_conversation_id: t6Win.convoId,
-    p_customer_id: CUSTOMER_ID,
-    p_window_id: t6Win.windowId,
-    p_ai_claim_id: t6Claim2.claimId,
-    p_provider_msg_id: 'mid_test',
-    p_sanitized_content: 'test',
-    p_raw_content: 'test',
-  } as never);
-  assert.ok(t10Err, 'Wrong company must be rejected fail-closed');
-  pass('Wrong company cannot finalize');
-
-  // Test 11: Provider message ID mismatch cannot finalize
-  const t11Win = await createDueSlaWindow('t11_mid_mismatch');
-  const { data: t11DelId } = await admin.rpc('create_ai_outbound_delivery_pending' as never, {
-    p_company_id: COMPANY_ID,
-    p_conversation_id: t11Win.convoId,
+    p_window_id: t7AWin.windowId,
+    p_ai_claim_id: t7AClaim2.claimId,
     p_channel: 'FACEBOOK',
-    p_client_command_id: t11Win.windowId,
   } as never);
+  const t7ADelId = (t7AGuard as any)?.[0]?.delivery_id;
+  const t7AToken = (t7AGuard as any)?.[0]?.dispatch_token;
+
   await admin.rpc('record_ai_outbound_provider_result' as never, {
     p_company_id: COMPANY_ID,
-    p_delivery_id: t11DelId,
+    p_delivery_id: t7ADelId,
     p_outcome: 'SENT',
-    p_provider_msg_id: 'real_provider_mid_123',
+    p_dispatch_token: t7AToken,
+    p_provider_msg_id: 'mid_t7a_stale',
   } as never);
 
-  const { error: t11Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+  // Call finalizer with stale claim1
+  const { error: t7AErr } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
     p_company_id: COMPANY_ID,
-    p_delivery_id: t11DelId,
-    p_conversation_id: t11Win.convoId,
+    p_delivery_id: t7ADelId,
+    p_conversation_id: t7AWin.convoId,
     p_customer_id: CUSTOMER_ID,
-    p_window_id: t11Win.windowId,
-    p_ai_claim_id: null,
+    p_window_id: t7AWin.windowId,
+    p_ai_claim_id: t7AClaim1.claimId, // Stale claim!
+    p_provider_msg_id: 'mid_t7a_stale',
+    p_sanitized_content: 'test content',
+    p_raw_content: 'test content',
+  } as never);
+  assert.ok(t7AErr && (t7AErr as any).message?.includes('CLAIM_NOT_AUTHORIZED'), 'Stale claim must be rejected fail-closed');
+  pass('Stale claim rejected by finalize_ai_outbound_delivery_atomic with real delivery');
+
+  // Test 7B: Stale claim rejected by finalize_ai_zalo_sla_atomic (Item 2 Zalo)
+  const t7BConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t7BConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t7b_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t7BTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t7BTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t7BConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo trigger',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const t7BWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t7BConvoId,
+    triggerInteractionId: t7BTriggerId,
+  });
+  const t7BClaim1 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t7BWin.id });
+  expireClaimDirectSql(t7BWin.id);
+  const t7BClaim2 = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t7BWin.id });
+
+  const t7BZaloDelId = crypto.randomUUID();
+  const t7BZaloMid = `zalo_mid_t7b_${RUN_ID}`;
+  await admin.from('zalo_outbound_deliveries').insert({
+    id: t7BZaloDelId,
+    company_id: COMPANY_ID,
+    conversation_id: t7BConvoId,
+    customer_id: CUSTOMER_ID,
+    recipient_zalo_uid: `zalo_user_t7b_${RUN_ID}`,
+    idempotency_key: `zalo_out:${COMPANY_ID}:ai-sla-win-${t7BWin.id}`,
+    command_id: `ai-sla-win-${t7BWin.id}`,
+    channel: 'ZALO',
+    content: 'Tư vấn Zalo',
+    content_sha256: crypto.createHash('sha256').update('Tư vấn Zalo').digest('hex'),
+    status: 'PROVIDER_SENT_PENDING_FINALIZE',
+    provider_msg_id: t7BZaloMid,
+    attempts: 1,
+    actor_type: 'AI',
+  });
+
+  const { error: t7BErr } = await admin.rpc('finalize_ai_zalo_sla_atomic' as never, {
+    p_company_id: COMPANY_ID,
+    p_window_id: t7BWin.id,
+    p_ai_claim_id: t7BClaim1.claimId, // Stale claim!
+    p_zalo_delivery_id: t7BZaloDelId,
+    p_provider_msg_id: t7BZaloMid,
+  } as never);
+  assert.ok(t7BErr && (t7BErr as any).message?.includes('CLAIM_NOT_AUTHORIZED'), 'Stale claim must be rejected fail-closed for Zalo');
+  pass('Stale claim rejected by finalize_ai_zalo_sla_atomic with real delivery');
+
+  // Test 8: Real delivery cross-binding test: wrong window cannot finalize (Item 3)
+  const t8Win = await createDueSlaWindow('t8_real_binding');
+  const t8Claim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t8Win.windowId });
+  const { data: t8Guard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t8Win.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t8Win.windowId,
+    p_ai_claim_id: t8Claim.claimId,
+    p_channel: 'FACEBOOK',
+  } as never);
+  const t8DelId = (t8Guard as any)?.[0]?.delivery_id;
+  const t8Token = (t8Guard as any)?.[0]?.dispatch_token;
+  await admin.rpc('record_ai_outbound_provider_result' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t8DelId,
+    p_outcome: 'SENT',
+    p_dispatch_token: t8Token,
+    p_provider_msg_id: 'mid_t8_binding',
+  } as never);
+
+  const t8OtherWin = await createDueSlaWindow('t8_other_win');
+  const { error: t8Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t8DelId,
+    p_conversation_id: t8Win.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t8OtherWin.windowId, // Mutated field: wrong window
+    p_ai_claim_id: t8Claim.claimId,
+    p_provider_msg_id: 'mid_t8_binding',
+    p_sanitized_content: 'test',
+    p_raw_content: 'test',
+  } as never);
+  assert.ok(t8Err && (t8Err as any).message?.includes('COMMAND_IDENTITY_MISMATCH'), 'Wrong window must fail with COMMAND_IDENTITY_MISMATCH');
+  pass('Real delivery cross-binding: wrong window rejected with COMMAND_IDENTITY_MISMATCH');
+
+  // Test 9: Real delivery cross-binding test: wrong customer cannot finalize (Item 3)
+  const otherCustomerRow = await admin.from('customers').insert({
+    id: crypto.randomUUID(),
+    company_id: COMPANY_ID,
+    customer_code: `CUST_OTHER_${RUN_ID}`,
+    name: 'Khách hàng khác',
+    source: 'WEBSITE',
+    stage: 'LEAD_NEW',
+  }).select('id').single();
+  const otherCustomerId = otherCustomerRow.data!.id;
+
+  const { error: t9Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t8DelId,
+    p_conversation_id: t8Win.convoId,
+    p_customer_id: otherCustomerId, // Mutated field: wrong customer
+    p_window_id: t8Win.windowId,
+    p_ai_claim_id: t8Claim.claimId,
+    p_provider_msg_id: 'mid_t8_binding',
+    p_sanitized_content: 'test',
+    p_raw_content: 'test',
+  } as never);
+  assert.ok(t9Err && (t9Err as any).message?.includes('CONVERSATION_CUSTOMER_MISMATCH'), 'Wrong customer must fail with CONVERSATION_CUSTOMER_MISMATCH');
+  pass('Real delivery cross-binding: wrong customer rejected with CONVERSATION_CUSTOMER_MISMATCH');
+
+  // Test 10: Real delivery cross-binding test: wrong conversation cannot finalize (Item 3)
+  const otherConvoRow = await admin.from('conversations').insert({
+    id: crypto.randomUUID(),
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'FACEBOOK',
+    external_conversation_id: `page_test_${RUN_ID}:psid_other_convo`,
+    status: 'OPEN',
+  }).select('id').single();
+  const otherConvoId = otherConvoRow.data!.id;
+
+  const { error: t10Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t8DelId,
+    p_conversation_id: otherConvoId, // Mutated field: wrong conversation
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t8Win.windowId,
+    p_ai_claim_id: t8Claim.claimId,
+    p_provider_msg_id: 'mid_t8_binding',
+    p_sanitized_content: 'test',
+    p_raw_content: 'test',
+  } as never);
+  assert.ok(t10Err && (t10Err as any).message?.includes('DELIVERY_CONVERSATION_MISMATCH'), 'Wrong conversation must fail with DELIVERY_CONVERSATION_MISMATCH');
+  pass('Real delivery cross-binding: wrong conversation rejected with DELIVERY_CONVERSATION_MISMATCH');
+
+  // Test 11: Real delivery cross-binding test: wrong company cannot finalize (Item 3)
+  const { error: t11Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+    p_company_id: OTHER_COMPANY_ID, // Mutated field: wrong company
+    p_delivery_id: t8DelId,
+    p_conversation_id: t8Win.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t8Win.windowId,
+    p_ai_claim_id: t8Claim.claimId,
+    p_provider_msg_id: 'mid_t8_binding',
+    p_sanitized_content: 'test',
+    p_raw_content: 'test',
+  } as never);
+  assert.ok(t11Err && (t11Err as any).message?.includes('DELIVERY_COMPANY_MISMATCH'), 'Wrong company must fail with DELIVERY_COMPANY_MISMATCH');
+  pass('Real delivery cross-binding: wrong company rejected with DELIVERY_COMPANY_MISMATCH');
+
+  // Test 12: Provider message ID mismatch cannot finalize
+  const { error: t12Err } = await admin.rpc('finalize_ai_outbound_delivery_atomic' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t8DelId,
+    p_conversation_id: t8Win.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t8Win.windowId,
+    p_ai_claim_id: t8Claim.claimId,
     p_provider_msg_id: 'tampered_mid_456',
     p_sanitized_content: 'test',
     p_raw_content: 'test',
   } as never);
-  assert.ok(t11Err && (t11Err as any).message?.includes('PROVIDER_MSG_ID_MISMATCH'), 'Provider message ID mismatch must be rejected fail-closed');
+  assert.ok(t12Err && (t12Err as any).message?.includes('PROVIDER_MSG_ID_MISMATCH'), 'Provider message ID mismatch must be rejected fail-closed');
   pass('Provider message ID mismatch cannot finalize');
 
-  // Test 12: Two workers racing for one SLA logical outbound operation: provider invocation count = 1
-  const t12Win = await createDueSlaWindow('t12_race');
-  const { data: g1 } = await admin.rpc('guard_ai_pre_dispatch' as never, {
-    p_company_id: COMPANY_ID,
-    p_conversation_id: t12Win.convoId,
-    p_customer_id: CUSTOMER_ID,
-    p_window_id: t12Win.windowId,
-    p_ai_claim_id: null,
-    p_channel: 'FACEBOOK',
-    p_lease_seconds: 120,
-  } as never);
-  assert.strictEqual((g1 as any)?.[0]?.granted, true);
+  // Test 13: Harden finalize_ai_zalo_sla_atomic interaction binding (Item 6)
+  // Create an unrelated interaction (e.g. actor_type = 'SALE') and pass as p_interaction_id
+  const unrelatedIntId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: unrelatedIntId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t7BConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'OUTBOUND',
+    sanitized_content: 'Unrelated sale message',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'SALE', // Not AI!
+    created_at: new Date().toISOString(),
+  });
 
-  // Worker 2 attempts while Worker 1 holds active lease
-  const { data: g2 } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+  const { error: t13ZaloErr } = await admin.rpc('finalize_ai_zalo_sla_atomic' as never, {
     p_company_id: COMPANY_ID,
-    p_conversation_id: t12Win.convoId,
-    p_customer_id: CUSTOMER_ID,
-    p_window_id: t12Win.windowId,
-    p_ai_claim_id: null,
-    p_channel: 'FACEBOOK',
-    p_lease_seconds: 120,
+    p_window_id: t7BWin.id,
+    p_ai_claim_id: t7BClaim2.claimId,
+    p_zalo_delivery_id: t7BZaloDelId,
+    p_interaction_id: unrelatedIntId, // Unrelated interaction!
+    p_provider_msg_id: t7BZaloMid,
   } as never);
-  assert.strictEqual((g2 as any)?.[0]?.granted, false);
-  assert.strictEqual((g2 as any)?.[0]?.reason, 'BUSY');
-  pass('Two workers racing for one SLA logical outbound operation: provider invocation count = 1');
+  assert.ok(t13ZaloErr && (t13ZaloErr as any).message?.includes('INTERACTION_ACTOR_MISMATCH'), 'Unrelated interaction with actor SALE must fail with INTERACTION_ACTOR_MISMATCH');
+  pass('Harden finalize_ai_zalo_sla_atomic: unrelated interaction rejected with INTERACTION_ACTOR_MISMATCH');
 
-  // Test 13: SENT happy path: exactly one public AI interaction, exactly one durable provider delivery, exactly one private provenance record, SLA = AI_RESPONDED
-  const t13Win = await createDueSlaWindow('t13_happy_path');
-  const t13Mid = `mid_happy_${RUN_ID}_${Date.now()}`;
-  const t13Result = await executeAiResponseRuntime({
+  // Test 14: Dispatch ownership to provider-result persistence (Item 7)
+  const t14Win = await createDueSlaWindow('t14_dispatch_ownership');
+  const t14Claim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t14Win.windowId });
+  const { data: t14Guard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t14Win.convoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t14Win.windowId,
+    p_ai_claim_id: t14Claim.claimId,
+    p_channel: 'FACEBOOK',
+  } as never);
+  const t14DelId = (t14Guard as any)?.[0]?.delivery_id;
+  const t14Token = (t14Guard as any)?.[0]?.dispatch_token;
+  assert.ok(t14Token, 'guard_ai_pre_dispatch must return durable dispatch_token');
+
+  // Attempt to persist provider result with wrong dispatch token
+  const { error: t14WrongTokenErr } = await admin.rpc('record_ai_outbound_provider_result' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t14DelId,
+    p_outcome: 'SENT',
+    p_dispatch_token: crypto.randomUUID(), // Wrong token!
+    p_provider_msg_id: 'mid_t14',
+  } as never);
+  assert.ok(t14WrongTokenErr && (t14WrongTokenErr as any).message?.includes('DISPATCH_TOKEN_MISMATCH'), 'Wrong dispatch token must fail with DISPATCH_TOKEN_MISMATCH');
+
+  // Persist with matching dispatch token
+  const { data: t14SuccessStatus } = await admin.rpc('record_ai_outbound_provider_result' as never, {
+    p_company_id: COMPANY_ID,
+    p_delivery_id: t14DelId,
+    p_outcome: 'SENT',
+    p_dispatch_token: t14Token,
+    p_provider_msg_id: 'mid_t14',
+  } as never);
+  assert.strictEqual(t14SuccessStatus, 'PROVIDER_SENT_PENDING_FINALIZE');
+  pass('Dispatch ownership: record_ai_outbound_provider_result validates matching dispatch_token');
+
+  // Test 15: Make two-worker test truly end-to-end (Item 4)
+  // Competing runtime executions against the same SLA logical operation with a controlled provider mock + barrier.
+  const t15Win = await createDueSlaWindow('t15_e2e_race');
+  let t15ProviderInvocations = 0;
+  const t15Mid = `mid_e2e_race_${RUN_ID}_${Date.now()}`;
+
+  const workerRunner = () => executeAiResponseRuntime({
     companyId: COMPANY_ID,
-    windowId: t13Win.windowId,
+    windowId: t15Win.windowId,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      t15ProviderInvocations++;
+      // Controlled barrier: hold dispatch for 80ms so other worker attempts concurrent dispatch
+      await new Promise(r => setTimeout(r, 80));
+      return { status: 'SENT', externalMessageId: t15Mid };
+    },
+    client: admin,
+  });
+
+  const [t15Res1, t15Res2] = await Promise.all([workerRunner(), workerRunner()]);
+  const t15Winners = [t15Res1, t15Res2].filter(r => r.success);
+  const t15Losers = [t15Res1, t15Res2].filter(r => !r.success);
+
+  assert.strictEqual(t15Winners.length, 1, 'Exactly one worker must win dispatch authority');
+  assert.strictEqual(t15Losers.length, 1, 'Exactly one worker must be denied');
+  assert.strictEqual(t15ProviderInvocations, 1, 'Provider invocation count must be EXACTLY 1');
+
+  // Assert one durable delivery in SENT
+  const { data: t15Deliveries } = await admin.from('outbound_deliveries')
+    .select('id, delivery_status, provider_message_id')
+    .eq('client_command_id', t15Win.windowId);
+  assert.strictEqual(t15Deliveries?.length, 1);
+  assert.strictEqual(t15Deliveries?.[0]?.delivery_status, 'SENT');
+
+  // Assert one final public AI interaction
+  const { data: t15Interactions } = await admin.from('interactions')
+    .select('id, external_ref')
+    .eq('conversation_id', t15Win.convoId)
+    .eq('actor_type', 'AI');
+  assert.strictEqual(t15Interactions?.length, 1);
+  assert.strictEqual(t15Interactions?.[0]?.external_ref, t15Mid);
+
+  // Assert SLA window resolves once to AI_RESPONDED
+  const { data: t15WinRow } = await bossRealClient.from('response_sla_windows')
+    .select('state, ai_response_interaction_id')
+    .eq('id', t15Win.windowId)
+    .single();
+  assert.strictEqual(t15WinRow?.state, 'AI_RESPONDED');
+  assert.strictEqual(t15WinRow?.ai_response_interaction_id, t15Interactions?.[0]?.id);
+  pass('Two-worker end-to-end race: exactly 1 winner, provider invocation count = 1, 1 delivery, 1 AI interaction, SLA resolves once');
+
+  // Test 16: SENT happy path: exactly one public AI interaction, exactly one durable provider delivery, exactly one private provenance record, SLA = AI_RESPONDED
+  const t16Win = await createDueSlaWindow('t16_happy_path');
+  const t16Mid = `mid_happy_${RUN_ID}_${Date.now()}`;
+  const t16Result = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: t16Win.windowId,
     model: new CompliantModel(),
     providerSender: async () => ({
       status: 'SENT',
-      externalMessageId: t13Mid,
+      externalMessageId: t16Mid,
     }),
     client: admin,
   });
-  assert.strictEqual(t13Result.success, true);
+  assert.strictEqual(t16Result.success, true);
 
-  const { data: t13Interactions } = await admin.from('interactions').select('id, external_ref').eq('conversation_id', t13Win.convoId).eq('actor_type', 'AI');
-  assert.strictEqual(t13Interactions?.length, 1);
-  assert.strictEqual(t13Interactions?.[0]?.external_ref, t13Mid);
+  const { data: t16Interactions } = await admin.from('interactions').select('id, external_ref').eq('conversation_id', t16Win.convoId).eq('actor_type', 'AI');
+  assert.strictEqual(t16Interactions?.length, 1);
+  assert.strictEqual(t16Interactions?.[0]?.external_ref, t16Mid);
 
-  const { data: t13Deliveries } = await admin.from('outbound_deliveries').select('id, delivery_status').eq('client_command_id', t13Win.windowId);
-  assert.strictEqual(t13Deliveries?.length, 1);
-  assert.strictEqual(t13Deliveries?.[0]?.delivery_status, 'SENT');
+  const { data: t16Deliveries } = await admin.from('outbound_deliveries').select('id, delivery_status').eq('client_command_id', t16Win.windowId);
+  assert.strictEqual(t16Deliveries?.length, 1);
+  assert.strictEqual(t16Deliveries?.[0]?.delivery_status, 'SENT');
 
-  const { data: t13Raw } = await (admin as any).rpc('get_interaction_raw_content', {
+  const { data: t16Raw } = await (admin as any).rpc('get_interaction_raw_content', {
     p_company_id: COMPANY_ID,
-    p_interaction_id: t13Result.interactionId,
+    p_interaction_id: t16Result.interactionId,
   });
-  assert.strictEqual(t13Raw?.length, 1);
+  assert.strictEqual(t16Raw?.length, 1);
 
-  const { data: t13WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t13Win.windowId).single();
-  assert.strictEqual(t13WinRow?.state, 'AI_RESPONDED');
+  const { data: t16WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t16Win.windowId).single();
+  assert.strictEqual(t16WinRow?.state, 'AI_RESPONDED');
   pass('SENT happy path: exactly one public interaction, one delivery, one provenance record, SLA = AI_RESPONDED');
 
-  // Test 14: Zalo production AI path persists full model/style/analysis provenance
-  const { data: t14RawData } = await (admin as any).rpc('get_interaction_raw_content', {
+  // Test 17: Zalo production AI path persists all 9 mandatory provenance fields (Item 10)
+  const { data: t17RawData } = await (admin as any).rpc('get_interaction_raw_content', {
     p_company_id: COMPANY_ID,
     p_interaction_id: t4Result.interactionId,
   });
-  const t14Meta = t14RawData?.[0]?.source_metadata as any;
-  assert.strictEqual(t14Meta?.source, 'ai_response_runtime');
-  assert.strictEqual(t14Meta?.model_version, 'gpt-4o-mini-test');
-  assert.ok(t14Meta?.window_id);
-  assert.ok(t14Meta?.command_id);
-  pass('Zalo production AI path persists full model/style/analysis provenance');
+  const t17Meta = t17RawData?.[0]?.source_metadata as any;
+  assert.strictEqual(t17Meta?.source, 'ai_response_runtime', 'Provenance must include source');
+  assert.strictEqual(t17Meta?.model_version, 'gpt-4o-mini-test', 'Provenance must include model_version');
+  assert.notStrictEqual(t17Meta?.analysis_record_id, undefined, 'Provenance must include analysis_record_id');
+  assert.notStrictEqual(t17Meta?.sales_style_profile_id, undefined, 'Provenance must include sales_style_profile_id');
+  assert.notStrictEqual(t17Meta?.is_neutral_default, undefined, 'Provenance must include is_neutral_default');
+  assert.notStrictEqual(t17Meta?.ai_claim_id, undefined, 'Provenance must include ai_claim_id');
+  assert.notStrictEqual(t17Meta?.window_id, undefined, 'Provenance must include window_id');
+  assert.notStrictEqual(t17Meta?.delivery_id, undefined, 'Provenance must include delivery_id');
+  assert.notStrictEqual(t17Meta?.command_id, undefined, 'Provenance must include command_id');
+  pass('Zalo production AI path persists all 9 mandatory provenance fields');
 
-  // Test 15: No synthetic message ID anywhere in production code
+  // Test 18: Synthetic message ID scan across all production outbound modules (Item 10)
+  const modulesToScan = [
+    'features/automation/response-sla/services/ai-response-runtime.ts',
+    'features/omnichannel/zalo/inbox-service.ts',
+    'features/omnichannel/facebook/facebook-sender.service.ts',
+  ];
+  for (const modulePath of modulesToScan) {
+    if (fs.existsSync(modulePath)) {
+      const code = fs.readFileSync(modulePath, 'utf8');
+      assert.strictEqual(/msg_\$\{crypto\.randomUUID\(\)\}/.test(code), false, `Module ${modulePath} must not contain synthetic message ID pattern`);
+      assert.strictEqual(/externalMessageId:\s*['"`]msg_/.test(code), false, `Module ${modulePath} must not synthesize externalMessageId`);
+    }
+  }
   const runtimeCode = fs.readFileSync('features/automation/response-sla/services/ai-response-runtime.ts', 'utf8');
-  assert.strictEqual(/msg_\$\{crypto\.randomUUID\(\)\}/.test(runtimeCode), false, 'No synthetic message ID pattern allowed');
   assert.strictEqual(/status:\s*'SENT'/.test(runtimeCode), false, 'Production code must not hardcode synthetic SENT status outside type checks');
-  pass('No synthetic message ID anywhere in production code');
+  pass('No synthetic message ID anywhere across production outbound modules');
 
-  // Test 16: UNKNOWN and UNCERTAIN are never downgraded to FAILED
-  const t16DelId = crypto.randomUUID();
+  // Test 19: UNKNOWN and UNCERTAIN are never downgraded to FAILED
+  const t19Win = await createDueSlaWindow('t19_uncertain');
+  const t19DelId = crypto.randomUUID();
+  const t19Token = crypto.randomUUID();
   await admin.from('outbound_deliveries').insert({
-    id: t16DelId,
+    id: t19DelId,
     company_id: COMPANY_ID,
-    conversation_id: t13Win.convoId,
+    conversation_id: t19Win.convoId,
     channel: 'FACEBOOK',
     delivery_status: 'DISPATCHING',
+    dispatch_token: t19Token,
   });
   await admin.rpc('record_ai_outbound_provider_result' as never, {
     p_company_id: COMPANY_ID,
-    p_delivery_id: t16DelId,
+    p_delivery_id: t19DelId,
     p_outcome: 'UNKNOWN',
+    p_dispatch_token: t19Token,
     p_error_message: 'Network ambiguity',
   } as never);
-  const { data: t16Row } = await admin.from('outbound_deliveries').select('delivery_status').eq('id', t16DelId).single();
-  assert.strictEqual(t16Row?.delivery_status, 'UNCERTAIN', 'UNKNOWN must map to UNCERTAIN, never FAILED');
+  const { data: t19Row } = await admin.from('outbound_deliveries').select('delivery_status').eq('id', t19DelId).single();
+  assert.strictEqual(t19Row?.delivery_status, 'UNCERTAIN', 'UNKNOWN must map to UNCERTAIN, never FAILED');
   pass('UNKNOWN and UNCERTAIN are never downgraded to FAILED');
 
-  // Test 17: Reconciliation of PROVIDER_SENT_PENDING_FINALIZE does not execute network/provider code
-  const t17Win = await createDueSlaWindow('t17_reconcile_no_network');
-  const t17DelId = crypto.randomUUID();
-  const t17Mid = `mid_reconcile_${RUN_ID}`;
+  // Test 20: Reconciliation of PROVIDER_SENT_PENDING_FINALIZE does not execute network/provider code
+  const t20Win = await createDueSlaWindow('t20_reconcile_no_network');
+  const t20DelId = crypto.randomUUID();
+  const t20Mid = `mid_reconcile_${RUN_ID}`;
   await admin.from('outbound_deliveries').insert({
-    id: t17DelId,
+    id: t20DelId,
     company_id: COMPANY_ID,
-    conversation_id: t17Win.convoId,
+    conversation_id: t20Win.convoId,
     channel: 'FACEBOOK',
     delivery_status: 'PROVIDER_SENT_PENDING_FINALIZE',
-    client_command_id: t17Win.windowId,
-    provider_message_id: t17Mid,
+    client_command_id: t20Win.windowId,
+    provider_message_id: t20Mid,
   });
 
-  const t17Result = await executeAiResponseRuntime({
+  const t20Result = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
-    windowId: t17Win.windowId,
+    windowId: t20Win.windowId,
     model: new CompliantModel(),
     providerSender: async () => {
       throw new Error('NETWORK_EXECUTED_DURING_RECONCILIATION');
     },
     client: admin,
   });
-  assert.strictEqual(t17Result.success, true);
-  assert.strictEqual(t17Result.externalMessageId, t17Mid);
-  const { data: t17WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t17Win.windowId).single();
-  assert.strictEqual(t17WinRow?.state, 'AI_RESPONDED');
+  assert.strictEqual(t20Result.success, true);
+  assert.strictEqual(t20Result.externalMessageId, t20Mid);
+  const { data: t20WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t20Win.windowId).single();
+  assert.strictEqual(t20WinRow?.state, 'AI_RESPONDED');
   pass('Reconciliation of PROVIDER_SENT_PENDING_FINALIZE does not execute network/provider code');
 
   console.log('\n================================================================');

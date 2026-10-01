@@ -444,6 +444,7 @@ ${
       provenance,
       providerSender,
       model,
+      client,
     });
   }
 
@@ -499,12 +500,7 @@ interface GuardPreDispatchRow {
   provider_msg_id: string | null;
   interaction_id: string | null;
   window_state: string | null;
-}
-
-interface ZaloFinResult {
-  interaction_id: string;
-  already_finalized: boolean;
-  provider_msg_id: string;
+  dispatch_token: string | null;
 }
 
 // ==============================================================================
@@ -583,19 +579,8 @@ async function executeZaloCanonicalPath(params: {
       };
     }
     if (guard.reason === 'PENDING_FINALIZE') {
-      // Crash recovery: provider accepted previously, only finalize DB state!
-      let intId = guard.interaction_id;
-      if (!intId) {
-        try {
-          const { data: finData } = await admin.rpc(
-            'zalo_finalize_outbound_delivery' as never,
-            { p_delivery_id: guard.delivery_id } as never
-          );
-          intId = ((finData as unknown) as ZaloFinResult)?.interaction_id;
-        } catch {
-          // If zalo_finalize_outbound_delivery fails or payload missing, finalize_ai_zalo_sla_atomic mints interaction atomically
-        }
-      }
+      // Crash recovery: provider accepted previously, finalize DB state atomically!
+      const intId = guard.interaction_id;
 
       const { data: finalIntId, error: finSlaErr } = await admin.rpc(
         'finalize_ai_zalo_sla_atomic' as never,
@@ -784,7 +769,7 @@ async function executeFacebookCanonicalPath(params: {
     content, claimId, decision, provenance, model: _model, client,
   } = params;
 
-  const admin = createAdminClient();
+  const admin = client || createAdminClient();
 
   // 1. Resolve canonical Facebook config via binding()
   const fbConfig = await dispatchFacebookCanonical({ companyId, conversationId, client });
@@ -907,6 +892,7 @@ async function executeFacebookCanonicalPath(params: {
   }
 
   const deliveryId = String(guard.delivery_id);
+  const dispatchToken = guard.dispatch_token;
 
   // 3. Dispatch via canonical Facebook transport
   const fbResult = await dispatchMessage({
@@ -925,6 +911,7 @@ async function executeFacebookCanonicalPath(params: {
         p_company_id: companyId,
         p_delivery_id: deliveryId,
         p_outcome: 'SENT',
+        p_dispatch_token: dispatchToken,
         p_provider_msg_id: fbResult.mid,
       } as never
     );
@@ -951,6 +938,7 @@ async function executeFacebookCanonicalPath(params: {
         p_company_id: companyId,
         p_delivery_id: deliveryId,
         p_outcome: 'FAILED',
+        p_dispatch_token: dispatchToken,
         p_error_message: 'Facebook dispatch failed',
       } as never
     );
@@ -975,6 +963,7 @@ async function executeFacebookCanonicalPath(params: {
       p_company_id: companyId,
       p_delivery_id: deliveryId,
       p_outcome: 'UNCERTAIN',
+      p_dispatch_token: dispatchToken,
       p_error_message: `Facebook dispatch status ${fbResult.status}`,
     } as never
   );
@@ -1008,13 +997,14 @@ async function executeWithAiOutbox(params: {
   provenance: ExecuteAiResponseRuntimeResult['provenance'];
   providerSender: OutboundProviderSender;
   model: AiResponseModel;
+  client?: SupabaseClient;
 }): Promise<ExecuteAiResponseRuntimeResult> {
   const {
     companyId, conversationId, customerId, windowId, channel,
-    content, claimId, decision, provenance, providerSender,
+    content, claimId, decision, provenance, providerSender, client,
   } = params;
 
-  const admin = createAdminClient();
+  const admin = client || createAdminClient();
 
   // Authoritative Pre-Dispatch DB Guard (Blocker B)
   const { data: guardRows, error: guardErr } = await admin.rpc(
@@ -1122,6 +1112,7 @@ async function executeWithAiOutbox(params: {
   }
 
   const deliveryId = String(guard.delivery_id);
+  const dispatchToken = guard.dispatch_token;
 
   // Invoke injected provider sender
   const providerResult = await providerSender({
@@ -1141,6 +1132,7 @@ async function executeWithAiOutbox(params: {
         p_company_id: companyId,
         p_delivery_id: deliveryId,
         p_outcome: 'SENT',
+        p_dispatch_token: dispatchToken,
         p_provider_msg_id: providerResult.externalMessageId,
       } as never
     );
@@ -1167,6 +1159,7 @@ async function executeWithAiOutbox(params: {
         p_company_id: companyId,
         p_delivery_id: deliveryId,
         p_outcome: 'FAILED',
+        p_dispatch_token: dispatchToken,
         p_error_message: providerResult.error || 'Provider rejected delivery',
       } as never
     );
@@ -1191,6 +1184,7 @@ async function executeWithAiOutbox(params: {
       p_company_id: companyId,
       p_delivery_id: deliveryId,
       p_outcome: 'UNCERTAIN',
+      p_dispatch_token: dispatchToken,
       p_error_message: providerResult.error || `Provider returned ${providerResult.status}`,
     } as never
   );

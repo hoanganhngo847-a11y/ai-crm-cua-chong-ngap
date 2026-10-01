@@ -1,34 +1,24 @@
--- Migration: 20261001150001_ai_durable_dispatch_hardening.sql
--- Description: Durable outbound state machine, authoritative pre-dispatch DB guard,
--- provider outcome persistence, UNKNOWN/UNCERTAIN preservation, and atomic SLA finalization.
+-- Migration: 20261001160001_ai_sale_fencing_linearization.sql
+-- Description: DB linearization fence shared between AI pre-dispatch and Sale SLA resolver,
+-- dispatch token ownership, stale-claim hardening, interaction binding validation, and test helper removal.
 
--- 1. Extend public.outbound_deliveries status constraints and add durable lease/window columns
-ALTER TABLE public.outbound_deliveries DROP CONSTRAINT IF EXISTS outbound_deliveries_delivery_status_check;
+-- 1. Linearization fence columns on public.response_sla_windows
+ALTER TABLE public.response_sla_windows
+  ADD COLUMN IF NOT EXISTS ai_dispatch_fenced_until timestamptz NULL,
+  ADD COLUMN IF NOT EXISTS ai_dispatch_delivery_id uuid NULL,
+  ADD COLUMN IF NOT EXISTS ai_dispatch_token uuid NULL;
+
+-- 2. Dispatch token column on public.outbound_deliveries
 ALTER TABLE public.outbound_deliveries
-  ADD CONSTRAINT outbound_deliveries_delivery_status_check
-  CHECK (delivery_status IN (
-    'PENDING',
-    'PENDING_DISPATCH',
-    'QUEUED',
-    'DISPATCHING',
-    'PROVIDER_SENT_PENDING_FINALIZE',
-    'SENT',
-    'DELIVERED',
-    'FAILED',
-    'UNCERTAIN',
-    'PROVIDER_UNCERTAIN'
-  ));
+  ADD COLUMN IF NOT EXISTS dispatch_token uuid NULL;
 
-ALTER TABLE public.outbound_deliveries ADD COLUMN IF NOT EXISTS lease_until timestamptz NULL;
-ALTER TABLE public.outbound_deliveries ADD COLUMN IF NOT EXISTS window_id uuid NULL;
+-- 3. Drop test-only RPC from production schema
+DROP FUNCTION IF EXISTS public.test_expire_response_sla_claim(uuid);
 
-CREATE INDEX IF NOT EXISTS idx_outbound_deliveries_window
-  ON public.outbound_deliveries (company_id, window_id)
-  WHERE window_id IS NOT NULL;
 
--- 2. Authoritative Pre-Dispatch DB Guard
--- Must be invoked immediately before any irreversible Facebook or Zalo provider call.
--- Atomically establishes dispatch authority under row lock and validates all security invariants.
+-- 4. Updated guard_ai_pre_dispatch with mandatory claim_id, dispatch_token generation, and SLA window fencing
+DROP FUNCTION IF EXISTS public.guard_ai_pre_dispatch(uuid, uuid, uuid, uuid, uuid, text, integer);
+
 CREATE OR REPLACE FUNCTION public.guard_ai_pre_dispatch(
   p_company_id uuid,
   p_conversation_id uuid,
@@ -44,7 +34,8 @@ RETURNS TABLE (
   delivery_id uuid,
   provider_msg_id text,
   interaction_id uuid,
-  window_state text
+  window_state text,
+  dispatch_token uuid
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -60,12 +51,19 @@ DECLARE
   v_sale_reply_resolved_at timestamptz;
   v_stable_zalo_command text;
   v_new_delivery_id uuid;
+  v_dispatch_token uuid;
   v_now timestamptz := clock_timestamp();
   v_lease interval := make_interval(secs => greatest(coalesce(p_lease_seconds, 120), 10));
 BEGIN
   -- A. Mandatory input validation
   IF p_company_id IS NULL OR p_conversation_id IS NULL OR p_customer_id IS NULL OR p_window_id IS NULL THEN
-    RETURN QUERY SELECT false, 'INVALID_ARGUMENTS'::text, NULL::uuid, NULL::text, NULL::uuid, NULL::text;
+    RETURN QUERY SELECT false, 'INVALID_ARGUMENTS'::text, NULL::uuid, NULL::text, NULL::uuid, NULL::text, NULL::uuid;
+    RETURN;
+  END IF;
+
+  -- Item 5: Mandatory claim ID for new dispatch (no NULL authorization bypass)
+  IF p_ai_claim_id IS NULL THEN
+    RETURN QUERY SELECT false, 'CLAIM_ID_MANDATORY'::text, NULL::uuid, NULL::text, NULL::uuid, NULL::text, NULL::uuid;
     RETURN;
   END IF;
 
@@ -76,37 +74,37 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RETURN QUERY SELECT false, 'WINDOW_NOT_FOUND'::text, NULL::uuid, NULL::text, NULL::uuid, NULL::text;
+    RETURN QUERY SELECT false, 'WINDOW_NOT_FOUND'::text, NULL::uuid, NULL::text, NULL::uuid, NULL::text, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_window.company_id <> p_company_id THEN
-    RETURN QUERY SELECT false, 'WRONG_COMPANY'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'WRONG_COMPANY'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_window.conversation_id <> p_conversation_id THEN
-    RETURN QUERY SELECT false, 'CONVERSATION_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'CONVERSATION_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_window.customer_id <> p_customer_id THEN
-    RETURN QUERY SELECT false, 'CUSTOMER_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'CUSTOMER_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_window.state <> 'OPEN' THEN
-    RETURN QUERY SELECT false, v_window.state, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, v_window.state, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
-  IF p_ai_claim_id IS NOT NULL AND v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id THEN
-    RETURN QUERY SELECT false, 'CLAIM_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+  IF v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id THEN
+    RETURN QUERY SELECT false, 'CLAIM_MISMATCH'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_window.ai_claim_expires_at IS NOT NULL AND v_window.ai_claim_expires_at <= v_now THEN
-    RETURN QUERY SELECT false, 'CLAIM_EXPIRED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'CLAIM_EXPIRED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
@@ -117,12 +115,12 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RETURN QUERY SELECT false, 'CONVERSATION_NOT_FOUND'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'CONVERSATION_NOT_FOUND'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
   IF v_conv.status = 'CLOSED' THEN
-    RETURN QUERY SELECT false, 'CONVERSATION_CLOSED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    RETURN QUERY SELECT false, 'CONVERSATION_CLOSED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
     RETURN;
   END IF;
 
@@ -155,6 +153,8 @@ BEGIN
       state = 'SALE_RESPONDED',
       sale_response_interaction_id = v_sale_reply_id,
       resolved_at = coalesce(v_sale_reply_resolved_at, v_now),
+      ai_dispatch_fenced_until = NULL,
+      ai_dispatch_token = NULL,
       updated_at = v_now
     WHERE id = p_window_id;
 
@@ -189,9 +189,12 @@ BEGIN
       )
     );
 
-    RETURN QUERY SELECT false, 'SALE_ALREADY_RESPONDED'::text, NULL::uuid, NULL::text, NULL::uuid, 'SALE_RESPONDED'::text;
+    RETURN QUERY SELECT false, 'SALE_ALREADY_RESPONDED'::text, NULL::uuid, NULL::text, NULL::uuid, 'SALE_RESPONDED'::text, NULL::uuid;
     RETURN;
   END IF;
+
+  -- Generate durable dispatch token for ownership proof
+  v_dispatch_token := gen_random_uuid();
 
   -- E. Channel-specific state machine check
   IF p_channel = 'ZALO' THEN
@@ -206,16 +209,16 @@ BEGIN
 
     IF FOUND THEN
       IF v_zalo.status = 'SENT' THEN
-        RETURN QUERY SELECT false, 'ALREADY_SENT'::text, v_zalo.id, v_zalo.provider_msg_id, v_zalo.interaction_id, v_window.state;
+        RETURN QUERY SELECT false, 'ALREADY_SENT'::text, v_zalo.id, v_zalo.provider_msg_id, v_zalo.interaction_id, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_zalo.status = 'PROVIDER_SENT_PENDING_FINALIZE' THEN
-        RETURN QUERY SELECT false, 'PENDING_FINALIZE'::text, v_zalo.id, v_zalo.provider_msg_id, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'PENDING_FINALIZE'::text, v_zalo.id, v_zalo.provider_msg_id, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_zalo.status IN ('PROVIDER_UNCERTAIN', 'UNCERTAIN') THEN
-        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_zalo.id, v_zalo.provider_msg_id, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_zalo.id, v_zalo.provider_msg_id, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_zalo.status = 'SENDING' AND v_zalo.lease_until IS NOT NULL AND v_zalo.lease_until > v_now THEN
-        RETURN QUERY SELECT false, 'BUSY'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'BUSY'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_zalo.status = 'SENDING' THEN
         -- Lease expired mid-flight: transition to UNCERTAIN, never auto-retry
@@ -223,16 +226,33 @@ BEGIN
         SET status = 'PROVIDER_UNCERTAIN', lease_until = NULL, error_code = 'LEASE_EXPIRED_OUTCOME_UNKNOWN', updated_at = v_now
         WHERE id = v_zalo.id;
 
-        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       END IF;
-      -- If status is FAILED or PENDING, allow send
-      RETURN QUERY SELECT true, 'GRANTED'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state;
+
+      -- If status is FAILED or PENDING, grant dispatch under fence
+      UPDATE public.response_sla_windows
+      SET
+        ai_dispatch_fenced_until = v_now + v_lease,
+        ai_dispatch_delivery_id = v_zalo.id,
+        ai_dispatch_token = v_dispatch_token,
+        updated_at = v_now
+      WHERE id = p_window_id;
+
+      RETURN QUERY SELECT true, 'GRANTED'::text, v_zalo.id, NULL::text, NULL::uuid, v_window.state, v_dispatch_token;
       RETURN;
     END IF;
 
-    -- No prior row: dispatch authority granted for Zalo
-    RETURN QUERY SELECT true, 'GRANTED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state;
+    -- No prior row: dispatch authority granted for Zalo under fence
+    UPDATE public.response_sla_windows
+    SET
+      ai_dispatch_fenced_until = v_now + v_lease,
+      ai_dispatch_delivery_id = NULL,
+      ai_dispatch_token = v_dispatch_token,
+      updated_at = v_now
+    WHERE id = p_window_id;
+
+    RETURN QUERY SELECT true, 'GRANTED'::text, NULL::uuid, NULL::text, NULL::uuid, v_window.state, v_dispatch_token;
     RETURN;
 
   ELSE
@@ -245,16 +265,16 @@ BEGIN
 
     IF FOUND THEN
       IF v_del.delivery_status = 'SENT' THEN
-        RETURN QUERY SELECT false, 'ALREADY_SENT'::text, v_del.id, v_del.provider_message_id, v_del.interaction_id, v_window.state;
+        RETURN QUERY SELECT false, 'ALREADY_SENT'::text, v_del.id, v_del.provider_message_id, v_del.interaction_id, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_del.delivery_status = 'PROVIDER_SENT_PENDING_FINALIZE' THEN
-        RETURN QUERY SELECT false, 'PENDING_FINALIZE'::text, v_del.id, v_del.provider_message_id, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'PENDING_FINALIZE'::text, v_del.id, v_del.provider_message_id, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_del.delivery_status IN ('UNCERTAIN', 'PROVIDER_UNCERTAIN') THEN
-        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_del.id, v_del.provider_message_id, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_del.id, v_del.provider_message_id, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_del.delivery_status = 'DISPATCHING' AND v_del.lease_until IS NOT NULL AND v_del.lease_until > v_now THEN
-        RETURN QUERY SELECT false, 'BUSY'::text, v_del.id, NULL::text, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'BUSY'::text, v_del.id, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_del.delivery_status = 'DISPATCHING' THEN
         -- Lease expired mid-flight: transition to UNCERTAIN, never auto-retry
@@ -262,24 +282,33 @@ BEGIN
         SET delivery_status = 'UNCERTAIN', lease_until = NULL, error_message = 'LEASE_EXPIRED_OUTCOME_UNKNOWN', updated_at = v_now
         WHERE id = v_del.id;
 
-        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_del.id, NULL::text, NULL::uuid, v_window.state;
+        RETURN QUERY SELECT false, 'UNCERTAIN'::text, v_del.id, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
         RETURN;
       ELSIF v_del.delivery_status IN ('PENDING', 'PENDING_DISPATCH', 'FAILED') THEN
-        -- Transition to DISPATCHING under active lease
+        -- Transition to DISPATCHING under active lease and dispatch_token
         UPDATE public.outbound_deliveries
         SET
           delivery_status = 'DISPATCHING',
+          dispatch_token = v_dispatch_token,
           lease_until = v_now + v_lease,
           locked_at = v_now,
           locked_by = 'ai_response_runtime',
           updated_at = v_now
         WHERE id = v_del.id;
 
-        RETURN QUERY SELECT true, 'GRANTED'::text, v_del.id, NULL::text, NULL::uuid, v_window.state;
+        UPDATE public.response_sla_windows
+        SET
+          ai_dispatch_fenced_until = v_now + v_lease,
+          ai_dispatch_delivery_id = v_del.id,
+          ai_dispatch_token = v_dispatch_token,
+          updated_at = v_now
+        WHERE id = p_window_id;
+
+        RETURN QUERY SELECT true, 'GRANTED'::text, v_del.id, NULL::text, NULL::uuid, v_window.state, v_dispatch_token;
         RETURN;
       END IF;
 
-      RETURN QUERY SELECT false, ('UNEXPECTED_STATUS_' || v_del.delivery_status)::text, v_del.id, NULL::text, NULL::uuid, v_window.state;
+      RETURN QUERY SELECT false, ('UNEXPECTED_STATUS_' || v_del.delivery_status)::text, v_del.id, NULL::text, NULL::uuid, v_window.state, NULL::uuid;
       RETURN;
     END IF;
 
@@ -296,6 +325,7 @@ BEGIN
       window_id,
       request_fingerprint,
       lease_until,
+      dispatch_token,
       locked_at,
       locked_by,
       created_at,
@@ -311,13 +341,22 @@ BEGIN
       p_window_id,
       p_company_id::text || ':' || p_conversation_id::text || ':' || p_window_id::text,
       v_now + v_lease,
+      v_dispatch_token,
       v_now,
       'ai_response_runtime',
       v_now,
       v_now
     );
 
-    RETURN QUERY SELECT true, 'GRANTED'::text, v_new_delivery_id, NULL::text, NULL::uuid, v_window.state;
+    UPDATE public.response_sla_windows
+    SET
+      ai_dispatch_fenced_until = v_now + v_lease,
+      ai_dispatch_delivery_id = v_new_delivery_id,
+      ai_dispatch_token = v_dispatch_token,
+      updated_at = v_now
+    WHERE id = p_window_id;
+
+    RETURN QUERY SELECT true, 'GRANTED'::text, v_new_delivery_id, NULL::text, NULL::uuid, v_window.state, v_dispatch_token;
     RETURN;
   END IF;
 END;
@@ -329,12 +368,15 @@ REVOKE ALL ON FUNCTION public.guard_ai_pre_dispatch(uuid, uuid, uuid, uuid, uuid
 GRANT EXECUTE ON FUNCTION public.guard_ai_pre_dispatch(uuid, uuid, uuid, uuid, uuid, text, integer) TO service_role;
 
 
--- 3. Record Outbound Provider Result Immediately
--- Persists provider acceptance or failure into outbound_deliveries BEFORE CRM/SLA finalization.
+-- 5. Updated record_ai_outbound_provider_result requiring dispatch ownership
+DROP FUNCTION IF EXISTS public.record_ai_outbound_provider_result(uuid, uuid, text, text, text);
+DROP FUNCTION IF EXISTS public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text);
+
 CREATE OR REPLACE FUNCTION public.record_ai_outbound_provider_result(
   p_company_id uuid,
   p_delivery_id uuid,
   p_outcome text,
+  p_dispatch_token uuid,
   p_provider_msg_id text DEFAULT NULL,
   p_error_message text DEFAULT NULL
 )
@@ -348,7 +390,7 @@ DECLARE
   v_new_status text;
   v_now timestamptz := clock_timestamp();
 BEGIN
-  IF p_company_id IS NULL OR p_delivery_id IS NULL OR p_outcome IS NULL THEN
+  IF p_company_id IS NULL OR p_delivery_id IS NULL OR p_outcome IS NULL OR p_dispatch_token IS NULL THEN
     RAISE EXCEPTION 'MANDATORY_PARAMETERS_MISSING' USING ERRCODE = '22023';
   END IF;
 
@@ -359,6 +401,21 @@ BEGIN
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'DELIVERY_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Validate dispatch token ownership (Item 7)
+  IF v_del.dispatch_token IS DISTINCT FROM p_dispatch_token THEN
+    RAISE EXCEPTION 'DISPATCH_TOKEN_MISMATCH' USING ERRCODE = '42501';
+  END IF;
+
+  -- Validate allowed source delivery states
+  IF v_del.delivery_status = 'PROVIDER_SENT_PENDING_FINALIZE' AND p_outcome = 'SENT'
+     AND v_del.provider_message_id IS NOT DISTINCT FROM p_provider_msg_id THEN
+    RETURN 'PROVIDER_SENT_PENDING_FINALIZE';
+  END IF;
+
+  IF v_del.delivery_status NOT IN ('DISPATCHING', 'UNCERTAIN', 'PROVIDER_UNCERTAIN') THEN
+    RAISE EXCEPTION 'INVALID_DELIVERY_STATE_TRANSITION: %', v_del.delivery_status USING ERRCODE = '55000';
   END IF;
 
   IF p_outcome = 'SENT' THEN
@@ -383,8 +440,19 @@ BEGIN
       delivery_status = v_new_status,
       error_message = coalesce(p_error_message, 'Provider rejected message'),
       lease_until = NULL,
+      dispatch_token = NULL,
       updated_at = v_now
     WHERE id = p_delivery_id;
+
+    -- Un-fence SLA window on failure so window can be recovered or answered by Sale
+    IF v_del.window_id IS NOT NULL THEN
+      UPDATE public.response_sla_windows
+      SET ai_dispatch_fenced_until = NULL,
+          ai_dispatch_token = NULL,
+          updated_at = v_now
+      WHERE id = v_del.window_id
+        AND ai_dispatch_token = p_dispatch_token;
+    END IF;
 
   ELSIF p_outcome IN ('UNCERTAIN', 'UNKNOWN') THEN
     v_new_status := 'UNCERTAIN';
@@ -405,26 +473,211 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, text, text) FROM anon;
-REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, text, text) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text) FROM anon;
+REVOKE ALL ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text) TO service_role;
 
 
--- 4. Hardened finalize_ai_outbound_delivery_atomic (Blocker F)
--- Validates:
--- - delivery belongs to p_company_id
--- - delivery belongs to p_conversation_id
--- - canonical conversation belongs to company
--- - conversation.customer_id == p_customer_id
--- - delivery.channel == canonical conversation.channel
--- - SLA window belongs to the same company/conversation/customer
--- - SLA window state == OPEN
--- - SLA window.ai_claim_id == p_ai_claim_id OR finalizer uses canonical durable operation authorized by that claim
--- - delivery is in PROVIDER_SENT_PENDING_FINALIZE
--- - provider message ID matches the durably persisted provider message ID
--- - stable logical command identity matches the SLA response operation (p_window_id)
--- If any validation fails: ROLLBACK / raise.
+-- 6. Updated resolve_response_sla_on_sale_reply participating in linearization fence (Item 1)
+CREATE OR REPLACE FUNCTION public.resolve_response_sla_on_sale_reply(
+  p_company_id uuid,
+  p_conversation_id uuid,
+  p_sale_interaction_id uuid,
+  p_resolved_at timestamptz DEFAULT NULL
+)
+RETURNS TABLE (
+  id uuid,
+  company_id uuid,
+  conversation_id uuid,
+  customer_id uuid,
+  trigger_interaction_id uuid,
+  started_at timestamptz,
+  deadline_at timestamptz,
+  state text,
+  resolved_at timestamptz,
+  sale_response_interaction_id uuid,
+  ai_response_interaction_id uuid,
+  ai_claimed_at timestamptz,
+  ai_claim_id uuid,
+  ai_claim_expires_at timestamptz,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_customer_id uuid;
+  v_interaction_company_id uuid;
+  v_interaction_customer_id uuid;
+  v_interaction_convo_id uuid;
+  v_interaction_type text;
+  v_interaction_direction text;
+  v_interaction_actor text;
+  v_interaction_created_at timestamptz;
+  v_resolved_at timestamptz;
+  v_window public.response_sla_windows%ROWTYPE;
+  v_resolved_window public.response_sla_windows%ROWTYPE;
+  v_outbox private.han_outbox%ROWTYPE;
+BEGIN
+  -- 1. Validate Conversation existence & tenant binding
+  SELECT c.customer_id
+  INTO v_customer_id
+  FROM public.conversations c
+  WHERE c.id = p_conversation_id
+    AND c.company_id = p_company_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CONVERSATION_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- 2. Validate Sale Interaction (enforce company, customer, conversation alignment)
+  SELECT
+    i.company_id,
+    i.customer_id,
+    i.conversation_id,
+    i.type,
+    i.direction,
+    i.actor_type,
+    i.created_at
+  INTO
+    v_interaction_company_id,
+    v_interaction_customer_id,
+    v_interaction_convo_id,
+    v_interaction_type,
+    v_interaction_direction,
+    v_interaction_actor,
+    v_interaction_created_at
+  FROM public.interactions i
+  WHERE i.id = p_sale_interaction_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'SALE_INTERACTION_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_interaction_company_id <> p_company_id THEN
+    RAISE EXCEPTION 'INTERACTION_COMPANY_MISMATCH' USING ERRCODE = '42501';
+  END IF;
+
+  IF v_interaction_convo_id IS NULL OR v_interaction_convo_id <> p_conversation_id THEN
+    RAISE EXCEPTION 'INTERACTION_CONVERSATION_MISMATCH' USING ERRCODE = '22000';
+  END IF;
+
+  IF v_interaction_customer_id <> v_customer_id THEN
+    RAISE EXCEPTION 'INTERACTION_CUSTOMER_MISMATCH' USING ERRCODE = '22000';
+  END IF;
+
+  IF v_interaction_type <> 'MESSAGE' THEN
+    RAISE EXCEPTION 'INVALID_INTERACTION_TYPE' USING ERRCODE = '22000';
+  END IF;
+
+  IF v_interaction_direction <> 'OUTBOUND' THEN
+    RAISE EXCEPTION 'INVALID_INTERACTION_DIRECTION' USING ERRCODE = '22000';
+  END IF;
+
+  IF v_interaction_actor <> 'SALE' THEN
+    RAISE EXCEPTION 'INVALID_INTERACTION_ACTOR' USING ERRCODE = '22000';
+  END IF;
+
+  -- Canonical resolved timestamp rules:
+  -- Priority 1: If matching Hán outbox row exists, outbox.sent_at is canonical and authoritative.
+  SELECT *
+  INTO v_outbox
+  FROM private.han_outbox o
+  WHERE o.company_id = p_company_id
+    AND o.interaction_id = p_sale_interaction_id;
+
+  IF FOUND THEN
+    IF v_outbox.status <> 'SENT' OR v_outbox.sent_at IS NULL THEN
+      RAISE EXCEPTION 'OUTBOX_NOT_CONFIRMED' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_outbox.sent_at < v_interaction_created_at THEN
+      RAISE EXCEPTION 'CORRUPT_OUTBOX_SENT_AT' USING ERRCODE = '22000';
+    END IF;
+
+    v_resolved_at := v_outbox.sent_at;
+  ELSE
+    -- Priority 2: Non-Hán / generic channel compatibility:
+    IF p_resolved_at IS NOT NULL THEN
+      IF p_resolved_at < v_interaction_created_at THEN
+        RAISE EXCEPTION 'RESOLVED_AT_CANNOT_PRECEDE_INTERACTION' USING ERRCODE = '22000';
+      END IF;
+      v_resolved_at := p_resolved_at;
+    ELSE
+      v_resolved_at := v_interaction_created_at;
+    END IF;
+  END IF;
+
+  -- 3. Lock OPEN SLA window for this conversation
+  SELECT *
+  INTO v_window
+  FROM public.response_sla_windows w
+  WHERE w.company_id = p_company_id
+    AND w.conversation_id = p_conversation_id
+    AND w.state = 'OPEN'
+  FOR UPDATE;
+
+  -- 4. If no OPEN window, return empty set (idempotent no-op)
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  -- 4b. Linearization Fence Check (Item 1):
+  -- If AI has acquired pre-dispatch authority and the fence is still active,
+  -- AI is currently dispatching to provider. Sale resolver yields so AI can finalize as winner.
+  IF v_window.ai_dispatch_fenced_until IS NOT NULL AND v_window.ai_dispatch_fenced_until > clock_timestamp() THEN
+    RETURN;
+  END IF;
+
+  -- 5. Resolve window to SALE_RESPONDED
+  UPDATE public.response_sla_windows
+  SET state = 'SALE_RESPONDED',
+      sale_response_interaction_id = p_sale_interaction_id,
+      resolved_at = v_resolved_at,
+      ai_dispatch_fenced_until = NULL,
+      ai_dispatch_token = NULL,
+      updated_at = clock_timestamp()
+  WHERE public.response_sla_windows.id = v_window.id
+  RETURNING * INTO v_resolved_window;
+
+  -- 6. If conversation was in AI_HANDLING, reset to OPEN because Sale has stepped in
+  UPDATE public.conversations
+  SET status = 'OPEN',
+      updated_at = clock_timestamp()
+  WHERE public.conversations.id = p_conversation_id
+    AND public.conversations.status = 'AI_HANDLING';
+
+  RETURN QUERY
+  SELECT
+    v_resolved_window.id,
+    v_resolved_window.company_id,
+    v_resolved_window.conversation_id,
+    v_resolved_window.customer_id,
+    v_resolved_window.trigger_interaction_id,
+    v_resolved_window.started_at,
+    v_resolved_window.deadline_at,
+    v_resolved_window.state,
+    v_resolved_window.resolved_at,
+    v_resolved_window.sale_response_interaction_id,
+    v_resolved_window.ai_response_interaction_id,
+    v_resolved_window.ai_claimed_at,
+    v_resolved_window.ai_claim_id,
+    v_resolved_window.ai_claim_expires_at,
+    v_resolved_window.created_at,
+    v_resolved_window.updated_at;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz) FROM anon;
+REVOKE ALL ON FUNCTION public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz) TO service_role;
+
+
+-- 7. Hardened finalize_ai_outbound_delivery_atomic (Item 2)
 CREATE OR REPLACE FUNCTION public.finalize_ai_outbound_delivery_atomic(
   p_company_id uuid,
   p_delivery_id uuid,
@@ -500,7 +753,13 @@ BEGIN
     RAISE EXCEPTION 'DELIVERY_CHANNEL_MISMATCH' USING ERRCODE = '22000';
   END IF;
 
-  -- 4. Lock and validate SLA window
+  -- 4. Validate stable logical command identity & window binding
+  IF (v_delivery.window_id IS NOT NULL AND v_delivery.window_id <> p_window_id)
+     OR v_delivery.client_command_id IS DISTINCT FROM p_window_id THEN
+    RAISE EXCEPTION 'COMMAND_IDENTITY_MISMATCH' USING ERRCODE = '22023';
+  END IF;
+
+  -- 5. Lock and validate SLA window
   SELECT * INTO v_window
   FROM public.response_sla_windows
   WHERE id = p_window_id
@@ -522,14 +781,8 @@ BEGIN
     RAISE EXCEPTION 'WINDOW_CUSTOMER_MISMATCH' USING ERRCODE = '42501';
   END IF;
 
-  -- 5. Validate stable logical command identity
-  IF v_delivery.client_command_id IS DISTINCT FROM p_window_id THEN
-    RAISE EXCEPTION 'COMMAND_IDENTITY_MISMATCH' USING ERRCODE = '22023';
-  END IF;
-
-  -- 6. Validate claim authority: window must have active claim or match stable window command
-  IF v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id
-     AND v_delivery.client_command_id IS DISTINCT FROM v_window.id THEN
+  -- 6. Validate claim authority (Item 2: strict validation, no unconditional bypass)
+  IF p_ai_claim_id IS NULL OR v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id THEN
     RAISE EXCEPTION 'CLAIM_NOT_AUTHORIZED' USING ERRCODE = '42501';
   END IF;
 
@@ -624,12 +877,14 @@ BEGIN
     updated_at = v_now
   WHERE id = p_delivery_id;
 
-  -- 12. Atomically resolve Response SLA window to AI_RESPONDED
+  -- 12. Atomically resolve Response SLA window to AI_RESPONDED & clear linearization fence
   UPDATE public.response_sla_windows
   SET
     state = 'AI_RESPONDED',
     ai_response_interaction_id = v_interaction_id,
     resolved_at = v_now,
+    ai_dispatch_fenced_until = NULL,
+    ai_dispatch_token = NULL,
     updated_at = v_now
   WHERE id = p_window_id
     AND company_id = p_company_id
@@ -685,7 +940,7 @@ REVOKE ALL ON FUNCTION public.finalize_ai_outbound_delivery_atomic(uuid, uuid, u
 GRANT EXECUTE ON FUNCTION public.finalize_ai_outbound_delivery_atomic(uuid, uuid, uuid, uuid, uuid, uuid, text, text, text, jsonb) TO service_role;
 
 
--- 5. Trusted SECURITY DEFINER RPC for Zalo AI SLA Finalization & Provenance (Blocker G & H)
+-- 8. Hardened finalize_ai_zalo_sla_atomic (Item 2 & Item 6)
 CREATE OR REPLACE FUNCTION public.finalize_ai_zalo_sla_atomic(
   p_company_id uuid,
   p_window_id uuid,
@@ -704,6 +959,7 @@ DECLARE
   v_zalo public.zalo_outbound_deliveries%ROWTYPE;
   v_conv public.conversations%ROWTYPE;
   v_window public.response_sla_windows%ROWTYPE;
+  v_supplied_interaction public.interactions%ROWTYPE;
   v_interaction_id uuid;
   v_ref text;
   v_rows_updated integer;
@@ -778,14 +1034,53 @@ BEGIN
     RAISE EXCEPTION 'WINDOW_CUSTOMER_MISMATCH' USING ERRCODE = '42501';
   END IF;
 
-  -- 4. Validate claim authority
-  IF v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id
-     AND v_zalo.command_id IS DISTINCT FROM v_expected_command THEN
+  -- 4. Validate claim authority (Item 2: strict validation, no unconditional bypass)
+  IF p_ai_claim_id IS NULL OR v_window.ai_claim_id IS DISTINCT FROM p_ai_claim_id THEN
     RAISE EXCEPTION 'CLAIM_NOT_AUTHORIZED' USING ERRCODE = '42501';
   END IF;
 
-  -- 5. Determine or mint interaction
-  v_interaction_id := coalesce(p_interaction_id, v_zalo.interaction_id);
+  -- 5. Determine or mint interaction with strict binding validation (Item 6)
+  IF p_interaction_id IS NOT NULL THEN
+    SELECT * INTO v_supplied_interaction
+    FROM public.interactions
+    WHERE id = p_interaction_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INTERACTION_NOT_FOUND' USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_supplied_interaction.company_id <> p_company_id THEN
+      RAISE EXCEPTION 'INTERACTION_COMPANY_MISMATCH' USING ERRCODE = '42501';
+    END IF;
+
+    IF v_supplied_interaction.conversation_id <> v_zalo.conversation_id THEN
+      RAISE EXCEPTION 'INTERACTION_CONVERSATION_MISMATCH' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_supplied_interaction.customer_id <> v_zalo.customer_id THEN
+      RAISE EXCEPTION 'INTERACTION_CUSTOMER_MISMATCH' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_supplied_interaction.channel <> 'ZALO' THEN
+      RAISE EXCEPTION 'INTERACTION_CHANNEL_MISMATCH' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_supplied_interaction.direction <> 'OUTBOUND' THEN
+      RAISE EXCEPTION 'INTERACTION_DIRECTION_MISMATCH' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_supplied_interaction.actor_type <> 'AI' THEN
+      RAISE EXCEPTION 'INTERACTION_ACTOR_MISMATCH' USING ERRCODE = '22000';
+    END IF;
+
+    IF v_zalo.interaction_id IS NOT NULL AND v_zalo.interaction_id <> p_interaction_id THEN
+      RAISE EXCEPTION 'INTERACTION_DELIVERY_MISMATCH' USING ERRCODE = '22023';
+    END IF;
+
+    v_interaction_id := p_interaction_id;
+  ELSE
+    v_interaction_id := v_zalo.interaction_id;
+  END IF;
 
   IF v_interaction_id IS NULL THEN
     v_interaction_id := gen_random_uuid();
@@ -847,12 +1142,14 @@ BEGIN
     RAISE EXCEPTION 'WINDOW_NOT_OPEN: State is %', v_window.state USING ERRCODE = '55000';
   END IF;
 
-  -- 7. Atomically resolve Response SLA window
+  -- 7. Atomically resolve Response SLA window & clear linearization fence
   UPDATE public.response_sla_windows
   SET
     state = 'AI_RESPONDED',
     ai_response_interaction_id = v_interaction_id,
     resolved_at = v_now,
+    ai_dispatch_fenced_until = NULL,
+    ai_dispatch_token = NULL,
     updated_at = v_now
   WHERE id = p_window_id
     AND company_id = p_company_id
@@ -863,15 +1160,11 @@ BEGIN
     RAISE EXCEPTION 'SLA_WINDOW_UPDATE_AFFECTED_ZERO_ROWS' USING ERRCODE = 'P0001';
   END IF;
 
-  -- 8. Enrich private.interaction_raw_contents with full AI Provenance (Blocker H)
-  UPDATE private.interaction_raw_contents
-  SET
-    source_metadata = coalesce(source_metadata, '{}'::jsonb) || p_source_metadata,
-    created_at = coalesce(created_at, v_now)
-  WHERE interaction_id = v_interaction_id
-    AND company_id = p_company_id;
-
-  IF NOT FOUND THEN
+  -- 8. Record AI Provenance in private.interaction_raw_contents (strict append-only)
+  IF NOT EXISTS (
+    SELECT 1 FROM private.interaction_raw_contents
+    WHERE interaction_id = v_interaction_id
+  ) THEN
     INSERT INTO private.interaction_raw_contents (
       interaction_id,
       company_id,
@@ -932,5 +1225,3 @@ REVOKE ALL ON FUNCTION public.finalize_ai_zalo_sla_atomic(uuid, uuid, uuid, uuid
 REVOKE ALL ON FUNCTION public.finalize_ai_zalo_sla_atomic(uuid, uuid, uuid, uuid, uuid, text, jsonb) FROM anon;
 REVOKE ALL ON FUNCTION public.finalize_ai_zalo_sla_atomic(uuid, uuid, uuid, uuid, uuid, text, jsonb) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.finalize_ai_zalo_sla_atomic(uuid, uuid, uuid, uuid, uuid, text, jsonb) TO service_role;
-
-
