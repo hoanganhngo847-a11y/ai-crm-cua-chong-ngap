@@ -808,15 +808,22 @@ async function run() {
   // Runtime must reject invented commitments fail-closed
   let firewallViolationCaught = false;
   try {
-    await executeAiResponseRuntime({
+    const res = await executeAiResponseRuntime({
       companyId: COMPANY_ID,
       windowId: win1.windowId,
+      conversationId: win1.convoId,
+      customerId: CUSTOMER_ID,
       model: new ProhibitedCommitmentModel(),
       client: admin,
     });
+    if (!res.success) {
+      assert.fail(`executeAiResponseRuntime did not reach firewall check: ${res.error}`);
+    }
   } catch (err: unknown) {
     if (err instanceof PolicyFirewallViolationError) {
       firewallViolationCaught = true;
+    } else {
+      throw err;
     }
   }
   assert.ok(firewallViolationCaught, 'AI response containing invented price/discount/bank account must be rejected by Policy Firewall');
@@ -2869,6 +2876,718 @@ async function run() {
   const { data: t20WinRow } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t20Win.windowId).single();
   assert.strictEqual(t20WinRow?.state, 'AI_RESPONDED');
   pass('Reconciliation of PROVIDER_SENT_PENDING_FINALIZE does not execute network/provider code');
+
+  // Test 21: Irreversible provider-accepted semantics in Zalo (Requirement 1 & 9)
+  // Prove that once ACCEPTED is recorded, no contradictory REJECTED or UNCERTAIN outcome can downgrade or release the delivery.
+  const t21ConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t21ConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t21_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t21TriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t21TriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t21ConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo test irreversibility',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+  });
+  const t21Win = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t21ConvoId,
+    triggerInteractionId: t21TriggerId,
+  });
+
+  const t21Cmd = `zalo-irrev-c1-${RUN_ID}`;
+  const { data: t21Claim } = await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t21ConvoId,
+    p_command_id: t21Cmd,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'Sale C1 irreversibility',
+    p_sanitized_content: 'Sale C1 irreversibility',
+    p_content_sha256: crypto.createHash('sha256').update('Sale C1 irreversibility').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+  const t21DelId = (t21Claim as any)?.[0]?.delivery_id;
+  const t21Token = (t21Claim as any)?.[0]?.claim_token;
+  const t21Mid = `zalo_mid_t21_${RUN_ID}`;
+
+  // 1. Record ACCEPTED with valid non-empty mid
+  await admin.rpc('zalo_record_outbound_provider_result' as never, {
+    p_delivery_id: t21DelId,
+    p_claim_token: t21Token,
+    p_outcome: 'ACCEPTED',
+    p_provider_msg_id: t21Mid,
+  } as never);
+
+  // 2. Assert delivery is in PROVIDER_SENT_PENDING_FINALIZE
+  const { data: t21DelRow1 } = await admin.from('zalo_outbound_deliveries').select('status, provider_msg_id').eq('id', t21DelId).single();
+  assert.strictEqual(t21DelRow1?.status, 'PROVIDER_SENT_PENDING_FINALIZE');
+  assert.strictEqual(t21DelRow1?.provider_msg_id, t21Mid);
+
+  async function expectRpcError(
+    fn: string,
+    args: Record<string, unknown>,
+    expectedSnippet: string
+  ) {
+    const { error } = await admin.rpc(fn as never, args as never);
+    assert.ok(error, `Expected ${fn} to fail, but succeeded`);
+    assert.ok(
+      (error as any).message?.includes(expectedSnippet),
+      `Expected ${fn} error to include "${expectedSnippet}", got: "${(error as any).message}"`
+    );
+  }
+
+  // 3. Attempt to record contradictory REJECTED using same token -> MUST fail closed
+  await expectRpcError(
+    'zalo_record_outbound_provider_result',
+    {
+      p_delivery_id: t21DelId,
+      p_claim_token: t21Token,
+      p_outcome: 'REJECTED',
+      p_error_code: 'SIMULATED_REJECT',
+    },
+    'ZALO_OUTCOME_IRREVERSIBLE'
+  );
+
+  // 4. Attempt to record contradictory UNCERTAIN using same token -> MUST fail closed
+  await expectRpcError(
+    'zalo_record_outbound_provider_result',
+    {
+      p_delivery_id: t21DelId,
+      p_claim_token: t21Token,
+      p_outcome: 'UNCERTAIN',
+      p_error_code: 'SIMULATED_UNCERTAIN',
+    },
+    'ZALO_OUTCOME_IRREVERSIBLE'
+  );
+
+  // 5. Attempt invalid p_outcome string -> MUST raise ZALO_OUTBOUND_OUTCOME_INVALID
+  await expectRpcError(
+    'zalo_record_outbound_provider_result',
+    {
+      p_delivery_id: t21DelId,
+      p_claim_token: t21Token,
+      p_outcome: 'INVALID_STRING',
+    },
+    'ZALO_OUTBOUND_OUTCOME_INVALID'
+  );
+
+  // 6. Conflicting ACCEPTED with different provider message ID -> MUST fail
+  await expectRpcError(
+    'zalo_record_outbound_provider_result',
+    {
+      p_delivery_id: t21DelId,
+      p_claim_token: t21Token,
+      p_outcome: 'ACCEPTED',
+      p_provider_msg_id: 'conflicting_provider_mid',
+    },
+    'ZALO_PROVIDER_MSG_ID_CONFLICT'
+  );
+
+  // 7. Repeated idempotent ACCEPTED with SAME provider message ID -> succeeds
+  const { data: t21ReplayStatus } = await admin.rpc('zalo_record_outbound_provider_result' as never, {
+    p_delivery_id: t21DelId,
+    p_claim_token: t21Token,
+    p_outcome: 'ACCEPTED',
+    p_provider_msg_id: t21Mid,
+  } as never);
+  assert.strictEqual(t21ReplayStatus, 'PROVIDER_SENT_PENDING_FINALIZE');
+
+  // 8. Delivery remains PROVIDER_SENT_PENDING_FINALIZE; shared window remains PROVIDER_ACCEPTED
+  const { data: t21DelRowAfter } = await admin.from('zalo_outbound_deliveries').select('status').eq('id', t21DelId).single();
+  assert.strictEqual(t21DelRowAfter?.status, 'PROVIDER_SENT_PENDING_FINALIZE');
+  const { data: t21WinRow } = await bossRealClient.from('response_sla_windows').select('dispatch_state, dispatch_owner').eq('id', t21Win.id).single();
+  assert.strictEqual(t21WinRow?.dispatch_state, 'PROVIDER_ACCEPTED');
+  assert.strictEqual(t21WinRow?.dispatch_owner, 'SALE');
+
+  // 9. AI provider calls = 0 while in PROVIDER_ACCEPTED / pending finalize
+  let t21AiCalls = 0;
+  const t21AiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: t21Win.id,
+    conversationId: t21ConvoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      t21AiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+  assert.strictEqual(t21AiCalls, 0, 'AI provider invocation count must remain 0');
+  assert.strictEqual(t21AiResult.success, false);
+
+  // 10. Finalize C1 -> resolves SLA to SALE_RESPONDED
+  await admin.rpc('zalo_finalize_outbound_delivery' as never, { p_delivery_id: t21DelId } as never);
+  const { data: t21WinFinal } = await bossRealClient.from('response_sla_windows').select('state').eq('id', t21Win.id).single();
+  assert.strictEqual(t21WinFinal?.state, 'SALE_RESPONDED');
+  pass('Provider-accepted irreversibility (Zalo): contradictory REJECTED/UNCERTAIN rejected fail-closed, AI calls = 0, SLA = SALE_RESPONDED');
+
+  // Test 22: Same-command Zalo retry preserves shared and delivery token without rotation (Requirement 2)
+  const t22ConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t22ConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t22_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t22TriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t22TriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t22ConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo test token stability',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+  });
+  const t22Win = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t22ConvoId,
+    triggerInteractionId: t22TriggerId,
+  });
+
+  const t22Cmd = `zalo-stable-token-${RUN_ID}`;
+  const { data: t22Claim1 } = await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t22ConvoId,
+    p_command_id: t22Cmd,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'Stable token send',
+    p_sanitized_content: 'Stable token send',
+    p_content_sha256: crypto.createHash('sha256').update('Stable token send').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+  const t22DelId = (t22Claim1 as any)?.[0]?.delivery_id;
+  const t22ClaimTokenBefore = (t22Claim1 as any)?.[0]?.claim_token;
+
+  // Read SLA window dispatch_token before retry
+  const { data: t22WinBefore } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_token, dispatch_delivery_id, dispatch_fenced_until')
+    .eq('id', t22Win.id)
+    .single();
+
+  // Retry the exact same command while delivery is SENDING
+  const { data: t22Claim2 } = await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t22ConvoId,
+    p_command_id: t22Cmd,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'Stable token send',
+    p_sanitized_content: 'Stable token send',
+    p_content_sha256: crypto.createHash('sha256').update('Stable token send').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+  assert.strictEqual((t22Claim2 as any)?.[0]?.claim_status, 'BUSY');
+
+  // Verify delivery token is byte-for-byte unchanged
+  const { data: t22DelAfter } = await admin.from('zalo_outbound_deliveries').select('claim_token').eq('id', t22DelId).single();
+  assert.strictEqual(t22DelAfter?.claim_token, t22ClaimTokenBefore, 'Delivery claim_token must remain identical');
+
+  // Verify SLA window dispatch_token, delivery_id, fenced_until are byte-for-byte unchanged
+  const { data: t22WinAfter } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_token, dispatch_delivery_id, dispatch_fenced_until')
+    .eq('id', t22Win.id)
+    .single();
+  assert.strictEqual(t22WinAfter?.dispatch_token, t22WinBefore?.dispatch_token, 'dispatch_token must NOT be rotated on retry');
+  assert.strictEqual(t22WinAfter?.dispatch_delivery_id, t22WinBefore?.dispatch_delivery_id, 'dispatch_delivery_id must be unchanged');
+  assert.strictEqual(t22WinAfter?.dispatch_fenced_until, t22WinBefore?.dispatch_fenced_until, 'dispatch_fenced_until must be unchanged');
+  pass('Same-command Zalo retry preserves shared and delivery token without rotation (Zero Token Rotation)');
+
+  // Test 23: Human Sale Zalo PENDING_FINALIZE crash recovery with zero network (Requirement 3)
+  const t23ConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t23ConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t23_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t23TriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t23TriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t23ConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo test crash recovery',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+  });
+  const t23Win = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t23ConvoId,
+    triggerInteractionId: t23TriggerId,
+  });
+
+  const t23Cmd = `zalo-crash-recov-${RUN_ID}`;
+  let t23ProviderCalls = 0;
+  const t23Mid = `zalo_mid_t23_${RUN_ID}`;
+
+  // Use a simulated failing finalizer on Run 1
+  let t23FailFinalize = true;
+  const failingFinalizeClient = {
+    ...admin,
+    rpc: async (fn: string, args: any) => {
+      if (fn === 'zalo_finalize_outbound_delivery' && t23FailFinalize) {
+        throw new Error('SIMULATED_CRASH_AFTER_ACCEPTED');
+      }
+      return admin.rpc(fn as never, args);
+    },
+  };
+
+  const inboxService23 = new ZaloInboxService({
+    supabase: failingFinalizeClient as any,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        t23ProviderCalls++;
+        return { outcome: 'ACCEPTED', providerMsgId: t23Mid };
+      },
+    } as any),
+  });
+
+  // Run 1: provider succeeds, provider result persisted, but finalizer crashes
+  await assert.rejects(
+    async () => {
+      await inboxService23.sendZaloReply(
+        { conversationId: t23ConvoId, content: 'Tin nhan thu crash recovery', commandId: t23Cmd, oaId: t4OaId },
+        saleActorContext
+      );
+    },
+    /SIMULATED_CRASH_AFTER_ACCEPTED/
+  );
+
+  assert.strictEqual(t23ProviderCalls, 1, 'Provider was invoked once on initial attempt');
+
+  // Verify delivery is durably in PROVIDER_SENT_PENDING_FINALIZE
+  const { data: t23DelRow1 } = await admin
+    .from('zalo_outbound_deliveries')
+    .select('id, status, provider_msg_id')
+    .eq('command_id', t23Cmd)
+    .single();
+  assert.strictEqual(t23DelRow1?.status, 'PROVIDER_SENT_PENDING_FINALIZE');
+
+  // Run 2: normal finalizer restored, retry same commandId
+  t23FailFinalize = false;
+  const inboxService23Recov = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        t23ProviderCalls++;
+        throw new Error('NETWORK_EXECUTED_ON_RETRY');
+      },
+    } as any),
+  });
+
+  const t23RecovResult = await inboxService23Recov.sendZaloReply(
+    { conversationId: t23ConvoId, content: 'Tin nhan thu crash recovery', commandId: t23Cmd, oaId: t4OaId },
+    saleActorContext
+  );
+
+  assert.strictEqual(t23ProviderCalls, 1, 'Provider invocation count MUST remain exactly 1 (zero network on retry)');
+  assert.strictEqual(t23RecovResult.success, true);
+
+  // Assert SLA resolved to SALE_RESPONDED and exactly 1 interaction was created
+  const { data: t23WinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state')
+    .eq('id', t23Win.id)
+    .single();
+  assert.strictEqual(t23WinFinal?.state, 'SALE_RESPONDED');
+
+  const { count: t23InteractionCount } = await admin
+    .from('interactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', t23ConvoId)
+    .eq('direction', 'OUTBOUND');
+  assert.strictEqual(t23InteractionCount, 1, 'Exactly one OUTBOUND interaction must be created');
+  pass('Human Sale Zalo PENDING_FINALIZE crash recovery: zero network on retry, SLA = SALE_RESPONDED, 1 interaction');
+
+  // Test 24: Persisted Zalo UNCERTAIN on lease expiry (Requirement 4)
+  const t24ConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t24ConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t24_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t24TriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t24TriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t24ConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo test persist uncertain',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+  });
+  const t24Win = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t24ConvoId,
+    triggerInteractionId: t24TriggerId,
+  });
+
+  const t24Cmd1 = `zalo-own-c1-${RUN_ID}`;
+  const t24Cmd2 = `zalo-compete-c2-${RUN_ID}`;
+  let t24C2Calls = 0;
+
+  // 1. C1 acquires dispatch ownership
+  await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t24ConvoId,
+    p_command_id: t24Cmd1,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'C1 ownership',
+    p_sanitized_content: 'C1 ownership',
+    p_content_sha256: crypto.createHash('sha256').update('C1 ownership').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+
+  // 2. Expire lease
+  expireDispatchFenceDirectSql(t24Win.id);
+
+  // 3. Competing Sale calls sendZaloReply
+  const inboxService24 = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        t24C2Calls++;
+        return { outcome: 'ACCEPTED', providerMsgId: 'c2_should_never_run' };
+      },
+    } as any),
+  });
+
+  const t24C2Result = await inboxService24.sendZaloReply(
+    { conversationId: t24ConvoId, content: 'C2 send', commandId: t24Cmd2, oaId: t4OaId },
+    saleActorContext
+  );
+
+  assert.strictEqual(t24C2Calls, 0, 'Competing Sale C2 provider calls must be 0');
+  assert.strictEqual(t24C2Result.success, false);
+  assert.strictEqual(t24C2Result.status, 'UNCERTAIN');
+
+  // 4. Assert DB window itself is NOW persistently UNCERTAIN without running any AI worker!
+  const { data: t24WinAfterC2 } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_state, state')
+    .eq('id', t24Win.id)
+    .single();
+  assert.strictEqual(t24WinAfterC2?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must be persistently UNCERTAIN');
+  assert.strictEqual(t24WinAfterC2?.state, 'OPEN');
+
+  // 5. Test expired AI fence hit by human Zalo Sale path also persists UNCERTAIN
+  const t24AiConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t24AiConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t24_ai_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const t24AiTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t24AiTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t24AiConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo test AI fence expiry',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+  });
+  const t24AiWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: t24AiConvoId,
+    triggerInteractionId: t24AiTriggerId,
+  });
+  const t24AiClaim = await claimResponseSlaForAi({ companyId: COMPANY_ID, windowId: t24AiWin.id });
+  const { data: t24AiGuard } = await admin.rpc('guard_ai_pre_dispatch' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: t24AiConvoId,
+    p_customer_id: CUSTOMER_ID,
+    p_window_id: t24AiWin.id,
+    p_ai_claim_id: t24AiClaim.claimId,
+    p_channel: 'ZALO',
+  } as never);
+  assert.strictEqual((t24AiGuard as any)?.[0]?.granted, true, 'AI must acquire dispatch authority');
+  expireDispatchFenceDirectSql(t24AiWin.id);
+
+  const t24SaleAiFenceResult = await inboxService24.sendZaloReply(
+    { conversationId: t24AiConvoId, content: 'Sale hits expired AI fence', commandId: `sale-ai-fence-${RUN_ID}`, oaId: t4OaId },
+    saleActorContext
+  );
+  assert.strictEqual(t24SaleAiFenceResult.success, false);
+  assert.strictEqual(t24SaleAiFenceResult.status, 'UNCERTAIN');
+
+  const { data: t24AiWinPersist } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_state, state')
+    .eq('id', t24AiWin.id)
+    .single();
+  assert.strictEqual(t24AiWinPersist?.dispatch_state, 'UNCERTAIN', 'Expired AI fence must persistently set UNCERTAIN on Sale claim');
+  pass('Persisted Zalo UNCERTAIN: lease-expiry updates persist in DB without rollback, provider calls = 0');
+
+  // Test 25: Facebook stale provider SENT cannot resolve or mutate active Sale dispatch window (Requirement 5)
+  const t25Win = await createDueSlaWindow('t25_fb_stale_result');
+  const t25R1Req = crypto.randomUUID();
+  const t25R2Req = crypto.randomUUID();
+  let t25AiCalls = 0;
+
+  // 1. Seed old Sale request R1 in han_outbox on the same conversation
+  const t25R1IntId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: t25R1IntId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: t25Win.convoId,
+    channel: 'FACEBOOK',
+    type: 'MESSAGE',
+    direction: 'OUTBOUND',
+    sanitized_content: 'Old R1 send',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'SALE',
+    actor_user_id: sale.id,
+    created_at: new Date(Date.now() - 15 * 60000).toISOString(),
+  });
+  await admin.from('private.han_outbox' as never).insert({
+    company_id: COMPANY_ID,
+    request_id: t25R1Req,
+    conversation_id: t25Win.convoId,
+    interaction_id: t25R1IntId,
+    actor_id: sale.id,
+    content: 'Old R1 send',
+    status: 'SENDING',
+  } as never);
+
+  // 2. Active Sale request R2 prepares and acquires dispatch ownership
+  const { data: t25R2Prep } = await admin.rpc('han_prepare_send' as never, {
+    p_company: COMPANY_ID,
+    p_conversation: t25Win.convoId,
+    p_actor: sale.id,
+    p_request: t25R2Req,
+    p_content: 'Active R2 send',
+    p_safe: 'Active R2 send',
+    p_safe_status: 'SUCCEEDED',
+    p_delivery: null,
+  } as never);
+  assert.strictEqual((t25R2Prep as any)?.claimed, true);
+
+  // Verify R2 currently owns the SLA window
+  const { data: t25WinBeforeR1 } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_delivery_id, dispatch_owner, dispatch_state, state')
+    .eq('id', t25Win.windowId)
+    .single();
+  assert.strictEqual(t25WinBeforeR1?.dispatch_delivery_id, t25R2Req);
+  assert.strictEqual(t25WinBeforeR1?.dispatch_owner, 'SALE');
+  assert.strictEqual(t25WinBeforeR1?.dispatch_state, 'DISPATCHING');
+  assert.strictEqual(t25WinBeforeR1?.state, 'OPEN');
+
+  // 3. Process stale R1 as SENT with authoritative MID
+  await admin.rpc('han_finish_send' as never, {
+    p_company: COMPANY_ID,
+    p_request: t25R1Req,
+    p_status: 'SENT',
+    p_mid: `mid_r1_stale_${RUN_ID}`,
+  } as never);
+
+  // 4. Assert R2 ownership/delivery binding on SLA window is STRICTLY UNCHANGED!
+  const { data: t25WinAfterR1 } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_delivery_id, dispatch_owner, dispatch_state, state, sale_response_interaction_id')
+    .eq('id', t25Win.windowId)
+    .single();
+  assert.strictEqual(t25WinAfterR1?.dispatch_delivery_id, t25R2Req, 'dispatch_delivery_id must still be R2');
+  assert.strictEqual(t25WinAfterR1?.dispatch_owner, 'SALE');
+  assert.strictEqual(t25WinAfterR1?.dispatch_state, 'DISPATCHING');
+  assert.strictEqual(t25WinAfterR1?.state, 'OPEN', 'Window must NOT be resolved by stale R1');
+  assert.strictEqual(t25WinAfterR1?.sale_response_interaction_id, null);
+
+  // 5. Competing AI worker attempts dispatch while R2 in flight -> blocked!
+  const t25AiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: t25Win.windowId,
+    conversationId: t25Win.convoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      t25AiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+  assert.strictEqual(t25AiCalls, 0, 'AI provider invocation count MUST remain 0 while R2 is in-flight');
+  assert.strictEqual(t25AiResult.success, false);
+
+  // 6. Finish R2 as SENT -> SLA window resolves strictly to SALE_RESPONDED bound to R2
+  await admin.rpc('han_finish_send' as never, {
+    p_company: COMPANY_ID,
+    p_request: t25R2Req,
+    p_status: 'SENT',
+    p_mid: `mid_r2_active_${RUN_ID}`,
+  } as never);
+
+  const { data: t25WinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state, dispatch_owner')
+    .eq('id', t25Win.windowId)
+    .single();
+  assert.strictEqual(t25WinFinal?.state, 'SALE_RESPONDED');
+  assert.strictEqual(t25WinFinal?.dispatch_state, 'PROVIDER_ACCEPTED');
+  pass('Facebook stale-result ownership: stale R1 SENT cannot mutate/resolve active R2 dispatch window');
+
+  // Test 26: Regression assertions for restored han_prepare_send security & input invariants (Requirement 6)
+  const t26Win = await createDueSlaWindow('t26_prepare_guards');
+
+  // A. Content length > 2000 -> INVALID_INPUT
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26Win.convoId,
+      p_actor: sale.id,
+      p_request: crypto.randomUUID(),
+      p_content: 'A'.repeat(2001),
+      p_safe: 'A'.repeat(2001),
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: null,
+    },
+    'INVALID_INPUT'
+  );
+
+  // B. Invalid p_safe_status -> INVALID_INPUT
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26Win.convoId,
+      p_actor: sale.id,
+      p_request: crypto.randomUUID(),
+      p_content: 'Hello',
+      p_safe: 'Hello',
+      p_safe_status: 'PENDING',
+      p_delivery: null,
+    },
+    'INVALID_INPUT'
+  );
+
+  // C. FAILED with non-null p_safe -> INVALID_INPUT
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26Win.convoId,
+      p_actor: sale.id,
+      p_request: crypto.randomUUID(),
+      p_content: 'Hello',
+      p_safe: 'Hello',
+      p_safe_status: 'FAILED',
+      p_delivery: null,
+    },
+    'INVALID_INPUT'
+  );
+
+  // D. SUCCEEDED with null p_safe -> INVALID_INPUT
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26Win.convoId,
+      p_actor: sale.id,
+      p_request: crypto.randomUUID(),
+      p_content: 'Hello',
+      p_safe: null,
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: null,
+    },
+    'INVALID_INPUT'
+  );
+
+  // E. Non-member / unauthorized actor -> ACCESS_DENIED
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26Win.convoId,
+      p_actor: crypto.randomUUID(),
+      p_request: crypto.randomUUID(),
+      p_content: 'Hello',
+      p_safe: 'Hello',
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: null,
+    },
+    'ACCESS_DENIED'
+  );
+
+  // F. Non-Facebook conversation channel -> NOT_FOUND
+  const t26NonFbConvo = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: t26NonFbConvo,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_t26_${RUN_ID}`,
+    status: 'OPEN',
+  });
+  await expectRpcError(
+    'han_prepare_send',
+    {
+      p_company: COMPANY_ID,
+      p_conversation: t26NonFbConvo,
+      p_actor: sale.id,
+      p_request: crypto.randomUUID(),
+      p_content: 'Hello',
+      p_safe: 'Hello',
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: null,
+    },
+    'NOT_FOUND'
+  );
+
+  pass('Restored han_prepare_send security guards: content bounds, safe status consistency, actor membership, channel matching');
 
   console.log('\n================================================================');
   console.log(`ALL ${testCount} ROUND 3 PRODUCT WIRING & REAL RUNTIME TESTS PASSED!`);
