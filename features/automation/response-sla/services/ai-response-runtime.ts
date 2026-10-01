@@ -12,6 +12,7 @@ import type { AiAnalysisRecord } from '@/shared/contracts/ai-analysis';
 import {
   buildRuntimeSalesStyleContext,
 } from '@/features/sales-style/services/runtime-style-context';
+import { dispatchMessage } from '@/features/omnichannel/facebook/transport';
 
 // ==============================================================================
 // 1. POLICY FIREWALL VALIDATION & ERROR
@@ -105,7 +106,7 @@ export class OpenAiResponseModel implements AiResponseModel {
 }
 
 // ==============================================================================
-// 3. OUTBOUND PROVIDER TYPES
+// 3. OUTBOUND PROVIDER TYPES & REAL DISPATCHER
 // ==============================================================================
 
 export interface OutboundProviderResult {
@@ -120,8 +121,128 @@ export type OutboundProviderSender = (params: {
   customerId: string;
   channel: string;
   content: string;
-  interactionId: string;
+  deliveryId: string;
 }) => Promise<OutboundProviderResult>;
+
+/**
+ * Production channel dispatcher: executes real provider delivery based on channel.
+ * Never synthesizes SENT; fails closed if channel unconfigured.
+ */
+export async function dispatchRealChannelOutbound(params: {
+  companyId: string;
+  conversationId: string;
+  customerId: string;
+  channel: string;
+  content: string;
+  client?: SupabaseClient;
+}): Promise<OutboundProviderResult> {
+  const { companyId, conversationId, channel, content, client = createAdminClient() } = params;
+
+  if (channel === 'FACEBOOK') {
+    // 1. Fetch conversation external_conversation_id
+    const { data: conv } = await client
+      .from('conversations')
+      .select('external_conversation_id')
+      .eq('id', conversationId)
+      .eq('company_id', companyId)
+      .single();
+
+    const externalId = conv?.external_conversation_id || '';
+    const parts = externalId.split(':');
+    if (parts.length < 2) {
+      return { status: 'FAILED', error: 'INVALID_EXTERNAL_CONVERSATION_ID' };
+    }
+
+    const pageId = parts[0];
+    const recipientPsid = parts.slice(1).join(':');
+
+    const token =
+      process.env[`FACEBOOK_PAGE_ACCESS_TOKEN_${pageId}`] ||
+      process.env.FACEBOOK_PAGE_ACCESS_TOKEN ||
+      '';
+    const version = process.env.META_GRAPH_VERSION || 'v20.0';
+
+    if (!token.trim()) {
+      return { status: 'FAILED', error: 'FACEBOOK_NOT_CONFIGURED' };
+    }
+
+    const fbResult = await dispatchMessage({
+      page: pageId,
+      recipient: recipientPsid,
+      version,
+      token,
+      content,
+    });
+
+    if (fbResult.status === 'SENT' && fbResult.mid) {
+      return {
+        status: 'SENT',
+        externalMessageId: fbResult.mid,
+      };
+    }
+
+    return {
+      status: fbResult.status,
+      error: `Facebook dispatch failed with status ${fbResult.status}`,
+    };
+  }
+
+  if (channel === 'ZALO') {
+    // Check Zalo configuration
+    const zaloToken = process.env.ZALO_OA_ACCESS_TOKEN || '';
+    if (!zaloToken.trim()) {
+      return { status: 'FAILED', error: 'ZALO_NOT_CONFIGURED' };
+    }
+
+    // In a real Zalo deployment, retrieve Zalo UID from identities table
+    const { data: identity } = await client
+      .from('identities')
+      .select('identifier')
+      .eq('company_id', companyId)
+      .eq('customer_id', params.customerId)
+      .eq('channel', 'ZALO')
+      .maybeSingle();
+
+    if (!identity?.identifier) {
+      return { status: 'FAILED', error: 'MISSING_ZALO_RECIPIENT_UID' };
+    }
+
+    // Attempt real Zalo API send
+    try {
+      const response = await fetch('https://openapi.zalo.me/v3.0/oa/message/cs', {
+        method: 'POST',
+        headers: {
+          access_token: zaloToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recipient: { user_id: identity.identifier },
+          message: { text: content },
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload.error === 0 && payload.data?.message_id) {
+          return {
+            status: 'SENT',
+            externalMessageId: String(payload.data.message_id),
+          };
+        }
+      }
+      return { status: 'FAILED', error: 'Zalo message rejected by API' };
+    } catch (err: unknown) {
+      return { status: 'FAILED', error: (err as Error).message || 'Zalo network error' };
+    }
+  }
+
+  // Unsupported or unconfigured channel: FAIL CLOSED
+  return {
+    status: 'FAILED',
+    error: `PROVIDER_NOT_CONFIGURED: Channel "${channel}" has no configured provider transport`,
+  };
+}
 
 // ==============================================================================
 // 4. RUNTIME EXECUTION PARAMS & RESULT
@@ -141,6 +262,7 @@ export interface ExecuteAiResponseRuntimeResult {
   decision?: string;
   windowId: string;
   conversationId?: string;
+  deliveryId?: string;
   interactionId?: string;
   externalMessageId?: string;
   providerStatus?: string;
@@ -161,7 +283,10 @@ export interface ExecuteAiResponseRuntimeResult {
 /**
  * Canonical AI Response Runtime:
  * Inbound Interaction -> Response SLA -> AI Claim -> AI Generation (Analysis + Sales Style + Firewall)
- * -> Outbound Send -> Provider Confirmation -> SLA Resolution
+ * -> Canonical Pending Outbound Delivery (outbound_deliveries)
+ * -> Channel-Specific Provider Dispatcher
+ * -> Provider Delivery Confirmation (SENT only)
+ * -> Atomic Finalization (public.interactions + private provenance + SLA resolution)
  */
 export async function executeAiResponseRuntime(
   params: ExecuteAiResponseRuntimeParams
@@ -279,59 +404,29 @@ export async function executeAiResponseRuntime(
     );
   }
 
-  // Step 8: Persist AI Outbound Interaction
-  const { data: newInteraction, error: intErr } = await client
-    .from('interactions')
-    .insert({
-      company_id: companyId,
-      customer_id: customerId,
-      conversation_id: conversationId,
-      channel: conv.channel,
-      type: 'MESSAGE',
-      direction: 'OUTBOUND',
-      actor_type: 'AI',
-      sanitized_content: rawGeneratedText,
-      sanitization_status: 'SUCCEEDED',
-      sanitizer_version: 'v1',
-      created_at: new Date().toISOString(),
-    })
-    .select('id, created_at')
-    .single();
+  // Step 8: Create Canonical Pending Outbound Delivery in outbound_deliveries
+  // (NO public.interactions row exists yet — preserves AI Claim != AI Sent)
+  const admin = createAdminClient();
+  const { data: deliveryId, error: deliveryErr } = await admin.rpc('create_ai_outbound_delivery_pending' as never, {
+    p_company_id: companyId,
+    p_conversation_id: conversationId,
+    p_channel: conv.channel,
+    p_client_command_id: claimResult.claimId,
+    p_request_fingerprint: `${companyId}:${conversationId}:${claimResult.claimId}`,
+  } as never);
 
-  if (intErr || !newInteraction) {
+  if (deliveryErr || !deliveryId) {
     return {
       success: false,
       claimed: true,
       decision: claimResult.decision,
       windowId,
       conversationId,
-      error: `Failed to record AI interaction: ${intErr?.message}`,
+      error: `Failed to create pending outbound delivery: ${deliveryErr?.message}`,
     };
   }
 
-  const interactionId = newInteraction.id;
-
-  // Step 9: Store Provenance in private schema (No PII / Phone in public)
-  const admin = createAdminClient();
-  const { error: rawErr } = await admin.rpc('save_ai_interaction_provenance' as never, {
-    p_company_id: companyId,
-    p_interaction_id: interactionId,
-    p_raw_content: rawGeneratedText,
-    p_source_metadata: {
-      source: 'ai_response_runtime',
-      model_version: model.modelVersion,
-      analysis_record_id: analysisRecord?.id || null,
-      sales_style_profile_id: styleContext.activeProfileId,
-      is_neutral_default: styleContext.isNeutralDefault,
-      ai_claim_id: claimResult.claimId,
-      window_id: windowId,
-    },
-  } as never);
-  if (rawErr) {
-    console.error('Lỗi khi lưu interaction_raw_contents:', rawErr);
-  }
-
-  // Step 10: Provider Sending & Delivery Confirmation
+  // Step 9: Channel-Specific Provider Dispatcher
   let providerResult: OutboundProviderResult;
   if (providerSender) {
     providerResult = await providerSender({
@@ -340,29 +435,42 @@ export async function executeAiResponseRuntime(
       customerId,
       channel: conv.channel,
       content: rawGeneratedText,
-      interactionId,
+      deliveryId: String(deliveryId),
     });
   } else {
-    // Default provider simulation: if no provider sender injected, simulate provider outcome
-    // by checking environment or returning mock SENT with UUID
-    providerResult = {
-      status: 'SENT',
-      externalMessageId: `msg_${crypto.randomUUID()}`,
-    };
+    // Production default: real channel dispatcher (Facebook / Zalo).
+    // Fails closed if channel is unconfigured. Never synthesizes SENT!
+    providerResult = await dispatchRealChannelOutbound({
+      companyId,
+      conversationId,
+      customerId,
+      channel: conv.channel,
+      content: rawGeneratedText,
+      client: admin,
+    });
   }
 
-  // Invariant: AI Claim != AI Sent; model generated != provider SENT
-  // FAILED / UNKNOWN provider result must NOT falsely resolve SLA
+  // Step 10: Provider Result Evaluation (Fail-Closed on FAILED / UNKNOWN / UNCERTAIN)
+  // If provider does not confirm SENT with provider message ID:
+  // - Mark delivery FAILED in outbound_deliveries
+  // - ZERO rows inserted in public.interactions (no false sent message visible!)
+  // - SLA remains OPEN for human intervention
   if (providerResult.status !== 'SENT' || !providerResult.externalMessageId) {
+    await admin.rpc('record_ai_outbound_delivery_failed' as never, {
+      p_company_id: companyId,
+      p_delivery_id: deliveryId,
+      p_error_message: providerResult.error || `Provider delivery status: ${providerResult.status}`,
+    } as never);
+
     return {
       success: false,
       claimed: true,
       decision: claimResult.decision,
       windowId,
       conversationId,
-      interactionId,
+      deliveryId: String(deliveryId),
       providerStatus: providerResult.status,
-      error: providerResult.error || `Provider delivery status is ${providerResult.status}`,
+      error: providerResult.error || `Provider delivery failed with status ${providerResult.status}`,
       provenance: {
         modelVersion: model.modelVersion,
         analysisRecordId: analysisRecord?.id || null,
@@ -373,33 +481,50 @@ export async function executeAiResponseRuntime(
     };
   }
 
-  // Step 11: SLA Resolution on Confirmed Provider Delivery
-  // Atomic RPC: resolve_response_sla_on_ai_reply
-  const { error: resolveErr } = await client.rpc('resolve_response_sla_on_ai_reply', {
-    p_company_id: companyId,
-    p_conversation_id: conversationId,
-    p_ai_claim_id: claimResult.claimId,
-    p_ai_interaction_id: interactionId,
-  });
+  // Step 11: Finalize Confirmed Delivery in Database Atomically
+  // Atomic RPC: finalize_ai_outbound_delivery_atomic
+  // - Creates public.interactions (actor_type = 'AI', external_ref = provider_msg_id)
+  // - Saves mandatory provenance in private raw contents table via trusted RPC (Fail-Closed!)
+  // - Updates outbound_deliveries to SENT with interaction_id link
+  // - Resolves Response SLA window to AI_RESPONDED
+  // - Resets conversation status to OPEN
+  const { data: finalizedInteractionId, error: finalizeErr } = await admin.rpc(
+    'finalize_ai_outbound_delivery_atomic' as never,
+    {
+      p_company_id: companyId,
+      p_delivery_id: deliveryId,
+      p_conversation_id: conversationId,
+      p_customer_id: customerId,
+      p_window_id: windowId,
+      p_ai_claim_id: claimResult.claimId,
+      p_provider_msg_id: providerResult.externalMessageId,
+      p_sanitized_content: rawGeneratedText,
+      p_raw_content: rawGeneratedText,
+      p_source_metadata: {
+        source: 'ai_response_runtime',
+        model_version: model.modelVersion,
+        analysis_record_id: analysisRecord?.id || null,
+        sales_style_profile_id: styleContext.activeProfileId,
+        is_neutral_default: styleContext.isNeutralDefault,
+        ai_claim_id: claimResult.claimId,
+        window_id: windowId,
+        delivery_id: deliveryId,
+      },
+    } as never
+  );
 
-  if (resolveErr) {
+  if (finalizeErr || !finalizedInteractionId) {
     return {
       success: false,
       claimed: true,
       decision: claimResult.decision,
       windowId,
       conversationId,
-      interactionId,
+      deliveryId: String(deliveryId),
       providerStatus: providerResult.status,
-      error: `Failed to resolve SLA: ${resolveErr.message}`,
+      error: `Failed to finalize delivery atomically: ${finalizeErr?.message}`,
     };
   }
-
-  // Update external_ref on interaction
-  await client
-    .from('interactions')
-    .update({ external_ref: providerResult.externalMessageId })
-    .eq('id', interactionId);
 
   return {
     success: true,
@@ -407,7 +532,8 @@ export async function executeAiResponseRuntime(
     decision: claimResult.decision,
     windowId,
     conversationId,
-    interactionId,
+    deliveryId: String(deliveryId),
+    interactionId: String(finalizedInteractionId),
     externalMessageId: providerResult.externalMessageId,
     providerStatus: providerResult.status,
     provenance: {

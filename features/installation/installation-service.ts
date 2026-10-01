@@ -116,7 +116,11 @@ export async function getTechnicianFieldWorkspaceData(
     .order('start_time', { ascending: false });
 
   if (role === 'TECHNICIAN') {
-    surveyQuery = surveyQuery.eq('assignee_id', userId);
+    // Canonical current assignment rule: strictly active work states only.
+    // Historical work (COMPLETED, CANCELLED, REJECTED) must never appear.
+    surveyQuery = surveyQuery
+      .eq('assignee_id', userId)
+      .in('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']);
   }
 
   const { data: rawSurveys, error: surveyError } = await surveyQuery;
@@ -168,7 +172,11 @@ export async function getTechnicianFieldWorkspaceData(
     .order('created_at', { ascending: false });
 
   if (role === 'TECHNICIAN') {
-    installQuery = installQuery.eq('appointments.assignee_id', userId);
+    // Current assignments only: appointment in active states AND installation not historical
+    installQuery = installQuery
+      .eq('appointments.assignee_id', userId)
+      .in('appointments.status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+      .not('status', 'in', '("COMPLETED","FAILED")');
   }
 
   const { data: rawInstalls, error: installError } = await installQuery;

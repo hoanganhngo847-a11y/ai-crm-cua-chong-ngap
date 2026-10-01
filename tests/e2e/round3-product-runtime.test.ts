@@ -48,6 +48,7 @@ import {
   PolicyFirewallViolationError,
   type AiResponseModel,
 } from '../../features/automation/response-sla/services/ai-response-runtime';
+import { processDueResponseSlaWindows } from '../../features/automation/response-sla/services/sla-automation-worker';
 import { openResponseSlaWindow } from '../../features/automation/response-sla/services/response-sla-store';
 import { buildRuntimeSalesStyleContext } from '../../features/sales-style/services/runtime-style-context';
 
@@ -488,14 +489,136 @@ async function run() {
   const INSTALLATION_ID = installDto.id;
 
   // Technician workspace shows current assigned job
+  // 1. Create survey appointments: current active vs historical
+  const surveyActiveId = crypto.randomUUID();
+  const surveyHistoricalCompletedId = crypto.randomUUID();
+  const surveyHistoricalCancelledId = crypto.randomUUID();
+  const surveyOtherTechId = crypto.randomUUID();
+
+  await admin.from('appointments').insert([
+    {
+      id: surveyActiveId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      type: 'SURVEY',
+      start_time: new Date(Date.now() + 3600000).toISOString(),
+      assignee_id: tech.id,
+      address: '456 Khảo Sát Hiện Trường, Q.1',
+      status: 'ASSIGNED',
+    },
+    {
+      id: surveyHistoricalCompletedId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      type: 'SURVEY',
+      start_time: new Date(Date.now() - 86400000).toISOString(),
+      assignee_id: tech.id,
+      address: '789 Khảo Sát Đã Xong, Q.2',
+      status: 'COMPLETED',
+    },
+    {
+      id: surveyHistoricalCancelledId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      type: 'SURVEY',
+      start_time: new Date(Date.now() - 172800000).toISOString(),
+      assignee_id: tech.id,
+      address: '101 Khảo Sát Đã Hủy, Q.3',
+      status: 'CANCELLED',
+    },
+    {
+      id: surveyOtherTechId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      type: 'SURVEY',
+      start_time: new Date(Date.now() + 7200000).toISOString(),
+      assignee_id: otherTech.id,
+      address: '202 Khảo Sát Của Thợ Khác, Q.4',
+      status: 'ASSIGNED',
+    },
+  ]);
+
+  // Create installation for otherTech to test another technician assignment
+  const validCalc2 = await calculateAndSavePriceCalculation(
+    {
+      companyId: COMPANY_ID,
+      customerId: CUSTOMER_ID,
+      measurements: {
+        width: 1.5,
+        height: 0.6,
+        gate_type: 'STAINLESS_STEEL',
+        mounting_method: 'SURFACE',
+      },
+    },
+    saleClient
+  );
+  const orderResult2 = await createOrderFromCalculation(
+    {
+      companyId: COMPANY_ID,
+      customerId: CUSTOMER_ID,
+      priceCalculationId: validCalc2.id,
+    },
+    saleClient
+  );
+  const otherOrderId = orderResult2.orderId || (orderResult2 as any).order_id;
+  const { error: poErr } = await admin.from('production_orders').insert({
+    company_id: COMPANY_ID,
+    order_id: otherOrderId,
+    status: 'READY_FOR_DISPATCH',
+    qc_status: 'PASSED',
+    specs: {},
+    materials: {},
+    deadline: new Date(Date.now() + 86400000).toISOString(),
+  });
+  if (poErr) throw poErr;
+  await admin.from('orders').update({ order_status: 'READY_FOR_INSTALL' }).eq('id', otherOrderId);
+
+  const otherApptId = crypto.randomUUID();
+  await admin.from('appointments').insert({
+    id: otherApptId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    type: 'INSTALLATION',
+    start_time: new Date(Date.now() + 86400000).toISOString(),
+    assignee_id: otherTech.id,
+    address: '789 Đường Thợ Khác, Q.7, TP.HCM',
+    status: 'ACCEPTED',
+  });
+  const otherInstallDto = await scheduleInstallation(
+    COMPANY_ID,
+    {
+      customerId: CUSTOMER_ID,
+      orderId: otherOrderId,
+      appointmentId: otherApptId,
+      crew: ['Thợ Khác 1'],
+    },
+    admin,
+    boss.id
+  );
+
   const techWorkspace = await getTechnicianFieldWorkspaceData(COMPANY_ID, tech.id, 'TECHNICIAN', admin);
   assert.strictEqual(techWorkspace.installations.length, 1, 'Assigned technician sees current installation');
   assert.strictEqual(techWorkspace.installations[0].id, INSTALLATION_ID);
+  assert.ok(
+    !techWorkspace.installations.some((i) => i.id === otherInstallDto.id),
+    'Assigned technician does NOT see other technician installation'
+  );
 
-  // Other unassigned technician sees 0 installations
+  const surveyIds = techWorkspace.surveys.map((s) => s.id);
+  assert.ok(surveyIds.includes(surveyActiveId), 'Technician sees active ASSIGNED survey');
+  assert.ok(!surveyIds.includes(surveyHistoricalCompletedId), 'Technician does NOT see COMPLETED survey in current workspace');
+  assert.ok(!surveyIds.includes(surveyHistoricalCancelledId), 'Technician does NOT see CANCELLED survey in current workspace');
+  assert.ok(!surveyIds.includes(surveyOtherTechId), 'Technician does NOT see another technician survey');
+
+  // Other technician sees their own installation, but NOT tech's installation
   const otherTechWorkspace = await getTechnicianFieldWorkspaceData(COMPANY_ID, otherTech.id, 'TECHNICIAN', admin);
-  assert.strictEqual(otherTechWorkspace.installations.length, 0, 'Unassigned technician sees zero installations');
-  pass('Technician workspace filters strictly by current assignment');
+  assert.strictEqual(otherTechWorkspace.installations.length, 1, 'Other technician sees their own installation');
+  assert.strictEqual(otherTechWorkspace.installations[0].id, otherInstallDto.id);
+  assert.ok(
+    !otherTechWorkspace.installations.some((i) => i.id === INSTALLATION_ID),
+    'Other technician does NOT see first technician installation'
+  );
+  pass('Technician workspace filters strictly by current assignment (active work only, zero cross-technician leak)');
 
   // Unassigned technician cannot mutate installation
   let unassignedMutateError: any = null;
@@ -556,6 +679,15 @@ async function run() {
   assert.strictEqual(completedOrder!.order_status, 'COMPLETED', 'Order status must be COMPLETED after handover');
   pass('Handover completion validates verified evidence and transitions order to COMPLETED');
 
+  // Verify completed installation is removed from technician active workspace
+  const techWorkspaceAfterHandover = await getTechnicianFieldWorkspaceData(COMPANY_ID, tech.id, 'TECHNICIAN', admin);
+  assert.strictEqual(
+    techWorkspaceAfterHandover.installations.length,
+    0,
+    'Completed installation must not appear in current technician workspace'
+  );
+  pass('Historical COMPLETED installation is excluded from technician current workspace');
+
   // 2.6 Warranty Flow
   const warrantyTicket = await createWarrantyTicket(
     COMPANY_ID,
@@ -614,7 +746,7 @@ async function run() {
       company_id: COMPANY_ID,
       customer_id: CUSTOMER_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: `ext_fb_${testSuffix}_${RUN_ID}`,
+      external_conversation_id: `page_test_${RUN_ID}:psid_${testSuffix}`,
       status: 'OPEN',
       assigned_to: sale.id, // assigned to Sale
     });
@@ -687,6 +819,14 @@ async function run() {
     }
   }
 
+  // Count interactions in conversation before failed send attempt
+  const { data: interactionsBeforeFail } = await admin
+    .from('interactions')
+    .select('id')
+    .eq('conversation_id', win2.convoId)
+    .eq('actor_type', 'AI');
+  const countBeforeFail = interactionsBeforeFail?.length || 0;
+
   // Provider send fails (e.g. Meta API 500 error)
   const failedSendResult = await executeAiResponseRuntime({
     companyId: COMPANY_ID,
@@ -701,6 +841,25 @@ async function run() {
 
   assert.strictEqual(failedSendResult.success, false);
   assert.strictEqual(failedSendResult.providerStatus, 'FAILED');
+  assert.ok(failedSendResult.deliveryId, 'Delivery record must be created in outbound_deliveries');
+
+  // Verify outbound_deliveries has status = 'FAILED' and interaction_id IS NULL
+  const { data: failedDelivery } = await admin
+    .from('outbound_deliveries')
+    .select('delivery_status, interaction_id')
+    .eq('id', failedSendResult.deliveryId)
+    .single();
+  assert.strictEqual(failedDelivery?.delivery_status, 'FAILED');
+  assert.strictEqual(failedDelivery?.interaction_id, null, 'Failed delivery must NOT link or create an interaction row');
+
+  // Verify ZERO interaction rows created in public.interactions for failed send
+  const { data: interactionsAfterFail } = await admin
+    .from('interactions')
+    .select('id')
+    .eq('conversation_id', win2.convoId)
+    .eq('actor_type', 'AI');
+  const countAfterFail = interactionsAfterFail?.length || 0;
+  assert.strictEqual(countAfterFail, countBeforeFail, 'Failed provider send must NOT leave any interaction row in public.interactions');
 
   const { data: windowAfterFailedSend } = await bossRealClient
     .from('response_sla_windows')
@@ -708,7 +867,7 @@ async function run() {
     .eq('id', win2.windowId)
     .single();
   assert.strictEqual(windowAfterFailedSend!.state, 'OPEN', 'SLA window must NOT resolve on FAILED provider send');
-  pass('FAILED provider send does not falsely resolve SLA');
+  pass('FAILED provider send does not create public interaction and does not resolve SLA');
 
   // 3.3 Outbound Provider Confirmation: SENT provider result resolves SLA atomically
   const win3 = await createDueSlaWindow('success_provider');
@@ -727,6 +886,27 @@ async function run() {
   assert.strictEqual(successfulSendResult.success, true);
   assert.strictEqual(successfulSendResult.externalMessageId, confirmedProviderMsgId);
   assert.ok(successfulSendResult.interactionId);
+  assert.ok(successfulSendResult.deliveryId);
+
+  // Verify public.interactions row exists with actor_type = 'AI'
+  const { data: createdInteraction } = await admin
+    .from('interactions')
+    .select('id, actor_type, external_ref, direction')
+    .eq('id', successfulSendResult.interactionId)
+    .single();
+  assert.strictEqual(createdInteraction?.actor_type, 'AI');
+  assert.strictEqual(createdInteraction?.direction, 'OUTBOUND');
+  assert.strictEqual(createdInteraction?.external_ref, confirmedProviderMsgId);
+
+  // Verify outbound_deliveries has status = 'SENT' and links to interaction_id
+  const { data: sentDelivery } = await admin
+    .from('outbound_deliveries')
+    .select('delivery_status, interaction_id, provider_message_id')
+    .eq('id', successfulSendResult.deliveryId)
+    .single();
+  assert.strictEqual(sentDelivery?.delivery_status, 'SENT');
+  assert.strictEqual(sentDelivery?.interaction_id, successfulSendResult.interactionId);
+  assert.strictEqual(sentDelivery?.provider_message_id, confirmedProviderMsgId);
 
   // Verify SLA window is now resolved to AI_RESPONDED
   const { data: windowAfterSent } = await bossRealClient
@@ -763,6 +943,45 @@ async function run() {
   assert.strictEqual(metadata.is_neutral_default, true); // Sale has no activated custom profile yet
   assert.strictEqual(metadata.window_id, win3.windowId);
   pass('AI Response provenance is fully recorded in private audit metadata');
+
+  // 3.5 Real Channel Dispatcher Fail-Closed (Zero Synthetic SENT)
+  const winUnconfigured = await createDueSlaWindow('unconfigured_channel');
+  // Call executeAiResponseRuntime WITHOUT providerSender: production real dispatcher path
+  const unconfiguredResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: winUnconfigured.windowId,
+    model: new CompliantModel(),
+    client: admin,
+  });
+  assert.strictEqual(unconfiguredResult.success, false, 'Unconfigured provider must fail closed');
+  assert.strictEqual(unconfiguredResult.providerStatus, 'FAILED');
+  assert.ok(
+    unconfiguredResult.error?.includes('NOT_CONFIGURED'),
+    `Error must indicate unconfigured provider, got: ${unconfiguredResult.error}`
+  );
+  pass('Real channel dispatcher fails closed on unconfigured provider (zero synthetic SENT)');
+
+  // 3.6 Real Production Automation Worker & Callsite
+  const winWorker = await createDueSlaWindow('automation_worker');
+  const workerSummary = await processDueResponseSlaWindows({
+    companyId: COMPANY_ID,
+    limit: 10,
+    model: new CompliantModel(),
+    providerSender: async () => ({
+      status: 'SENT',
+      externalMessageId: `worker_mid_${RUN_ID}_${Date.now()}`,
+    }),
+  });
+  assert.ok(workerSummary.processed >= 1, 'Worker must process due windows');
+  assert.ok(workerSummary.succeeded >= 1, 'Worker must succeed on confirmed delivery');
+
+  const { data: windowAfterWorker } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state')
+    .eq('id', winWorker.windowId)
+    .single();
+  assert.strictEqual(windowAfterWorker!.state, 'AI_RESPONDED', 'Production worker resolves due window to AI_RESPONDED');
+  pass('Production automation worker processes overdue SLA windows end-to-end');
 
   console.log('\n================================================================');
   console.log(`ALL ${testCount} ROUND 3 PRODUCT WIRING & REAL RUNTIME TESTS PASSED!`);
