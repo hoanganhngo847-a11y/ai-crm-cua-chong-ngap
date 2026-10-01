@@ -53,3 +53,155 @@ export async function completeInstallationAndHandover(companyId: string,input: C
  }
  await operationsRpc(admin,'complete_installation_atomic',{p_company_id:companyId,p_installation_id:input.installationId,p_actor_id:actor?.userId,p_verified_photos:i.photos,p_verified_handover:i.handover_ref});
 }
+
+export interface FieldSurveyItem {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  address: string;
+  startTime: string;
+  status: string;
+}
+
+export interface FieldInstallationItem {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  orderId: string;
+  orderCode: string;
+  orderStatus: string;
+  appointmentId: string;
+  address: string;
+  startTime: string;
+  status: InstallationStatus;
+  photos: string[];
+  handoverRef: string | null;
+  completedAt: string | null;
+  crew: string[];
+}
+
+export interface FieldWorkspaceData {
+  surveys: FieldSurveyItem[];
+  installations: FieldInstallationItem[];
+  role: string;
+  userId: string;
+}
+
+export async function getTechnicianFieldWorkspaceData(
+  companyId: string,
+  userId: string,
+  role: string,
+  overrideAdminClient?: OperationsClient
+): Promise<FieldWorkspaceData> {
+  const admin = overrideAdminClient || createAdminClient();
+
+  // 1. Fetch survey appointments
+  let surveyQuery = admin
+    .from('appointments')
+    .select(`
+      id,
+      customer_id,
+      address,
+      start_time,
+      status,
+      customers (
+        name,
+        customer_code
+      )
+    `)
+    .eq('company_id', companyId)
+    .eq('type', 'SURVEY')
+    .order('start_time', { ascending: false });
+
+  if (role === 'TECHNICIAN') {
+    surveyQuery = surveyQuery.eq('assignee_id', userId);
+  }
+
+  const { data: rawSurveys, error: surveyError } = await surveyQuery;
+  if (surveyError) throw new OperationsError('FETCH_FAILED');
+
+  const surveys: FieldSurveyItem[] = (rawSurveys || []).map((s: Record<string, unknown>) => {
+    const cust = s.customers as { name?: string; customer_code?: string } | null;
+    return {
+      id: String(s.id),
+      customerId: String(s.customer_id),
+      customerName: cust?.name || 'Khách hàng',
+      customerCode: cust?.customer_code || '',
+      address: String(s.address || ''),
+      startTime: String(s.start_time || ''),
+      status: String(s.status || ''),
+    };
+  });
+
+  // 2. Fetch installations
+  let installQuery = admin
+    .from('installations')
+    .select(`
+      id,
+      customer_id,
+      order_id,
+      appointment_id,
+      crew,
+      status,
+      photos,
+      handover_ref,
+      completed_at,
+      appointments!inner (
+        id,
+        assignee_id,
+        address,
+        start_time,
+        status
+      ),
+      customers (
+        name,
+        customer_code
+      ),
+      orders (
+        order_code,
+        order_status
+      )
+    `)
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
+
+  if (role === 'TECHNICIAN') {
+    installQuery = installQuery.eq('appointments.assignee_id', userId);
+  }
+
+  const { data: rawInstalls, error: installError } = await installQuery;
+  if (installError) throw new OperationsError('FETCH_FAILED');
+
+  const installations: FieldInstallationItem[] = (rawInstalls || []).map((i: Record<string, unknown>) => {
+    const cust = i.customers as { name?: string; customer_code?: string } | null;
+    const ord = i.orders as { order_code?: string; order_status?: string } | null;
+    const appt = i.appointments as { address?: string; start_time?: string } | null;
+
+    return {
+      id: String(i.id),
+      customerId: String(i.customer_id),
+      customerName: cust?.name || 'Khách hàng',
+      customerCode: cust?.customer_code || '',
+      orderId: String(i.order_id),
+      orderCode: ord?.order_code || '',
+      orderStatus: ord?.order_status || '',
+      appointmentId: String(i.appointment_id),
+      address: appt?.address || '',
+      startTime: appt?.start_time || '',
+      status: i.status as InstallationStatus,
+      photos: Array.isArray(i.photos) ? (i.photos as string[]) : [],
+      handoverRef: (i.handover_ref as string) || null,
+      completedAt: (i.completed_at as string) || null,
+      crew: Array.isArray(i.crew) ? (i.crew as string[]) : [],
+    };
+  });
+
+  return {
+    surveys,
+    installations,
+    role,
+    userId,
+  };
+}

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import type { Conversation, InboxMessage, InboxChannel } from '../types/inbox.types';
+import { generateAiDraftSuggestionAction } from '../actions';
 
 interface InboxViewProps {
   userRole?: string | null;
@@ -18,6 +19,16 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
   const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
   const [sending, setSending] = useState<boolean>(false);
   const [replyText, setReplyText] = useState<string>('');
+
+  // AI Suggestion states
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [loadingAiSuggestion, setLoadingAiSuggestion] = useState<boolean>(false);
+  const [aiSuggestionMeta, setAiSuggestionMeta] = useState<{
+    isNeutralDefault?: boolean;
+    styleProfileId?: string | null;
+    analysisSummary?: string | null;
+  } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // Filters
   const [channelFilter, setChannelFilter] = useState<InboxChannel | 'all'>('all');
@@ -76,6 +87,9 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
 
       if (json.success && json.data) {
         setMessages(json.data.messages || []);
+        setAiSuggestion(null);
+        setAiError(null);
+        setAiSuggestionMeta(null);
 
         // Cập nhật lại unread count trên UI
         setConversations((prev) =>
@@ -101,6 +115,32 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
       isMounted = false;
     };
   }, [selectedConversationId, fetchMessages]);
+
+  const handleRequestAiSuggestion = async () => {
+    if (!selectedConversationId || loadingAiSuggestion) return;
+    setLoadingAiSuggestion(true);
+    setAiError(null);
+    try {
+      const res = await generateAiDraftSuggestionAction({
+        conversationId: selectedConversationId,
+      });
+      if (res.success && res.suggestion) {
+        setAiSuggestion(res.suggestion);
+        setAiSuggestionMeta({
+          isNeutralDefault: res.isNeutralDefault,
+          styleProfileId: res.styleProfileId,
+          analysisSummary: res.analysisSummary,
+        });
+      } else {
+        setAiError(res.error || 'Không thể tạo gợi ý AI');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Lỗi khi tạo gợi ý AI';
+      setAiError(message);
+    } finally {
+      setLoadingAiSuggestion(false);
+    }
+  };
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
@@ -468,6 +508,51 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
               {/* Message Input Box */}
               <div className="p-3 border-t border-slate-800 bg-slate-900/80">
                 <form onSubmit={handleSendMessage} className="space-y-2">
+                  {/* AI Draft Suggestion Box */}
+                  {aiError && (
+                    <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex justify-between items-center">
+                      <span>{aiError}</span>
+                      <button type="button" onClick={() => setAiError(null)} className="underline text-[10px]">Đóng</button>
+                    </div>
+                  )}
+
+                  {aiSuggestion && (
+                    <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-800/60 text-xs space-y-2">
+                      <div className="flex items-center justify-between text-purple-300 font-semibold">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>
+                          <span>Gợi ý trả lời từ AI (Bản nháp - Chưa gửi khách)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyText(aiSuggestion);
+                              setAiSuggestion(null);
+                            }}
+                            className="px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-medium transition"
+                          >
+                            Dùng gợi ý
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAiSuggestion(null)}
+                            className="text-slate-400 hover:text-white text-[11px]"
+                          >
+                            Bỏ qua
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-slate-200 italic bg-purple-950/60 p-2 rounded border border-purple-900/40">
+                        &ldquo;{aiSuggestion}&rdquo;
+                      </p>
+                      <div className="flex items-center gap-3 text-[10px] text-purple-300/80">
+                        <span>Phong cách: {aiSuggestionMeta?.isNeutralDefault ? 'Chuẩn mực mặc định' : 'Cá nhân hóa'}</span>
+                        {aiSuggestionMeta?.analysisSummary && <span>• Đã áp dụng phân tích hành trình</span>}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-end gap-2">
                     <textarea
                       rows={2}
@@ -482,6 +567,25 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                       placeholder="Nhập nội dung tư vấn phản hồi (Nhấn Enter để gửi)..."
                       className="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl p-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
                     />
+
+                    <button
+                      type="button"
+                      disabled={loadingAiSuggestion || sending}
+                      onClick={handleRequestAiSuggestion}
+                      className="px-3 py-3 rounded-xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-700/60 text-purple-300 hover:text-white font-medium text-xs flex items-center gap-1 transition disabled:opacity-40"
+                      title="Tạo bản nháp gợi ý từ AI dựa trên phong cách Sale và phân tích khách hàng"
+                    >
+                      {loadingAiSuggestion ? (
+                        <span>Đang tạo...</span>
+                      ) : (
+                        <>
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                          <span>Gợi ý AI</span>
+                        </>
+                      )}
+                    </button>
 
                     <button
                       type="submit"

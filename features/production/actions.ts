@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { sanitizeErrorMessage } from '../operations/server';
 import { getActorContext, requireCompanyRole } from '../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
+import { revalidatePath } from 'next/cache';
 import {
     createProductionOrder,
+    deriveCanonicalProductionFacts,
     recordQualityCheck,
     updateProductionProgress,
 } from './production-service';
@@ -80,6 +82,61 @@ export async function createProductionOrderAction(
         return { success: false, error: sanitizeErrorMessage(err, 'Lỗi tạo lệnh xưởng.') };
     }
 }
+
+/**
+ * Action: Xuất xưởng sản xuất có kiểm soát thông số chuẩn (P1-005)
+ * - Browser CHỈ gửi orderId và deadline (thời hạn giao hàng).
+ * - Server tải toàn bộ thông số kỹ thuật (specs) và vật tư (materials) chuẩn từ khảo sát/chính sách giá.
+ * - Tuyệt đối không cho phép client tự gửi hay can thiệp thông số sản xuất.
+ */
+export async function releaseOrderToProductionAction(input: {
+    orderId: string;
+    deadline: string;
+}): Promise<{ success: boolean; data?: ProductionOrderDTO; error?: string }> {
+    try {
+        const actor = await getActorContext();
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định danh tính hoặc tổ chức làm việc.' };
+        }
+
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
+
+        // Validate deadline
+        const parsedDeadline = z.iso.datetime({ offset: true }).safeParse(input.deadline);
+        if (!parsedDeadline.success) {
+            return { success: false, error: 'Hạn hoàn thành (deadline) không đúng định dạng thời gian ISO.' };
+        }
+
+        // Derive authoritative technical specs and materials from survey / policy
+        const facts = await deriveCanonicalProductionFacts(actor.companyId, input.orderId);
+        if (!facts.canRelease || !facts.specs || !facts.materials) {
+            return {
+                success: false,
+                error: facts.reason || 'NEED_INFO: Thiếu thông số kỹ thuật hoặc danh mục vật tư chuẩn.',
+            };
+        }
+
+        const data = await createProductionOrder(
+            actor.companyId,
+            {
+                orderId: input.orderId,
+                deadline: parsedDeadline.data,
+                specs: facts.specs,
+                materials: facts.materials,
+            },
+            undefined,
+            actor.userId
+        );
+
+        revalidatePath('/production');
+        revalidatePath('/orders');
+
+        return { success: true, data };
+    } catch (err: unknown) {
+        return { success: false, error: sanitizeErrorMessage(err, 'Lỗi xuất xưởng sản xuất.') };
+    }
+}
+
 
 /**
  * Action: Cập nhật tiến độ xưởng (Việc 30)

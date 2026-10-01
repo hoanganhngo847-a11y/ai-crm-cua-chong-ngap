@@ -225,6 +225,13 @@ const GATES: GateStep[] = [
     description: 'Verify pricing snapshot, order creation, payment webhook, manual deposit, contract generation & signing with AAL2, contracts bucket RLS, and TV8 production handoff',
   },
   {
+    id: 'GATE_11H_ROUND3_PRODUCT_WIRING',
+    name: '11h. Round 3 Product Wiring & AI Runtime Gate',
+    command: 'npm',
+    args: ['run', 'test:round3-product-runtime'],
+    description: 'Verify P1-004 Commercial UI, P1-005 Operations UI, and P1-006 AI Runtime Wiring',
+  },
+  {
     id: 'GATE_12_TYPECHECK',
     name: '12. TypeScript Typecheck Gate',
     command: 'npm',

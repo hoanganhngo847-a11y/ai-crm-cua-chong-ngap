@@ -74,3 +74,184 @@ export async function updateWarrantyStatus(companyId: string,input: UpdateWarran
 export async function reopenWarrantyTicket(companyId: string,input: ReopenWarrantyTicketInput,overrideAdminClient?: OperationsClient,actor?: OperationsActor): Promise<void> {
  await operationsRpc(overrideAdminClient || createAdminClient(),'update_warranty_status_atomic',{p_company_id:companyId,p_ticket_id:input.ticketId,p_actor_id:actor?.userId,p_actor_role:actor?.role,p_operation:'reopen',p_notes:input.reason});
 }
+
+export interface WarrantyDashboardTicketItem {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  orderId: string;
+  orderCode: string;
+  installationId: string | null;
+  issue: string;
+  status: WarrantyTicketStatus;
+  assignedTo: string | null;
+  assignedTechnicianName: string | null;
+  openedAt: string;
+  resolvedAt: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface WarrantyEligibleOrder {
+  id: string;
+  code: string;
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+}
+
+export interface WarrantyTechnicianOption {
+  userId: string;
+  fullName: string;
+}
+
+export interface WarrantyDashboardData {
+  tickets: WarrantyDashboardTicketItem[];
+  eligibleOrders: WarrantyEligibleOrder[];
+  technicians: WarrantyTechnicianOption[];
+  role: string;
+  userId: string;
+}
+
+export async function getWarrantyDashboardData(
+  companyId: string,
+  userId: string,
+  role: string,
+  overrideAdminClient?: OperationsClient
+): Promise<WarrantyDashboardData> {
+  const admin = overrideAdminClient || createAdminClient();
+
+  // 1. Fetch tickets
+  let ticketQuery = admin
+    .from('warranty_tickets')
+    .select(`
+      id,
+      customer_id,
+      order_id,
+      installation_id,
+      issue,
+      status,
+      assigned_to,
+      opened_at,
+      resolved_at,
+      notes,
+      created_at,
+      customers (
+        name,
+        customer_code
+      ),
+      orders (
+        order_code
+      )
+    `)
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
+
+  if (role === 'TECHNICIAN') {
+    ticketQuery = ticketQuery.eq('assigned_to', userId);
+  }
+
+  const { data: rawTickets, error: ticketError } = await ticketQuery;
+  if (ticketError) throw new Error('Không thể tải danh sách phiếu bảo hành');
+
+  // Map technician user names if any
+  const assignedIds = Array.from(
+    new Set((rawTickets || []).map((t: Record<string, unknown>) => t.assigned_to as string | null).filter(Boolean))
+  ) as string[];
+  const techMap = new Map<string, string>();
+  if (assignedIds.length > 0) {
+    const { data: profiles } = await admin
+      .from('user_profiles')
+      .select('id, full_name')
+      .in('id', assignedIds);
+    (profiles || []).forEach((p: { id: string; full_name: string }) => techMap.set(p.id, p.full_name));
+  }
+
+  const tickets: WarrantyDashboardTicketItem[] = (rawTickets || []).map((t: Record<string, unknown>) => {
+    const cust = t.customers as { name?: string; customer_code?: string } | null;
+    const ord = t.orders as { order_code?: string } | null;
+    const assigned = (t.assigned_to as string) || null;
+
+    return {
+      id: String(t.id),
+      customerId: String(t.customer_id),
+      customerName: cust?.name || 'Khách hàng',
+      customerCode: cust?.customer_code || '',
+      orderId: String(t.order_id),
+      orderCode: ord?.order_code || '',
+      installationId: (t.installation_id as string) || null,
+      issue: String(t.issue || ''),
+      status: t.status as WarrantyTicketStatus,
+      assignedTo: assigned,
+      assignedTechnicianName: assigned ? techMap.get(assigned) || 'Kỹ thuật viên' : null,
+      openedAt: String(t.opened_at || ''),
+      resolvedAt: (t.resolved_at as string) || null,
+      notes: (t.notes as string) || null,
+      createdAt: String(t.created_at || ''),
+    };
+  });
+
+  // 2. Fetch eligible completed orders (for BOSS_ADMIN & SALE to create tickets)
+  let eligibleOrders: WarrantyEligibleOrder[] = [];
+  if (['BOSS_ADMIN', 'SALE'].includes(role)) {
+    const { data: rawOrders } = await admin
+      .from('orders')
+      .select(`
+        id,
+        order_code,
+        customer_id,
+        customers (
+          name,
+          customer_code
+        )
+      `)
+      .eq('company_id', companyId)
+      .eq('order_status', 'COMPLETED')
+      .order('created_at', { ascending: false });
+
+    eligibleOrders = (rawOrders || []).map((o: Record<string, unknown>) => {
+      const cust = o.customers as { name?: string; customer_code?: string } | null;
+      return {
+        id: String(o.id),
+        code: String(o.order_code || ''),
+        customerId: String(o.customer_id),
+        customerName: cust?.name || 'Khách hàng',
+        customerCode: cust?.customer_code || '',
+      };
+    });
+  }
+
+  // 3. Fetch technician options (for BOSS_ADMIN assignment)
+  let technicians: WarrantyTechnicianOption[] = [];
+  if (role === 'BOSS_ADMIN') {
+    const { data: rawTechs } = await admin
+      .from('company_members')
+      .select(`
+        user_id,
+        user_profiles (
+          id,
+          full_name
+        )
+      `)
+      .eq('company_id', companyId)
+      .eq('role', 'TECHNICIAN')
+      .eq('status', 'ACTIVE');
+
+    technicians = (rawTechs || []).map((m: Record<string, unknown>) => {
+      const prof = m.user_profiles as { full_name?: string } | null;
+      return {
+        userId: String(m.user_id),
+        fullName: prof?.full_name || 'Kỹ thuật viên',
+      };
+    });
+  }
+
+  return {
+    tickets,
+    eligibleOrders,
+    technicians,
+    role,
+    userId,
+  };
+}
