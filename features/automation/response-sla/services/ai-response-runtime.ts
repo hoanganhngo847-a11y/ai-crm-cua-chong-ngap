@@ -13,6 +13,13 @@ import {
   buildRuntimeSalesStyleContext,
 } from '@/features/sales-style/services/runtime-style-context';
 import { dispatchMessage } from '@/features/omnichannel/facebook/transport';
+import { binding } from '@/features/omnichannel/facebook/binding';
+import {
+  ZaloInboxService,
+  type ZaloSystemPrincipal,
+  type ZaloInboxServiceOptions,
+} from '@/features/omnichannel/zalo/inbox-service';
+import type { SendZaloReplyResult } from '@/features/omnichannel/zalo/types';
 
 // ==============================================================================
 // 1. POLICY FIREWALL VALIDATION & ERROR
@@ -35,7 +42,7 @@ export function validateAiResponsePolicyFirewall(text: string): { valid: boolean
   const lower = text.toLowerCase();
 
   // 1. Price pattern detection (e.g. 5 triệu, 500.000đ, 200k, $50, 10tr)
-  const priceRegex = /\b\d+(?:[\.,]\d+)?\s*(?:triệu|nghìn|tr|k|vnđ|vnd|đ|đồng|usd|\$)(?:\s*\/\s*(?:m2|m|bộ))?\b/i;
+  const priceRegex = /\b\d+(?:[.,]\d+)?\s*(?:triệu|nghìn|tr|k|vnđ|vnd|đ|đồng|usd|\$)(?:\s*\/\s*(?:m2|m|bộ))?\b/i;
   if (priceRegex.test(lower)) {
     return { valid: false, violationReason: 'Invented or committed price detected' };
   }
@@ -106,13 +113,17 @@ export class OpenAiResponseModel implements AiResponseModel {
 }
 
 // ==============================================================================
-// 3. OUTBOUND PROVIDER TYPES & REAL DISPATCHER
+// 3. OUTBOUND PROVIDER TYPES & CANONICAL CHANNEL DISPATCHERS
 // ==============================================================================
 
 export interface OutboundProviderResult {
   status: 'SENT' | 'FAILED' | 'UNKNOWN' | 'UNCERTAIN';
   externalMessageId?: string;
   error?: string;
+  /** For Zalo, the canonical deliveryId from zalo_outbound_deliveries. */
+  canonicalDeliveryId?: string;
+  /** For Zalo, the canonical interactionId from zalo_finalize_outbound_delivery. */
+  canonicalInteractionId?: string;
 }
 
 export type OutboundProviderSender = (params: {
@@ -125,122 +136,136 @@ export type OutboundProviderSender = (params: {
 }) => Promise<OutboundProviderResult>;
 
 /**
- * Production channel dispatcher: executes real provider delivery based on channel.
- * Never synthesizes SENT; fails closed if channel unconfigured.
+ * Facebook AI outbound dispatch using canonical infrastructure:
+ * 1. Uses binding() to resolve page→company→token (canonical multi-tenant page config)
+ * 2. Uses dispatchMessage() canonical transport
+ *
+ * Does NOT use han_prepare_send (which requires SALE/BOSS_ADMIN role).
+ * The AI outbox (create_ai_outbound_delivery_pending / finalize_ai_outbound_delivery_atomic)
+ * handles the AI-specific lifecycle separately.
  */
-export async function dispatchRealChannelOutbound(params: {
+async function dispatchFacebookCanonical(params: {
   companyId: string;
   conversationId: string;
-  customerId: string;
-  channel: string;
+  client: SupabaseClient;
+}): Promise<{ pageId: string; recipientPsid: string; token: string; version: string } | OutboundProviderResult> {
+  const { companyId, conversationId, client } = params;
+
+  // 1. Fetch conversation external_conversation_id
+  const { data: conv } = await client
+    .from('conversations')
+    .select('external_conversation_id')
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .single();
+
+  const externalId = conv?.external_conversation_id || '';
+  const parts = externalId.split(':');
+  if (parts.length < 2) {
+    return { status: 'FAILED', error: 'INVALID_EXTERNAL_CONVERSATION_ID' };
+  }
+
+  const pageId = parts[0];
+  const recipientPsid = parts.slice(1).join(':');
+
+  // 2. Resolve page binding via canonical binding() infrastructure
+  //    This validates page→company mapping and provides the correct token env var.
+  let config;
+  try {
+    config = binding(pageId);
+  } catch {
+    return { status: 'FAILED', error: 'FACEBOOK_PAGE_NOT_CONFIGURED' };
+  }
+
+  // 3. Verify tenant isolation: page binding must match the claimed company
+  if (config.company !== companyId) {
+    return { status: 'FAILED', error: 'FACEBOOK_PAGE_COMPANY_MISMATCH' };
+  }
+
+  // 4. Resolve token from the canonical env var declared in the binding
+  const token = (process.env[config.tokenEnv] || '').trim();
+  if (!token) {
+    return { status: 'FAILED', error: 'FACEBOOK_NOT_CONFIGURED' };
+  }
+
+  const version = (process.env.META_GRAPH_VERSION || '').trim();
+  if (!version || !/^v\d+\.\d+$/.test(version)) {
+    return { status: 'FAILED', error: 'META_GRAPH_VERSION_NOT_CONFIGURED' };
+  }
+
+  return { pageId, recipientPsid, token, version };
+}
+
+/**
+ * Zalo AI outbound dispatch using the full canonical ZaloInboxService.sendSystemZaloReply().
+ *
+ * Delegates entirely to the existing durable outbox:
+ *   1. zalo_claim_outbound_delivery (idempotent claim, tenant-isolated)
+ *   2. ZaloClient.sendTextMessageWithOutcome (real provider call)
+ *   3. zalo_record_outbound_provider_result (persists outcome immediately)
+ *   4. zalo_finalize_outbound_delivery (creates interaction, updates conversation, resolves SLA)
+ *
+ * No parallel architecture; no direct Zalo API calls from the AI runtime.
+ */
+async function dispatchZaloCanonical(params: {
+  companyId: string;
+  conversationId: string;
   content: string;
-  client?: SupabaseClient;
+  claimId: string | null;
+  zaloServiceOptions?: ZaloInboxServiceOptions;
 }): Promise<OutboundProviderResult> {
-  const { companyId, conversationId, channel, content, client = createAdminClient() } = params;
+  const { companyId, conversationId, content, claimId, zaloServiceOptions } = params;
 
-  if (channel === 'FACEBOOK') {
-    // 1. Fetch conversation external_conversation_id
-    const { data: conv } = await client
-      .from('conversations')
-      .select('external_conversation_id')
-      .eq('id', conversationId)
-      .eq('company_id', companyId)
-      .single();
+  const service = new ZaloInboxService(zaloServiceOptions);
+  const principal: ZaloSystemPrincipal = {
+    kind: 'SYSTEM_WORKER',
+    companyId,
+    actorType: 'AI',
+    workerName: 'ai-response-runtime',
+  };
 
-    const externalId = conv?.external_conversation_id || '';
-    const parts = externalId.split(':');
-    if (parts.length < 2) {
-      return { status: 'FAILED', error: 'INVALID_EXTERNAL_CONVERSATION_ID' };
-    }
+  const commandId = `ai-sla-${claimId}`;
 
-    const pageId = parts[0];
-    const recipientPsid = parts.slice(1).join(':');
-
-    const token =
-      process.env[`FACEBOOK_PAGE_ACCESS_TOKEN_${pageId}`] ||
-      process.env.FACEBOOK_PAGE_ACCESS_TOKEN ||
-      '';
-    const version = process.env.META_GRAPH_VERSION || 'v20.0';
-
-    if (!token.trim()) {
-      return { status: 'FAILED', error: 'FACEBOOK_NOT_CONFIGURED' };
-    }
-
-    const fbResult = await dispatchMessage({
-      page: pageId,
-      recipient: recipientPsid,
-      version,
-      token,
-      content,
-    });
-
-    if (fbResult.status === 'SENT' && fbResult.mid) {
-      return {
-        status: 'SENT',
-        externalMessageId: fbResult.mid,
-      };
-    }
-
+  let result: SendZaloReplyResult;
+  try {
+    result = await service.sendSystemZaloReply(
+      {
+        conversationId,
+        content,
+        commandId,
+      },
+      principal,
+    );
+  } catch (err: unknown) {
     return {
-      status: fbResult.status,
-      error: `Facebook dispatch failed with status ${fbResult.status}`,
+      status: 'FAILED',
+      error: err instanceof Error ? err.message : 'Zalo canonical send failed',
     };
   }
 
-  if (channel === 'ZALO') {
-    // Check Zalo configuration
-    const zaloToken = process.env.ZALO_OA_ACCESS_TOKEN || '';
-    if (!zaloToken.trim()) {
-      return { status: 'FAILED', error: 'ZALO_NOT_CONFIGURED' };
-    }
-
-    // In a real Zalo deployment, retrieve Zalo UID from identities table
-    const { data: identity } = await client
-      .from('identities')
-      .select('identifier')
-      .eq('company_id', companyId)
-      .eq('customer_id', params.customerId)
-      .eq('channel', 'ZALO')
-      .maybeSingle();
-
-    if (!identity?.identifier) {
-      return { status: 'FAILED', error: 'MISSING_ZALO_RECIPIENT_UID' };
-    }
-
-    // Attempt real Zalo API send
-    try {
-      const response = await fetch('https://openapi.zalo.me/v3.0/oa/message/cs', {
-        method: 'POST',
-        headers: {
-          access_token: zaloToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          recipient: { user_id: identity.identifier },
-          message: { text: content },
-        }),
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (response.ok) {
-        const payload = await response.json();
-        if (payload.error === 0 && payload.data?.message_id) {
-          return {
-            status: 'SENT',
-            externalMessageId: String(payload.data.message_id),
-          };
-        }
-      }
-      return { status: 'FAILED', error: 'Zalo message rejected by API' };
-    } catch (err: unknown) {
-      return { status: 'FAILED', error: (err as Error).message || 'Zalo network error' };
-    }
+  // Map canonical SendZaloReplyResult → OutboundProviderResult
+  if (result.success && (result.status === 'SENT' || result.status === 'ALREADY_SENT')) {
+    return {
+      status: 'SENT',
+      externalMessageId: result.externalMessageId,
+      canonicalDeliveryId: result.deliveryId,
+      canonicalInteractionId: result.interactionId,
+    };
   }
 
-  // Unsupported or unconfigured channel: FAIL CLOSED
+  if (result.status === 'PENDING_FINALIZE') {
+    // Provider accepted but DB finalization pending. Reconciler handles it.
+    return {
+      status: 'UNCERTAIN',
+      canonicalDeliveryId: result.deliveryId,
+      error: result.error || 'Zalo message sent but DB finalization pending',
+    };
+  }
+
   return {
-    status: 'FAILED',
-    error: `PROVIDER_NOT_CONFIGURED: Channel "${channel}" has no configured provider transport`,
+    status: result.status === 'UNCERTAIN' ? 'UNCERTAIN' : 'FAILED',
+    canonicalDeliveryId: result.deliveryId,
+    error: result.error || `Zalo dispatch ended with status ${result.status}`,
   };
 }
 
@@ -254,6 +279,8 @@ export interface ExecuteAiResponseRuntimeParams {
   model?: AiResponseModel;
   providerSender?: OutboundProviderSender;
   client?: SupabaseClient;
+  /** Override ZaloInboxService construction (tests only). */
+  zaloServiceOptions?: ZaloInboxServiceOptions;
 }
 
 export interface ExecuteAiResponseRuntimeResult {
@@ -283,10 +310,12 @@ export interface ExecuteAiResponseRuntimeResult {
 /**
  * Canonical AI Response Runtime:
  * Inbound Interaction -> Response SLA -> AI Claim -> AI Generation (Analysis + Sales Style + Firewall)
- * -> Canonical Pending Outbound Delivery (outbound_deliveries)
- * -> Channel-Specific Provider Dispatcher
- * -> Provider Delivery Confirmation (SENT only)
- * -> Atomic Finalization (public.interactions + private provenance + SLA resolution)
+ * -> Channel-Specific Canonical Dispatch:
+ *    FACEBOOK: AI outbox (create_ai_outbound_delivery_pending) -> binding() + dispatchMessage
+ *              -> finalize_ai_outbound_delivery_atomic
+ *    ZALO:     ZaloInboxService.sendSystemZaloReply() (full canonical durable pipeline)
+ *
+ * No parallel provider architecture. Channels reuse existing canonical infrastructure.
  */
 export async function executeAiResponseRuntime(
   params: ExecuteAiResponseRuntimeParams
@@ -297,6 +326,7 @@ export async function executeAiResponseRuntime(
     model = new OpenAiResponseModel(),
     providerSender,
     client = createAdminClient(),
+    zaloServiceOptions,
   } = params;
 
   // Step 1: Claim Response SLA for AI
@@ -404,90 +434,385 @@ export async function executeAiResponseRuntime(
     );
   }
 
-  // Step 8: Create Canonical Pending Outbound Delivery in outbound_deliveries
-  // (NO public.interactions row exists yet — preserves AI Claim != AI Sent)
+  const provenance = {
+    modelVersion: model.modelVersion,
+    analysisRecordId: analysisRecord?.id || null,
+    salesStyleProfileId: styleContext.activeProfileId,
+    isNeutralDefault: styleContext.isNeutralDefault,
+    aiClaimId: claimResult.claimId,
+  };
+
+  // Step 8: Channel-Specific Canonical Dispatch
+  // Test override: if providerSender is injected, use it (tests only).
+  if (providerSender) {
+    return executeWithAiOutbox({
+      companyId,
+      conversationId,
+      customerId,
+      windowId,
+      channel: conv.channel,
+      content: rawGeneratedText,
+      claimId: claimResult.claimId,
+      decision: claimResult.decision,
+      provenance,
+      providerSender,
+      model,
+    });
+  }
+
+  if (conv.channel === 'ZALO') {
+    return executeZaloCanonicalPath({
+      companyId,
+      conversationId,
+      customerId,
+      windowId,
+      content: rawGeneratedText,
+      claimId: claimResult.claimId,
+      decision: claimResult.decision,
+      provenance,
+      zaloServiceOptions,
+    });
+  }
+
+  if (conv.channel === 'FACEBOOK') {
+    return executeFacebookCanonicalPath({
+      companyId,
+      conversationId,
+      customerId,
+      windowId,
+      content: rawGeneratedText,
+      claimId: claimResult.claimId,
+      decision: claimResult.decision,
+      provenance,
+      model,
+      client,
+    });
+  }
+
+  // Unsupported channel: FAIL CLOSED
+  return {
+    success: false,
+    claimed: true,
+    decision: claimResult.decision,
+    windowId,
+    conversationId,
+    error: `PROVIDER_NOT_CONFIGURED: Channel "${conv.channel}" has no configured provider transport`,
+    provenance,
+  };
+}
+
+// ==============================================================================
+// 6. ZALO CANONICAL PATH (delegates to ZaloInboxService)
+// ==============================================================================
+
+/**
+ * Zalo AI outbound path: fully delegates to ZaloInboxService.sendSystemZaloReply().
+ *
+ * The canonical Zalo pipeline (zalo_claim_outbound_delivery → ZaloClient → zalo_record_outbound_provider_result
+ * → zalo_finalize_outbound_delivery) handles:
+ * - Durable outbox with idempotent command_id
+ * - Real provider dispatch via ZaloClientFactory (multi-tenant OA token store)
+ * - Atomic interaction creation, provenance, and conversation update
+ *
+ * SLA resolution is handled by finalize_ai_outbound_delivery_atomic post-send,
+ * since zalo_finalize does not resolve response_sla_windows for AI actor_type.
+ */
+async function executeZaloCanonicalPath(params: {
+  companyId: string;
+  conversationId: string;
+  customerId: string;
+  windowId: string;
+  content: string;
+  claimId: string | null;
+  decision: string | undefined;
+  provenance: ExecuteAiResponseRuntimeResult['provenance'];
+  zaloServiceOptions?: ZaloInboxServiceOptions;
+}): Promise<ExecuteAiResponseRuntimeResult> {
+  const {
+    companyId, conversationId, customerId: _customerId, windowId,
+    content, claimId, decision, provenance, zaloServiceOptions,
+  } = params;
+
+  const zaloResult = await dispatchZaloCanonical({
+    companyId,
+    conversationId,
+    content,
+    claimId,
+    zaloServiceOptions,
+  });
+
+  if (zaloResult.status !== 'SENT' || !zaloResult.externalMessageId) {
+    // Canonical Zalo pipeline failed or is uncertain. No synthetic SENT; fail closed.
+    return {
+      success: false,
+      claimed: true,
+      decision,
+      windowId,
+      conversationId,
+      deliveryId: zaloResult.canonicalDeliveryId,
+      providerStatus: zaloResult.status,
+      error: zaloResult.error || `Zalo provider delivery failed: ${zaloResult.status}`,
+      provenance,
+    };
+  }
+
+  // Zalo canonical pipeline created the interaction. Now resolve the SLA window atomically.
   const admin = createAdminClient();
+  if (windowId) {
+    await admin
+      .from('response_sla_windows')
+      .update({
+        state: 'AI_RESPONDED',
+        ai_response_interaction_id: zaloResult.canonicalInteractionId || null,
+        resolved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', windowId)
+      .eq('company_id', companyId)
+      .eq('state', 'OPEN');
+  }
+
+  return {
+    success: true,
+    claimed: true,
+    decision,
+    windowId,
+    conversationId,
+    deliveryId: zaloResult.canonicalDeliveryId,
+    interactionId: zaloResult.canonicalInteractionId,
+    externalMessageId: zaloResult.externalMessageId,
+    providerStatus: 'SENT',
+    provenance,
+  };
+}
+
+// ==============================================================================
+// 7. FACEBOOK CANONICAL PATH (binding() + dispatchMessage + AI outbox)
+// ==============================================================================
+
+/**
+ * Facebook AI outbound path:
+ * 1. Uses binding() for canonical page→company→token resolution (no direct env reads)
+ * 2. Creates pending delivery in AI outbox (create_ai_outbound_delivery_pending)
+ * 3. Calls dispatchMessage() canonical transport
+ * 4. On SENT: finalize_ai_outbound_delivery_atomic (creates interaction, provenance, SLA)
+ * 5. On failure: record_ai_outbound_delivery_failed
+ *
+ * Does NOT use han_prepare_send (which requires SALE/BOSS_ADMIN role and creates the
+ * interaction before provider dispatch, violating the AI invariant of no public interaction
+ * before confirmed delivery).
+ */
+async function executeFacebookCanonicalPath(params: {
+  companyId: string;
+  conversationId: string;
+  customerId: string;
+  windowId: string;
+  content: string;
+  claimId: string | null;
+  decision: string | undefined;
+  provenance: ExecuteAiResponseRuntimeResult['provenance'];
+  model: AiResponseModel;
+  client: SupabaseClient;
+}): Promise<ExecuteAiResponseRuntimeResult> {
+  const {
+    companyId, conversationId, customerId, windowId,
+    content, claimId, decision, provenance, model, client,
+  } = params;
+
+  const admin = createAdminClient();
+
+  // 1. Resolve canonical Facebook config via binding()
+  const fbConfig = await dispatchFacebookCanonical({ companyId, conversationId, client });
+  if ('status' in fbConfig) {
+    // Failed to resolve Facebook config — return error without provider call
+    return {
+      success: false,
+      claimed: true,
+      decision,
+      windowId,
+      conversationId,
+      providerStatus: fbConfig.status,
+      error: fbConfig.error,
+      provenance,
+    };
+  }
+
+  // 2. Create pending AI outbox delivery
   const { data: deliveryId, error: deliveryErr } = await admin.rpc('create_ai_outbound_delivery_pending' as never, {
     p_company_id: companyId,
     p_conversation_id: conversationId,
-    p_channel: conv.channel,
-    p_client_command_id: claimResult.claimId,
-    p_request_fingerprint: `${companyId}:${conversationId}:${claimResult.claimId}`,
+    p_channel: 'FACEBOOK',
+    p_client_command_id: claimId,
+    p_request_fingerprint: `${companyId}:${conversationId}:${claimId}`,
   } as never);
 
   if (deliveryErr || !deliveryId) {
     return {
       success: false,
       claimed: true,
-      decision: claimResult.decision,
+      decision,
       windowId,
       conversationId,
       error: `Failed to create pending outbound delivery: ${deliveryErr?.message}`,
+      provenance,
     };
   }
 
-  // Step 9: Channel-Specific Provider Dispatcher
-  let providerResult: OutboundProviderResult;
-  if (providerSender) {
-    providerResult = await providerSender({
-      companyId,
+  // 3. Dispatch via canonical Facebook transport
+  const fbResult = await dispatchMessage({
+    page: fbConfig.pageId,
+    recipient: fbConfig.recipientPsid,
+    version: fbConfig.version,
+    token: fbConfig.token,
+    content,
+  });
+
+  return finalizeAiOutboundDelivery({
+    admin,
+    companyId,
+    conversationId,
+    customerId,
+    windowId,
+    content,
+    claimId,
+    decision,
+    provenance,
+    model,
+    deliveryId: String(deliveryId),
+    providerStatus: fbResult.status,
+    providerMid: fbResult.mid,
+  });
+}
+
+// ==============================================================================
+// 8. TEST PATH: providerSender override
+// ==============================================================================
+
+/**
+ * Handles the AI outbox path with an injected providerSender (tests).
+ */
+async function executeWithAiOutbox(params: {
+  companyId: string;
+  conversationId: string;
+  customerId: string;
+  windowId: string;
+  channel: string;
+  content: string;
+  claimId: string | null;
+  decision: string | undefined;
+  provenance: ExecuteAiResponseRuntimeResult['provenance'];
+  providerSender: OutboundProviderSender;
+  model: AiResponseModel;
+}): Promise<ExecuteAiResponseRuntimeResult> {
+  const {
+    companyId, conversationId, customerId, windowId, channel,
+    content, claimId, decision, provenance, providerSender, model,
+  } = params;
+
+  const admin = createAdminClient();
+
+  // Create pending delivery in AI outbox
+  const { data: deliveryId, error: deliveryErr } = await admin.rpc('create_ai_outbound_delivery_pending' as never, {
+    p_company_id: companyId,
+    p_conversation_id: conversationId,
+    p_channel: channel,
+    p_client_command_id: claimId,
+    p_request_fingerprint: `${companyId}:${conversationId}:${claimId}`,
+  } as never);
+
+  if (deliveryErr || !deliveryId) {
+    return {
+      success: false,
+      claimed: true,
+      decision,
+      windowId,
       conversationId,
-      customerId,
-      channel: conv.channel,
-      content: rawGeneratedText,
-      deliveryId: String(deliveryId),
-    });
-  } else {
-    // Production default: real channel dispatcher (Facebook / Zalo).
-    // Fails closed if channel is unconfigured. Never synthesizes SENT!
-    providerResult = await dispatchRealChannelOutbound({
-      companyId,
-      conversationId,
-      customerId,
-      channel: conv.channel,
-      content: rawGeneratedText,
-      client: admin,
-    });
+      error: `Failed to create pending outbound delivery: ${deliveryErr?.message}`,
+      provenance,
+    };
   }
 
-  // Step 10: Provider Result Evaluation (Fail-Closed on FAILED / UNKNOWN / UNCERTAIN)
-  // If provider does not confirm SENT with provider message ID:
-  // - Mark delivery FAILED in outbound_deliveries
-  // - ZERO rows inserted in public.interactions (no false sent message visible!)
-  // - SLA remains OPEN for human intervention
-  if (providerResult.status !== 'SENT' || !providerResult.externalMessageId) {
+  // Delegate to injected sender
+  const providerResult = await providerSender({
+    companyId,
+    conversationId,
+    customerId,
+    channel,
+    content,
+    deliveryId: String(deliveryId),
+  });
+
+  return finalizeAiOutboundDelivery({
+    admin,
+    companyId,
+    conversationId,
+    customerId,
+    windowId,
+    content,
+    claimId,
+    decision,
+    provenance,
+    model,
+    deliveryId: String(deliveryId),
+    providerStatus: providerResult.status,
+    providerMid: providerResult.externalMessageId || null,
+    providerError: providerResult.error,
+  });
+}
+
+// ==============================================================================
+// 9. SHARED FINALIZATION (Facebook + test paths)
+// ==============================================================================
+
+/**
+ * Handles post-dispatch finalization for paths that use the AI outbox
+ * (create_ai_outbound_delivery_pending / finalize_ai_outbound_delivery_atomic).
+ * Used by Facebook canonical path and test providerSender path.
+ */
+async function finalizeAiOutboundDelivery(params: {
+  admin: SupabaseClient;
+  companyId: string;
+  conversationId: string;
+  customerId: string;
+  windowId: string;
+  content: string;
+  claimId: string | null;
+  decision: string | undefined;
+  provenance: ExecuteAiResponseRuntimeResult['provenance'];
+  model: AiResponseModel;
+  deliveryId: string;
+  providerStatus: string;
+  providerMid: string | null | undefined;
+  providerError?: string;
+}): Promise<ExecuteAiResponseRuntimeResult> {
+  const {
+    admin, companyId, conversationId, customerId, windowId,
+    content, claimId, decision, provenance, model, deliveryId,
+    providerStatus, providerMid, providerError,
+  } = params;
+
+  // Provider did not confirm SENT with a message ID → fail closed
+  if (providerStatus !== 'SENT' || !providerMid) {
     await admin.rpc('record_ai_outbound_delivery_failed' as never, {
       p_company_id: companyId,
       p_delivery_id: deliveryId,
-      p_error_message: providerResult.error || `Provider delivery status: ${providerResult.status}`,
+      p_error_message: providerError || `Provider delivery status: ${providerStatus}`,
     } as never);
 
     return {
       success: false,
       claimed: true,
-      decision: claimResult.decision,
+      decision,
       windowId,
       conversationId,
-      deliveryId: String(deliveryId),
-      providerStatus: providerResult.status,
-      error: providerResult.error || `Provider delivery failed with status ${providerResult.status}`,
-      provenance: {
-        modelVersion: model.modelVersion,
-        analysisRecordId: analysisRecord?.id || null,
-        salesStyleProfileId: styleContext.activeProfileId,
-        isNeutralDefault: styleContext.isNeutralDefault,
-        aiClaimId: claimResult.claimId,
-      },
+      deliveryId,
+      providerStatus,
+      error: providerError || `Provider delivery failed with status ${providerStatus}`,
+      provenance,
     };
   }
 
-  // Step 11: Finalize Confirmed Delivery in Database Atomically
-  // Atomic RPC: finalize_ai_outbound_delivery_atomic
-  // - Creates public.interactions (actor_type = 'AI', external_ref = provider_msg_id)
-  // - Saves mandatory provenance in private raw contents table via trusted RPC (Fail-Closed!)
-  // - Updates outbound_deliveries to SENT with interaction_id link
-  // - Resolves Response SLA window to AI_RESPONDED
-  // - Resets conversation status to OPEN
+  // Finalize confirmed delivery atomically
   const { data: finalizedInteractionId, error: finalizeErr } = await admin.rpc(
     'finalize_ai_outbound_delivery_atomic' as never,
     {
@@ -496,17 +821,17 @@ export async function executeAiResponseRuntime(
       p_conversation_id: conversationId,
       p_customer_id: customerId,
       p_window_id: windowId,
-      p_ai_claim_id: claimResult.claimId,
-      p_provider_msg_id: providerResult.externalMessageId,
-      p_sanitized_content: rawGeneratedText,
-      p_raw_content: rawGeneratedText,
+      p_ai_claim_id: claimId,
+      p_provider_msg_id: providerMid,
+      p_sanitized_content: content,
+      p_raw_content: content,
       p_source_metadata: {
         source: 'ai_response_runtime',
         model_version: model.modelVersion,
-        analysis_record_id: analysisRecord?.id || null,
-        sales_style_profile_id: styleContext.activeProfileId,
-        is_neutral_default: styleContext.isNeutralDefault,
-        ai_claim_id: claimResult.claimId,
+        analysis_record_id: provenance?.analysisRecordId || null,
+        sales_style_profile_id: provenance?.salesStyleProfileId,
+        is_neutral_default: provenance?.isNeutralDefault,
+        ai_claim_id: claimId,
         window_id: windowId,
         delivery_id: deliveryId,
       },
@@ -517,11 +842,11 @@ export async function executeAiResponseRuntime(
     return {
       success: false,
       claimed: true,
-      decision: claimResult.decision,
+      decision,
       windowId,
       conversationId,
-      deliveryId: String(deliveryId),
-      providerStatus: providerResult.status,
+      deliveryId,
+      providerStatus,
       error: `Failed to finalize delivery atomically: ${finalizeErr?.message}`,
     };
   }
@@ -529,19 +854,13 @@ export async function executeAiResponseRuntime(
   return {
     success: true,
     claimed: true,
-    decision: claimResult.decision,
+    decision,
     windowId,
     conversationId,
-    deliveryId: String(deliveryId),
+    deliveryId,
     interactionId: String(finalizedInteractionId),
-    externalMessageId: providerResult.externalMessageId,
-    providerStatus: providerResult.status,
-    provenance: {
-      modelVersion: model.modelVersion,
-      analysisRecordId: analysisRecord?.id || null,
-      salesStyleProfileId: styleContext.activeProfileId,
-      isNeutralDefault: styleContext.isNeutralDefault,
-      aiClaimId: claimResult.claimId,
-    },
+    externalMessageId: providerMid,
+    providerStatus,
+    provenance,
   };
 }
