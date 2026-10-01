@@ -1518,6 +1518,213 @@ async function run() {
   assert.strictEqual(tScenDWinFinal?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must become UNCERTAIN');
   pass('Scenario D (Facebook): AI in-flight lease expired -> Sale pre-guard denies with DISPATCH_UNCERTAIN (calls: Sale=0, state=UNCERTAIN)');
 
+  // Facebook Scenario E: Sale R1 acquires dispatch ownership and provider is held at a barrier.
+  // Sale R2 uses a DIFFERENT request ID and attempts send.
+  // Required: R1 provider calls = 1, R2 provider calls = 0, R2 status = SALE_ALREADY_DISPATCHING, Total external calls = 1.
+  // Then R1 SENT: SLA = SALE_RESPONDED.
+  const tScenEWin = await createDueSlaWindow('scen_e_sale_concurrent');
+  let tScenER1Calls = 0;
+  let tScenER2Calls = 0;
+  let tScenER2Result: any = null;
+  const tScenER1Req = crypto.randomUUID();
+  const tScenER2Req = crypto.randomUUID();
+  const tScenEMid = `mid_sale_scen_e_${RUN_ID}_${Date.now()}`;
+
+  const tScenER1Result = await executeSaleFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: tScenEWin.convoId,
+    actorId: sale.id,
+    content: 'Tin nhắn R1 của Sale',
+    requestId: tScenER1Req,
+    providerSender: async () => {
+      tScenER1Calls++;
+
+      // Barrier: While R1 is held in-flight, R2 with different request ID attempts send
+      tScenER2Result = await executeSaleFacebookSend({
+        companyId: COMPANY_ID,
+        conversationId: tScenEWin.convoId,
+        actorId: sale.id,
+        content: 'Tin nhắn R2 của Sale (cạnh tranh)',
+        requestId: tScenER2Req,
+        providerSender: async () => {
+          tScenER2Calls++;
+          return { status: 'SENT', mid: 'mid_r2_should_not_run' };
+        },
+      });
+
+      return { status: 'SENT', mid: tScenEMid };
+    },
+  });
+
+  assert.strictEqual(tScenER1Calls, 1, 'Sale R1 provider invocation count must be 1');
+  assert.strictEqual(tScenER2Calls, 0, 'Sale R2 provider invocation count MUST be 0 when R1 is in-flight');
+  assert.strictEqual(tScenER1Calls + tScenER2Calls, 1, 'Total external provider calls must be exactly 1');
+  assert.strictEqual(tScenER2Result?.claimed, false, 'Sale R2 pre-provider guard must deny send');
+  assert.strictEqual(tScenER2Result?.status, 'SALE_ALREADY_DISPATCHING', 'Sale R2 status must be SALE_ALREADY_DISPATCHING');
+  assert.strictEqual(tScenER1Result.success, true, 'Sale R1 send must succeed');
+
+  const { data: tScenEWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state, sale_response_interaction_id')
+    .eq('id', tScenEWin.windowId)
+    .single();
+  assert.strictEqual(tScenEWinRow?.state, 'SALE_RESPONDED', 'Window state must resolve to SALE_RESPONDED');
+  assert.strictEqual(tScenEWinRow?.dispatch_owner, 'SALE');
+  assert.strictEqual(tScenEWinRow?.dispatch_state, 'PROVIDER_ACCEPTED');
+  pass('Scenario E (Facebook): R1 in-flight -> R2 denied SALE_ALREADY_DISPATCHING (calls: R1=1, R2=0, Total=1, SLA=SALE_RESPONDED)');
+
+  // Facebook Scenario F: R1 is still provider-in-flight.
+  // R2 must NOT be allowed to obtain ownership or release R1's fence.
+  // Prove AI provider invocation remains 0 while R1 is unresolved.
+  const tScenFWin = await createDueSlaWindow('scen_f_r1_fence_integrity');
+  let tScenFR1Calls = 0;
+  let tScenFAiCalls = 0;
+  let tScenFAiResult: any = null;
+  const tScenFR1Req = crypto.randomUUID();
+  const tScenFR2Req = crypto.randomUUID();
+
+  // R1 prepares and acquires dispatch fence
+  const { data: tScenFR1Prep } = await admin.rpc('han_prepare_send' as never, {
+    p_company: COMPANY_ID,
+    p_conversation: tScenFWin.convoId,
+    p_actor: sale.id,
+    p_request: tScenFR1Req,
+    p_content: 'R1 in flight',
+    p_safe: 'R1 in flight',
+    p_safe_status: 'SUCCEEDED',
+    p_delivery: null,
+  } as never);
+  assert.strictEqual((tScenFR1Prep as any)?.claimed, true, 'R1 must claim outbox and acquire fence');
+  tScenFR1Calls++;
+
+  // R2 attempts send -> denied
+  const { data: tScenFR2Prep } = await admin.rpc('han_prepare_send' as never, {
+    p_company: COMPANY_ID,
+    p_conversation: tScenFWin.convoId,
+    p_actor: sale.id,
+    p_request: tScenFR2Req,
+    p_content: 'R2 concurrently',
+    p_safe: 'R2 concurrently',
+    p_safe_status: 'SUCCEEDED',
+    p_delivery: null,
+  } as never);
+  assert.strictEqual((tScenFR2Prep as any)?.claimed, false, 'R2 must be denied');
+  assert.strictEqual((tScenFR2Prep as any)?.status, 'SALE_ALREADY_DISPATCHING');
+
+  // Attempt to call han_finish_send with R2 and FAILED -> must NOT release R1's fence
+  try {
+    await admin.rpc('han_finish_send' as never, {
+      p_company: COMPANY_ID,
+      p_request: tScenFR2Req,
+      p_status: 'FAILED',
+      p_mid: null,
+    } as never);
+  } catch {}
+
+  // AI attempts dispatch while R1 is still in-flight
+  tScenFAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tScenFWin.windowId,
+    conversationId: tScenFWin.convoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      tScenFAiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+
+  assert.strictEqual(tScenFAiCalls, 0, 'AI provider invocation count MUST remain 0 while R1 is unresolved');
+  assert.strictEqual(tScenFAiResult.success, false, 'AI dispatch must be denied while R1 is in-flight');
+
+  // Finish R1 as SENT
+  await admin.rpc('han_finish_send' as never, {
+    p_company: COMPANY_ID,
+    p_request: tScenFR1Req,
+    p_status: 'SENT',
+    p_mid: `mid_r1_f_${RUN_ID}`,
+  } as never);
+  pass('Scenario F (Facebook): R1 fence integrity preserved against R2; AI calls = 0 while R1 in-flight');
+
+  // Facebook Late Authoritative Result after UNCERTAIN:
+  // Sale dispatch acquired (R1) -> lease expires -> shared state becomes UNCERTAIN
+  // -> no competing AI/Sale network send occurs (R2 denied, AI denied)
+  // -> original provider later returns authoritative SENT for R1
+  // -> SLA resolves to SALE_RESPONDED. Total external provider calls = 1.
+  const tFbLateWin = await createDueSlaWindow('scen_fb_late_authoritative');
+  let tFbLateR1Calls = 0;
+  let tFbLateR2Calls = 0;
+  let tFbLateAiCalls = 0;
+  const tFbLateR1Req = crypto.randomUUID();
+  const tFbLateR2Req = crypto.randomUUID();
+
+  // 1. R1 prepares and acquires dispatch fence
+  await admin.rpc('han_prepare_send' as never, {
+    p_company: COMPANY_ID,
+    p_conversation: tFbLateWin.convoId,
+    p_actor: sale.id,
+    p_request: tFbLateR1Req,
+    p_content: 'R1 ban dau',
+    p_safe: 'R1 ban dau',
+    p_safe_status: 'SUCCEEDED',
+    p_delivery: null,
+  } as never);
+  tFbLateR1Calls++;
+
+  // 2. Simulate dispatch lease expiry while unresolved
+  expireDispatchFenceDirectSql(tFbLateWin.windowId);
+
+  // 3. Competing Sale R2 attempts send -> pre-guard transitions & denies with DISPATCH_UNCERTAIN
+  const tFbLateR2Result = await executeSaleFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: tFbLateWin.convoId,
+    actorId: sale.id,
+    content: 'R2 co gui sau khi timeout',
+    requestId: tFbLateR2Req,
+    providerSender: async () => {
+      tFbLateR2Calls++;
+      return { status: 'SENT', mid: 'r2_should_not_run' };
+    },
+  });
+  assert.strictEqual(tFbLateR2Calls, 0, 'Competing Sale R2 provider calls must be 0');
+  assert.strictEqual(tFbLateR2Result.claimed, false, 'Sale R2 pre-guard must deny send');
+  assert.strictEqual(tFbLateR2Result.status, 'DISPATCH_UNCERTAIN');
+
+  // 4. Competing AI worker attempts send -> denied fail-closed
+  const tFbLateAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tFbLateWin.windowId,
+    conversationId: tFbLateWin.convoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      tFbLateAiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+  assert.strictEqual(tFbLateAiCalls, 0, 'Competing AI provider calls must be 0');
+  assert.strictEqual(tFbLateAiResult.success, false, 'AI send must be denied on UNCERTAIN window');
+
+  // 5. Original provider later returns authoritative SENT for the SAME delivery R1
+  await admin.rpc('han_finish_send' as never, {
+    p_company: COMPANY_ID,
+    p_request: tFbLateR1Req,
+    p_status: 'SENT',
+    p_mid: `mid_r1_authoritative_${RUN_ID}`,
+  } as never);
+
+  const { data: tFbLateWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state, dispatch_owner')
+    .eq('id', tFbLateWin.windowId)
+    .single();
+  assert.strictEqual(tFbLateWinFinal?.state, 'SALE_RESPONDED', 'Window must reconcile to SALE_RESPONDED');
+  assert.strictEqual(tFbLateWinFinal?.dispatch_state, 'PROVIDER_ACCEPTED');
+  assert.strictEqual(tFbLateR1Calls + tFbLateR2Calls + tFbLateAiCalls, 1, 'Total external calls must be strictly 1');
+  pass('Late authoritative SENT (Facebook): Reconciles original Sale response, 0 competing external sends (Total calls = 1)');
+
   // Zalo Scenario A: AI acquires dispatch fence -> Sale attempts sendZaloReply -> Sale denied (BUSY / AI_DISPATCH_FENCED)
   // Counts: Sale provider calls = 0, AI provider calls = 1, Total = 1, SLA = AI_RESPONDED
   const tZaloAConvoId = crypto.randomUUID();
@@ -1792,6 +1999,359 @@ async function run() {
     .single();
   assert.strictEqual(tZaloCWinFinal?.dispatch_state, 'UNCERTAIN', 'Window dispatch_state must stay UNCERTAIN');
   pass('Scenario C (Zalo): Sale returns UNCERTAIN -> AI provider calls = 0, state stays UNCERTAIN (Fail-Safe)');
+
+  // Zalo Scenario D: Sale command C1 provider held in-flight.
+  // Sale command C2 is different.
+  // Required: C1 provider calls = 1, C2 provider calls = 0, C2 status = BUSY (SALE_ALREADY_DISPATCHING), Total Zalo external calls = 1.
+  // Then C1 ACCEPTED: SLA = SALE_RESPONDED.
+  const tZaloDConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloDConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_zd_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloDTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloDTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloDConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo can thiep dong thoi',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloDWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloDConvoId,
+    triggerInteractionId: tZaloDTriggerId,
+  });
+
+  let tZaloDC1Calls = 0;
+  let tZaloDC2Calls = 0;
+  let tZaloDC2Result: any = null;
+
+  const zaloInboxServiceD2 = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloDC2Calls++;
+        return { outcome: 'ACCEPTED', providerMsgId: `msg_sale_zalo_d2_${RUN_ID}` };
+      },
+    } as any),
+  });
+
+  const zaloInboxServiceD = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloDC1Calls++;
+
+        // Barrier: While C1 is in-flight, C2 attempts sendZaloReply with different commandId
+        tZaloDC2Result = await zaloInboxServiceD2.sendZaloReply(
+          {
+            conversationId: tZaloDConvoId,
+            content: 'Sale C2 gui cung luc',
+            commandId: `sale-zalo-d-c2-${RUN_ID}`,
+            oaId: t4OaId,
+          },
+          saleActorContext
+        );
+
+        return { outcome: 'ACCEPTED', providerMsgId: `msg_sale_zalo_d_${RUN_ID}` };
+      },
+    } as any),
+  });
+
+  const tZaloDC1Result = await zaloInboxServiceD.sendZaloReply(
+    {
+      conversationId: tZaloDConvoId,
+      content: 'Sale C1 dang gui',
+      commandId: `sale-zalo-d-c1-${RUN_ID}`,
+      oaId: t4OaId,
+    },
+    saleActorContext
+  );
+
+  assert.strictEqual(tZaloDC1Calls, 1, 'Sale C1 provider invocation count must be 1');
+  assert.strictEqual(tZaloDC2Calls, 0, 'Sale C2 provider invocation count MUST be 0 when C1 is in-flight');
+  assert.strictEqual(tZaloDC1Calls + tZaloDC2Calls, 1, 'Total external Zalo provider calls must be exactly 1');
+  assert.strictEqual(tZaloDC2Result?.success, false, 'Sale C2 must be denied');
+  assert.strictEqual(tZaloDC2Result?.status, 'BUSY', 'Sale C2 status must be BUSY (SALE_ALREADY_DISPATCHING)');
+  assert.strictEqual(tZaloDC1Result.success, true, 'Sale C1 send must succeed');
+
+  const { data: tZaloDWinRow } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_owner, dispatch_state')
+    .eq('id', tZaloDWin.id)
+    .single();
+  assert.strictEqual(tZaloDWinRow?.state, 'SALE_RESPONDED', 'Window state must resolve to SALE_RESPONDED');
+  pass('Scenario D (Zalo): C1 in-flight -> C2 denied SALE_ALREADY_DISPATCHING (calls: C1=1, C2=0, Total=1, SLA=SALE_RESPONDED)');
+
+  // Zalo Scenario E: Stale or unrelated delivery cannot mutate/release shared SLA dispatch owner.
+  // An outcome (REJECTED/UNCERTAIN) belonging to an old delivery cannot release C1's active fence.
+  const tZaloEConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloEConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_ze_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloETriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloETriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloEConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo kiem tra stale delivery',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloEWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloEConvoId,
+    triggerInteractionId: tZaloETriggerId,
+  });
+
+  // Scenario E (Zalo): Stale delivery outcome cannot release or mutate current delivery active fence
+  const tZaloEC1Cmd = `active-del-c1-${RUN_ID}`;
+  const { data: tZaloEC1Claim } = await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: tZaloEConvoId,
+    p_command_id: tZaloEC1Cmd,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'Active delivery C1',
+    p_sanitized_content: 'Active delivery C1',
+    p_content_sha256: crypto.createHash('sha256').update('Active delivery C1').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+  const c1DelId = (tZaloEC1Claim as any)?.[0]?.delivery_id;
+  const c1ClaimToken = (tZaloEC1Claim as any)?.[0]?.claim_token;
+  assert.ok(c1DelId, 'C1 delivery ID must exist');
+
+  // Verify C1 currently holds the window
+  const { data: tZaloEWinActive } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_delivery_id, dispatch_owner, dispatch_state')
+    .eq('id', tZaloEWin.id)
+    .single();
+  assert.strictEqual(tZaloEWinActive?.dispatch_delivery_id, c1DelId, 'C1 must be the dispatch_delivery_id');
+  assert.strictEqual(tZaloEWinActive?.dispatch_owner, 'SALE');
+  assert.strictEqual(tZaloEWinActive?.dispatch_state, 'DISPATCHING');
+
+  // Now create a stale delivery row directly in zalo_outbound_deliveries on the same conversation
+  const staleDelId = crypto.randomUUID();
+  const staleClaimToken = crypto.randomUUID();
+  await admin.from('zalo_outbound_deliveries').insert({
+    id: staleDelId,
+    company_id: COMPANY_ID,
+    conversation_id: tZaloEConvoId,
+    customer_id: CUSTOMER_ID,
+    recipient_zalo_uid: `zalo_user_ze_${RUN_ID}`,
+    idempotency_key: `zalo_out:${COMPANY_ID}:stale-cmd-${RUN_ID}`,
+    content: 'Stale delivery',
+    status: 'SENDING',
+    attempts: 1,
+    command_id: `stale-cmd-${RUN_ID}`,
+    channel: 'ZALO',
+    lease_until: new Date(Date.now() + 120000).toISOString(),
+    oa_id: t4OaId,
+    actor_type: 'SALE',
+    actor_user_id: sale.id,
+    claim_token: staleClaimToken,
+    content_sha256: crypto.createHash('sha256').update('Stale delivery').digest('hex'),
+  });
+
+  // Stale delivery attempts to record REJECTED:
+  await admin.rpc('zalo_record_outbound_provider_result' as never, {
+    p_delivery_id: staleDelId,
+    p_claim_token: staleClaimToken,
+    p_outcome: 'REJECTED',
+    p_provider_msg_id: null,
+    p_error_code: 'OLD_ERROR',
+    p_error_message: 'Old error message',
+  } as never);
+
+  // Verify C1's active fence was NOT released!
+  const { data: tZaloEWinAfterStale } = await bossRealClient
+    .from('response_sla_windows')
+    .select('dispatch_delivery_id, dispatch_owner, dispatch_state')
+    .eq('id', tZaloEWin.id)
+    .single();
+  assert.strictEqual(tZaloEWinAfterStale?.dispatch_delivery_id, c1DelId, 'C1 delivery ID must remain bound');
+  assert.strictEqual(tZaloEWinAfterStale?.dispatch_owner, 'SALE', 'SALE ownership must NOT be released by stale delivery');
+  assert.strictEqual(tZaloEWinAfterStale?.dispatch_state, 'DISPATCHING', 'State must remain DISPATCHING');
+
+  // Verify AI cannot dispatch while C1 is in-flight
+  let tZaloEAiCalls = 0;
+  const tZaloEAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tZaloEWin.id,
+    conversationId: tZaloEConvoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      tZaloEAiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+  assert.strictEqual(tZaloEAiCalls, 0, 'AI provider invocation count MUST remain 0 while C1 is in-flight');
+  assert.strictEqual(tZaloEAiResult.success, false, 'AI dispatch must be denied while C1 is in-flight');
+
+  // Finish C1 as ACCEPTED and finalize
+  await admin.rpc('zalo_record_outbound_provider_result' as never, {
+    p_delivery_id: c1DelId,
+    p_claim_token: c1ClaimToken,
+    p_outcome: 'ACCEPTED',
+    p_provider_msg_id: `zalo_c1_mid_${RUN_ID}`,
+  } as never);
+  await admin.rpc('zalo_finalize_outbound_delivery' as never, {
+    p_delivery_id: c1DelId,
+  } as never);
+
+  const { data: tZaloEWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state, dispatch_owner')
+    .eq('id', tZaloEWin.id)
+    .single();
+  assert.strictEqual(tZaloEWinFinal?.state, 'SALE_RESPONDED', 'Window must reconcile to SALE_RESPONDED');
+  pass('Scenario E (Zalo): Stale delivery outcome cannot release or mutate current delivery active fence');
+
+  // Zalo Late Authoritative Result after UNCERTAIN:
+  // Sale dispatch acquired (C1) -> lease expires -> shared state becomes UNCERTAIN
+  // -> no competing AI/Sale network send occurs (C2 denied, AI denied)
+  // -> original provider later returns authoritative ACCEPTED for C1
+  // -> SLA resolves to SALE_RESPONDED. Total external provider calls = 1.
+  const tZaloLateConvoId = crypto.randomUUID();
+  await admin.from('conversations').insert({
+    id: tZaloLateConvoId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    channel: 'ZALO',
+    external_conversation_id: `zalo_user_zlate_${RUN_ID}`,
+    status: 'OPEN',
+    assigned_to: sale.id,
+  });
+  const tZaloLateTriggerId = crypto.randomUUID();
+  await admin.from('interactions').insert({
+    id: tZaloLateTriggerId,
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    conversation_id: tZaloLateConvoId,
+    channel: 'ZALO',
+    type: 'MESSAGE',
+    direction: 'INBOUND',
+    sanitized_content: 'Zalo kiem tra late authoritative',
+    sanitization_status: 'SUCCEEDED',
+    actor_type: 'CUSTOMER',
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  });
+  const tZaloLateWin = await openResponseSlaWindow({
+    companyId: COMPANY_ID,
+    conversationId: tZaloLateConvoId,
+    triggerInteractionId: tZaloLateTriggerId,
+  });
+
+  let tZaloLateC1Calls = 0;
+  let tZaloLateC2Calls = 0;
+  let tZaloLateAiCalls = 0;
+  const tZaloLateC1Cmd = `zalo-late-c1-${RUN_ID}`;
+  const tZaloLateC2Cmd = `zalo-late-c2-${RUN_ID}`;
+
+  // 1. C1 acquires dispatch fence
+  const { data: tZaloLateC1Claim } = await admin.rpc('zalo_claim_outbound_delivery' as never, {
+    p_company_id: COMPANY_ID,
+    p_conversation_id: tZaloLateConvoId,
+    p_command_id: tZaloLateC1Cmd,
+    p_actor_type: 'SALE',
+    p_actor_user_id: sale.id,
+    p_raw_content: 'Zalo C1 late send',
+    p_sanitized_content: 'Zalo C1 late send',
+    p_content_sha256: crypto.createHash('sha256').update('Zalo C1 late send').digest('hex'),
+    p_oa_id: t4OaId,
+  } as never);
+  const lateC1DelId = (tZaloLateC1Claim as any)?.[0]?.delivery_id;
+  const lateC1Token = (tZaloLateC1Claim as any)?.[0]?.claim_token;
+  tZaloLateC1Calls++;
+
+  // 2. Simulate dispatch lease expiry while unresolved
+  expireDispatchFenceDirectSql(tZaloLateWin.id);
+
+  // 3. Competing Sale C2 attempts send -> pre-guard transitions & denies with DISPATCH_UNCERTAIN
+  const zaloInboxServiceLate = new ZaloInboxService({
+    supabase: admin,
+    clientProvider: async () => ({
+      sendTextMessageWithOutcome: async () => {
+        tZaloLateC2Calls++;
+        return { outcome: 'ACCEPTED', providerMsgId: 'c2_should_not_run' };
+      },
+    } as any),
+  });
+  const tZaloLateC2Result = await zaloInboxServiceLate.sendZaloReply(
+    {
+      conversationId: tZaloLateConvoId,
+      content: 'C2 co gui khi UNCERTAIN',
+      commandId: tZaloLateC2Cmd,
+      oaId: t4OaId,
+    },
+    saleActorContext
+  );
+  assert.strictEqual(tZaloLateC2Calls, 0, 'Competing Sale C2 provider calls must be 0');
+  assert.strictEqual(tZaloLateC2Result.success, false, 'Sale C2 must be denied');
+  assert.strictEqual(tZaloLateC2Result.status, 'UNCERTAIN');
+
+  // 4. Competing AI worker attempts dispatch -> denied fail-closed
+  const tZaloLateAiResult = await executeAiResponseRuntime({
+    companyId: COMPANY_ID,
+    windowId: tZaloLateWin.id,
+    conversationId: tZaloLateConvoId,
+    customerId: CUSTOMER_ID,
+    model: new CompliantModel(),
+    providerSender: async () => {
+      tZaloLateAiCalls++;
+      return { status: 'SENT', externalMessageId: 'ai_should_not_run' };
+    },
+    client: admin,
+  });
+  assert.strictEqual(tZaloLateAiCalls, 0, 'Competing AI provider calls must be 0');
+  assert.strictEqual(tZaloLateAiResult.success, false, 'AI send must be denied on UNCERTAIN window');
+
+  // 5. Original provider later returns authoritative outcome for C1
+  await admin.rpc('zalo_record_outbound_provider_result' as never, {
+    p_delivery_id: lateC1DelId,
+    p_claim_token: lateC1Token,
+    p_outcome: 'ACCEPTED',
+    p_provider_msg_id: `zalo_late_mid_${RUN_ID}`,
+  } as never);
+  await admin.rpc('zalo_finalize_outbound_delivery' as never, {
+    p_delivery_id: lateC1DelId,
+  } as never);
+
+  const { data: tZaloLateWinFinal } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state, dispatch_owner')
+    .eq('id', tZaloLateWin.id)
+    .single();
+  assert.strictEqual(tZaloLateWinFinal?.state, 'SALE_RESPONDED', 'Window must reconcile to SALE_RESPONDED');
+  assert.strictEqual(tZaloLateWinFinal?.dispatch_state, 'PROVIDER_ACCEPTED');
+  assert.strictEqual(tZaloLateC1Calls + tZaloLateC2Calls + tZaloLateAiCalls, 1, 'Total external calls must be strictly 1');
+  pass('Late authoritative ACCEPTED (Zalo): Reconciles original Sale response, 0 competing external sends (Total calls = 1)');
 
   // Test 6: Mandatory claim ID for new dispatch (Item 5)
   // guard_ai_pre_dispatch with p_ai_claim_id = null must fail-closed (no NULL bypass)

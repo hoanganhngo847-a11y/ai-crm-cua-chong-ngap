@@ -270,6 +270,12 @@ export class ZaloInboxService {
       if (claimError.message.includes('AI_ALREADY_RESPONDED')) {
         return { success: false, status: 'CONFLICT', error: 'AI đã phản hồi cho hội thoại này (AI_ALREADY_RESPONDED).' };
       }
+      if (claimError.message.includes('SALE_ALREADY_DISPATCHING')) {
+        return { success: false, status: 'BUSY', error: 'Tư vấn viên khác đang phản hồi (SALE_ALREADY_DISPATCHING).' };
+      }
+      if (claimError.message.includes('SALE_ALREADY_RESPONDED')) {
+        return { success: false, status: 'CONFLICT', error: 'Tư vấn viên đã phản hồi cho hội thoại này (SALE_ALREADY_RESPONDED).' };
+      }
       throw mapClaimError(claimError.message);
     }
 

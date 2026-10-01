@@ -115,6 +115,7 @@ BEGIN
         VALUES(a, incoming, 'FACEBOOK', now(), false);
     PERFORM pg_temp.expect_error(format('SELECT public.han_prepare_send(%L,%L,%L,%L,%L,%L,%L,%L)', a, conv, actor, gen_random_uuid(), 'hello', 'hello', 'SUCCEEDED', delivery), 'CARE_STOPPED');
 
+    DELETE FROM public.response_sla_windows WHERE conversation_id = conv;
     SELECT count(*) INTO count_before FROM public.interactions WHERE company_id = a;
     CREATE TRIGGER han_test_audit_failure BEFORE INSERT ON public.audit_logs FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_audit();
     PERFORM pg_temp.expect_error(format('SELECT public.han_prepare_send(%L,%L,%L,%L,%L,%L,%L,NULL)', a, conv, actor, gen_random_uuid(), 'hello', 'hello', 'SUCCEEDED'), 'TEST_AUDIT_FAILURE');
