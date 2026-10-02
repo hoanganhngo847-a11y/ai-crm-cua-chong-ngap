@@ -6,6 +6,39 @@ import { createAuthorizedSignedUrl } from '@/lib/sensitive/signed-urls';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/**
+ * Typed safe error shape for Supabase Storage upload errors.
+ * Covers StorageApiError (status, statusCode, code, message) and
+ * StorageError (status, statusCode, message) without requiring `any`.
+ */
+interface StorageErrorLike {
+  statusCode?: string | number;
+  status?: string | number;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Determines whether a storage upload error represents a recoverable
+ * ResourceAlreadyExists / HTTP 409 conflict.
+ *
+ * Canonical storage paths are deterministic per (contractId, revision),
+ * so a 409 means a concurrent caller already uploaded the same content.
+ */
+export function isStorageResourceConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as StorageErrorLike;
+  if (e.statusCode === '409' || e.statusCode === 409) return true;
+  if (e.status === 409) return true;
+  if (e.code === 'ResourceAlreadyExists') return true;
+  if (typeof e.message === 'string') {
+    if (e.message.includes('already exists') || e.message.includes('ResourceAlreadyExists')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface ContractListItemDTO {
   id: string;
   orderId: string;
@@ -40,13 +73,16 @@ export function validateSignedPdf(buffer: Buffer): void {
  * Uses atomic DB claim to prevent duplicate revisions under concurrent calls.
  * Saves PDF to canonical 'contracts' storage bucket with server-derived path.
  */
-export async function generateContractForOrder(params: {
-  companyId: string;
-  orderId: string;
-  forceRevision?: boolean;
-}) {
+export async function generateContractForOrder(
+  params: {
+    companyId: string;
+    orderId: string;
+    forceRevision?: boolean;
+  },
+  client?: SupabaseClient
+) {
   const { companyId, orderId, forceRevision = false } = params;
-  const adminSupabase = createAdminClient();
+  const adminSupabase = client || createAdminClient();
 
   // 1. Claim contract generation atomically in DB
   const { data: claimData, error: claimError } = await adminSupabase.rpc(
@@ -68,6 +104,7 @@ export async function generateContractForOrder(params: {
       status: claimData.contractStatus,
       revisionNo: claimData.revisionNo,
       generatedFileRef: claimData.generatedFileRef,
+      contractGenerationStatus: 'ALREADY_EXISTS' as const,
     };
   }
 
@@ -125,8 +162,16 @@ export async function generateContractForOrder(params: {
     });
 
   if (uploadError) {
-    console.error('Lỗi khi upload file hợp đồng:', uploadError);
-    throw new Error('Không thể lưu trữ tệp hợp đồng');
+    // ResourceAlreadyExists (409) is safe to ignore: canonical path is deterministic per
+    // (contractId, revision), so a pre-existing file means a concurrent caller already
+    // uploaded the same content. Proceed to finalize.
+    const isResourceConflict = isStorageResourceConflict(uploadError);
+
+    if (!isResourceConflict) {
+      console.error('Lỗi khi upload file hợp đồng:', uploadError);
+      throw new Error('Không thể lưu trữ tệp hợp đồng');
+    }
+    // File already exists at canonical path — continue to finalize
   }
 
   // 4. Finalize contract generation in database
@@ -149,6 +194,100 @@ export async function generateContractForOrder(params: {
     revisionNo,
     status: 'GENERATED',
     generatedFileRef: canonicalFilePath,
+    contractGenerationStatus: 'GENERATED' as const,
+  };
+}
+
+/**
+ * Ensures contract generation for an order whose deposit is confirmed (DEPOSIT_CONFIRMED).
+ * Recovers from previous contract generation or storage outages safely and idempotently.
+ * Never overwrites a SIGNED contract.
+ */
+export async function ensureContractForDepositConfirmedOrder(
+  companyId: string,
+  orderId: string,
+  client?: SupabaseClient
+): Promise<{
+  contractId: string;
+  revisionNo: number;
+  status: string;
+  generatedFileRef: string | null;
+  contractGenerationStatus: 'GENERATED' | 'ALREADY_EXISTS';
+}> {
+  const adminSupabase = client || createAdminClient();
+
+  // 1. Verify the Order belongs to the company
+  const { data: order, error: orderErr } = await adminSupabase
+    .from('orders')
+    .select('id, company_id, deposit_status, final_amount, order_code, customer_id')
+    .eq('id', orderId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (orderErr || !order) {
+    throw new Error('RESOURCE_NOT_FOUND: Order not found');
+  }
+
+  // 2. Verify deposit is actually DEPOSIT_CONFIRMED
+  if (order.deposit_status !== 'CONFIRMED' && order.deposit_status !== 'DEPOSIT_CONFIRMED') {
+    throw new Error('DEPOSIT_NOT_CONFIRMED: Cannot generate or recover contract until deposit is confirmed');
+  }
+
+  // 3. Inspect current Contract state
+  const { data: currentContract } = await adminSupabase
+    .from('contracts')
+    .select('id, revision_no, status, generated_file_ref, signed_file_ref, is_current')
+    .eq('company_id', companyId)
+    .eq('order_id', orderId)
+    .eq('is_current', true)
+    .maybeSingle();
+
+  if (currentContract) {
+    // 6. Never overwrite a SIGNED contract
+    if (currentContract.status === 'SIGNED') {
+      return {
+        contractId: currentContract.id,
+        revisionNo: currentContract.revision_no,
+        status: currentContract.status,
+        generatedFileRef: currentContract.generated_file_ref,
+        contractGenerationStatus: 'ALREADY_EXISTS',
+      };
+    }
+
+    // 5. Reuse an existing claimed/generated contract where appropriate
+    if (
+      ['GENERATED', 'SENT_TO_CUSTOMER'].includes(currentContract.status) &&
+      currentContract.generated_file_ref &&
+      currentContract.generated_file_ref !== 'CLAIMED'
+    ) {
+      return {
+        contractId: currentContract.id,
+        revisionNo: currentContract.revision_no,
+        status: currentContract.status,
+        generatedFileRef: currentContract.generated_file_ref,
+        contractGenerationStatus: 'ALREADY_EXISTS',
+      };
+    }
+  }
+
+  // 4. Call existing atomic contract-generation claim safely (remains idempotent under concurrent calls)
+  const genResult = await generateContractForOrder(
+    {
+      companyId,
+      orderId,
+      forceRevision: false,
+    },
+    adminSupabase
+  );
+
+  return {
+    contractId: genResult.contractId,
+    revisionNo: genResult.revisionNo,
+    status: genResult.status,
+    generatedFileRef: genResult.generatedFileRef ?? null,
+    contractGenerationStatus:
+      (genResult.contractGenerationStatus as 'GENERATED' | 'ALREADY_EXISTS') ||
+      (genResult.status === 'GENERATED' ? 'GENERATED' : 'ALREADY_EXISTS'),
   };
 }
 

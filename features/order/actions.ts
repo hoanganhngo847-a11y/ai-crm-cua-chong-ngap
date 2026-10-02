@@ -2,9 +2,11 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getActorContext } from '@/lib/auth/context';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { APPLICATION_ROLES } from '@/shared/constants/roles';
+import { ensureContractForDepositConfirmedOrder } from '@/features/contract/services';
 import { createOrderFromCalculation, updateOrderDepositAndDebt } from './services';
 
 const createOrderSchema = z.object({
@@ -30,10 +32,14 @@ const updateDepositSchema = z.object({
  * Server looks up calculation, verifies status is CALCULATED and customer binding,
  * and derives final_amount and payment reference authoritatively.
  */
-export async function createOrderFromCalculationAction(input: {
-  priceCalculationId: string;
-}): Promise<{
+export async function createOrderFromCalculationAction(
+  input: {
+    priceCalculationId: string;
+  },
+  options?: { userClient?: SupabaseClient }
+): Promise<{
   success: boolean;
+  status?: string;
   orderId?: string;
   orderCode?: string;
   paymentReference?: string;
@@ -48,7 +54,7 @@ export async function createOrderFromCalculationAction(input: {
       };
     }
 
-    const actor = await getActorContext();
+    const actor = await getActorContext(undefined, options?.userClient);
     if (!actor?.companyId || !actor?.userId) {
       return { success: false, error: 'Chưa xác định danh tính hoặc tổ chức làm việc.' };
     }
@@ -89,14 +95,19 @@ export async function createOrderFromCalculationAction(input: {
       priceCalculationId: calc.id,
     });
 
-    revalidatePath('/quotations');
-    revalidatePath('/orders');
-    revalidatePath('/contracts');
+    try {
+      revalidatePath('/quotations');
+      revalidatePath('/orders');
+      revalidatePath('/contracts');
+    } catch {
+      // Revalidation non-fatal in test environment
+    }
 
     return {
       success: true,
-      orderId: (result as { order_id?: string; id?: string })?.order_id || (result as { id?: string })?.id,
-      orderCode: (result as { order_code?: string })?.order_code,
+      status: result.status,
+      orderId: result.orderId,
+      orderCode: result.orderCode,
       paymentReference: result.paymentReference,
     };
   } catch (err: unknown) {
@@ -111,11 +122,14 @@ export async function createOrderFromCalculationAction(input: {
  * SALE strictly denied.
  * Idempotency key per logical submission, positive bounded amount.
  */
-export async function updateOrderDepositAction(input: {
-  orderId: string;
-  depositAmount: number;
-  idempotencyKey: string;
-}): Promise<{
+export async function updateOrderDepositAction(
+  input: {
+    orderId: string;
+    depositAmount: number;
+    idempotencyKey: string;
+  },
+  options?: { userClient?: SupabaseClient }
+): Promise<{
   success: boolean;
   data?: unknown;
   error?: string;
@@ -129,7 +143,7 @@ export async function updateOrderDepositAction(input: {
       };
     }
 
-    const actor = await getActorContext();
+    const actor = await getActorContext(undefined, options?.userClient);
     if (!actor?.companyId || !actor?.userId) {
       return { success: false, error: 'Chưa xác định danh tính hoặc tổ chức làm việc.' };
     }
@@ -148,12 +162,80 @@ export async function updateOrderDepositAction(input: {
       idempotencyKey: parsed.data.idempotencyKey,
     });
 
-    revalidatePath('/orders');
-    revalidatePath('/contracts');
+    try {
+      revalidatePath('/orders');
+      revalidatePath('/contracts');
+    } catch {
+      // Revalidation non-fatal in test environment
+    }
 
     return { success: true, data: res };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Lỗi khi ghi nhận tiền cọc đơn hàng';
+    return { success: false, error: message };
+  }
+}
+
+const recoverContractSchema = z.object({
+  orderId: z.string().uuid({ message: 'Mã đơn hàng không hợp lệ' }),
+});
+
+/**
+ * Action: Tạo / Khôi phục hợp đồng cho đơn hàng đã xác nhận đặt cọc (DEPOSIT_CONFIRMED).
+ * Allowed roles: BOSS_ADMIN, SALE.
+ * Server remains authoritative: verifies order ownership, deposit confirmation,
+ * derives canonical contract facts, and reuses existing contract safely.
+ */
+export async function recoverOrderContractAction(
+  input: {
+    orderId: string;
+  },
+  options?: { userClient?: SupabaseClient }
+): Promise<{
+  success: boolean;
+  contractId?: string;
+  contractStatus?: string;
+  contractGenerationStatus?: string;
+  error?: string;
+}> {
+  try {
+    const parsed = recoverContractSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: parsed.error.issues.map((e) => e.message).join(', '),
+      };
+    }
+
+    const actor = await getActorContext(undefined, options?.userClient);
+    if (!actor?.companyId || !actor?.userId) {
+      return { success: false, error: 'Chưa xác định danh tính hoặc tổ chức làm việc.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return {
+        success: false,
+        error: 'Bạn không có quyền tạo hoặc khôi phục hợp đồng cho đơn hàng này.',
+      };
+    }
+
+    const res = await ensureContractForDepositConfirmedOrder(actor.companyId, parsed.data.orderId);
+
+    try {
+      revalidatePath('/orders');
+      revalidatePath('/contracts');
+    } catch {
+      // Revalidation non-fatal in test environment
+    }
+
+    return {
+      success: true,
+      contractId: res.contractId,
+      contractStatus: res.status,
+      contractGenerationStatus: res.contractGenerationStatus,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Lỗi khi tạo / khôi phục hợp đồng';
     return { success: false, error: message };
   }
 }
