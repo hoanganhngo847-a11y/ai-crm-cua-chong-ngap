@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createClient as createServerClient } from '../../../lib/supabase/server';
 import type {
   Appointment,
   AppointmentFilters,
@@ -70,12 +69,14 @@ function formatAppointment(
   };
 }
 
+import { createAdminClient } from '../../../lib/supabase/admin';
+
 /**
- * Resolves Supabase client (injected or default server client).
+ * Resolves Supabase client (injected or service admin client for backend operations).
  */
 async function resolveClient(client?: SupabaseClient): Promise<SupabaseClient> {
   if (client) return client;
-  return await createServerClient();
+  return createAdminClient();
 }
 
 /**
@@ -135,6 +136,49 @@ export async function verifyActiveCompanyTechnician(
     id: profile.id,
     full_name: profile.full_name,
   };
+}
+
+/**
+ * Retrieves active technicians belonging to the specified company.
+ * Security Invariant: Zero Phone Exposure. Only id and full_name are returned.
+ */
+export async function getActiveCompanyTechnicians(
+  companyId: string,
+  client?: SupabaseClient
+): Promise<Array<{ id: string; full_name: string }>> {
+  if (!companyId) return [];
+
+  const supabase = await resolveClient(client);
+
+  // 1. Fetch active company members with role TECHNICIAN in target company
+  const { data: members, error: memberErr } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .eq('role', 'TECHNICIAN')
+    .eq('status', 'ACTIVE');
+
+  if (memberErr || !members || members.length === 0) {
+    return [];
+  }
+
+  const userIds = members.map((m) => m.user_id);
+
+  // 2. Fetch active profiles for these technicians
+  const { data: profiles, error: profileErr } = await supabase
+    .from('user_profiles')
+    .select('id, full_name')
+    .in('id', userIds)
+    .eq('status', 'ACTIVE');
+
+  if (profileErr || !profiles) {
+    return [];
+  }
+
+  return profiles.map((p) => ({
+    id: p.id,
+    full_name: p.full_name || 'Kỹ thuật viên',
+  }));
 }
 
 /**

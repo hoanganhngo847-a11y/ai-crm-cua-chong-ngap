@@ -34,8 +34,9 @@ export async function fetchSurveyListPageData(actor: {
 
   const customerIds = Array.from(new Set(appointmentList.map((a) => a.customer_id)));
   const assigneeIds = Array.from(new Set(appointmentList.map((a) => a.assignee_id)));
+  const appointmentIds = appointmentList.map((a) => a.id);
 
-  const [{ data: customerRows }, { data: assigneeRows }] = await Promise.all([
+  const [{ data: customerRows }, { data: assigneeRows }, { data: surveyRows }] = await Promise.all([
     customerIds.length > 0
       ? adminClient
           .from('customers')
@@ -48,10 +49,18 @@ export async function fetchSurveyListPageData(actor: {
           .select('id, full_name')
           .in('id', assigneeIds)
       : Promise.resolve({ data: [] }),
+    appointmentIds.length > 0
+      ? adminClient
+          .from('surveys')
+          .select('id, appointment_id')
+          .in('appointment_id', appointmentIds)
+          .eq('company_id', actor.companyId)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const customerMap = new Map((customerRows || []).map((c) => [c.id, c]));
   const assigneeMap = new Map((assigneeRows || []).map((u) => [u.id, u.full_name]));
+  const surveyMap = new Map((surveyRows || []).map((s) => [s.appointment_id, s.id]));
 
   return appointmentList.map((apt) => {
     const cust = customerMap.get(apt.customer_id);
@@ -67,6 +76,7 @@ export async function fetchSurveyListPageData(actor: {
       address: apt.address,
       start_time: apt.start_time,
       status: apt.status,
+      survey_id: surveyMap.get(apt.id) || null,
     };
   });
 }

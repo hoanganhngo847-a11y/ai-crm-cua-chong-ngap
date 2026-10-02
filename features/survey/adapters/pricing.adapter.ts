@@ -9,7 +9,74 @@ import type {
   FloorMaterial,
   FloorEvenness,
   SlopeGrade,
+  MeasurementData,
 } from '../types/survey';
+
+/**
+ * Canonical deterministic unit conversion from millimeters (mm) to meters (m).
+ * Formula: meters = mm / 1000
+ * Invariant: Fails closed on invalid, NaN, or non-positive millimeter values.
+ */
+export function convertMillimetersToMeters(mm: unknown): number {
+  const num = typeof mm === 'string' && mm.trim() !== '' ? Number(mm) : mm;
+  if (typeof num !== 'number' || isNaN(num) || !isFinite(num) || num <= 0) {
+    throw new Error('INVALID_UNIT_CONVERSION: Giá trị milimét phải là số dương hợp lệ.');
+  }
+  return Math.round(num) / 1000;
+}
+
+export interface CanonicalPricingMeasurements {
+  width?: number; // width in meters (m) derived deterministically from clear_width_mm / 1000
+  height?: number; // height in meters (m) derived deterministically from barrier_height_mm / 1000
+  unit: 'm';
+  clear_width_mm?: number;
+  barrier_height_mm?: number;
+  anticipated_flood_height_mm?: number;
+  gate_type?: string;
+  mounting_method?: string;
+  survey_id?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * ONE Canonical Survey → Pricing Adapter.
+ * Bridges Survey technical millimeter measurements (clear_width_mm, barrier_height_mm)
+ * to Pricing Engine meter dimensions (width, height) deterministically.
+ *
+ * Invariant:
+ * - 2500 mm -> 2.5 m
+ * - 1200 mm -> 1.2 m
+ * - Deterministic, explicit units ('m').
+ * - Fails closed: Never guesses or invents missing dimensions.
+ * - Missing dimensions remain undefined so pricing engine marks them in missing_fields.
+ */
+export function adaptSurveyToPricingInput(
+  survey: Partial<SurveyRecord> | { measurements?: Partial<MeasurementData>; id?: string }
+): CanonicalPricingMeasurements {
+  const m = survey?.measurements || ({} as Partial<MeasurementData>);
+  const result: CanonicalPricingMeasurements = {
+    unit: 'm',
+    clear_width_mm: typeof m.clear_width_mm === 'number' && m.clear_width_mm > 0 ? m.clear_width_mm : undefined,
+    barrier_height_mm: typeof m.barrier_height_mm === 'number' && m.barrier_height_mm > 0 ? m.barrier_height_mm : undefined,
+    anticipated_flood_height_mm:
+      typeof m.anticipated_flood_height_mm === 'number' && m.anticipated_flood_height_mm > 0
+        ? m.anticipated_flood_height_mm
+        : undefined,
+    gate_type: m.gate_type || undefined,
+    mounting_method: m.mounting_method || undefined,
+    survey_id: survey?.id || undefined,
+  };
+
+  if (typeof m.clear_width_mm === 'number' && m.clear_width_mm > 0) {
+    result.width = convertMillimetersToMeters(m.clear_width_mm);
+  }
+
+  if (typeof m.barrier_height_mm === 'number' && m.barrier_height_mm > 0) {
+    result.height = convertMillimetersToMeters(m.barrier_height_mm);
+  }
+
+  return result;
+}
 
 /**
  * Technical Pricing Adapter (Bàn giao dữ liệu kỹ thuật cho TV7: Pricing Engine)

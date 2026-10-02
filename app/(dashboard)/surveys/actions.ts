@@ -76,7 +76,17 @@ function normalizeSafeActionError(
     msg.includes('INVALID_PREDECESSOR_STATE') ||
     msg.includes('INVALID_COMPLETED_BY') ||
     msg.includes('APPOINTMENT_NOT_FOUND') ||
-    msg.includes('APPOINTMENT_TYPE_NOT_SURVEY')
+    msg.includes('APPOINTMENT_TYPE_NOT_SURVEY') ||
+    msg.includes('Người được phân công phải là kỹ thuật viên') ||
+    msg.includes('Không tìm thấy hồ sơ khách hàng') ||
+    msg.includes('Khách hàng không thuộc') ||
+    msg.includes('Doanh nghiệp không khớp') ||
+    msg.includes('POLICY_CONFIGURATION_ERROR') ||
+    msg.includes('RESOURCE_NOT_FOUND') ||
+    msg.includes('CHECK_VIOLATION') ||
+    msg.includes('Thời gian khảo sát') ||
+    msg.includes('Địa chỉ khảo sát') ||
+    msg.includes('Kỹ thuật viên phụ trách')
   ) {
     if (msg.includes('SURVEY_ALREADY_EXISTS:')) {
       return 'Khảo sát cho lịch hẹn này đã tồn tại.';
@@ -95,6 +105,9 @@ function normalizeSafeActionError(
     }
     if (msg.includes('APPOINTMENT_TYPE_NOT_SURVEY:')) {
       return 'Lịch hẹn không phải là lịch khảo sát hợp lệ.';
+    }
+    if (msg.includes('POLICY_CONFIGURATION_ERROR:')) {
+      return 'Chưa cấu hình chính sách giá hiệu lực cho doanh nghiệp.';
     }
     return msg;
   }
@@ -451,3 +464,256 @@ export async function completeSurveyAction(
   }
 }
 
+export interface CreateSurveyAppointmentActionResponse {
+  success: boolean;
+  message?: string;
+  appointment?: import('../../../features/survey/types/appointment').Appointment;
+}
+
+/**
+ * Action: Lên lịch khảo sát hiện trường mới dành riêng cho SALE hoặc BOSS_ADMIN.
+ * Server xác thực tenant nghiêm ngặt: client company_id hoàn toàn bị bỏ qua,
+ * công ty được derive trực tiếp từ membership đang hoạt động của người dùng.
+ * Phân công bắt buộc phải là kỹ thuật viên (TECHNICIAN) đang hoạt động cùng công ty.
+ */
+export async function createSurveyAppointmentAction(
+  input: {
+    customerId: string;
+    assigneeId: string;
+    address: string;
+    appointmentDate: string;
+    companyId?: string;
+  }
+): Promise<CreateSurveyAppointmentActionResponse> {
+  try {
+    const { getActorContext } = await import('../../../lib/auth/context');
+    const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+    const { createAppointment } = await import(
+      '../../../features/survey/services/appointment.service'
+    );
+    const { createClient: createServerClient } = await import('../../../lib/supabase/server');
+
+    const actor = await getActorContext();
+    if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      return { success: false, message: 'Bạn chưa đăng nhập hoặc phiên làm việc đã hết hạn.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return {
+        success: false,
+        message: 'Bạn không có quyền lên lịch khảo sát. Thao tác chỉ dành cho Sale hoặc Quản trị viên.',
+      };
+    }
+
+    if (!actor.companyId) {
+      return { success: false, message: 'Không xác định được doanh nghiệp của bạn.' };
+    }
+
+    // Client-provided companyId is NEVER authoritative; if supplied and different, fail closed
+    if (input.companyId && input.companyId !== actor.companyId) {
+      return { success: false, message: 'Doanh nghiệp không khớp với tài khoản đăng nhập.' };
+    }
+
+    // Fetch customer using authenticated user client to verify tenant boundary under RLS
+    const userClient = await createServerClient();
+    const { data: customer, error: custErr } = await userClient
+      .from('customers')
+      .select('id, company_id, name, stage')
+      .eq('id', input.customerId)
+      .eq('company_id', actor.companyId)
+      .maybeSingle();
+
+    if (custErr || !customer) {
+      return {
+        success: false,
+        message: 'Không tìm thấy hồ sơ khách hàng thuộc doanh nghiệp của bạn.',
+      };
+    }
+
+    const appointment = await createAppointment(
+      {
+        customer_id: customer.id,
+        assignee_id: input.assigneeId,
+        address: input.address,
+        appointment_date: input.appointmentDate,
+        type: 'SURVEY',
+        status: 'ASSIGNED',
+      },
+      userClient
+    );
+
+    // Advance customer stage to SURVEY_SCHEDULED if currently at an early stage
+    try {
+      const { CustomerService } = await import('../../../features/crm/services/customer.service');
+      const earlyStages = ['LEAD_NEW', 'CONTACT_CYCLE_1', 'CONTACT_CYCLE_2', 'CONTACT_CYCLE_3', 'SURVEY_REQUESTED'];
+      if (earlyStages.includes(customer.stage)) {
+        await CustomerService.updateStage(
+          {
+            customerId: customer.id,
+            companyId: actor.companyId,
+            to_stage: 'SURVEY_SCHEDULED',
+            note: `Lên lịch khảo sát hiện trường với kỹ thuật viên ngày ${new Date(input.appointmentDate).toLocaleString('vi-VN')}`,
+            actorId: actor.userId,
+          },
+          userClient
+        );
+      }
+    } catch (stageErr) {
+      console.warn('[Stage update non-fatal error]:', stageErr);
+    }
+
+    revalidatePath('/surveys');
+    revalidatePath('/customers');
+    revalidatePath(`/customers/${customer.id}`);
+
+    return {
+      success: true,
+      message: 'Đã lên lịch khảo sát thành công.',
+      appointment,
+    };
+  } catch (err: unknown) {
+    console.error('[Action Error - createSurveyAppointmentAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(
+        err,
+        'Không thể tạo lịch hẹn khảo sát do lỗi hệ thống. Vui lòng thử lại.'
+      ),
+    };
+  }
+}
+
+/**
+ * Action: Lấy danh sách kỹ thuật viên (TECHNICIAN) đang hoạt động cùng công ty.
+ * Zero-phone boundary: Tuyệt đối không trả về số điện thoại cá nhân.
+ */
+export async function getActiveCompanyTechniciansAction(): Promise<{
+  success: boolean;
+  technicians?: Array<{ id: string; full_name: string }>;
+  message?: string;
+}> {
+  try {
+    const { getActorContext } = await import('../../../lib/auth/context');
+    const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+    const { getActiveCompanyTechnicians } = await import(
+      '../../../features/survey/services/appointment.service'
+    );
+
+    const actor = await getActorContext();
+    if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      return { success: false, message: 'Bạn chưa đăng nhập.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return { success: false, message: 'Bạn không có quyền xem danh sách kỹ thuật viên.' };
+    }
+
+    if (!actor.companyId) {
+      return { success: false, message: 'Không xác định được doanh nghiệp.' };
+    }
+
+    const technicians = await getActiveCompanyTechnicians(actor.companyId);
+
+    return {
+      success: true,
+      technicians,
+    };
+  } catch (err) {
+    console.error('[Action Error - getActiveCompanyTechniciansAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(err, 'Lỗi khi lấy danh sách kỹ thuật viên.'),
+    };
+  }
+}
+
+export interface CalculatePriceFromSurveyActionResponse {
+  success: boolean;
+  message?: string;
+  calculationId?: string;
+  status?: string;
+  amount?: number | null;
+  missingFields?: string[];
+}
+
+/**
+ * Action: Kích hoạt tính giá tin cậy từ khảo sát đã hoàn tất (Option B - Explicit trusted Sale/Boss action).
+ * Thao tác lấy dữ liệu khảo sát trực tiếp từ database qua canonical adapter,
+ * áp dụng chính sách giá active của công ty và ghi nhận PriceCalculation bất biến.
+ */
+export async function calculatePriceFromSurveyAction(
+  params: { surveyId: string }
+): Promise<CalculatePriceFromSurveyActionResponse> {
+  try {
+    const { getActorContext } = await import('../../../lib/auth/context');
+    const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+    const { calculatePriceFromSurvey } = await import('../../../features/pricing/services');
+    const { createClient: createServerClient } = await import('../../../lib/supabase/server');
+
+    const actor = await getActorContext();
+    if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      return { success: false, message: 'Bạn chưa đăng nhập.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return {
+        success: false,
+        message: 'Bạn không có quyền tính giá. Thao tác chỉ dành cho Sale hoặc Quản trị viên.',
+      };
+    }
+
+    if (!actor.companyId) {
+      return { success: false, message: 'Không xác định được doanh nghiệp.' };
+    }
+
+    const calcResult = await calculatePriceFromSurvey({
+      companyId: actor.companyId,
+      surveyId: params.surveyId,
+    });
+
+    // If successfully CALCULATED, update customer stage to PRICE_CALCULATED
+    if (calcResult.status === 'CALCULATED') {
+      try {
+        const { CustomerService } = await import('../../../features/crm/services/customer.service');
+        const userClient = await createServerClient();
+        await CustomerService.updateStage(
+          {
+            customerId: calcResult.customer_id,
+            companyId: actor.companyId,
+            to_stage: 'PRICE_CALCULATED',
+            note: `Đã tính giá từ khảo sát: ${calcResult.amount != null ? Number(calcResult.amount).toLocaleString('vi-VN') + ' đ' : 'Thành công'}`,
+            actorId: actor.userId,
+          },
+          userClient
+        );
+      } catch (stErr) {
+        console.warn('[Stage update non-fatal error]:', stErr);
+      }
+    }
+
+    revalidatePath('/quotations');
+    revalidatePath('/surveys');
+    revalidatePath(`/customers/${calcResult.customer_id}`);
+
+    return {
+      success: true,
+      calculationId: calcResult.id,
+      status: calcResult.status,
+      amount: calcResult.amount,
+      missingFields: calcResult.missing_fields,
+      message:
+        calcResult.status === 'CALCULATED'
+          ? `Đã tính giá thành công: ${Number(calcResult.amount).toLocaleString('vi-VN')} đ`
+          : 'Dữ liệu khảo sát chưa đủ để tính giá tự động (NEED_INFO).',
+    };
+  } catch (err: unknown) {
+    console.error('[Action Error - calculatePriceFromSurveyAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(
+        err,
+        'Không thể tính giá từ khảo sát do lỗi hệ thống.'
+      ),
+    };
+  }
+}

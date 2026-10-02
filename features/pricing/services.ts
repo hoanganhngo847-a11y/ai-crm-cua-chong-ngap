@@ -4,6 +4,8 @@ import { APPLICATION_ROLES } from '@/shared/constants/roles';
 import { calculatePrice } from './utils';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { adaptSurveyToPricingInput } from '@/features/survey/adapters/pricing.adapter';
+
 export async function getActivePricingPolicy(companyId: string) {
   const adminClient = createAdminClient();
   const { data, error } = await adminClient
@@ -24,17 +26,19 @@ export async function getActivePricingPolicy(companyId: string) {
 
 /**
  * Calculates and persists an immutable price calculation snapshot via trusted server RPC.
+ * When surveyId is present, the server fetches the completed survey and derives measurements
+ * authoritatively via adaptSurveyToPricingInput.
  */
 export async function calculateAndSavePriceCalculation(
   params: {
     companyId: string;
     customerId: string;
     surveyId?: string;
-    measurements: Record<string, unknown>;
+    measurements?: Record<string, unknown>;
   },
   client?: SupabaseClient
 ) {
-  const { companyId, customerId, surveyId, measurements } = params;
+  const { companyId, customerId, surveyId } = params;
 
   // 1. Authorize actor
   await verifyActorForCompany(
@@ -43,21 +47,41 @@ export async function calculateAndSavePriceCalculation(
     client
   );
 
-  // 2. Fetch current policy
+  const adminClient = createAdminClient();
+
+  // 2. Derive measurements: when surveyId is supplied, fetch authoritative survey
+  let canonicalMeasurements = params.measurements || {};
+  if (surveyId) {
+    const { data: survey, error: surveyError } = await adminClient
+      .from('surveys')
+      .select('*')
+      .eq('id', surveyId)
+      .eq('company_id', companyId)
+      .maybeSingle();
+
+    if (surveyError || !survey) {
+      throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy khảo sát hợp lệ thuộc doanh nghiệp.');
+    }
+    if (survey.customer_id !== customerId) {
+      throw new Error('RESOURCE_NOT_FOUND: Khảo sát không thuộc khách hàng này.');
+    }
+    canonicalMeasurements = adaptSurveyToPricingInput(survey);
+  }
+
+  // 3. Fetch current policy
   const policy = await getActivePricingPolicy(companyId);
 
-  // 3. Compute price
-  const calculationResult = calculatePrice(measurements, policy);
+  // 4. Compute price
+  const calculationResult = calculatePrice(canonicalMeasurements, policy);
 
-  // 4. Persist via atomic RPC (service role only)
-  const adminClient = createAdminClient();
+  // 5. Persist via atomic RPC (service role only)
   const { data, error } = await adminClient.rpc('save_price_calculation_rpc', {
     p_company_id: companyId,
     p_customer_id: customerId,
     p_survey_id: surveyId || null,
     p_pricing_policy_id: policy.id,
     p_policy_version: policy.version,
-    p_input_data: measurements,
+    p_input_data: canonicalMeasurements,
     p_amount: calculationResult.amount,
     p_status: calculationResult.status,
     p_missing_fields: calculationResult.missing_fields,
@@ -69,6 +93,101 @@ export async function calculateAndSavePriceCalculation(
   }
 
   return data;
+}
+
+/**
+ * Trusted server calculation and persistence of price calculation directly from a completed survey.
+ * Invariants:
+ * - Authorizes actor as active SALE or BOSS_ADMIN in the target company.
+ * - Server fetches the Survey directly by (surveyId, companyId). Browser NEVER provides measurements or policies.
+ * - Validates Customer belongs to target company.
+ * - Applies canonical Survey-to-Pricing adapter (clear_width_mm / 1000 -> width_m, barrier_height_mm / 1000 -> height_m).
+ * - Fetches active PricingPolicy.
+ * - Pure calculation via calculatePrice().
+ * - Persists immutable snapshot via save_price_calculation_rpc.
+ * - Returns the resulting PriceCalculation.
+ */
+export async function calculatePriceFromSurvey(
+  params: {
+    companyId: string;
+    surveyId: string;
+  },
+  client?: SupabaseClient
+) {
+  const { companyId, surveyId } = params;
+
+  // 1. Authorize actor
+  await verifyActorForCompany(
+    companyId,
+    { allowedRoles: [APPLICATION_ROLES.BOSS_ADMIN, APPLICATION_ROLES.SALE] },
+    client
+  );
+
+  const adminClient = createAdminClient();
+
+  // 2. Fetch authoritative survey directly from database
+  const { data: survey, error: surveyError } = await adminClient
+    .from('surveys')
+    .select('*')
+    .eq('id', surveyId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (surveyError || !survey) {
+    throw new Error('RESOURCE_NOT_FOUND: Không tìm thấy khảo sát hợp lệ thuộc doanh nghiệp.');
+  }
+
+  // 3. Verify target customer belongs to the company
+  const { data: customer, error: customerError } = await adminClient
+    .from('customers')
+    .select('id, company_id')
+    .eq('id', survey.customer_id)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (customerError || !customer) {
+    throw new Error('RESOURCE_NOT_FOUND: Khách hàng không thuộc doanh nghiệp.');
+  }
+
+  // 4. Adapt completed survey using canonical adapter
+  const canonicalInput = adaptSurveyToPricingInput(survey);
+
+  // 5. Fetch active PricingPolicy
+  const policy = await getActivePricingPolicy(companyId);
+
+  // 6. Compute price fail-closed
+  const calculationResult = calculatePrice(canonicalInput, policy);
+
+  // 7. Persist via save_price_calculation_rpc
+  const { data, error } = await adminClient.rpc('save_price_calculation_rpc', {
+    p_company_id: companyId,
+    p_customer_id: survey.customer_id,
+    p_survey_id: survey.id,
+    p_pricing_policy_id: policy.id,
+    p_policy_version: policy.version,
+    p_input_data: canonicalInput,
+    p_amount: calculationResult.amount,
+    p_status: calculationResult.status,
+    p_missing_fields: calculationResult.missing_fields,
+  });
+
+  if (error) {
+    console.error('Lỗi khi lưu bảng tính giá từ khảo sát:', error);
+    throw error;
+  }
+
+  return {
+    id: data.id,
+    company_id: companyId,
+    customer_id: survey.customer_id,
+    survey_id: survey.id,
+    pricing_policy_id: policy.id,
+    policy_version: policy.version,
+    input_data: canonicalInput,
+    amount: calculationResult.amount,
+    status: calculationResult.status,
+    missing_fields: calculationResult.missing_fields,
+  };
 }
 
 /**

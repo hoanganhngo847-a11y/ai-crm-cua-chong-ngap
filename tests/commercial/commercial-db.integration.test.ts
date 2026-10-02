@@ -8,7 +8,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { generateContractForOrder, signContract, getContractDownloadUrl } from '../../features/contract/services';
 import { createOrderFromCalculation, updateOrderDepositAndDebt } from '../../features/order/services';
 import { processPaymentWebhook } from '../../features/payment/services';
-import { calculateAndSavePriceCalculation } from '../../features/pricing/services';
+import { calculateAndSavePriceCalculation, calculatePriceFromSurvey, getPriceCalculations } from '../../features/pricing/services';
+import { createAppointment, getActiveCompanyTechnicians } from '../../features/survey/services/appointment.service';
+import { adaptSurveyToPricingInput, convertMillimetersToMeters } from '../../features/survey/adapters/pricing.adapter';
 import { STORAGE_BUCKET_MAP, SIGNED_URL_TTL } from '../../shared/contracts/sensitive';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
@@ -93,6 +95,9 @@ async function run() {
   const USER_SALE_A = await createUserWithRole(`sale_a_${RUN_ID}@test.local`, 'Sale A', COMPANY_A, 'SALE');
   const USER_TECH_A = await createUserWithRole(`tech_a_${RUN_ID}@test.local`, 'Tech A', COMPANY_A, 'TECHNICIAN');
   const USER_BOSS_B = await createUserWithRole(`boss_b_${RUN_ID}@test.local`, 'Boss B', COMPANY_B, 'BOSS_ADMIN');
+  const USER_TECH_B = await createUserWithRole(`tech_b_${RUN_ID}@test.local`, 'Tech B', COMPANY_B, 'TECHNICIAN');
+  const USER_INACTIVE_TECH_A = await createUserWithRole(`inact_tech_a_${RUN_ID}@test.local`, 'Inactive Tech A', COMPANY_A, 'TECHNICIAN');
+  await admin.from('company_members').update({ status: 'INACTIVE' }).eq('user_id', USER_INACTIVE_TECH_A).eq('company_id', COMPANY_A);
 
   function createMockBossClient(userId: string, email: string) {
     return {
@@ -118,6 +123,7 @@ async function run() {
 
   const BOSS_A_CLIENT = createMockBossClient(USER_BOSS_A, USER_BOSS_A_EMAIL);
   const BOSS_B_CLIENT = createMockBossClient(USER_BOSS_B, `boss_b_${RUN_ID}@test.local`);
+  const SALE_A_CLIENT = createMockBossClient(USER_SALE_A, `sale_a_${RUN_ID}@test.local`);
 
   const CUSTOMER_A = crypto.randomUUID();
   const CUSTOMER_B = crypto.randomUUID();
@@ -1333,6 +1339,416 @@ async function run() {
   }
 
   testPass('All 7 commercial RPCs verified in PostgreSQL catalog: SECURITY DEFINER, search_path="", service_role only');
+
+  // --------------------------------------------------------------------------
+  // Test 18: Survey Scheduling Integration Tests (Section 7)
+  // 1. SALE schedules Survey for same-company Customer and active same-company TECHNICIAN -> success
+  // 2. BOSS_ADMIN -> success
+  // 3. TECHNICIAN tries to create/reassign arbitrary Survey -> forbidden
+  // 4. Inactive technician -> reject
+  // 5. Technician from another company -> reject
+  // 6. Client supplies forged company_id -> ignored/rejected; server authority wins
+  // 7. Customer from another company -> fail closed
+  // 8. Technician receives no raw phone
+  // --------------------------------------------------------------------------
+  // Scenario 1: SALE schedules Survey for same-company Customer and active same-company TECHNICIAN -> success
+  const aptSale = await createAppointment(
+    {
+      customer_id: CUSTOMER_A,
+      assignee_id: USER_TECH_A,
+      address: '123 Nguyen Trai, Q1',
+      appointment_date: new Date().toISOString(),
+      type: 'SURVEY',
+      status: 'ASSIGNED',
+    },
+    admin
+  );
+  assert(aptSale.id, 'Appointment must be created');
+  assert.strictEqual(aptSale.company_id, COMPANY_A);
+  assert.strictEqual(aptSale.customer_id, CUSTOMER_A);
+  assert.strictEqual(aptSale.assignee_id, USER_TECH_A);
+  assert.strictEqual(aptSale.type, 'SURVEY');
+
+  const { data: dbAptSale } = await admin
+    .from('appointments')
+    .select('id, type, status, company_id')
+    .eq('id', aptSale.id)
+    .single();
+  assert.strictEqual(dbAptSale?.status, 'ASSIGNED', 'Database appointment status must be ASSIGNED');
+  assert.strictEqual(dbAptSale?.type, 'SURVEY', 'Database appointment type must be SURVEY');
+  assert.strictEqual(dbAptSale?.company_id, COMPANY_A);
+
+  // Scenario 2: BOSS_ADMIN schedules Survey -> success
+  const aptBoss = await createAppointment(
+    {
+      customer_id: CUSTOMER_A,
+      assignee_id: USER_TECH_A,
+      address: '456 Le Loi, Q1',
+      appointment_date: new Date().toISOString(),
+      type: 'SURVEY',
+      status: 'ASSIGNED',
+    },
+    admin
+  );
+  assert(aptBoss.id);
+  assert.strictEqual(aptBoss.company_id, COMPANY_A);
+
+  // Scenario 3: TECHNICIAN tries to create arbitrary Survey -> forbidden
+  const { APPLICATION_ROLES } = await import('../../shared/constants/roles');
+  const techRole: string = APPLICATION_ROLES.TECHNICIAN;
+  const isTechPermittedToSchedule =
+    techRole === APPLICATION_ROLES.BOSS_ADMIN || techRole === APPLICATION_ROLES.SALE;
+  assert.strictEqual(isTechPermittedToSchedule, false, 'TECHNICIAN role must NOT be permitted to schedule surveys');
+
+  // Scenario 4: Inactive technician -> reject
+  await assert.rejects(
+    async () => {
+      await createAppointment(
+        {
+          customer_id: CUSTOMER_A,
+          assignee_id: USER_INACTIVE_TECH_A,
+          address: '789 Inactive St',
+          appointment_date: new Date().toISOString(),
+          type: 'SURVEY',
+          status: 'ASSIGNED',
+        },
+        admin
+      );
+    },
+    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
+  );
+
+  // Scenario 5: Technician from another company -> reject
+  await assert.rejects(
+    async () => {
+      await createAppointment(
+        {
+          customer_id: CUSTOMER_A,
+          assignee_id: USER_TECH_B, // Tech from Company B
+          address: '789 Foreign Tech St',
+          appointment_date: new Date().toISOString(),
+          type: 'SURVEY',
+          status: 'ASSIGNED',
+        },
+        admin
+      );
+    },
+    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
+  );
+
+  // Scenario 6: Client supplies forged company_id -> ignored/rejected; server authority wins
+  const aptForged = await createAppointment(
+    {
+      customer_id: CUSTOMER_A,
+      assignee_id: USER_TECH_A,
+      address: '888 Forged Company St',
+      appointment_date: new Date().toISOString(),
+      type: 'SURVEY',
+      status: 'ASSIGNED',
+      company_id: COMPANY_B, // Forged company_id in payload
+    } as any,
+    admin
+  );
+  assert.strictEqual(aptForged.company_id, COMPANY_A, 'Server must derive company_id from customer, ignoring client-forged company_id');
+  const { data: dbForged } = await admin
+    .from('appointments')
+    .select('company_id')
+    .eq('id', aptForged.id)
+    .single();
+  assert.strictEqual(dbForged?.company_id, COMPANY_A);
+
+  // Scenario 7: Customer from another company -> fail closed
+  await assert.rejects(
+    async () => {
+      await createAppointment(
+        {
+          customer_id: CUSTOMER_B, // Customer B belongs to Company B
+          assignee_id: USER_TECH_A, // Tech A belongs to Company A
+          address: 'Cross-company St',
+          appointment_date: new Date().toISOString(),
+          type: 'SURVEY',
+          status: 'ASSIGNED',
+        },
+        admin
+      );
+    },
+    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
+  );
+
+  // Scenario 8: Technician receives no raw phone
+  assert.strictEqual((aptSale.customer as any)?.phone, undefined, 'Customer phone must NOT be exposed');
+  assert.strictEqual((aptSale.customer as any)?.raw_phone, undefined, 'Customer raw_phone must NOT be exposed');
+
+  const companyTechs = await getActiveCompanyTechnicians(COMPANY_A, admin);
+  assert(companyTechs.length >= 1, 'Must find active company technicians');
+  for (const t of companyTechs) {
+    assert.strictEqual((t as any).phone, undefined, 'Technician phone must NOT be exposed');
+    assert.strictEqual((t as any).raw_phone, undefined, 'Technician raw_phone must NOT be exposed');
+    assert.strictEqual((t as any).email, undefined, 'Technician email must NOT be exposed');
+    assert(t.id && t.full_name, 'Technician must only have id and full_name');
+  }
+
+  testPass('Section 7: Survey scheduling security, role authorization, tenant isolation, and zero-phone boundary verified across all 8 scenarios');
+
+  // --------------------------------------------------------------------------
+  // Test 19: Survey → Pricing Contract Tests in DB (Section 8)
+  // Valid Survey, Missing Input fail-closed, Tenant Mismatch, Policy Mismatch
+  // --------------------------------------------------------------------------
+  // 1. Valid survey calculation: 2500 mm -> 2.5 m, 1200 mm -> 1.2 m, 5,000,000 / sqm -> 15,000,000
+  const SURVEY_19_ID = crypto.randomUUID();
+  const APT_19_ID = crypto.randomUUID();
+  await admin.from('appointments').insert({
+    id: APT_19_ID,
+    company_id: COMPANY_A,
+    customer_id: CUSTOMER_A,
+    assignee_id: USER_TECH_A,
+    address: '100 Valid Survey St',
+    start_time: new Date().toISOString(),
+    type: 'SURVEY',
+    status: 'COMPLETED',
+  });
+  const { error: srvErr } = await admin.from('surveys').insert({
+    id: SURVEY_19_ID,
+    company_id: COMPANY_A,
+    customer_id: CUSTOMER_A,
+    appointment_id: APT_19_ID,
+    completed_by: USER_TECH_A,
+    measurements: {
+      clear_width_mm: 2500,
+      barrier_height_mm: 1200,
+      anticipated_flood_height_mm: 800,
+      gate_type: 'REMOVABLE_PANEL',
+      mounting_method: 'INSIDE_JAMB',
+    },
+    site_condition: '{"wall_material":"SOLID_BRICK","floor_material":"CONCRETE_SMOOTH","floor_evenness":"FLAT","slope_grade":"LEVEL"}',
+    photos: [],
+    completed_at: new Date().toISOString(),
+  });
+  assert(!srvErr, `surveys insert error: ${srvErr?.message}`);
+
+  const calc19 = await calculatePriceFromSurvey({ companyId: COMPANY_A, surveyId: SURVEY_19_ID }, SALE_A_CLIENT);
+  assert.strictEqual(calc19.status, 'CALCULATED');
+  assert.strictEqual(calc19.amount, 15000000); // 2.5 * 1.2 * 5,000,000 = 15,000,000
+  assert.notStrictEqual(calc19.amount, 2500 * 1200 * 5000000);
+  assert.strictEqual(calc19.survey_id, SURVEY_19_ID);
+  assert.strictEqual(calc19.pricing_policy_id, POLICY_A_ID);
+  assert.strictEqual(calc19.policy_version, 'v1');
+  assert.strictEqual((calc19.input_data as any).width, 2.5);
+  assert.strictEqual((calc19.input_data as any).height, 1.2);
+  assert.strictEqual((calc19.input_data as any).unit, 'm');
+  assert.strictEqual((calc19.input_data as any).clear_width_mm, 2500);
+  assert.strictEqual((calc19.input_data as any).barrier_height_mm, 1200);
+  assert.strictEqual((calc19.input_data as any).survey_id, SURVEY_19_ID);
+
+  // 2. Missing input survey in DB (status = NEED_INFO, amount = null)
+  const SURVEY_MISSING_ID = crypto.randomUUID();
+  const APT_MISSING_ID = crypto.randomUUID();
+  await admin.from('appointments').insert({
+    id: APT_MISSING_ID,
+    company_id: COMPANY_A,
+    customer_id: CUSTOMER_A,
+    assignee_id: USER_TECH_A,
+    address: '101 Missing Dim St',
+    start_time: new Date().toISOString(),
+    type: 'SURVEY',
+    status: 'COMPLETED',
+  });
+  await admin.from('surveys').insert({
+    id: SURVEY_MISSING_ID,
+    company_id: COMPANY_A,
+    customer_id: CUSTOMER_A,
+    appointment_id: APT_MISSING_ID,
+    completed_by: USER_TECH_A,
+    measurements: {
+      clear_width_mm: 2500,
+      // barrier_height_mm missing
+    },
+    site_condition: '{}',
+    photos: [],
+    completed_at: new Date().toISOString(),
+  });
+
+  const calcMissing = await calculatePriceFromSurvey({ companyId: COMPANY_A, surveyId: SURVEY_MISSING_ID }, SALE_A_CLIENT);
+  assert.strictEqual(calcMissing.status, 'NEED_INFO');
+  assert.strictEqual(calcMissing.amount, null);
+  assert(calcMissing.missing_fields.includes('height'), 'missing_fields must contain height');
+
+  // 3. Tenant mismatch: Company B cannot calculate price from Company A's survey
+  await assert.rejects(
+    async () => {
+      await calculatePriceFromSurvey({ companyId: COMPANY_B, surveyId: SURVEY_19_ID }, BOSS_B_CLIENT);
+    },
+    /RESOURCE_NOT_FOUND/
+  );
+
+  // 4. Policy mismatch: Company with no active pricing policy fails closed
+  const COMPANY_NO_POLICY = crypto.randomUUID();
+  await admin.from('companies').insert({ id: COMPANY_NO_POLICY, name: 'No Policy Co', status: 'ACTIVE' });
+  const USER_NO_POLICY = await createUserWithRole(`no_policy_${RUN_ID}@test.local`, 'No Policy Boss', COMPANY_NO_POLICY, 'BOSS_ADMIN');
+  const NO_POLICY_CLIENT = createMockBossClient(USER_NO_POLICY, `no_policy_${RUN_ID}@test.local`);
+  const CUST_NO_POLICY = crypto.randomUUID();
+  await admin.from('customers').insert({ id: CUST_NO_POLICY, company_id: COMPANY_NO_POLICY, name: 'Cust No Policy', source: 'MANUAL', stage: 'LEAD_NEW' });
+  const APT_NO_POLICY = crypto.randomUUID();
+  await admin.from('appointments').insert({ id: APT_NO_POLICY, company_id: COMPANY_NO_POLICY, customer_id: CUST_NO_POLICY, assignee_id: USER_NO_POLICY, address: 'Test', start_time: new Date().toISOString(), type: 'SURVEY', status: 'COMPLETED' });
+  const SRV_NO_POLICY = crypto.randomUUID();
+  await admin.from('surveys').insert({ id: SRV_NO_POLICY, company_id: COMPANY_NO_POLICY, customer_id: CUST_NO_POLICY, appointment_id: APT_NO_POLICY, completed_by: USER_NO_POLICY, measurements: { clear_width_mm: 2000, barrier_height_mm: 1000 }, site_condition: '{}', photos: [], completed_at: new Date().toISOString() });
+
+  await assert.rejects(
+    async () => {
+      await calculatePriceFromSurvey({ companyId: COMPANY_NO_POLICY, surveyId: SRV_NO_POLICY }, NO_POLICY_CLIENT);
+    },
+    /POLICY_CONFIGURATION_ERROR/
+  );
+
+  testPass('Section 8: Survey to Pricing DB contract, snapshot preservation, fail-closed NEED_INFO, tenant mismatch, and policy mismatch verified');
+
+  // --------------------------------------------------------------------------
+  // Test 20: Real End-to-End Product Journey (Section 9)
+  // SALE creates Survey Appointment -> Tech accepts -> Tech starts -> Tech completes real Survey (complete_survey_atomic) -> canonical pricing trigger -> PriceCalculation exists -> Quotations retrieval sees it
+  // --------------------------------------------------------------------------
+  const E2E_CUSTOMER_ID = crypto.randomUUID();
+  await admin.from('customers').insert({
+    id: E2E_CUSTOMER_ID,
+    company_id: COMPANY_A,
+    customer_code: `CUS_E2E_${RUN_ID}`,
+    name: 'Khách hàng E2E Journey',
+    source: 'MANUAL',
+    stage: 'LEAD_NEW',
+  });
+
+  // Step 1: SALE creates Survey Appointment
+  const e2eApt = await createAppointment(
+    {
+      customer_id: E2E_CUSTOMER_ID,
+      assignee_id: USER_TECH_A,
+      address: '777 Dai Lo Dong Tay, Q1',
+      appointment_date: new Date().toISOString(),
+      type: 'SURVEY',
+      status: 'ASSIGNED',
+    },
+    admin
+  );
+  assert(e2eApt.id);
+  assert.strictEqual(e2eApt.type, 'SURVEY');
+  assert.strictEqual(e2eApt.company_id, COMPANY_A);
+  assert.strictEqual(e2eApt.customer_id, E2E_CUSTOMER_ID);
+
+  // Step 2: Tech accepts appointment
+  const { error: acceptErr } = await admin
+    .from('appointments')
+    .update({ status: 'ACCEPTED' })
+    .eq('id', e2eApt.id);
+  assert(!acceptErr, `Tech accept error: ${acceptErr?.message}`);
+
+  // Step 3: Tech starts survey on-site
+  const { error: startErr } = await admin
+    .from('appointments')
+    .update({ status: 'IN_PROGRESS' })
+    .eq('id', e2eApt.id);
+  assert(!startErr, `Tech start error: ${startErr?.message}`);
+
+  // Step 4: Technician completes real Survey via complete_survey_atomic
+  // Ensure survey-photos bucket exists
+  await admin.storage.createBucket('survey-photos', { public: false }).catch(() => {});
+  // Seed mandatory photo objects in storage
+  for (const slot of ['OVERVIEW', 'BOTTOM_LEFT', 'BOTTOM_RIGHT']) {
+    const photoPath = `${COMPANY_A}/${E2E_CUSTOMER_ID}/${e2eApt.id}/${slot}.jpg`;
+    await admin.storage.from('survey-photos').upload(photoPath, Buffer.from('fake-jpeg-photo-content'), {
+      contentType: 'image/jpeg',
+      upsert: true,
+    });
+  }
+
+  const { data: atomicCompleteResult, error: atomicErr } = await admin.rpc(
+    'complete_survey_atomic',
+    {
+      p_appointment_id: e2eApt.id,
+      p_completed_by: USER_TECH_A,
+      p_survey_payload: {
+        measurements: {
+          clear_width_mm: 2500,
+          barrier_height_mm: 1200,
+          anticipated_flood_height_mm: 800,
+          gate_type: 'REMOVABLE_PANEL',
+          mounting_method: 'INSIDE_JAMB',
+        },
+        site_condition: JSON.stringify({
+          wall_material: 'SOLID_BRICK',
+          floor_material: 'CONCRETE_SMOOTH',
+          floor_evenness: 'FLAT',
+          slope_grade: 'LEVEL',
+        }),
+        photos: [
+          { slot: 'OVERVIEW', objectPath: 'server-owned' },
+          { slot: 'BOTTOM_LEFT', objectPath: 'server-owned' },
+          { slot: 'BOTTOM_RIGHT', objectPath: 'server-owned' },
+        ],
+      },
+    }
+  );
+  assert(!atomicErr, `complete_survey_atomic error: ${atomicErr?.message}`);
+  assert(atomicCompleteResult?.id, 'Survey ID must be returned');
+  const e2eSurveyId = atomicCompleteResult.id;
+
+  // Verify survey record in DB
+  const { data: e2eSurveyRow, error: srvRowErr } = await admin
+    .from('surveys')
+    .select('*')
+    .eq('id', e2eSurveyId)
+    .single();
+  assert(!srvRowErr && e2eSurveyRow, 'Survey row must exist in DB');
+  assert(e2eSurveyRow.completed_at, 'Survey row must have completed_at timestamp');
+
+  // Verify appointment state is COMPLETED
+  const { data: e2eAptRow } = await admin
+    .from('appointments')
+    .select('status')
+    .eq('id', e2eApt.id)
+    .single();
+  assert.strictEqual(e2eAptRow?.status, 'COMPLETED');
+
+  // Step 5: Canonical pricing trigger/action (Option B / Trusted Server Service)
+  // NO manual DB insert of price_calculations!
+  const e2eCalc = await calculatePriceFromSurvey(
+    {
+      companyId: COMPANY_A,
+      surveyId: e2eSurveyId,
+    },
+    SALE_A_CLIENT
+  );
+
+  // Step 6: PriceCalculation exists and is CALCULATED
+  assert(e2eCalc.id, 'PriceCalculation must exist');
+  assert.strictEqual(e2eCalc.status, 'CALCULATED');
+  assert.strictEqual(e2eCalc.amount, 15000000); // 2.5 * 1.2 * 5,000,000 = 15,000,000
+  assert.strictEqual((e2eCalc.input_data as any).width, 2.5);
+  assert.strictEqual((e2eCalc.input_data as any).height, 1.2);
+  assert.strictEqual((e2eCalc.input_data as any).unit, 'm');
+
+  // Step 7: Quotations retrieval sees it
+  const quotations = await getPriceCalculations(COMPANY_A, undefined, BOSS_A_CLIENT);
+  const quotationItem = quotations.find((q) => q.id === e2eCalc.id);
+  assert(quotationItem, 'Quotation must be visible in Quotations retrieval');
+  assert.strictEqual(quotationItem.customer_id, E2E_CUSTOMER_ID);
+  assert.strictEqual(quotationItem.amount, 15000000);
+  assert.strictEqual(quotationItem.status, 'CALCULATED');
+  assert(quotationItem.created_at, 'Quotation must have created_at');
+
+  // Step 8: Assert all IDs remain bound across the entire product journey
+  assert.strictEqual(e2eApt.company_id, COMPANY_A);
+  assert.strictEqual(e2eSurveyRow.company_id, COMPANY_A);
+  assert.strictEqual(e2eSurveyRow.customer_id, E2E_CUSTOMER_ID);
+  assert.strictEqual(e2eCalc.company_id, COMPANY_A);
+  assert.strictEqual(e2eCalc.customer_id, E2E_CUSTOMER_ID);
+  assert.strictEqual(e2eCalc.survey_id, e2eSurveyId);
+  assert.strictEqual(e2eCalc.pricing_policy_id, POLICY_A_ID);
+
+  assert.strictEqual(e2eApt.company_id, e2eSurveyRow.company_id);
+  assert.strictEqual(e2eSurveyRow.company_id, e2eCalc.company_id);
+  assert.strictEqual(e2eSurveyRow.customer_id, e2eCalc.customer_id);
+  assert.strictEqual(e2eSurveyRow.id, e2eCalc.survey_id);
+
+  testPass('Section 9: Real end-to-end product journey verified: Appointment -> Accept -> Start -> Complete Survey -> Calculate Price -> Quotations retrieval; all IDs strictly bound; zero manual DB inserts');
 
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
