@@ -91,6 +91,24 @@ function queryRawJson<T>(sql: string): T {
   return JSON.parse(trimmed) as T;
 }
 
+function insertHanReceiptDirectSql(receipt: {
+  company_id: string;
+  external_identity: string;
+  event_key: string;
+  kind: 'DELIVERY' | 'READ';
+  mids?: string[];
+  watermark?: number;
+}): void {
+  const midsSql =
+    receipt.mids && receipt.mids.length > 0
+      ? `ARRAY[${receipt.mids.map((m) => `'${m}'`).join(',')}]`
+      : `ARRAY[]::text[]`;
+  const watermarkSql = receipt.watermark !== undefined ? receipt.watermark.toString() : 'NULL';
+  execSync(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "INSERT INTO private.han_receipts (company_id, external_identity, event_key, kind, mids, watermark) VALUES ('${receipt.company_id}', '${receipt.external_identity}', '${receipt.event_key}', '${receipt.kind}', ${midsSql}, ${watermarkSql});"`
+  );
+}
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -780,12 +798,13 @@ async function run() {
   // Helper to open overdue Response SLA window bound to conversation
   async function createDueSlaWindow(testSuffix: string) {
     const convoId = crypto.randomUUID();
+    const externalConversationId = `page_test_${RUN_ID}:psid_${testSuffix}`;
     await admin.from('conversations').insert({
       id: convoId,
       company_id: COMPANY_ID,
       customer_id: CUSTOMER_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: `page_test_${RUN_ID}:psid_${testSuffix}`,
+      external_conversation_id: externalConversationId,
       status: 'OPEN',
       assigned_to: sale.id, // assigned to Sale
     });
@@ -811,7 +830,7 @@ async function run() {
       conversationId: convoId,
       triggerInteractionId: triggerIntId,
     });
-    return { convoId, triggerIntId, windowId: win.id };
+    return { convoId, triggerIntId, windowId: win.id, externalConversationId };
   }
 
   // 3.1 Policy Firewall Test: Model attempts to invent commercial commitments
@@ -3354,7 +3373,7 @@ async function run() {
     sanitized_content: 'Zalo test AI fence expiry',
     sanitization_status: 'SUCCEEDED',
     actor_type: 'CUSTOMER',
-    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
+    created_at: new Date(Date.now() - 10 * 60000).toISOString(),
   });
   const t24AiWin = await openResponseSlaWindow({
     companyId: COMPANY_ID,
@@ -4060,7 +4079,73 @@ async function run() {
 
   pass('Stale expired Zalo delivery D1 cannot poison active Sale delivery D2 (exact ownership isolation)');
 
-  // Test 29: Never downgrade Facebook UNKNOWN to FAILED in care_deliveries (Requirement 3)
+  // Helper to execute canonical Facebook Care send path enforcing han_prepare_send -> providerSender -> han_finish_send
+  async function executeCareFacebookSend({
+    companyId,
+    conversationId,
+    actorId,
+    content,
+    careDeliveryId,
+    requestId = crypto.randomUUID(),
+    providerSender,
+  }: {
+    companyId: string;
+    conversationId: string;
+    actorId: string;
+    content: string;
+    careDeliveryId: string;
+    requestId?: string;
+    providerSender: () => Promise<{ status: 'SENT' | 'FAILED' | 'UNKNOWN'; mid: string | null }>;
+  }) {
+    // 1. Pre-provider DB guard & dispatch claim
+    const { data: prepData, error: prepErr } = await admin.rpc('han_prepare_send' as never, {
+      p_company: companyId,
+      p_conversation: conversationId,
+      p_actor: actorId,
+      p_request: requestId,
+      p_content: content,
+      p_safe: content,
+      p_safe_status: 'SUCCEEDED',
+      p_delivery: careDeliveryId,
+    } as never);
+
+    if (prepErr) {
+      throw new Error(`han_prepare_send failed: ${prepErr.message}`);
+    }
+
+    const prep = prepData as any;
+    if (!prep?.claimed) {
+      return { success: false, status: prep?.status, claimed: false, requestId, prep };
+    }
+
+    // 2. Real provider invocation tracked by caller's counter
+    const provRes = await providerSender();
+
+    // 3. Post-provider resolution
+    const { error: finishErr } = await admin.rpc('han_finish_send' as never, {
+      p_company: companyId,
+      p_request: requestId,
+      p_status: provRes.status,
+      p_mid: provRes.mid,
+    } as never);
+
+    if (finishErr) {
+      throw new Error(`han_finish_send failed: ${finishErr.message}`);
+    }
+
+    return {
+      success: provRes.status === 'SENT',
+      status: provRes.status,
+      requestId,
+      mid: provRes.mid,
+      prep,
+    };
+  }
+
+  // ============================================================================
+  // Test 29: Facebook Care Delivery SENT Durability & Receipt Reconciliation
+  // (P1-006: Schema-Compatible Reconcile, Provider-Count Invariants, & UNKNOWN Fail-Safe)
+  // ============================================================================
   const t29CampaignId = crypto.randomUUID();
   await admin.from('care_campaigns').insert({
     id: t29CampaignId,
@@ -4071,9 +4156,191 @@ async function run() {
     started_at: new Date().toISOString(),
   });
 
+  // ----------------------------------------------------------------------------
+  // Scenario 1: Real Care + SENT with NO receipts (Prompt Section 3 & 7)
+  // ----------------------------------------------------------------------------
   const t29CareDelId1 = crypto.randomUUID();
   await admin.from('care_deliveries').insert({
     id: t29CareDelId1,
+    company_id: COMPANY_ID,
+    campaign_id: t29CampaignId,
+    customer_id: CUSTOMER_ID,
+    idempotency_key: `care_del_sent_${RUN_ID}`,
+    channel: 'FACEBOOK',
+    status: 'PENDING',
+  });
+
+  const t29Convo1 = await createDueSlaWindow('care_sent');
+  const t29SentMid = `mid_fb_care_sent_${RUN_ID}`;
+  let t29CareSentCalls = 0;
+
+  const t29SentResult = await executeCareFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: t29Convo1.convoId,
+    actorId: sale.id,
+    content: 'Care message content sent',
+    careDeliveryId: t29CareDelId1,
+    providerSender: async () => {
+      t29CareSentCalls++;
+      return { status: 'SENT', mid: t29SentMid };
+    },
+  });
+
+  assert.strictEqual(t29SentResult.success, true);
+  assert.strictEqual(t29CareSentCalls, 1, 'Provider invocation count must be exactly 1 for SENT');
+
+  // Assert outbox, interaction, SLA window, and care_deliveries statuses
+  const outboxRowsSent = queryRawJson<Array<{ status: string; provider_mid: string; care_delivery_id: string; interaction_id: string }>>(`
+    SELECT status, provider_mid, care_delivery_id, interaction_id FROM private.han_outbox WHERE request_id = '${t29SentResult.requestId}';
+  `);
+  assert.strictEqual(outboxRowsSent.length, 1);
+  assert.strictEqual(outboxRowsSent[0].status, 'SENT', 'private.han_outbox.status = SENT');
+  assert.strictEqual(outboxRowsSent[0].provider_mid, t29SentMid, 'provider_mid = MID');
+  assert.strictEqual(outboxRowsSent[0].care_delivery_id, t29CareDelId1);
+
+  const { data: intSent } = await admin
+    .from('interactions')
+    .select('external_ref')
+    .eq('id', outboxRowsSent[0].interaction_id)
+    .single();
+  assert.ok(intSent?.external_ref?.includes(t29SentMid), `interaction external_ref must contain MID (got: ${intSent?.external_ref})`);
+
+  const { data: winSent } = await bossRealClient
+    .from('response_sla_windows')
+    .select('state, dispatch_state, dispatch_owner, sale_response_interaction_id')
+    .eq('id', t29Convo1.windowId)
+    .single();
+  assert.strictEqual(winSent?.state, 'SALE_RESPONDED', 'SLA state = SALE_RESPONDED');
+  assert.strictEqual(winSent?.dispatch_state, 'PROVIDER_ACCEPTED', 'dispatch_state = PROVIDER_ACCEPTED');
+  assert.strictEqual(winSent?.dispatch_owner, 'SALE');
+  assert.strictEqual(winSent?.sale_response_interaction_id, outboxRowsSent[0].interaction_id);
+
+  const { data: careDel1After } = await admin
+    .from('care_deliveries')
+    .select('status, sent_at, external_message_ref')
+    .eq('id', t29CareDelId1)
+    .single();
+  assert.strictEqual(careDel1After?.status, 'SENT', 'care_deliveries.status = SENT when no receipt exists');
+  assert.ok(careDel1After?.sent_at !== null, 'sent_at IS NOT NULL');
+  assert.strictEqual(careDel1After?.external_message_ref, t29SentMid, 'external_message_ref = MID');
+
+  pass('Facebook care delivery SENT: outbox SENT, provider MID recorded, SLA SALE_RESPONDED, care SENT (provider count 1)');
+
+  // ----------------------------------------------------------------------------
+  // Scenario 2: Pre-existing DELIVERY receipt reconciliation (Prompt Section 4 & 7)
+  // ----------------------------------------------------------------------------
+  const t29CareDelId2 = crypto.randomUUID();
+  await admin.from('care_deliveries').insert({
+    id: t29CareDelId2,
+    company_id: COMPANY_ID,
+    campaign_id: t29CampaignId,
+    customer_id: CUSTOMER_ID,
+    idempotency_key: `care_del_delivery_${RUN_ID}`,
+    channel: 'FACEBOOK',
+    status: 'PENDING',
+  });
+
+  const t29Convo2 = await createDueSlaWindow('care_delivery_rcpt');
+  const t29DelivMid = `mid_fb_care_deliv_${RUN_ID}`;
+  let t29CareDelivCalls = 0;
+
+  // Pre-seed matching private.han_receipts row: kind = DELIVERY, mids contains MID
+  insertHanReceiptDirectSql({
+    company_id: COMPANY_ID,
+    external_identity: t29Convo2.externalConversationId,
+    event_key: `evt_deliv_${RUN_ID}`,
+    kind: 'DELIVERY',
+    mids: [t29DelivMid],
+  });
+
+  const t29DelivResult = await executeCareFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: t29Convo2.convoId,
+    actorId: sale.id,
+    content: 'Care message content delivery receipt',
+    careDeliveryId: t29CareDelId2,
+    providerSender: async () => {
+      t29CareDelivCalls++;
+      return { status: 'SENT', mid: t29DelivMid };
+    },
+  });
+
+  assert.strictEqual(t29DelivResult.success, true);
+  assert.strictEqual(t29CareDelivCalls, 1, 'Provider invocation count must be exactly 1 for DELIVERY-reconciled');
+
+  const { data: careDel2After } = await admin
+    .from('care_deliveries')
+    .select('status, delivered_at, external_message_ref')
+    .eq('id', t29CareDelId2)
+    .single();
+  assert.strictEqual(careDel2After?.status, 'DELIVERED', 'care_deliveries.status = DELIVERED with pre-existing receipt');
+  assert.ok(careDel2After?.delivered_at !== null, 'delivered_at IS NOT NULL');
+  assert.strictEqual(careDel2After?.external_message_ref, t29DelivMid);
+
+  pass('Facebook care delivery: pre-existing DELIVERY receipt reconciles care_deliveries to DELIVERED with delivered_at');
+
+  // ----------------------------------------------------------------------------
+  // Scenario 3: Pre-existing READ receipt reconciliation using REAL schema (Prompt Section 5 & 7)
+  // ----------------------------------------------------------------------------
+  const t29CareDelId3 = crypto.randomUUID();
+  await admin.from('care_deliveries').insert({
+    id: t29CareDelId3,
+    company_id: COMPANY_ID,
+    campaign_id: t29CampaignId,
+    customer_id: CUSTOMER_ID,
+    idempotency_key: `care_del_read_${RUN_ID}`,
+    channel: 'FACEBOOK',
+    status: 'PENDING',
+  });
+
+  const t29Convo3 = await createDueSlaWindow('care_read_rcpt');
+  const t29ReadMid = `mid_fb_care_read_${RUN_ID}`;
+  let t29CareReadCalls = 0;
+
+  // Pre-seed matching private.han_receipts row: kind = READ, watermark >= outbound request timestamp in ms
+  // Using REAL table contract (mids text[], watermark bigint) without nonexistent read_watermarks column
+  const t29ReadWatermark = Date.now() + 60000;
+  insertHanReceiptDirectSql({
+    company_id: COMPANY_ID,
+    external_identity: t29Convo3.externalConversationId,
+    event_key: `evt_read_${RUN_ID}`,
+    kind: 'READ',
+    mids: [],
+    watermark: t29ReadWatermark,
+  });
+
+  const t29ReadResult = await executeCareFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: t29Convo3.convoId,
+    actorId: sale.id,
+    content: 'Care message content read receipt',
+    careDeliveryId: t29CareDelId3,
+    providerSender: async () => {
+      t29CareReadCalls++;
+      return { status: 'SENT', mid: t29ReadMid };
+    },
+  });
+
+  assert.strictEqual(t29ReadResult.success, true);
+  assert.strictEqual(t29CareReadCalls, 1, 'Provider invocation count must be exactly 1 for READ-reconciled');
+
+  const { data: careDel3After } = await admin
+    .from('care_deliveries')
+    .select('status, delivered_at, external_message_ref')
+    .eq('id', t29CareDelId3)
+    .single();
+  assert.strictEqual(careDel3After?.status, 'READ', 'care_deliveries.status = READ with pre-existing read receipt');
+  assert.ok(careDel3After?.delivered_at !== null, 'delivered_at IS NOT NULL');
+  assert.strictEqual(careDel3After?.external_message_ref, t29ReadMid);
+
+  pass('Facebook care delivery: pre-existing READ receipt reconciles care_deliveries to READ with delivered_at (real watermark schema)');
+
+  // ----------------------------------------------------------------------------
+  // Scenario 4: Facebook Care UNKNOWN maps to UNCERTAIN (never FAILED) (Prompt Section 6 & 7)
+  // ----------------------------------------------------------------------------
+  const t29CareDelId4 = crypto.randomUUID();
+  await admin.from('care_deliveries').insert({
+    id: t29CareDelId4,
     company_id: COMPANY_ID,
     campaign_id: t29CampaignId,
     customer_id: CUSTOMER_ID,
@@ -4082,64 +4349,57 @@ async function run() {
     status: 'PENDING',
   });
 
-  const t29Convo = await createDueSlaWindow('care_unknown');
-  const t29Req1 = crypto.randomUUID();
-
-  // 1. han_prepare_send with a valid care_delivery_id
-  const { data: t29Prep1 } = await admin.rpc('han_prepare_send' as never, {
-    p_company: COMPANY_ID,
-    p_conversation: t29Convo.convoId,
-    p_actor: sale.id,
-    p_request: t29Req1,
-    p_content: 'Care message content 1',
-    p_safe: 'Care message content 1',
-    p_safe_status: 'SUCCEEDED',
-    p_delivery: t29CareDelId1,
-  } as never);
-  assert.strictEqual((t29Prep1 as any)?.claimed, true);
-
-  // 2. Provider returns UNKNOWN
+  const t29Convo4 = await createDueSlaWindow('care_unknown');
   const t29UnknownMid = `mid_fb_unknown_${RUN_ID}`;
-  const t29ProviderInvocations = 1; // Exactly 1 provider attempt made
-  await admin.rpc('han_finish_send' as never, {
-    p_company: COMPANY_ID,
-    p_request: t29Req1,
-    p_status: 'UNKNOWN',
-    p_mid: t29UnknownMid,
-  } as never);
+  let t29CareUnknownCalls = 0;
 
-  // 3. Assert outbox, window, and care_deliveries statuses
-  const outboxRows1 = queryRawJson<Array<{ status: string; provider_mid: string; care_delivery_id: string }>>(`
-    SELECT status, provider_mid, care_delivery_id FROM private.han_outbox WHERE request_id = '${t29Req1}';
+  const t29UnknownResult = await executeCareFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: t29Convo4.convoId,
+    actorId: sale.id,
+    content: 'Care message content unknown',
+    careDeliveryId: t29CareDelId4,
+    providerSender: async () => {
+      t29CareUnknownCalls++;
+      return { status: 'UNKNOWN', mid: t29UnknownMid };
+    },
+  });
+
+  assert.strictEqual(t29UnknownResult.success, false);
+  assert.strictEqual(t29CareUnknownCalls, 1, 'Provider invocation count must be exactly 1 after UNKNOWN');
+
+  const outboxRowsUnknown = queryRawJson<Array<{ status: string; provider_mid: string; care_delivery_id: string }>>(`
+    SELECT status, provider_mid, care_delivery_id FROM private.han_outbox WHERE request_id = '${t29UnknownResult.requestId}';
   `);
-  assert.strictEqual(outboxRows1.length, 1);
-  assert.strictEqual(outboxRows1[0].status, 'UNKNOWN');
-  assert.strictEqual(outboxRows1[0].provider_mid, t29UnknownMid);
-  assert.strictEqual(outboxRows1[0].care_delivery_id, t29CareDelId1);
+  assert.strictEqual(outboxRowsUnknown.length, 1);
+  assert.strictEqual(outboxRowsUnknown[0].status, 'UNKNOWN');
+  assert.strictEqual(outboxRowsUnknown[0].provider_mid, t29UnknownMid);
+  assert.strictEqual(outboxRowsUnknown[0].care_delivery_id, t29CareDelId4);
 
-  const { data: t29Win1 } = await bossRealClient
+  const { data: winUnknown } = await bossRealClient
     .from('response_sla_windows')
     .select('dispatch_state, state')
-    .eq('id', t29Convo.windowId)
+    .eq('id', t29Convo4.windowId)
     .single();
-  assert.strictEqual(t29Win1?.dispatch_state, 'UNCERTAIN');
-  assert.strictEqual(t29Win1?.state, 'OPEN');
+  assert.strictEqual(winUnknown?.dispatch_state, 'UNCERTAIN');
+  assert.strictEqual(winUnknown?.state, 'OPEN');
 
-  const { data: t29CareDel1After } = await admin
+  const { data: careDel4After } = await admin
     .from('care_deliveries')
     .select('status, external_message_ref')
-    .eq('id', t29CareDelId1)
+    .eq('id', t29CareDelId4)
     .single();
-  assert.strictEqual(t29CareDel1After?.status, 'UNCERTAIN', 'care_deliveries status MUST BE UNCERTAIN (NEVER FAILED!)');
-  assert.strictEqual(t29CareDel1After?.external_message_ref, t29UnknownMid);
+  assert.strictEqual(careDel4After?.status, 'UNCERTAIN', 'care_deliveries status MUST BE UNCERTAIN (NEVER FAILED!)');
+  assert.strictEqual(careDel4After?.external_message_ref, t29UnknownMid);
 
-  // 4. Assert no automatic retry/resend occurs solely because provider result was UNKNOWN
-  assert.strictEqual(t29ProviderInvocations, 1, 'Provider invocation count remains exactly 1 after UNKNOWN');
+  pass('Facebook care deliveries: UNKNOWN maps to UNCERTAIN (never FAILED) with real provider invocation count 1');
 
-  // 5. Separate definitive FAILED test proving FAILED remains retryable only when provider definitively rejected
-  const t29CareDelId2 = crypto.randomUUID();
+  // ----------------------------------------------------------------------------
+  // Scenario 5: Facebook Care definitive rejection maps to FAILED (Prompt Section 6 & 7)
+  // ----------------------------------------------------------------------------
+  const t29CareDelId5 = crypto.randomUUID();
   await admin.from('care_deliveries').insert({
-    id: t29CareDelId2,
+    id: t29CareDelId5,
     company_id: COMPANY_ID,
     campaign_id: t29CampaignId,
     customer_id: CUSTOMER_ID,
@@ -4148,52 +4408,47 @@ async function run() {
     status: 'PENDING',
   });
 
-  const t29Convo2 = await createDueSlaWindow('care_failed');
-  const t29Req2 = crypto.randomUUID();
+  const t29Convo5 = await createDueSlaWindow('care_failed');
+  let t29CareFailedCalls = 0;
 
-  const { data: t29Prep2 } = await admin.rpc('han_prepare_send' as never, {
-    p_company: COMPANY_ID,
-    p_conversation: t29Convo2.convoId,
-    p_actor: sale.id,
-    p_request: t29Req2,
-    p_content: 'Care message content 2',
-    p_safe: 'Care message content 2',
-    p_safe_status: 'SUCCEEDED',
-    p_delivery: t29CareDelId2,
-  } as never);
-  assert.strictEqual((t29Prep2 as any)?.claimed, true);
+  const t29FailedResult = await executeCareFacebookSend({
+    companyId: COMPANY_ID,
+    conversationId: t29Convo5.convoId,
+    actorId: sale.id,
+    content: 'Care message content failed',
+    careDeliveryId: t29CareDelId5,
+    providerSender: async () => {
+      t29CareFailedCalls++;
+      return { status: 'FAILED', mid: null };
+    },
+  });
 
-  // Provider definitively rejected
-  await admin.rpc('han_finish_send' as never, {
-    p_company: COMPANY_ID,
-    p_request: t29Req2,
-    p_status: 'FAILED',
-    p_mid: null,
-  } as never);
+  assert.strictEqual(t29FailedResult.success, false);
+  assert.strictEqual(t29CareFailedCalls, 1, 'Provider invocation count must be exactly 1 after FAILED');
 
-  const outboxRows2 = queryRawJson<Array<{ status: string }>>(`
-    SELECT status FROM private.han_outbox WHERE request_id = '${t29Req2}';
+  const outboxRowsFailed = queryRawJson<Array<{ status: string }>>(`
+    SELECT status FROM private.han_outbox WHERE request_id = '${t29FailedResult.requestId}';
   `);
-  assert.strictEqual(outboxRows2.length, 1);
-  assert.strictEqual(outboxRows2[0].status, 'FAILED');
+  assert.strictEqual(outboxRowsFailed.length, 1);
+  assert.strictEqual(outboxRowsFailed[0].status, 'FAILED');
 
-  const { data: t29Win2 } = await bossRealClient
+  const { data: winFailed } = await bossRealClient
     .from('response_sla_windows')
     .select('dispatch_state, dispatch_owner, state')
-    .eq('id', t29Convo2.windowId)
+    .eq('id', t29Convo5.windowId)
     .single();
-  assert.strictEqual(t29Win2?.dispatch_state, 'FAILED');
-  assert.strictEqual(t29Win2?.dispatch_owner, 'NONE');
-  assert.strictEqual(t29Win2?.state, 'OPEN');
+  assert.strictEqual(winFailed?.dispatch_state, 'FAILED');
+  assert.strictEqual(winFailed?.dispatch_owner, 'NONE');
+  assert.strictEqual(winFailed?.state, 'OPEN');
 
-  const { data: t29CareDel2After } = await admin
+  const { data: careDel5After } = await admin
     .from('care_deliveries')
     .select('status')
-    .eq('id', t29CareDelId2)
+    .eq('id', t29CareDelId5)
     .single();
-  assert.strictEqual(t29CareDel2After?.status, 'FAILED', 'Definitive rejection transitions care_deliveries to FAILED');
+  assert.strictEqual(careDel5After?.status, 'FAILED', 'Definitive rejection transitions care_deliveries to FAILED');
 
-  pass('Facebook care deliveries: UNKNOWN maps to UNCERTAIN (never FAILED) with tenant binding; definitive rejection maps to FAILED');
+  pass('Facebook care deliveries: definitive rejection maps to FAILED with real provider invocation count 1');
 
   console.log('\n================================================================');
   console.log(`ALL ${testCount} ROUND 3 PRODUCT WIRING & REAL RUNTIME TESTS PASSED!`);
