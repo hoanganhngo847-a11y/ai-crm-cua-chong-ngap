@@ -5,8 +5,9 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { generateContractForOrder, signContract, getContractDownloadUrl } from '../../features/contract/services';
+import { generateContractForOrder, signContract, getContractDownloadUrl, ensureContractForDepositConfirmedOrder } from '../../features/contract/services';
 import { createOrderFromCalculation, updateOrderDepositAndDebt } from '../../features/order/services';
+import { recoverOrderContractAction, createOrderFromCalculationAction, updateOrderDepositAction } from '../../features/order/actions';
 import { processPaymentWebhook } from '../../features/payment/services';
 import { calculateAndSavePriceCalculation, calculatePriceFromSurvey, getPriceCalculations } from '../../features/pricing/services';
 import { createAppointment, getActiveCompanyTechnicians } from '../../features/survey/services/appointment.service';
@@ -575,11 +576,22 @@ async function run() {
   const ORDER_B_ID = orderBData.orderId;
 
   // Dedicated order for Company A to test cross-tenant payment reference without mutating ORDER_A_ID
+  const { data: calcACross } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const PAYMENT_REF_A_CROSS = `DH-TESTAX${RUN_ID.toUpperCase()}`;
   const { data: orderACrossData, error: orderACrossErr } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcACross.id,
     p_payment_reference: PAYMENT_REF_A_CROSS,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -748,20 +760,42 @@ async function run() {
   // --------------------------------------------------------------------------
   // Test 11: Manual deposit authorization, idempotency, and ORDER BINDING (Section 2)
   // --------------------------------------------------------------------------
-  // Create Order 1 and Order 2 in Company A
+  // Create Order 1 and Order 2 in Company A with distinct price calculations
+  const { data: calcMan1 } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: orderMan1 } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcMan1.id,
     p_payment_reference: `DH-MAN1${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
   const ORDER_MAN_1_ID = orderMan1.orderId;
 
+  const { data: calcMan2 } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: orderMan2 } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcMan2.id,
     p_payment_reference: `DH-MAN2${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -836,10 +870,21 @@ async function run() {
   // Test 12: Contract generation & Dynamic Revision Model (Section 9)
   // --------------------------------------------------------------------------
   // Unconfirmed deposit order fails contract generation claim
+  const { data: calcUnconf } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: unconfirmedOrder } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcUnconf.id,
     p_payment_reference: `DH-UNCONF${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -1146,10 +1191,21 @@ async function run() {
   // Test 14b: Failure recovery - upload succeeds, DB finalize fails before commit
   // --------------------------------------------------------------------------
   {
+    const { data: calcRecovB } = await admin.rpc('save_price_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_survey_id: null,
+      p_pricing_policy_id: POLICY_B_ID,
+      p_policy_version: 'v1',
+      p_input_data: { width: 2, height: 1.2 },
+      p_amount: 12000000,
+      p_status: 'CALCULATED',
+      p_missing_fields: [],
+    });
     const { data: orderRecovData } = await admin.rpc('create_order_from_calculation_rpc', {
       p_company_id: COMPANY_B,
       p_customer_id: CUSTOMER_B,
-      p_price_calculation_id: CALC_B_ID,
+      p_price_calculation_id: calcRecovB.id,
       p_payment_reference: `DH-RECOV-B-${Date.now()}`,
       p_actor_user_id: USER_BOSS_B,
     });
@@ -1242,12 +1298,23 @@ async function run() {
 
   // --------------------------------------------------------------------------
   // Test 14c: Ambiguous commit recovery - DB finalize committed but response lost
-  // --------------------------------------------------------------------------
   {
+    const { data: calcAmbigB, error: calcAmbigErr } = await admin.rpc('save_price_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_survey_id: null,
+      p_pricing_policy_id: POLICY_B_ID,
+      p_policy_version: 'v1',
+      p_input_data: { width: 3, height: 2 },
+      p_amount: 12000000,
+      p_status: 'CALCULATED',
+      p_missing_fields: [],
+    });
+    assert(!calcAmbigErr && calcAmbigB, `save_price_calculation_rpc failed: ${calcAmbigErr?.message}`);
     const { data: orderAmbigData } = await admin.rpc('create_order_from_calculation_rpc', {
       p_company_id: COMPANY_B,
       p_customer_id: CUSTOMER_B,
-      p_price_calculation_id: CALC_B_ID,
+      p_price_calculation_id: calcAmbigB.id,
       p_payment_reference: `DH-AMBIG-B-${Date.now()}`,
       p_actor_user_id: USER_BOSS_B,
     });
@@ -1827,6 +1894,524 @@ async function run() {
   assert.strictEqual(e2eSurveyRow.id, calcRow.survey_id);
 
   testPass('Section 9: Product Action End-to-End Journey verified: SALE schedules via Server Action (real RLS) -> Tech accepts via Action -> Tech starts via Action -> Tech completes real Survey -> SALE triggers calculatePriceFromSurveyAction -> Quotations retrieval sees it; all IDs strictly bound; zero service-role write bypass');
+
+  // ==========================================================================
+  // Section 10: P1-008 Commercial Exactly-Once & Recovery Invariant Tests
+  // ==========================================================================
+
+  // --------------------------------------------------------------------------
+  // Required Test 1: 10 concurrent create-order attempts from one PriceCalculation -> exactly 1 Order
+  // --------------------------------------------------------------------------
+  const { data: calcConc, error: calcConcErr } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calcConcErr && calcConc, `save_price_calculation_rpc failed: ${calcConcErr?.message}`);
+
+  const concurrentAttempts = Array.from({ length: 10 }, () =>
+    createOrderFromCalculation({
+      companyId: COMPANY_A,
+      customerId: CUSTOMER_A,
+      priceCalculationId: calcConc.id,
+    }, BOSS_A_CLIENT)
+  );
+
+  const concResults = await Promise.all(concurrentAttempts);
+  const firstOrderId = concResults[0].orderId;
+  const firstPayRef = concResults[0].paymentReference;
+
+  for (const res of concResults) {
+    assert.strictEqual(res.orderId, firstOrderId, 'All concurrent attempts must resolve to the same orderId');
+    assert.strictEqual(res.paymentReference, firstPayRef, 'All concurrent attempts must resolve to the same paymentReference');
+  }
+
+  const { data: ordersForCalc, error: ordersForCalcErr } = await admin
+    .from('orders')
+    .select('id')
+    .eq('price_calculation_id', calcConc.id);
+  assert(!ordersForCalcErr && ordersForCalc.length === 1, `Must have exactly 1 order row in DB, found ${ordersForCalc?.length}`);
+
+  const { data: financeForCalc, error: financeForCalcErr } = await admin
+    .from('finance_summaries')
+    .select('order_id')
+    .eq('order_id', firstOrderId);
+  assert(!financeForCalcErr && financeForCalc.length === 1, `Must have exactly 1 finance summary row in DB, found ${financeForCalc?.length}: ${financeForCalcErr?.message}`);
+
+  testPass('Required Test 1: 10 concurrent create-order attempts from one PriceCalculation -> exactly 1 Order, 1 finance_summary, same orderId & paymentReference');
+
+  // --------------------------------------------------------------------------
+  // Required Test 2: Existing Order retry returns same orderId/paymentReference
+  // --------------------------------------------------------------------------
+  const retryOrderRes = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcConc.id,
+  }, BOSS_A_CLIENT);
+  assert.strictEqual(retryOrderRes.status, 'ALREADY_EXISTS', 'Retry must return ALREADY_EXISTS');
+  assert.strictEqual(retryOrderRes.orderId, firstOrderId, 'Retry must return existing orderId');
+  assert.strictEqual(retryOrderRes.paymentReference, firstPayRef, 'Retry must not generate a second paymentReference');
+
+  testPass('Required Test 2: Existing Order retry returns same orderId/paymentReference deterministically without creating duplicate');
+
+  // --------------------------------------------------------------------------
+  // Required Test 3: Manual deposit commit + lost response + retry same command ID -> money counted once
+  // --------------------------------------------------------------------------
+  const { data: calcManDep } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: manDepOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcManDep.id,
+  }, BOSS_A_CLIENT);
+
+  const manDepCommandId = `cmd-manual-deposit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const firstDepositRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manDepOrderId,
+    depositAmount: 3000000,
+    idempotencyKey: manDepCommandId,
+  }, BOSS_A_CLIENT);
+
+  assert.strictEqual(firstDepositRes.status, 'MATCHED');
+
+  // Simulate retry with exact same command ID, orderId, and amount
+  const retryDepositRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manDepOrderId,
+    depositAmount: 3000000,
+    idempotencyKey: manDepCommandId,
+  }, BOSS_A_CLIENT);
+
+  assert.strictEqual(retryDepositRes.status, 'ALREADY_PROCESSED');
+
+  const { data: txsForCmd } = await admin
+    .from('payment_transactions')
+    .select('id, amount')
+    .eq('provider_ref', manDepCommandId);
+  assert.strictEqual(txsForCmd?.length, 1, 'Exactly one payment_transaction row must exist for command ID');
+
+  const { data: finAfterRetry } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', manDepOrderId)
+    .single();
+  assert.strictEqual(Number(finAfterRetry?.collected_amount), 3000000, 'Collected amount must increase exactly once');
+
+  testPass('Required Test 3: Manual deposit commit + lost response + retry same command ID -> money counted once (ALREADY_PROCESSED)');
+
+  // --------------------------------------------------------------------------
+  // Required Test 4: Same manual command ID + changed amount -> rejected
+  // --------------------------------------------------------------------------
+  let threwChangedAmount = false;
+  try {
+    await updateOrderDepositAndDebt({
+      companyId: COMPANY_A,
+      orderId: manDepOrderId,
+      depositAmount: 4000000, // Different amount!
+      idempotencyKey: manDepCommandId,
+    }, BOSS_A_CLIENT);
+  } catch (err: any) {
+    threwChangedAmount = true;
+    assert(err.message.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'), `Unexpected error: ${err.message}`);
+  }
+  assert(threwChangedAmount, 'Must reject retry with same command ID but changed amount');
+
+  testPass('Required Test 4: Same manual command ID + changed amount -> rejected fail-closed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 5: Same manual command ID + changed Order -> rejected
+  // --------------------------------------------------------------------------
+  const { data: calcOtherOrder } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: otherOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcOtherOrder.id,
+  }, BOSS_A_CLIENT);
+
+  let threwChangedOrder = false;
+  try {
+    await updateOrderDepositAndDebt({
+      companyId: COMPANY_A,
+      orderId: otherOrderId, // Different order!
+      depositAmount: 3000000,
+      idempotencyKey: manDepCommandId,
+    }, BOSS_A_CLIENT);
+  } catch (err: any) {
+    threwChangedOrder = true;
+    assert(err.message.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'), `Unexpected error: ${err.message}`);
+  }
+  assert(threwChangedOrder, 'Must reject retry with same command ID but changed order');
+
+  testPass('Required Test 5: Same manual command ID + changed Order -> rejected fail-closed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 6: Payment reaches deposit threshold + contract storage generation fails
+  // --------------------------------------------------------------------------
+  const { data: calcWebhookFail } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const webhookOrderRes = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcWebhookFail.id,
+  }, BOSS_A_CLIENT);
+  const webhookOrderId = webhookOrderRes.orderId;
+  const webhookPayRef = webhookOrderRes.paymentReference;
+
+  // Create a proxy admin client where storage upload returns error
+  const failingStorageAdmin = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from: (bucket: string) => {
+            const bucketObj = (target as any).storage.from(bucket);
+            return new Proxy(bucketObj, {
+              get(bTarget, bProp) {
+                if (bProp === 'upload') {
+                  return async () => ({
+                    data: null,
+                    error: new Error('SIMULATED_STORAGE_OUTAGE_ON_CONTRACT_UPLOAD'),
+                  });
+                }
+                return (bTarget as any)[bProp];
+              },
+            });
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  const webhookProviderRef = `WH-FAIL-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const webhookOccurredAt = new Date().toISOString();
+  const webhookResult1 = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_A1,
+    provider_ref: webhookProviderRef,
+    amount: 5000000, // Reaches deposit threshold (50% of 10,000,000)
+    occurred_at: webhookOccurredAt,
+    transfer_content: `Chuyen khoan ${webhookPayRef}`,
+  }, failingStorageAdmin as any);
+
+  assert.strictEqual(webhookResult1.status, 'MATCHED', 'Payment webhook itself succeeds with MATCHED');
+
+  // Verify payment committed and deposit confirmed
+  const { data: orderAfterWhFail } = await admin
+    .from('orders')
+    .select('deposit_status')
+    .eq('id', webhookOrderId)
+    .single();
+  assert.strictEqual(orderAfterWhFail?.deposit_status, 'DEPOSIT_CONFIRMED', 'Order deposit_status must be DEPOSIT_CONFIRMED');
+
+  // Verify no usable contract exists
+  const { data: contractsWhFail } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref')
+    .eq('order_id', webhookOrderId);
+  const usableWhContract = contractsWhFail?.find(c => c.status === 'GENERATED' && c.generated_file_ref && c.generated_file_ref !== 'CLAIMED');
+  assert(!usableWhContract, 'No usable contract must exist after storage generation failure');
+
+  testPass('Required Test 6: Payment reaches deposit threshold + contract storage generation fails -> payment committed, DEPOSIT_CONFIRMED, no usable contract');
+
+  // --------------------------------------------------------------------------
+  // Required Test 7: Same webhook retries -> payment remains counted once and contract generation recovers
+  // --------------------------------------------------------------------------
+  // Now call processPaymentWebhook with normal admin client (storage working)
+  const webhookResult2 = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_A1,
+    provider_ref: webhookProviderRef,
+    amount: 5000000,
+    occurred_at: webhookOccurredAt,
+    transfer_content: `Chuyen khoan ${webhookPayRef}`,
+  }, admin);
+
+  assert.strictEqual(webhookResult2.status, 'ALREADY_PROCESSED', 'Webhook retry must return ALREADY_PROCESSED');
+
+  // Payment counted once
+  const { data: finWhRetry } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', webhookOrderId)
+    .single();
+  assert.strictEqual(Number(finWhRetry?.collected_amount), 5000000, 'Collected amount must remain 5,000,000 (not double counted)');
+
+  // Contract generation recovered!
+  const { data: recoveredContracts } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref, is_current')
+    .eq('order_id', webhookOrderId)
+    .eq('is_current', true);
+  assert.strictEqual(recoveredContracts?.length, 1, 'Exactly one current contract must exist');
+  assert.strictEqual(recoveredContracts[0].status, 'GENERATED');
+  assert(recoveredContracts[0].generated_file_ref && recoveredContracts[0].generated_file_ref !== 'CLAIMED', 'Contract must have valid generated_file_ref');
+
+  testPass('Required Test 7: Same webhook retries -> ALREADY_PROCESSED, payment counted once, contract generation recovers');
+
+  // --------------------------------------------------------------------------
+  // Required Test 8: Manual deposit reaches threshold + contract generation fails
+  // --------------------------------------------------------------------------
+  const { data: calcManFail } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: manFailOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcManFail.id,
+  }, BOSS_A_CLIENT);
+
+  const manFailCmdId = `cmd-man-fail-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const manFailRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manFailOrderId,
+    depositAmount: 5000000, // Reaches deposit threshold
+    idempotencyKey: manFailCmdId,
+  }, BOSS_A_CLIENT, failingStorageAdmin as any);
+
+  assert.strictEqual(manFailRes.status, 'MATCHED');
+  assert.strictEqual(manFailRes.depositConfirmed, true);
+  assert.strictEqual(manFailRes.contractGenerationStatus, 'PENDING_RECOVERY');
+
+  const { data: orderAfterManFail } = await admin
+    .from('orders')
+    .select('deposit_status')
+    .eq('id', manFailOrderId)
+    .single();
+  assert.strictEqual(orderAfterManFail?.deposit_status, 'DEPOSIT_CONFIRMED');
+
+  testPass('Required Test 8: Manual deposit reaches threshold + contract generation fails -> returns PENDING_RECOVERY, deposit committed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 9: Same manual command retry -> deposit remains counted once and contract recovers
+  // --------------------------------------------------------------------------
+  const manRecoverRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manFailOrderId,
+    depositAmount: 5000000,
+    idempotencyKey: manFailCmdId,
+  }, BOSS_A_CLIENT, admin);
+
+  assert.strictEqual(manRecoverRes.status, 'ALREADY_PROCESSED');
+  assert.strictEqual(manRecoverRes.depositConfirmed, true);
+  assert(
+    manRecoverRes.contractGenerationStatus === 'GENERATED' || manRecoverRes.contractGenerationStatus === 'ALREADY_EXISTS',
+    `Expected GENERATED or ALREADY_EXISTS, got ${manRecoverRes.contractGenerationStatus}`
+  );
+  assert(manRecoverRes.contractId, 'contractId must be returned on recovery');
+
+  const { data: finManRecover } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', manFailOrderId)
+    .single();
+  assert.strictEqual(Number(finManRecover?.collected_amount), 5000000, 'Collected amount must not double-count');
+
+  testPass('Required Test 9: Same manual command retry -> deposit remains counted once and contract recovers');
+
+  // --------------------------------------------------------------------------
+  // Required Test 10: Deposit-confirmed Order without Contract -> recovery UI/action successfully creates canonical Contract
+  // --------------------------------------------------------------------------
+  const { data: calcRecovAction } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: recovActionOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcRecovAction.id,
+  }, BOSS_A_CLIENT);
+
+  // Direct DB update to set DEPOSIT_CONFIRMED without contract (simulating recovery needed)
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', recovActionOrderId);
+
+  // Invoke recoverOrderContractAction as authorized BOSS
+  const recovActionResultBoss = await recoverOrderContractAction(
+    { orderId: recovActionOrderId },
+    { userClient: bossRealClient }
+  );
+
+  assert.strictEqual(recovActionResultBoss.success, true, `Recovery action failed: ${recovActionResultBoss.error}`);
+  assert.strictEqual(recovActionResultBoss.contractGenerationStatus, 'GENERATED');
+  assert(recovActionResultBoss.contractId, 'Must return contractId');
+
+  const { data: dbContractRecov } = await admin
+    .from('contracts')
+    .select('id, status, is_current')
+    .eq('id', recovActionResultBoss.contractId)
+    .single();
+  assert.strictEqual(dbContractRecov?.status, 'GENERATED');
+  assert.strictEqual(dbContractRecov?.is_current, true);
+
+  testPass('Required Test 10: Deposit-confirmed Order without Contract -> recovery UI/action successfully creates canonical Contract');
+
+  // --------------------------------------------------------------------------
+  // Required Test 11: Deposit-not-confirmed Order -> recovery action rejected
+  // --------------------------------------------------------------------------
+  const { data: calcUnconfirmed } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: unconfirmedOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcUnconfirmed.id,
+  }, BOSS_A_CLIENT);
+
+  // Call recovery action on unconfirmed order
+  const recovUnconfResult = await recoverOrderContractAction(
+    { orderId: unconfirmedOrderId },
+    { userClient: bossRealClient }
+  );
+  assert.strictEqual(recovUnconfResult.success, false, 'Must fail for unconfirmed order');
+  assert(recovUnconfResult.error?.includes('DEPOSIT_NOT_CONFIRMED') || recovUnconfResult.error?.includes('chưa xác nhận cọc'), `Unexpected error message: ${recovUnconfResult.error}`);
+
+  // Also test unauthorized role (TECHNICIAN)
+  const recovTechResult = await recoverOrderContractAction(
+    { orderId: recovActionOrderId },
+    { userClient: techRealClient }
+  );
+  assert.strictEqual(recovTechResult.success, false, 'Must fail for TECHNICIAN role');
+
+  testPass('Required Test 11: Deposit-not-confirmed Order -> recovery action rejected fail-closed, unauthorized roles rejected');
+
+  // --------------------------------------------------------------------------
+  // Required Test 12: Concurrent recovery calls -> exactly one current contract/revision
+  // --------------------------------------------------------------------------
+  const { data: calcConcRecov } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: concRecovOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcConcRecov.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', concRecovOrderId);
+
+  // 10 concurrent recovery calls
+  const concRecoveryCalls = Array.from({ length: 10 }, () =>
+    ensureContractForDepositConfirmedOrder(COMPANY_A, concRecovOrderId)
+  );
+
+  const concRecovResults = await Promise.all(concRecoveryCalls);
+  const canonicalRecovContractId = concRecovResults[0].contractId;
+
+  for (const r of concRecovResults) {
+    assert.strictEqual(r.contractId, canonicalRecovContractId, 'All concurrent recovery calls must return the same contractId');
+  }
+
+  const { data: allContractsForOrder } = await admin
+    .from('contracts')
+    .select('id, revision_no, is_current')
+    .eq('order_id', concRecovOrderId);
+
+  assert.strictEqual(allContractsForOrder?.length, 1, `Must have exactly 1 contract row, found ${allContractsForOrder?.length}`);
+  assert.strictEqual(allContractsForOrder[0].revision_no, 1, 'Must be revision 1');
+  assert.strictEqual(allContractsForOrder[0].is_current, true, 'Must be is_current = true');
+
+  testPass('Required Test 12: Concurrent recovery calls (10 concurrent) -> exactly one current contract/revision');
+
+  // --------------------------------------------------------------------------
+  // Required Test 13: Existing SIGNED Contract -> recovery is deterministic no-op and never overwrites it
+  // --------------------------------------------------------------------------
+  const signRes = await signContract({
+    companyId: COMPANY_A,
+    contractId: canonicalRecovContractId,
+    signedPdfBuffer: validPdfBytes,
+  }, BOSS_A_CLIENT);
+  assert.strictEqual(signRes.success, true);
+  assert.strictEqual(signRes.status, 'SIGNED');
+
+  // Verify contract is SIGNED in DB
+  const { data: contractBeforeRecov } = await admin
+    .from('contracts')
+    .select('status, signed_file_ref, revision_no')
+    .eq('id', canonicalRecovContractId)
+    .single();
+  assert.strictEqual(contractBeforeRecov?.status, 'SIGNED');
+  const originalSignedPath = contractBeforeRecov?.signed_file_ref;
+
+  // Now call recovery on the SIGNED contract
+  const signedRecovResult = await ensureContractForDepositConfirmedOrder(COMPANY_A, concRecovOrderId);
+  assert.strictEqual(signedRecovResult.contractId, canonicalRecovContractId);
+  assert.strictEqual(signedRecovResult.status, 'SIGNED');
+  assert.strictEqual(signedRecovResult.contractGenerationStatus, 'ALREADY_EXISTS');
+
+  // Re-verify DB state is completely untouched
+  const { data: contractAfterRecov } = await admin
+    .from('contracts')
+    .select('status, signed_file_ref, revision_no')
+    .eq('id', canonicalRecovContractId)
+    .single();
+  assert.strictEqual(contractAfterRecov?.status, 'SIGNED');
+  assert.strictEqual(contractAfterRecov?.signed_file_ref, originalSignedPath);
+  assert.strictEqual(contractAfterRecov?.revision_no, contractBeforeRecov?.revision_no);
+
+  testPass('Required Test 13: Existing SIGNED Contract -> recovery is deterministic no-op and never overwrites it');
 
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);

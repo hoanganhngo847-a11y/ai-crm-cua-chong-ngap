@@ -1,5 +1,6 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { generateContractForOrder } from '@/features/contract/services';
+import { ensureContractForDepositConfirmedOrder } from '@/features/contract/services';
 
 export interface PaymentWebhookPayload {
   provider: string;
@@ -13,9 +14,9 @@ export interface PaymentWebhookPayload {
 /**
  * Handles incoming provider payment webhook.
  * Dispatches to atomic process_payment_webhook_rpc and automatically triggers
- * contract generation if deposit threshold is reached.
+ * contract generation or recovery if deposit threshold is reached.
  */
-export async function processPaymentWebhook(payload: PaymentWebhookPayload) {
+export async function processPaymentWebhook(payload: PaymentWebhookPayload, client?: SupabaseClient) {
   const { provider, provider_account, provider_ref, amount, occurred_at, transfer_content } = payload;
 
   if (!provider || !provider_account || !provider_ref || !amount || amount <= 0 || !occurred_at) {
@@ -27,7 +28,7 @@ export async function processPaymentWebhook(payload: PaymentWebhookPayload) {
   const matchedPaymentRef = paymentRefMatch ? paymentRefMatch[0].toUpperCase() : '';
 
   // 2. Call atomic RPC
-  const adminSupabase = createAdminClient();
+  const adminSupabase = client || createAdminClient();
   const { data, error } = await adminSupabase.rpc('process_payment_webhook_rpc', {
     p_provider: provider,
     p_provider_account: provider_account,
@@ -43,24 +44,24 @@ export async function processPaymentWebhook(payload: PaymentWebhookPayload) {
     throw new Error(error.message || String(error));
   }
 
-  // 3. Automated contract generation if deposit threshold was reached
-  if (data?.depositConfirmed && data?.orderId) {
+  // 3. Automated contract generation and recovery if canonical order is DEPOSIT_CONFIRMED
+  // For both MATCHED and ALREADY_PROCESSED: when orderId exists, re-read canonical Order state.
+  if (data?.orderId) {
     try {
-      const { data: bankAcc } = await adminSupabase
-        .from('company_bank_accounts')
-        .select('company_id')
-        .eq('provider', provider)
-        .eq('provider_account', provider_account)
+      const { data: order } = await adminSupabase
+        .from('orders')
+        .select('id, company_id, deposit_status')
+        .eq('id', data.orderId)
         .maybeSingle();
 
-      if (bankAcc?.company_id) {
-        await generateContractForOrder({
-          companyId: bankAcc.company_id,
-          orderId: data.orderId,
-        });
+      if (
+        order &&
+        (order.deposit_status === 'CONFIRMED' || order.deposit_status === 'DEPOSIT_CONFIRMED')
+      ) {
+        await ensureContractForDepositConfirmedOrder(order.company_id, order.id, adminSupabase);
       }
     } catch (genError) {
-      console.error('Lỗi khi tự động sinh hợp đồng từ webhook thanh toán:', genError);
+      console.error('Lỗi khi tự động sinh / khôi phục hợp đồng từ webhook thanh toán:', genError);
     }
   }
 

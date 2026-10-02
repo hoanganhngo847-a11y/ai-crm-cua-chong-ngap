@@ -3,7 +3,7 @@
 import React, { useState, useTransition } from 'react';
 import Link from 'next/link';
 import type { OrderListItemDTO } from '../services';
-import { updateOrderDepositAction } from '../actions';
+import { updateOrderDepositAction, recoverOrderContractAction } from '../actions';
 
 interface OrdersViewProps {
   orders: OrderListItemDTO[];
@@ -12,10 +12,13 @@ interface OrdersViewProps {
 
 export default function OrdersView({ orders, userRole }: OrdersViewProps) {
   const isBossAdmin = userRole === 'BOSS_ADMIN';
+  const isSaleOrBoss = userRole === 'BOSS_ADMIN' || userRole === 'SALE';
   const [selectedOrder, setSelectedOrder] = useState<OrderListItemDTO | null>(null);
   const [depositAmount, setDepositAmount] = useState<string>('');
+  const [inFlightCommandId, setInFlightCommandId] = useState<string>('');
   const [loadingOrderId, setLoadingOrderId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [globalFeedback, setGlobalFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [isPending, startTransition] = useTransition();
 
@@ -23,6 +26,9 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
     setSelectedOrder(order);
     setDepositAmount('');
     setFeedback(null);
+    // Generate command ID once per logical manual-deposit operation.
+    // Retained across retries and network errors.
+    setInFlightCommandId(`manual_dep_${order.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   };
 
   const handleDepositSubmit = (e: React.FormEvent) => {
@@ -35,8 +41,13 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
       return;
     }
 
-    // Stable client idempotency key for this logical submission
-    const idempotencyKey = `manual_dep_${selectedOrder.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // Retain stable in-flight command ID across retries
+    let commandId = inFlightCommandId;
+    if (!commandId) {
+      commandId = `manual_dep_${selectedOrder.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setInFlightCommandId(commandId);
+    }
+
     setLoadingOrderId(selectedOrder.id);
     setFeedback(null);
 
@@ -45,28 +56,75 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
         const res = await updateOrderDepositAction({
           orderId: selectedOrder.id,
           depositAmount: numAmount,
-          idempotencyKey,
+          idempotencyKey: commandId,
         });
 
         if (res.success) {
+          const depData = res.data as {
+            depositConfirmed?: boolean;
+            contractGenerationStatus?: string;
+            contractStatus?: string;
+          };
+          let msg = 'Ghi nhận tiền cọc thành công!';
+          if (depData?.contractGenerationStatus === 'GENERATED') {
+            msg += ' Đã tự động khởi tạo hợp đồng thành công.';
+          } else if (depData?.contractGenerationStatus === 'ALREADY_EXISTS') {
+            msg += ' Hợp đồng kinh tế đã tồn tại.';
+          } else if (depData?.contractGenerationStatus === 'PENDING_RECOVERY') {
+            msg += ' Đã ghi nhận cọc, nhưng khởi tạo hợp đồng đang chờ khôi phục.';
+          }
+
           setFeedback({
             type: 'success',
-            message: `Ghi nhận tiền cọc thành công! ${(res.data as { depositConfirmed?: boolean })?.depositConfirmed ? 'Đã đủ điều kiện và tự động khởi tạo hợp đồng.' : ''}`,
+            message: msg,
           });
-          // Clear modal after short delay or keep open for confirmation
+          // Clear modal only upon verified success
           setTimeout(() => {
             setSelectedOrder(null);
+            setInFlightCommandId('');
           }, 1500);
         } else {
           setFeedback({
             type: 'error',
             message: res.error || 'Không thể ghi nhận tiền cọc.',
           });
+          // Do NOT rotate inFlightCommandId on failure; retry sends same command ID
         }
       } catch (err: unknown) {
         setFeedback({
           type: 'error',
           message: err instanceof Error ? err.message : 'Lỗi hệ thống khi ghi nhận cọc.',
+        });
+        // Do NOT rotate inFlightCommandId on exception/network failure
+      } finally {
+        setLoadingOrderId(null);
+      }
+    });
+  };
+
+  const handleRecoverContract = (order: OrderListItemDTO) => {
+    if (loadingOrderId || isPending) return;
+    setLoadingOrderId(order.id);
+    setGlobalFeedback(null);
+
+    startTransition(async () => {
+      try {
+        const res = await recoverOrderContractAction({ orderId: order.id });
+        if (res.success) {
+          setGlobalFeedback({
+            type: 'success',
+            message: `Khôi phục/khởi tạo hợp đồng thành công cho đơn hàng ${order.orderCode}!`,
+          });
+        } else {
+          setGlobalFeedback({
+            type: 'error',
+            message: res.error || 'Không thể khôi phục hợp đồng.',
+          });
+        }
+      } catch (err: unknown) {
+        setGlobalFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Lỗi hệ thống khi khôi phục hợp đồng.',
         });
       } finally {
         setLoadingOrderId(null);
@@ -113,6 +171,25 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
         </div>
       </div>
 
+      {/* Global Feedback Banner */}
+      {globalFeedback && (
+        <div
+          className={`p-3 rounded-xl text-xs flex items-center justify-between border ${
+            globalFeedback.type === 'success'
+              ? 'bg-emerald-950/80 border-emerald-800 text-emerald-300'
+              : 'bg-rose-950/80 border-rose-800 text-rose-300'
+          }`}
+        >
+          <span>{globalFeedback.message}</span>
+          <button
+            onClick={() => setGlobalFeedback(null)}
+            className="text-slate-400 hover:text-white font-bold ml-2"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Orders Table */}
       <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 shadow">
         <table className="min-w-full divide-y divide-slate-800 text-sm">
@@ -130,6 +207,8 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
           </thead>
           <tbody className="divide-y divide-slate-800/60">
             {filtered.map((order) => {
+              const needsContractRecovery = order.depositConfirmed && !order.contractId;
+
               return (
                 <tr key={order.id} className="hover:bg-slate-800/40 transition">
                   {/* Mã đơn hàng */}
@@ -194,6 +273,10 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
                           HĐ ({order.contractStatus || 'DRAFT'} - Rev {order.contractRevision || 1})
                         </Link>
                       </div>
+                    ) : needsContractRecovery ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-950/70 border border-amber-800 text-amber-300">
+                        Đã đủ cọc — Hợp đồng chưa được tạo
+                      </span>
                     ) : (
                       <span className="text-slate-500 text-[11px]">Chưa tạo HĐ</span>
                     )}
@@ -201,16 +284,34 @@ export default function OrdersView({ orders, userRole }: OrdersViewProps) {
 
                   {/* Action */}
                   <td className="py-3 px-4 text-center">
-                    {isBossAdmin ? (
-                      <button
-                        onClick={() => handleOpenDepositModal(order)}
-                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-amber-300 hover:text-amber-200 transition"
-                      >
-                        Ghi nhận cọc
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-500">Chỉ xem (Sale)</span>
-                    )}
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      {/* Recovery Action: If depositConfirmed and contractId is null, both BOSS_ADMIN and SALE can trigger recovery */}
+                      {needsContractRecovery && isSaleOrBoss && (
+                        <button
+                          onClick={() => handleRecoverContract(order)}
+                          disabled={loadingOrderId === order.id || isPending}
+                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs transition disabled:opacity-50 shadow-sm"
+                          title="Khôi phục tạo hợp đồng kinh tế theo trạng thái cọc"
+                        >
+                          {loadingOrderId === order.id ? 'Đang tạo...' : 'Tạo / Khôi phục hợp đồng'}
+                        </button>
+                      )}
+
+                      {/* Boss Admin Manual Deposit Action */}
+                      {isBossAdmin && (
+                        <button
+                          onClick={() => handleOpenDepositModal(order)}
+                          disabled={loadingOrderId === order.id || isPending}
+                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-amber-300 hover:text-amber-200 transition disabled:opacity-50"
+                        >
+                          Ghi nhận cọc
+                        </button>
+                      )}
+
+                      {!isBossAdmin && !needsContractRecovery && (
+                        <span className="text-xs text-slate-500">Chỉ xem (Sale)</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
