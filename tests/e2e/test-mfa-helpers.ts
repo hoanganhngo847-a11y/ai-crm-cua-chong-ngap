@@ -69,6 +69,12 @@ export async function elevateClientToAal2(
 
   const uniqueName = `${factorName} ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const enrollRes = await enrollTotpFactor(client, uniqueName);
-  const validOtp = generateTotpCode(enrollRes.secret);
-  await challengeAndVerifyTotp(enrollRes.factorId, validOtp, client);
+  try {
+    const validOtp = generateTotpCode(enrollRes.secret);
+    await challengeAndVerifyTotp(enrollRes.factorId, validOtp, client);
+  } catch (_firstErr) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const freshOtp = generateTotpCode(enrollRes.secret);
+    await challengeAndVerifyTotp(enrollRes.factorId, freshOtp, client);
+  }
 }

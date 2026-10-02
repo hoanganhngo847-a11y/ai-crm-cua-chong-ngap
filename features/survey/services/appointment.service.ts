@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createClient as createServerClient } from '../../../lib/supabase/server';
 import type {
   Appointment,
   AppointmentFilters,
@@ -70,8 +69,12 @@ function formatAppointment(
   };
 }
 
+import { createClient as createServerClient } from '../../../lib/supabase/server';
+
 /**
- * Resolves Supabase client (injected or default server client).
+ * Resolves Supabase client (injected or default authenticated server client).
+ * CRITICAL LEAST-PRIVILEGE INVARIANT:
+ * Never silently elevate generic CRUD helpers to service-role admin client.
  */
 async function resolveClient(client?: SupabaseClient): Promise<SupabaseClient> {
   if (client) return client;
@@ -86,6 +89,7 @@ async function resolveClient(client?: SupabaseClient): Promise<SupabaseClient> {
  *    - role === 'TECHNICIAN'
  *    - status === 'ACTIVE'
  * Throws "Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty." if invalid.
+ * Security Invariant: Zero Phone Exposure. Only id and full_name are returned.
  */
 export async function verifyActiveCompanyTechnician(
   assigneeId: string,
@@ -133,8 +137,65 @@ export async function verifyActiveCompanyTechnician(
 
   return {
     id: profile.id,
-    full_name: profile.full_name,
+    full_name: profile.full_name || 'Kỹ thuật viên',
   };
+}
+
+/**
+ * Retrieves active technicians belonging to the specified company.
+ * Security Invariant: Zero Phone Exposure. Only id and full_name are returned.
+ */
+export async function getActiveCompanyTechnicians(
+  companyId: string,
+  client?: SupabaseClient
+): Promise<Array<{ id: string; full_name: string }>> {
+  if (!companyId) return [];
+
+  const supabase = await resolveClient(client);
+
+  // 1. Fetch active company members with role TECHNICIAN in target company
+  const { data: members, error: memberErr } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .eq('role', 'TECHNICIAN')
+    .eq('status', 'ACTIVE');
+
+  if (memberErr || !members || members.length === 0) {
+    return [];
+  }
+
+  const userIds = members.map((m) => m.user_id);
+
+  // 2. Fetch active profiles for these technicians
+  const { data: profiles, error: profileErr } = await supabase
+    .from('user_profiles')
+    .select('id, full_name')
+    .in('id', userIds)
+    .eq('status', 'ACTIVE');
+
+  if (profileErr || !profiles) {
+    return [];
+  }
+
+  return profiles.map((p) => ({
+    id: p.id,
+    full_name: p.full_name || 'Kỹ thuật viên',
+  }));
+}
+
+/**
+ * Narrowly trusted technician retrieval for an already-authorized actor.
+ * Used by server actions after full actor authentication and authorization.
+ * Scoped strictly to companyId. Zero phone exposure.
+ */
+export async function getActiveTechniciansForAuthorizedActor(
+  companyId: string,
+  adminClientOverride?: SupabaseClient
+): Promise<Array<{ id: string; full_name: string }>> {
+  const { createAdminClient } = await import('../../../lib/supabase/admin');
+  const adminClient = adminClientOverride || createAdminClient();
+  return getActiveCompanyTechnicians(companyId, adminClient);
 }
 
 /**
@@ -149,7 +210,10 @@ export async function verifyActiveCompanyTechnician(
  */
 export async function createAppointment(
   input: CreateAppointmentInput,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: {
+    adminClient?: SupabaseClient;
+  }
 ): Promise<Appointment> {
   const supabase = await resolveClient(client);
 
@@ -191,7 +255,8 @@ export async function createAppointment(
   const companyId = customer.company_id;
 
   // 3. Verify assignee: Bắt buộc là kỹ thuật viên đang hoạt động thuộc cùng công ty
-  const assignee = await verifyActiveCompanyTechnician(input.assignee_id, companyId, supabase);
+  const techValidationClient = options?.adminClient || supabase;
+  const assignee = await verifyActiveCompanyTechnician(input.assignee_id, companyId, techValidationClient);
 
   // Enforce type: Chỉ hỗ trợ tạo lịch hẹn loại SURVEY trong phân hệ này
   if (input.type && input.type !== 'SURVEY') {
@@ -249,7 +314,10 @@ export async function createAppointment(
 export async function updateAppointment(
   appointmentId: string,
   input: UpdateAppointmentInput,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: {
+    adminClient?: SupabaseClient;
+  }
 ): Promise<Appointment> {
   if (!appointmentId) {
     throw new Error('Mã lịch hẹn (appointmentId) không hợp lệ.');
@@ -295,7 +363,8 @@ export async function updateAppointment(
       throw new Error('Mã kỹ thuật viên không hợp lệ.');
     }
     // Verify assignee: must be ACTIVE TECHNICIAN in the same company
-    await verifyActiveCompanyTechnician(input.assignee_id, existing.company_id, supabase);
+    const techValidationClient = options?.adminClient || supabase;
+    await verifyActiveCompanyTechnician(input.assignee_id, existing.company_id, techValidationClient);
     updates.assignee_id = input.assignee_id;
   }
 
@@ -340,7 +409,8 @@ export async function updateAppointment(
     .maybeSingle();
 
   // 5. Fetch safe assignee details
-  const { data: assignee } = await supabase
+  const lookupClient = options?.adminClient || supabase;
+  const { data: assignee } = await lookupClient
     .from('user_profiles')
     .select('id, full_name')
     .eq('id', updated.assignee_id)
@@ -370,9 +440,12 @@ export async function updateAppointment(
 export async function assignAppointment(
   appointmentId: string,
   assigneeId: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: {
+    adminClient?: SupabaseClient;
+  }
 ): Promise<Appointment> {
-  return updateAppointment(appointmentId, { assignee_id: assigneeId }, client);
+  return updateAppointment(appointmentId, { assignee_id: assigneeId }, client, options);
 }
 
 /**
@@ -620,4 +693,187 @@ export async function getAppointments(
 
     return formatAppointment(row, safeCust, safeAsgn);
   });
+}
+
+export interface ScheduleSurveyAppointmentInput {
+  customerId: string;
+  assigneeId: string;
+  address: string;
+  appointmentDate: string;
+  companyId?: string;
+}
+
+export interface ScheduleSurveyAppointmentResult {
+  success: boolean;
+  message?: string;
+  code?: string;
+  appointment?: Appointment;
+}
+
+/**
+ * Narrowly trusted server-side survey appointment scheduling orchestration.
+ *
+ * Implements strict security & authorization rules:
+ * 1. Authenticated actor must be ACTIVE.
+ * 2. Actor membership must be ACTIVE.
+ * 3. Actor role must be SALE or BOSS_ADMIN (TECHNICIAN/others get ROLE_FORBIDDEN).
+ * 4. Customer must belong to actor.companyId under real RLS.
+ * 5. Target Technician must:
+ *    - have ACTIVE profile;
+ *    - have ACTIVE membership;
+ *    - role TECHNICIAN;
+ *    - belong to exactly target company.
+ * 6. Appointment insert executed with authenticated userClient (RLS-enforced),
+ *    bound to actor.companyId/customer company.
+ * 7. Never trust company_id supplied by browser.
+ * 8. Return only safe technician fields: id, full_name.
+ * 9. Never return raw phone or email.
+ */
+export async function scheduleSurveyAppointment(
+  input: ScheduleSurveyAppointmentInput,
+  options?: {
+    userClient?: SupabaseClient;
+    adminClient?: SupabaseClient;
+  }
+): Promise<ScheduleSurveyAppointmentResult> {
+  const { getActorContext } = await import('../../../lib/auth/context');
+  const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+  const { createAdminClient } = await import('../../../lib/supabase/admin');
+
+  // 1. Resolve user client and authenticate actor
+  const userClient = await resolveClient(options?.userClient);
+  const actor = await getActorContext(undefined, userClient);
+
+  if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+    return {
+      success: false,
+      code: 'UNAUTHORIZED',
+      message: 'Bạn chưa đăng nhập hoặc phiên làm việc đã hết hạn.',
+    };
+  }
+
+  // 2. Enforce role authorization: SALE or BOSS_ADMIN
+  if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+    return {
+      success: false,
+      code: 'ROLE_FORBIDDEN',
+      message: 'Bạn không có quyền lên lịch khảo sát. Thao tác chỉ dành cho Sale hoặc Quản trị viên.',
+    };
+  }
+
+  // If BOSS_ADMIN in production, require MFA / AAL2
+  if (actor.role === APPLICATION_ROLES.BOSS_ADMIN) {
+    const shouldEnforceAal2 = process.env.NODE_ENV === 'production';
+    if (shouldEnforceAal2 && actor.aal !== 'aal2') {
+      return {
+        success: false,
+        code: 'MFA_REQUIRED',
+        message: 'Yêu cầu xác thực hai yếu tố (MFA / AAL2) cho tài khoản Quản trị viên.',
+      };
+    }
+  }
+
+  if (!actor.companyId) {
+    return {
+      success: false,
+      code: 'COMPANY_REQUIRED',
+      message: 'Không xác định được doanh nghiệp của bạn.',
+    };
+  }
+
+  // 3. Never trust company_id supplied by browser
+  if (input.companyId && input.companyId !== actor.companyId) {
+    return {
+      success: false,
+      code: 'COMPANY_MISMATCH',
+      message: 'Doanh nghiệp không khớp với tài khoản đăng nhập.',
+    };
+  }
+
+  // 4. Customer verification using userClient under real RLS
+  const { data: customer, error: custErr } = await userClient
+    .from('customers')
+    .select('id, company_id, name, stage')
+    .eq('id', input.customerId)
+    .eq('company_id', actor.companyId)
+    .maybeSingle();
+
+  if (custErr || !customer) {
+    return {
+      success: false,
+      code: 'CUSTOMER_NOT_FOUND',
+      message: 'Không tìm thấy hồ sơ khách hàng thuộc doanh nghiệp của bạn.',
+    };
+  }
+
+  // 5. Narrow trusted server-side technician validation
+  // Only executed within this already-authorized operation, scoped strictly to actor.companyId
+  const adminClient = options?.adminClient || createAdminClient();
+  let safeTechnician: { id: string; full_name: string };
+  try {
+    safeTechnician = await verifyActiveCompanyTechnician(
+      input.assigneeId,
+      actor.companyId,
+      adminClient
+    );
+  } catch (techErr: unknown) {
+    const errorMsg = techErr instanceof Error ? techErr.message : String(techErr);
+    return {
+      success: false,
+      code: 'INVALID_TECHNICIAN',
+      message:
+        errorMsg ||
+        'Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty.',
+    };
+  }
+
+  // 6. Appointment insert executed with authenticated userClient (RLS-enforced)
+  let appointment: Appointment;
+  try {
+    appointment = await createAppointment(
+      {
+        customer_id: customer.id,
+        assignee_id: safeTechnician.id,
+        address: input.address,
+        appointment_date: input.appointmentDate,
+        type: 'SURVEY',
+        status: 'ASSIGNED',
+      },
+      userClient,
+      { adminClient }
+    );
+  } catch (createErr: unknown) {
+    const errorMsg = createErr instanceof Error ? createErr.message : String(createErr);
+    return {
+      success: false,
+      code: 'CREATE_FAILED',
+      message: errorMsg || 'Không thể tạo lịch hẹn khảo sát.',
+    };
+  }
+
+  // 7. Advance customer stage if currently at an early stage
+  try {
+    const { CustomerService } = await import('../../../features/crm/services/customer.service');
+    const earlyStages = ['LEAD_NEW', 'CONTACT_CYCLE_1', 'CONTACT_CYCLE_2', 'CONTACT_CYCLE_3', 'SURVEY_REQUESTED'];
+    if (earlyStages.includes(customer.stage)) {
+      await CustomerService.updateStage(
+        {
+          customerId: customer.id,
+          companyId: actor.companyId,
+          to_stage: 'SURVEY_SCHEDULED',
+          note: `Lên lịch khảo sát hiện trường với kỹ thuật viên ngày ${new Date(input.appointmentDate).toLocaleString('vi-VN')}`,
+          actorId: actor.userId,
+        },
+        adminClient
+      );
+    }
+  } catch (stageErr) {
+    console.warn('[Stage update non-fatal error]:', stageErr);
+  }
+
+  return {
+    success: true,
+    message: 'Đã lên lịch khảo sát thành công.',
+    appointment,
+  };
 }

@@ -23,9 +23,9 @@ export interface UploadPhotoActionResponse {
 
 async function verifyAppointmentPermission(
   appointmentId: string,
-  options: { isMutation?: boolean } = {},
+  options: { isMutation?: boolean; userClient?: import('@supabase/supabase-js').SupabaseClient } = {},
 ) {
-  return authorizeSurveyAppointment(appointmentId, options.isMutation);
+  return authorizeSurveyAppointment(appointmentId, options.isMutation, options.userClient);
 }
 
 /**
@@ -76,7 +76,17 @@ function normalizeSafeActionError(
     msg.includes('INVALID_PREDECESSOR_STATE') ||
     msg.includes('INVALID_COMPLETED_BY') ||
     msg.includes('APPOINTMENT_NOT_FOUND') ||
-    msg.includes('APPOINTMENT_TYPE_NOT_SURVEY')
+    msg.includes('APPOINTMENT_TYPE_NOT_SURVEY') ||
+    msg.includes('Người được phân công phải là kỹ thuật viên') ||
+    msg.includes('Không tìm thấy hồ sơ khách hàng') ||
+    msg.includes('Khách hàng không thuộc') ||
+    msg.includes('Doanh nghiệp không khớp') ||
+    msg.includes('POLICY_CONFIGURATION_ERROR') ||
+    msg.includes('RESOURCE_NOT_FOUND') ||
+    msg.includes('CHECK_VIOLATION') ||
+    msg.includes('Thời gian khảo sát') ||
+    msg.includes('Địa chỉ khảo sát') ||
+    msg.includes('Kỹ thuật viên phụ trách')
   ) {
     if (msg.includes('SURVEY_ALREADY_EXISTS:')) {
       return 'Khảo sát cho lịch hẹn này đã tồn tại.';
@@ -96,6 +106,9 @@ function normalizeSafeActionError(
     if (msg.includes('APPOINTMENT_TYPE_NOT_SURVEY:')) {
       return 'Lịch hẹn không phải là lịch khảo sát hợp lệ.';
     }
+    if (msg.includes('POLICY_CONFIGURATION_ERROR:')) {
+      return 'Chưa cấu hình chính sách giá hiệu lực cho doanh nghiệp.';
+    }
     return msg;
   }
 
@@ -107,12 +120,13 @@ function normalizeSafeActionError(
  * Conditional write: Chỉ cập nhật khi status hiện tại là 'ASSIGNED'
  */
 export async function acceptSurveyAppointmentAction(
-  appointmentId: string
+  appointmentId: string,
+  options?: { userClient?: import('@supabase/supabase-js').SupabaseClient }
 ): Promise<ActionResponse> {
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      { isMutation: true }
+      { isMutation: true, userClient: options?.userClient }
     );
 
     if (appointment.status !== 'ASSIGNED') {
@@ -150,7 +164,11 @@ export async function acceptSurveyAppointmentAction(
       };
     }
 
-    revalidatePath('/surveys');
+    try {
+      revalidatePath('/surveys');
+    } catch {
+      // Non-fatal outside Next.js request context
+    }
     return { success: true, message: 'Đã nhận lịch khảo sát thành công.' };
   } catch (err) {
     console.error('[Action Error - acceptSurveyAppointmentAction]:', err);
@@ -170,12 +188,13 @@ export async function acceptSurveyAppointmentAction(
  * Conditional write: Chỉ cập nhật khi status là ASSIGNED hoặc ACCEPTED
  */
 export async function startSurveyAppointmentAction(
-  appointmentId: string
+  appointmentId: string,
+  options?: { userClient?: import('@supabase/supabase-js').SupabaseClient }
 ): Promise<ActionResponse> {
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      { isMutation: true }
+      { isMutation: true, userClient: options?.userClient }
     );
 
     if (appointment.status !== 'ACCEPTED' && appointment.status !== 'ASSIGNED') {
@@ -220,7 +239,11 @@ export async function startSurveyAppointmentAction(
       };
     }
 
-    revalidatePath('/surveys');
+    try {
+      revalidatePath('/surveys');
+    } catch {
+      // Non-fatal outside Next.js request context
+    }
     return {
       success: true,
       redirectUrl: `/surveys/${appointmentId}`,
@@ -242,12 +265,13 @@ export async function startSurveyAppointmentAction(
  * Conditional write: Chỉ cho phép hủy khi status thuộc ASSIGNED, ACCEPTED, IN_PROGRESS
  */
 export async function cancelSurveyAppointmentAction(
-  appointmentId: string
+  appointmentId: string,
+  options?: { userClient?: import('@supabase/supabase-js').SupabaseClient }
 ): Promise<ActionResponse> {
   try {
     const { appointment, adminClient } = await verifyAppointmentPermission(
       appointmentId,
-      { isMutation: true }
+      { isMutation: true, userClient: options?.userClient }
     );
 
     if (appointment.status === 'COMPLETED') {
@@ -285,7 +309,11 @@ export async function cancelSurveyAppointmentAction(
       };
     }
 
-    revalidatePath('/surveys');
+    try {
+      revalidatePath('/surveys');
+    } catch {
+      // Non-fatal outside Next.js request context
+    }
     return { success: true, message: 'Đã hủy lịch hẹn khảo sát.' };
   } catch (err) {
     console.error('[Action Error - cancelSurveyAppointmentAction]:', err);
@@ -427,8 +455,12 @@ export async function completeSurveyAction(
       };
     }
 
-    revalidatePath('/surveys');
-    revalidatePath(`/surveys/${input.appointmentId}`);
+    try {
+      revalidatePath('/surveys');
+      revalidatePath(`/surveys/${input.appointmentId}`);
+    } catch {
+      // Non-fatal outside Next.js request context
+    }
 
     return {
       success: true,
@@ -451,3 +483,210 @@ export async function completeSurveyAction(
   }
 }
 
+export interface CreateSurveyAppointmentActionResponse {
+  success: boolean;
+  message?: string;
+  appointment?: import('../../../features/survey/types/appointment').Appointment;
+}
+
+/**
+ * Action: Lên lịch khảo sát hiện trường mới dành riêng cho SALE hoặc BOSS_ADMIN.
+ * Server xác thực tenant nghiêm ngặt: client company_id hoàn toàn bị bỏ qua,
+ * công ty được derive trực tiếp từ membership đang hoạt động của người dùng.
+ * Phân công bắt buộc phải là kỹ thuật viên (TECHNICIAN) đang hoạt động cùng công ty.
+ */
+export async function createSurveyAppointmentAction(
+  input: {
+    customerId: string;
+    assigneeId: string;
+    address: string;
+    appointmentDate: string;
+    companyId?: string;
+  },
+  options?: {
+    userClient?: import('@supabase/supabase-js').SupabaseClient;
+    adminClient?: import('@supabase/supabase-js').SupabaseClient;
+  }
+): Promise<CreateSurveyAppointmentActionResponse> {
+  try {
+    const { scheduleSurveyAppointment } = await import(
+      '../../../features/survey/services/appointment.service'
+    );
+    const result = await scheduleSurveyAppointment(input, options);
+
+    if (result.success && result.appointment) {
+      try {
+        const { revalidatePath } = await import('next/cache');
+        revalidatePath('/surveys');
+        revalidatePath('/customers');
+        revalidatePath(`/customers/${input.customerId}`);
+      } catch {
+        // Revalidation is non-blocking or outside request context
+      }
+    }
+
+    return result;
+  } catch (err: unknown) {
+    console.error('[Action Error - createSurveyAppointmentAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(
+        err,
+        'Không thể tạo lịch hẹn khảo sát do lỗi hệ thống. Vui lòng thử lại.'
+      ),
+    };
+  }
+}
+
+/**
+ * Action: Lấy danh sách kỹ thuật viên (TECHNICIAN) đang hoạt động cùng công ty.
+ * Zero-phone boundary: Tuyệt đối không trả về số điện thoại cá nhân.
+ */
+export async function getActiveCompanyTechniciansAction(
+  options?: {
+    userClient?: import('@supabase/supabase-js').SupabaseClient;
+    adminClient?: import('@supabase/supabase-js').SupabaseClient;
+  }
+): Promise<{
+  success: boolean;
+  technicians?: Array<{ id: string; full_name: string }>;
+  message?: string;
+}> {
+  try {
+    const { getActorContext } = await import('../../../lib/auth/context');
+    const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+    const { getActiveTechniciansForAuthorizedActor } = await import(
+      '../../../features/survey/services/appointment.service'
+    );
+    const { createClient: createServerClient } = await import('../../../lib/supabase/server');
+
+    const userClient = options?.userClient || (await createServerClient());
+    const actor = await getActorContext(undefined, userClient);
+    if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      return { success: false, message: 'Bạn chưa đăng nhập.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return { success: false, message: 'Bạn không có quyền xem danh sách kỹ thuật viên.' };
+    }
+
+    if (!actor.companyId) {
+      return { success: false, message: 'Không xác định được doanh nghiệp.' };
+    }
+
+    const technicians = await getActiveTechniciansForAuthorizedActor(
+      actor.companyId,
+      options?.adminClient
+    );
+
+    return {
+      success: true,
+      technicians,
+    };
+  } catch (err) {
+    console.error('[Action Error - getActiveCompanyTechniciansAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(err, 'Lỗi khi lấy danh sách kỹ thuật viên.'),
+    };
+  }
+}
+
+export interface CalculatePriceFromSurveyActionResponse {
+  success: boolean;
+  message?: string;
+  calculationId?: string;
+  status?: string;
+  amount?: number | null;
+  missingFields?: string[];
+}
+
+/**
+ * Action: Kích hoạt tính giá tin cậy từ khảo sát đã hoàn tất (Option B - Explicit trusted Sale/Boss action).
+ * Thao tác lấy dữ liệu khảo sát trực tiếp từ database qua canonical adapter,
+ * áp dụng chính sách giá active của công ty và ghi nhận PriceCalculation bất biến.
+ */
+export async function calculatePriceFromSurveyAction(
+  params: { surveyId: string },
+  options?: {
+    userClient?: import('@supabase/supabase-js').SupabaseClient;
+  }
+): Promise<CalculatePriceFromSurveyActionResponse> {
+  try {
+    const { getActorContext } = await import('../../../lib/auth/context');
+    const { APPLICATION_ROLES } = await import('../../../shared/constants/roles');
+    const { calculatePriceFromSurvey } = await import('../../../features/pricing/services');
+    const { createClient: createServerClient } = await import('../../../lib/supabase/server');
+
+    const userClient = options?.userClient || (await createServerClient());
+    const actor = await getActorContext(undefined, userClient);
+    if (!actor || actor.profileStatus !== 'ACTIVE' || actor.membershipStatus !== 'ACTIVE') {
+      return { success: false, message: 'Bạn chưa đăng nhập.' };
+    }
+
+    if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+      return {
+        success: false,
+        message: 'Bạn không có quyền tính giá. Thao tác chỉ dành cho Sale hoặc Quản trị viên.',
+      };
+    }
+
+    if (!actor.companyId) {
+      return { success: false, message: 'Không xác định được doanh nghiệp.' };
+    }
+
+    const calcResult = await calculatePriceFromSurvey(
+      {
+        companyId: actor.companyId,
+        surveyId: params.surveyId,
+      },
+      userClient
+    );
+
+    // If successfully CALCULATED, update customer stage to PRICE_CALCULATED
+    if (calcResult.status === 'CALCULATED') {
+      try {
+        const { CustomerService } = await import('../../../features/crm/services/customer.service');
+        await CustomerService.updateStage({
+          customerId: calcResult.customer_id,
+          companyId: actor.companyId,
+          to_stage: 'PRICE_CALCULATED',
+          note: `Đã tính giá từ khảo sát: ${calcResult.amount != null ? Number(calcResult.amount).toLocaleString('vi-VN') + ' đ' : 'Thành công'}`,
+          actorId: actor.userId,
+        });
+      } catch (stErr) {
+        console.warn('[Stage update non-fatal error]:', stErr);
+      }
+    }
+
+    try {
+      const { revalidatePath } = await import('next/cache');
+      revalidatePath('/quotations');
+      revalidatePath('/surveys');
+      revalidatePath(`/customers/${calcResult.customer_id}`);
+    } catch {
+      // Revalidation non-fatal in test environment
+    }
+
+    return {
+      success: true,
+      calculationId: calcResult.id,
+      status: calcResult.status,
+      amount: calcResult.amount,
+      missingFields: calcResult.missing_fields,
+      message:
+        calcResult.status === 'CALCULATED'
+          ? `Đã tính giá thành công: ${Number(calcResult.amount).toLocaleString('vi-VN')} đ`
+          : 'Dữ liệu khảo sát chưa đủ để tính giá tự động (NEED_INFO).',
+    };
+  } catch (err: unknown) {
+    console.error('[Action Error - calculatePriceFromSurveyAction]:', err);
+    return {
+      success: false,
+      message: normalizeSafeActionError(
+        err,
+        'Không thể tính giá từ khảo sát do lỗi hệ thống.'
+      ),
+    };
+  }
+}

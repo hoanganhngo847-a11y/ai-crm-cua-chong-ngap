@@ -19,7 +19,10 @@ export interface SurveyAppointmentItem {
   status: 'ASSIGNED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'REJECTED';
   assignee_id: string;
   assignee_name: string;
+  survey_id?: string | null;
 }
+
+import CalculatePriceFromSurveyButton from '../../../features/pricing/components/calculate-price-from-survey-button';
 
 interface Props {
   initialAppointments: SurveyAppointmentItem[];
@@ -673,14 +676,22 @@ export default function SurveyListClient({
                         </button>
                       )}
 
-                      {/* Action 4: Xem kết quả (COMPLETED) */}
+                      {/* Action 4: Xem kết quả & Tính giá (COMPLETED) */}
                       {item.status === 'COMPLETED' && (
-                        <button
-                          onClick={() => router.push(`/surveys/${item.id}`)}
-                          className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-                        >
-                          Xem kết quả
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {item.survey_id && (userRole === 'BOSS_ADMIN' || userRole === 'SALE') && (
+                            <CalculatePriceFromSurveyButton
+                              surveyId={item.survey_id}
+                              userRole={userRole}
+                            />
+                          )}
+                          <button
+                            onClick={() => router.push(`/surveys/${item.id}`)}
+                            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+                          >
+                            Xem kết quả
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>

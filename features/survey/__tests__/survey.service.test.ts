@@ -5,6 +5,8 @@ import {
   formatSurveyForPricing,
   getSurveyForPricing,
   completeSurvey,
+  convertMillimetersToMeters,
+  adaptSurveyToPricingInput,
 } from '../services/survey.service';
 import {
   verifyMandatoryPhotosInStorage,
@@ -16,6 +18,7 @@ import {
   updateAppointment,
   assignAppointment,
   cancelAppointment,
+  getActiveCompanyTechnicians,
 } from '../services/appointment.service';
 import { sanitizeSurveyInput } from '../validations/survey.schema';
 import type {
@@ -1484,6 +1487,147 @@ async function main() {
         message: 'Không thể chỉnh sửa lịch hẹn đã hoàn tất khảo sát.',
       }
     );
+  });
+
+  // =========================================================================
+  // Section 12: Survey-to-Pricing Adapter & Technician Zero Phone Unit Tests
+  // =========================================================================
+
+  await runAsyncTest('Kịch bản 12.1: getActiveCompanyTechnicians tuân thủ Zero-Phone boundary và chỉ lấy ACTIVE TECHNICIAN', async () => {
+    const mockClient = {
+      from: (table: string) => {
+        const q: Record<string, unknown> = {
+          select: () => q,
+          eq: () => q,
+          in: () => q,
+        };
+        if (table === 'company_members') {
+          q.eq = (field: string, val: unknown) => {
+            return q;
+          };
+          // Simulate query returning member user_ids
+          Object.defineProperty(q, 'then', {
+            value: (resolve: (val: unknown) => void) => {
+              resolve({
+                data: [{ user_id: 'tech-user-1' }, { user_id: 'tech-user-2' }],
+                error: null,
+              });
+            },
+          });
+        } else if (table === 'user_profiles') {
+          Object.defineProperty(q, 'then', {
+            value: (resolve: (val: unknown) => void) => {
+              resolve({
+                data: [
+                  { id: 'tech-user-1', full_name: 'Nguyễn Văn Kỹ Thuật 1', phone: '0901234567', raw_phone: '+84901234567' },
+                  { id: 'tech-user-2', full_name: 'Trần Văn Kỹ Thuật 2' },
+                ],
+                error: null,
+              });
+            },
+          });
+        }
+        return q;
+      },
+    };
+
+    const techs = await getActiveCompanyTechnicians('comp-123', mockClient as unknown as Parameters<typeof getActiveCompanyTechnicians>[1]);
+    assert.strictEqual(techs.length, 2);
+    assert.deepStrictEqual(techs[0], { id: 'tech-user-1', full_name: 'Nguyễn Văn Kỹ Thuật 1' });
+    assert.deepStrictEqual(techs[1], { id: 'tech-user-2', full_name: 'Trần Văn Kỹ Thuật 2' });
+    // Verify phone is NOT exposed
+    assert.strictEqual((techs[0] as Record<string, unknown>).phone, undefined);
+    assert.strictEqual((techs[0] as Record<string, unknown>).raw_phone, undefined);
+  });
+
+  runTest('Kịch bản 12.2: convertMillimetersToMeters chuyển đổi chuẩn xác mm sang m', () => {
+    assert.strictEqual(convertMillimetersToMeters(2500), 2.5);
+    assert.strictEqual(convertMillimetersToMeters(1200), 1.2);
+    assert.strictEqual(convertMillimetersToMeters('2500'), 2.5);
+    assert.strictEqual(convertMillimetersToMeters('1200'), 1.2);
+    assert.strictEqual(convertMillimetersToMeters(1000), 1.0);
+    assert.strictEqual(convertMillimetersToMeters(500), 0.5);
+
+    // Negative / 0 / invalid should throw
+    assert.throws(() => convertMillimetersToMeters(0), /số dương/);
+    assert.throws(() => convertMillimetersToMeters(-100), /số dương/);
+    assert.throws(() => convertMillimetersToMeters(NaN), /số dương/);
+    assert.throws(() => convertMillimetersToMeters(null), /số dương/);
+    assert.throws(() => convertMillimetersToMeters('invalid'), /số dương/);
+  });
+
+  runTest('Kịch bản 12.3: adaptSurveyToPricingInput chuyển đổi số đo khảo sát thành input định giá chuẩn xác', () => {
+    const surveyRecord: SurveyRecord = {
+      id: 'srv-canonical-01',
+      company_id: 'comp-abc',
+      customer_id: 'cust-xyz',
+      appointment_id: 'apt-789',
+      completed_by: 'usr-tech-01',
+      measurements: {
+        clear_width_mm: 2500,
+        barrier_height_mm: 1200,
+        anticipated_flood_height_mm: 800,
+        gate_type: 'REMOVABLE_PANEL',
+        mounting_method: 'INSIDE_JAMB',
+      },
+      site_condition: JSON.stringify({
+        wall_material: 'SOLID_BRICK',
+        floor_material: 'CONCRETE_SMOOTH',
+        floor_evenness: 'FLAT',
+        slope_grade: 'LEVEL',
+      }),
+      photos: [],
+      completed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const pricingInput = adaptSurveyToPricingInput(surveyRecord);
+
+    // Assert converted meter dimensions
+    assert.strictEqual(pricingInput.width, 2.5);
+    assert.strictEqual(pricingInput.height, 1.2);
+    assert.strictEqual(pricingInput.unit, 'm');
+
+    // Assert original survey measurements preserved
+    assert.strictEqual(pricingInput.clear_width_mm, 2500);
+    assert.strictEqual(pricingInput.barrier_height_mm, 1200);
+    assert.strictEqual(pricingInput.anticipated_flood_height_mm, 800);
+    assert.strictEqual(pricingInput.survey_id, 'srv-canonical-01');
+    assert.strictEqual(pricingInput.gate_type, 'REMOVABLE_PANEL');
+    assert.strictEqual(pricingInput.mounting_method, 'INSIDE_JAMB');
+
+    // Assert calculation using converted values: 2.5 * 1.2 * 5,000,000 = 15,000,000
+    const basePricePerSqm = 5000000;
+    const calculatedAmount = pricingInput.width! * pricingInput.height! * basePricePerSqm;
+    assert.strictEqual(calculatedAmount, 15000000);
+    // Explicit assertion: NOT 2500 * 1200 * 5,000,000
+    assert.notStrictEqual(calculatedAmount, 2500 * 1200 * basePricePerSqm);
+  });
+
+  runTest('Kịch bản 12.4: adaptSurveyToPricingInput fail-closed khi thiếu số đo khảo sát, không suy đoán', () => {
+    const incompleteSurvey: SurveyRecord = {
+      id: 'srv-canonical-02',
+      company_id: 'comp-abc',
+      customer_id: 'cust-xyz',
+      appointment_id: 'apt-789',
+      completed_by: 'usr-tech-01',
+      measurements: {
+        clear_width_mm: 2500,
+        // barrier_height_mm missing
+      } as unknown as MeasurementData,
+      site_condition: '{}',
+      photos: [],
+      completed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const pricingInput = adaptSurveyToPricingInput(incompleteSurvey);
+    assert.strictEqual(pricingInput.width, 2.5);
+    assert.strictEqual(pricingInput.height, undefined);
+    assert.strictEqual(pricingInput.clear_width_mm, 2500);
+    assert.strictEqual(pricingInput.barrier_height_mm, undefined);
   });
 
   console.log('===============================================================');

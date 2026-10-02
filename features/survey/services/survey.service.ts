@@ -239,6 +239,9 @@ export async function completeSurvey(
 export {
   formatSurveyForPricing,
   getSurveyForPricing,
+  adaptSurveyToPricingInput,
+  convertMillimetersToMeters,
+  type CanonicalPricingMeasurements,
 } from '../adapters/pricing.adapter';
 
 /**

@@ -7,6 +7,7 @@ import { APPLICATION_ROLES } from '../../../../shared/constants/roles';
 import { CustomerService, maskPhone } from '../../../../features/crm/services/customer.service';
 import { InboxService } from '../../../../features/inbox/services/inbox.service';
 import CustomerTimeline from '../../../../features/crm/components/customer-timeline';
+import CustomerSurveyCard from '../../../../features/crm/components/customer-survey-card';
 import { sanitizePhoneInText } from '../../../../features/crm/utils/phone-sanitizer';
 import type { CustomerTimelineEvent } from '../../../../features/inbox/types/inbox.types';
 import { resolveCustomerPrivateContactForTrustedOperation } from '../../../../lib/sensitive/customer-contact';
@@ -346,6 +347,66 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     }
   }
 
+  // 4. Lấy lịch hẹn khảo sát, kết quả đo đạc và bảng tính giá của khách hàng
+  let customerAppointments: Array<{
+    id: string;
+    type: string;
+    status: string;
+    address: string;
+    start_time: string;
+    created_at: string;
+  }> = [];
+  let customerSurveys: Array<{
+    id: string;
+    appointment_id: string;
+    measurements?: {
+      clear_width_mm?: number;
+      barrier_height_mm?: number;
+      anticipated_flood_height_mm?: number;
+      gate_type?: string;
+      mounting_method?: string;
+    };
+    completed_at: string;
+    created_at?: string;
+  }> = [];
+  let customerCalculations: Array<{
+    id: string;
+    survey_id?: string | null;
+    amount: number | null;
+    status: string;
+    missing_fields: string[] | null;
+    created_at: string;
+  }> = [];
+
+  try {
+    const [apptsRes, surveysRes, calcsRes] = await Promise.all([
+      supabase
+        .from('appointments')
+        .select('id, type, status, address, start_time, created_at')
+        .eq('customer_id', customerData.id)
+        .eq('company_id', actor.companyId)
+        .order('start_time', { ascending: false }),
+      supabase
+        .from('surveys')
+        .select('id, appointment_id, measurements, completed_at, created_at')
+        .eq('customer_id', customerData.id)
+        .eq('company_id', actor.companyId)
+        .order('completed_at', { ascending: false }),
+      supabase
+        .from('price_calculations')
+        .select('id, survey_id, amount, status, missing_fields, created_at')
+        .eq('customer_id', customerData.id)
+        .eq('company_id', actor.companyId)
+        .order('created_at', { ascending: false }),
+    ]);
+
+    if (apptsRes.data) customerAppointments = apptsRes.data as unknown as typeof customerAppointments;
+    if (surveysRes.data) customerSurveys = surveysRes.data as unknown as typeof customerSurveys;
+    if (calcsRes.data) customerCalculations = calcsRes.data as unknown as typeof customerCalculations;
+  } catch (queryErr) {
+    console.warn('[Customer survey/calc query error]:', queryErr);
+  }
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Top Header & Breadcrumb */}
@@ -465,6 +526,17 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               </div>
             </div>
           </div>
+
+          {/* Card: Khảo sát & Tính giá (Customer Survey Card) */}
+          <CustomerSurveyCard
+            customerId={customerData.id}
+            customerName={customerData.name}
+            customerAddress={customerData.project_specs?.address || ''}
+            userRole={actor.role}
+            appointments={customerAppointments}
+            surveys={customerSurveys}
+            calculations={customerCalculations}
+          />
 
           {/* Card: Thông số kỹ thuật công trình cửa chống ngập */}
           {customerData.project_specs && (

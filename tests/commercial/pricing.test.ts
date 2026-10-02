@@ -1,5 +1,9 @@
 import assert from 'node:assert';
 import { calculatePrice } from '../../features/pricing/utils';
+import {
+  convertMillimetersToMeters,
+  adaptSurveyToPricingInput,
+} from '../../features/survey/adapters/pricing.adapter';
 
 console.log('================================================================');
 console.log('STARTING TV7 PRICING ENGINE & SNAPSHOT IMMUTABILITY TESTS');
@@ -108,6 +112,104 @@ function testPass(msg: string) {
   const result = calculatePrice({ width: 1, height: 1 }, policy);
   assert.strictEqual(result.amount, 1000000);
   testPass('Pricing calculator does not hardcode deposit percentages or arbitrary discounts');
+}
+
+// ----------------------------------------------------------------------------
+// Test 6: Canonical Survey → Pricing contract (Section 8)
+// 2500 mm -> 2.5 m, 1200 mm -> 1.2 m, formula 2.5 * 1.2 * price_per_sqm = 15,000,000
+// NOT 2500 * 1200 * price_per_sqm
+// ----------------------------------------------------------------------------
+{
+  // 1. Direct unit conversion tests
+  const widthM = convertMillimetersToMeters(2500);
+  const heightM = convertMillimetersToMeters(1200);
+  assert.strictEqual(widthM, 2.5, '2500 mm must convert to exactly 2.5 m');
+  assert.strictEqual(heightM, 1.2, '1200 mm must convert to exactly 1.2 m');
+
+  // 2. Real Survey record adapter
+  const surveyRecord = {
+    id: 'srv-contract-test-01',
+    company_id: 'comp-01',
+    customer_id: 'cust-01',
+    appointment_id: 'apt-01',
+    measurements: {
+      clear_width_mm: 2500,
+      barrier_height_mm: 1200,
+      anticipated_flood_height_mm: 800,
+      gate_type: 'REMOVABLE_PANEL' as const,
+      mounting_method: 'INSIDE_JAMB' as const,
+    },
+    site_condition: {
+      wall_material: 'SOLID_BRICK',
+      floor_material: 'CONCRETE_SMOOTH',
+      floor_evenness: 'FLAT',
+      slope_grade: 'LEVEL',
+    },
+    photos: [],
+    status: 'COMPLETED',
+    completed_at: new Date().toISOString(),
+  };
+
+  const adapted = adaptSurveyToPricingInput(surveyRecord);
+  assert.strictEqual(adapted.width, 2.5);
+  assert.strictEqual(adapted.height, 1.2);
+  assert.strictEqual(adapted.unit, 'm');
+  assert.strictEqual(adapted.survey_id, 'srv-contract-test-01');
+
+  // 3. Pricing calculation via canonical policy
+  const policy = {
+    price_rules: {
+      base_price_per_sqm: 5000000,
+    },
+    conditions: {
+      deposit_percentage: 30,
+    },
+  };
+
+  const calcResult = calculatePrice(adapted, policy);
+  assert.strictEqual(calcResult.status, 'CALCULATED');
+  assert.strictEqual(calcResult.amount, 15000000); // 2.5 * 1.2 * 5,000,000 = 15,000,000
+  // Assert explicit rejection of millimeter multiplication (2500 * 1200 * 5,000,000 = 15,000,000,000,000)
+  assert.notStrictEqual(calcResult.amount, 2500 * 1200 * 5000000);
+  assert.deepStrictEqual(calcResult.missing_fields, []);
+
+  testPass('Canonical Survey-to-Pricing adapter: 2500 mm -> 2.5 m, 1200 mm -> 1.2 m, amount = 15,000,000 (not millimeter multiplication)');
+}
+
+// ----------------------------------------------------------------------------
+// Test 7: Missing survey measurements produce fail-closed NEED_INFO without guessing
+// ----------------------------------------------------------------------------
+{
+  const incompleteSurvey = {
+    id: 'srv-contract-test-missing',
+    company_id: 'comp-01',
+    customer_id: 'cust-01',
+    appointment_id: 'apt-02',
+    measurements: {
+      clear_width_mm: 2500,
+      // barrier_height_mm missing!
+    },
+    site_condition: {},
+    photos: [],
+    status: 'COMPLETED',
+    completed_at: new Date().toISOString(),
+  };
+
+  const adapted = adaptSurveyToPricingInput(incompleteSurvey);
+  assert.strictEqual(adapted.width, 2.5);
+  assert.strictEqual(adapted.height, undefined);
+
+  const policy = {
+    price_rules: {
+      base_price_per_sqm: 5000000,
+    },
+  };
+
+  const calcResult = calculatePrice(adapted, policy);
+  assert.strictEqual(calcResult.status, 'NEED_INFO');
+  assert.strictEqual(calcResult.amount, null);
+  assert.deepStrictEqual(calcResult.missing_fields, ['height']);
+  testPass('Missing survey dimension produces NEED_INFO, amount = null, exact missing_fields (no guessed values)');
 }
 
 console.log(`\n================================================================`);
