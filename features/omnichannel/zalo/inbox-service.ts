@@ -261,6 +261,21 @@ export class ZaloInboxService {
       if (claimError.message.includes('ZALO_OA_NOT_CONFIGURED')) {
         return { success: false, status: 'FAILED', error: 'Zalo OA chưa được cấu hình cho hội thoại này.' };
       }
+      if (claimError.message.includes('AI_DISPATCH_FENCED')) {
+        return { success: false, status: 'BUSY', error: 'AI đang giữ quyền phản hồi (AI_DISPATCH_FENCED).' };
+      }
+      if (claimError.message.includes('DISPATCH_UNCERTAIN')) {
+        return { success: false, status: 'UNCERTAIN', error: 'Hội thoại đang ở trạng thái không chắc chắn (DISPATCH_UNCERTAIN).' };
+      }
+      if (claimError.message.includes('AI_ALREADY_RESPONDED')) {
+        return { success: false, status: 'CONFLICT', error: 'AI đã phản hồi cho hội thoại này (AI_ALREADY_RESPONDED).' };
+      }
+      if (claimError.message.includes('SALE_ALREADY_DISPATCHING')) {
+        return { success: false, status: 'BUSY', error: 'Tư vấn viên khác đang phản hồi (SALE_ALREADY_DISPATCHING).' };
+      }
+      if (claimError.message.includes('SALE_ALREADY_RESPONDED')) {
+        return { success: false, status: 'CONFLICT', error: 'Tư vấn viên đã phản hồi cho hội thoại này (SALE_ALREADY_RESPONDED).' };
+      }
       throw mapClaimError(claimError.message);
     }
 

@@ -15,6 +15,8 @@ export interface ContractListItemDTO {
   receivableAmount: number;
   isSigned: boolean;
   status: string;
+  revisionNo: number;
+  generatedFileRef?: string | null;
   createdAt: string;
 }
 
@@ -171,7 +173,9 @@ export async function getContractsWithOrderDetails(
     .select(`
       id,
       order_id,
+      revision_no,
       status,
+      generated_file_ref,
       signed_file_ref,
       contract_value,
       created_at,
@@ -199,7 +203,9 @@ export async function getContractsWithOrderDetails(
   interface ContractQueryRow {
     id: string;
     order_id: string;
+    revision_no: number;
     status: string;
+    generated_file_ref: string | null;
     signed_file_ref: string | null;
     contract_value: number | null;
     created_at: string;
@@ -230,6 +236,8 @@ export async function getContractsWithOrderDetails(
       receivableAmount: Number(finance.receivable_amount ?? order.final_amount ?? 0),
       isSigned: Boolean(item.signed_file_ref && item.status === 'SIGNED'),
       status: item.status,
+      revisionNo: item.revision_no || 1,
+      generatedFileRef: item.generated_file_ref,
       createdAt: item.created_at,
     };
   });

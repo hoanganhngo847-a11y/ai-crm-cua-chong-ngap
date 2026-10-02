@@ -56,6 +56,10 @@ export async function rpc(
             INVALID_DELIVERY: 409,
             CARE_STOPPED: 409,
             ACCESS_DENIED: 403,
+            AI_DISPATCH_FENCED: 409,
+            DISPATCH_UNCERTAIN: 409,
+            AI_ALREADY_RESPONDED: 409,
+            SALE_ALREADY_DISPATCHING: 409,
         };
 
         if (known[error.message]) {
@@ -308,6 +312,14 @@ export async function sendMessage(
     });
 
     if (!prepared.claimed) {
+        if (
+            prepared.status === 'AI_DISPATCH_FENCED' ||
+            prepared.status === 'DISPATCH_UNCERTAIN' ||
+            prepared.status === 'AI_ALREADY_RESPONDED' ||
+            prepared.status === 'SALE_ALREADY_DISPATCHING'
+        ) {
+            throw new ChannelError(prepared.status, 409);
+        }
         return {
             request_id: requestId,
             status: prepared.status,

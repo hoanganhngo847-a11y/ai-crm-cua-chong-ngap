@@ -75,7 +75,7 @@ async function seedTestData(client: SupabaseClient) {
 
   // Ensure user in auth.users
   const email = 'test-sale-inbox@test.vn';
-  const { data: list } = await client.auth.admin.listUsers();
+  const { data: list } = await client.auth.admin.listUsers({ perPage: 1000 });
   let user = list?.users.find((u) => u.email === email);
   if (!user) {
     const { data: created, error: uErr } = await client.auth.admin.createUser({

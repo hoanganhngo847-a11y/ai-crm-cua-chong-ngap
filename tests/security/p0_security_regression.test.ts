@@ -466,6 +466,14 @@ async function runP0SecurityRegressionTests() {
   assert.strictEqual(auditCountAfter, auditCountBefore, 'Audit logs must remain unchanged');
   testPass('4C: authenticated cannot finalize provider result; all DB state, outbox, and SLA untouched');
 
+  // Clean up 4C's in-flight send before starting 4D trusted tests
+  await adminClient.rpc('han_finish_send', {
+    p_company: COMPANY_A,
+    p_request: requestId4C,
+    p_status: 'FAILED',
+    p_mid: null,
+  });
+
   // D. Canonical trusted server path still works
   console.log('-> 4D: canonical trusted server path still works');
   // D1: FAILED keeps SLA OPEN

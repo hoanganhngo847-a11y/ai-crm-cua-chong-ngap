@@ -89,7 +89,7 @@ export async function getPriceCalculations(
   const adminClient = createAdminClient();
   let query = adminClient
     .from('price_calculations')
-    .select('id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at')
+    .select('id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at, customers ( name, customer_code )')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 

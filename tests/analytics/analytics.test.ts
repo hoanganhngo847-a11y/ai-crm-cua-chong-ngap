@@ -91,7 +91,7 @@ async function ensureUser(
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN',
   status: 'ACTIVE' | 'INACTIVE' = 'ACTIVE'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers();
+  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
   const existing = list?.users.find((u) => u.email === config.email);
 
   let userId = existing?.id;

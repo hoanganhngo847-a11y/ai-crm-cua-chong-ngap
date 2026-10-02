@@ -44,20 +44,39 @@ export default async function DashboardLayout({
           <span className="font-bold text-lg bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
             AI CRM Cửa Chống Ngập
           </span>
-          <nav className="flex items-center gap-4 text-sm">
+          <nav className="flex items-center gap-4 text-sm flex-wrap">
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
-              <Link href="/crm" className="text-slate-300 hover:text-white transition">
-                CRM &amp; Hộp thư
-              </Link>
+              <>
+                <Link href="/crm" className="text-slate-300 hover:text-white transition">
+                  CRM &amp; Hộp thư
+                </Link>
+                <Link href="/quotations" className="text-slate-300 hover:text-white transition">
+                  Báo giá
+                </Link>
+                <Link href="/orders" className="text-slate-300 hover:text-white transition">
+                  Đơn hàng
+                </Link>
+                <Link href="/contracts" className="text-slate-300 hover:text-white transition">
+                  Hợp đồng
+                </Link>
+                <Link href="/calls" className="text-slate-300 hover:text-white transition">
+                  Cuộc gọi
+                </Link>
+              </>
             )}
-            {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
-              <Link href="/calls" className="text-slate-300 hover:text-white transition">
-                Cuộc gọi
+            {actor.role === 'BOSS_ADMIN' && (
+              <Link href="/production" className="text-slate-300 hover:text-white transition">
+                Sản xuất
               </Link>
             )}
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'TECHNICIAN') && (
               <Link href="/field" className="text-slate-300 hover:text-white transition">
-                Hiện trường & Khảo sát
+                Hiện trường
+              </Link>
+            )}
+            {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE' || actor.role === 'TECHNICIAN') && (
+              <Link href="/warranty" className="text-slate-300 hover:text-white transition">
+                Bảo hành
               </Link>
             )}
             {actor.role === 'BOSS_ADMIN' && (
