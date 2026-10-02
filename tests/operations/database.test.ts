@@ -17,8 +17,9 @@ function concurrent(query: string) {
  });
 }
 function order(status='CONTRACT_SIGNED',signed=true,signedRef: string|null=signed?'test-signed':null) {
- const id=randomUUID();
- sql(`INSERT INTO public.orders(id,company_id,customer_id,payment_reference,price_calculation_id,deposit_status,order_status,final_amount) VALUES(${q(id)},${q(c)},${q(customer)},${q(id)},${q(price)},'CONFIRMED',${q(status)},100);
+ const id=randomUUID(), calcId=randomUUID();
+ sql(`INSERT INTO public.price_calculations(id,company_id,customer_id,pricing_policy_id,policy_version,input_data,amount,status) VALUES(${q(calcId)},${q(c)},${q(customer)},${q(policy)},'test','{"width": 2, "height": 1}',100,'CALCULATED');
+ INSERT INTO public.orders(id,company_id,customer_id,payment_reference,price_calculation_id,deposit_status,order_status,final_amount) VALUES(${q(id)},${q(c)},${q(customer)},${q(id)},${q(calcId)},'CONFIRMED',${q(status)},100);
  INSERT INTO public.contracts(company_id,order_id,template_version,generated_file_ref,signed_file_ref,status,contract_value) VALUES(${q(c)},${q(id)},'test','test',${signedRef!==null?q(signedRef):'NULL'},${q(signed?'SIGNED':'GENERATED')},100);`);
  return id;
 }
