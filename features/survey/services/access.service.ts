@@ -4,13 +4,17 @@ import { createAdminClient } from '../../../lib/supabase/admin';
 import { canAccessSurvey } from '../constants/access';
 
 /** Resolve tenant from the resource before checking the active session membership. */
-export async function authorizeSurveyAppointment(appointmentId: string, mutation = false) {
+export async function authorizeSurveyAppointment(
+  appointmentId: string,
+  mutation = false,
+  client?: import('@supabase/supabase-js').SupabaseClient
+) {
   const adminClient = createAdminClient();
   const { data: appointment, error } = await adminClient.from('appointments')
     .select('id, company_id, customer_id, assignee_id, status, type')
     .eq('id', appointmentId).maybeSingle();
   if (error || !appointment) throw new Error('Không tìm thấy lịch hẹn khảo sát.');
-  const actor = await getActorContext(appointment.company_id);
+  const actor = await getActorContext(appointment.company_id, client);
   if (!actor || !canAccessSurvey(actor, appointment, mutation)) {
     throw new Error('Bạn không có quyền thao tác trên lịch hẹn khảo sát này.');
   }

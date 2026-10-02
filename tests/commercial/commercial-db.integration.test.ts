@@ -10,6 +10,14 @@ import { createOrderFromCalculation, updateOrderDepositAndDebt } from '../../fea
 import { processPaymentWebhook } from '../../features/payment/services';
 import { calculateAndSavePriceCalculation, calculatePriceFromSurvey, getPriceCalculations } from '../../features/pricing/services';
 import { createAppointment, getActiveCompanyTechnicians } from '../../features/survey/services/appointment.service';
+import {
+  createSurveyAppointmentAction,
+  getActiveCompanyTechniciansAction,
+  acceptSurveyAppointmentAction,
+  startSurveyAppointmentAction,
+  calculatePriceFromSurveyAction,
+} from '../../app/(dashboard)/surveys/actions';
+import { elevateClientToAal2 } from '../e2e/test-mfa-helpers';
 import { adaptSurveyToPricingInput, convertMillimetersToMeters } from '../../features/survey/adapters/pricing.adapter';
 import { STORAGE_BUCKET_MAP, SIGNED_URL_TTL } from '../../shared/contracts/sensitive';
 
@@ -91,13 +99,48 @@ async function run() {
   }
 
   const USER_BOSS_A_EMAIL = `boss_a_${RUN_ID}@test.local`;
+  const USER_SALE_A_EMAIL = `sale_a_${RUN_ID}@test.local`;
+  const USER_TECH_A_EMAIL = `tech_a_${RUN_ID}@test.local`;
+  const USER_BOSS_B_EMAIL = `boss_b_${RUN_ID}@test.local`;
+  const USER_TECH_B_EMAIL = `tech_b_${RUN_ID}@test.local`;
+  const USER_INACTIVE_TECH_A_EMAIL = `inact_tech_a_${RUN_ID}@test.local`;
+
   const USER_BOSS_A = await createUserWithRole(USER_BOSS_A_EMAIL, 'Boss A', COMPANY_A, 'BOSS_ADMIN');
-  const USER_SALE_A = await createUserWithRole(`sale_a_${RUN_ID}@test.local`, 'Sale A', COMPANY_A, 'SALE');
-  const USER_TECH_A = await createUserWithRole(`tech_a_${RUN_ID}@test.local`, 'Tech A', COMPANY_A, 'TECHNICIAN');
-  const USER_BOSS_B = await createUserWithRole(`boss_b_${RUN_ID}@test.local`, 'Boss B', COMPANY_B, 'BOSS_ADMIN');
-  const USER_TECH_B = await createUserWithRole(`tech_b_${RUN_ID}@test.local`, 'Tech B', COMPANY_B, 'TECHNICIAN');
-  const USER_INACTIVE_TECH_A = await createUserWithRole(`inact_tech_a_${RUN_ID}@test.local`, 'Inactive Tech A', COMPANY_A, 'TECHNICIAN');
+  const USER_SALE_A = await createUserWithRole(USER_SALE_A_EMAIL, 'Sale A', COMPANY_A, 'SALE');
+  const USER_TECH_A = await createUserWithRole(USER_TECH_A_EMAIL, 'Tech A', COMPANY_A, 'TECHNICIAN');
+  const USER_BOSS_B = await createUserWithRole(USER_BOSS_B_EMAIL, 'Boss B', COMPANY_B, 'BOSS_ADMIN');
+  const USER_TECH_B = await createUserWithRole(USER_TECH_B_EMAIL, 'Tech B', COMPANY_B, 'TECHNICIAN');
+  const USER_INACTIVE_TECH_A = await createUserWithRole(USER_INACTIVE_TECH_A_EMAIL, 'Inactive Tech A', COMPANY_A, 'TECHNICIAN');
   await admin.from('company_members').update({ status: 'INACTIVE' }).eq('user_id', USER_INACTIVE_TECH_A).eq('company_id', COMPANY_A);
+
+  // Authenticated real Supabase clients with JWT sessions subject to PostgreSQL RLS
+  const saleRealClient = createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error: saleLoginErr } = await saleRealClient.auth.signInWithPassword({
+    email: USER_SALE_A_EMAIL,
+    password: 'Password123!@#',
+  });
+  assert(!saleLoginErr, `SALE login failed: ${saleLoginErr?.message}`);
+
+  const bossRealClient = createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error: bossLoginErr } = await bossRealClient.auth.signInWithPassword({
+    email: USER_BOSS_A_EMAIL,
+    password: 'Password123!@#',
+  });
+  assert(!bossLoginErr, `BOSS login failed: ${bossLoginErr?.message}`);
+  await elevateClientToAal2(bossRealClient);
+
+  const techRealClient = createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error: techLoginErr } = await techRealClient.auth.signInWithPassword({
+    email: USER_TECH_A_EMAIL,
+    password: 'Password123!@#',
+  });
+  assert(!techLoginErr, `Tech login failed: ${techLoginErr?.message}`);
 
   function createMockBossClient(userId: string, email: string) {
     return {
@@ -1341,152 +1384,184 @@ async function run() {
   testPass('All 7 commercial RPCs verified in PostgreSQL catalog: SECURITY DEFINER, search_path="", service_role only');
 
   // --------------------------------------------------------------------------
-  // Test 18: Survey Scheduling Integration Tests (Section 7)
-  // 1. SALE schedules Survey for same-company Customer and active same-company TECHNICIAN -> success
-  // 2. BOSS_ADMIN -> success
-  // 3. TECHNICIAN tries to create/reassign arbitrary Survey -> forbidden
-  // 4. Inactive technician -> reject
-  // 5. Technician from another company -> reject
-  // 6. Client supplies forged company_id -> ignored/rejected; server authority wins
-  // 7. Customer from another company -> fail closed
-  // 8. Technician receives no raw phone
+  // Test 18: Survey Scheduling Action-Level Integration Tests (Section 7)
+  // Invokes production Server Actions under real PostgreSQL RLS:
+  // Scenario A: SALE real scheduling path (real RLS) -> success
+  // Scenario B: BOSS_ADMIN real scheduling path (real RLS + AAL2) -> success
+  // Scenario C: TECHNICIAN real action denied (ROLE_FORBIDDEN safe denial)
+  // Scenario D: Forged company ID -> fail closed, zero foreign records written
+  // Scenario E: Cross-company customer -> fail closed
+  // Scenario F: Cross-company technician -> fail closed
+  // Scenario G: Inactive technician -> fail closed
+  // Scenario H: Privacy check -> technician selection & appointment DTO contain zero phone/raw_phone/email
   // --------------------------------------------------------------------------
-  // Scenario 1: SALE schedules Survey for same-company Customer and active same-company TECHNICIAN -> success
-  const aptSale = await createAppointment(
+
+  // Scenario A: SALE real scheduling path under real RLS
+  const resSale = await createSurveyAppointmentAction(
     {
-      customer_id: CUSTOMER_A,
-      assignee_id: USER_TECH_A,
+      customerId: CUSTOMER_A,
+      assigneeId: USER_TECH_A,
       address: '123 Nguyen Trai, Q1',
-      appointment_date: new Date().toISOString(),
-      type: 'SURVEY',
-      status: 'ASSIGNED',
+      appointmentDate: new Date().toISOString(),
     },
-    admin
+    { userClient: saleRealClient }
   );
-  assert(aptSale.id, 'Appointment must be created');
-  assert.strictEqual(aptSale.company_id, COMPANY_A);
-  assert.strictEqual(aptSale.customer_id, CUSTOMER_A);
-  assert.strictEqual(aptSale.assignee_id, USER_TECH_A);
-  assert.strictEqual(aptSale.type, 'SURVEY');
+  assert.strictEqual(resSale.success, true, `SALE scheduling failed: ${resSale.message}`);
+  assert(resSale.appointment?.id, 'Appointment must be returned');
+  assert.strictEqual(resSale.appointment.company_id, COMPANY_A);
+  assert.strictEqual(resSale.appointment.customer_id, CUSTOMER_A);
+  assert.strictEqual(resSale.appointment.assignee_id, USER_TECH_A);
+  assert.strictEqual(resSale.appointment.type, 'SURVEY');
 
   const { data: dbAptSale } = await admin
     .from('appointments')
-    .select('id, type, status, company_id')
-    .eq('id', aptSale.id)
+    .select('id, type, status, company_id, customer_id, assignee_id')
+    .eq('id', resSale.appointment.id)
     .single();
   assert.strictEqual(dbAptSale?.status, 'ASSIGNED', 'Database appointment status must be ASSIGNED');
   assert.strictEqual(dbAptSale?.type, 'SURVEY', 'Database appointment type must be SURVEY');
   assert.strictEqual(dbAptSale?.company_id, COMPANY_A);
+  assert.strictEqual(dbAptSale?.customer_id, CUSTOMER_A);
+  assert.strictEqual(dbAptSale?.assignee_id, USER_TECH_A);
 
-  // Scenario 2: BOSS_ADMIN schedules Survey -> success
-  const aptBoss = await createAppointment(
+  // Scenario B: BOSS_ADMIN real scheduling path (with verified MFA AAL2) under real RLS
+  const resBoss = await createSurveyAppointmentAction(
     {
-      customer_id: CUSTOMER_A,
-      assignee_id: USER_TECH_A,
+      customerId: CUSTOMER_A,
+      assigneeId: USER_TECH_A,
       address: '456 Le Loi, Q1',
-      appointment_date: new Date().toISOString(),
-      type: 'SURVEY',
-      status: 'ASSIGNED',
+      appointmentDate: new Date().toISOString(),
     },
-    admin
+    { userClient: bossRealClient }
   );
-  assert(aptBoss.id);
-  assert.strictEqual(aptBoss.company_id, COMPANY_A);
+  assert.strictEqual(resBoss.success, true, `BOSS scheduling failed: ${resBoss.message}`);
+  assert(resBoss.appointment?.id);
+  assert.strictEqual(resBoss.appointment.company_id, COMPANY_A);
+  assert.strictEqual(resBoss.appointment.customer_id, CUSTOMER_A);
+  assert.strictEqual(resBoss.appointment.assignee_id, USER_TECH_A);
+  assert.strictEqual(resBoss.appointment.type, 'SURVEY');
 
-  // Scenario 3: TECHNICIAN tries to create arbitrary Survey -> forbidden
-  const { APPLICATION_ROLES } = await import('../../shared/constants/roles');
-  const techRole: string = APPLICATION_ROLES.TECHNICIAN;
-  const isTechPermittedToSchedule =
-    techRole === APPLICATION_ROLES.BOSS_ADMIN || techRole === APPLICATION_ROLES.SALE;
-  assert.strictEqual(isTechPermittedToSchedule, false, 'TECHNICIAN role must NOT be permitted to schedule surveys');
+  const { data: dbAptBoss } = await admin
+    .from('appointments')
+    .select('id, type, status, company_id')
+    .eq('id', resBoss.appointment.id)
+    .single();
+  assert.strictEqual(dbAptBoss?.status, 'ASSIGNED');
+  assert.strictEqual(dbAptBoss?.type, 'SURVEY');
+  assert.strictEqual(dbAptBoss?.company_id, COMPANY_A);
 
-  // Scenario 4: Inactive technician -> reject
-  await assert.rejects(
-    async () => {
-      await createAppointment(
-        {
-          customer_id: CUSTOMER_A,
-          assignee_id: USER_INACTIVE_TECH_A,
-          address: '789 Inactive St',
-          appointment_date: new Date().toISOString(),
-          type: 'SURVEY',
-          status: 'ASSIGNED',
-        },
-        admin
-      );
-    },
-    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
-  );
-
-  // Scenario 5: Technician from another company -> reject
-  await assert.rejects(
-    async () => {
-      await createAppointment(
-        {
-          customer_id: CUSTOMER_A,
-          assignee_id: USER_TECH_B, // Tech from Company B
-          address: '789 Foreign Tech St',
-          appointment_date: new Date().toISOString(),
-          type: 'SURVEY',
-          status: 'ASSIGNED',
-        },
-        admin
-      );
-    },
-    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
-  );
-
-  // Scenario 6: Client supplies forged company_id -> ignored/rejected; server authority wins
-  const aptForged = await createAppointment(
+  // Scenario C: TECHNICIAN real action denied via product authorization orchestration
+  const resTech = await createSurveyAppointmentAction(
     {
-      customer_id: CUSTOMER_A,
-      assignee_id: USER_TECH_A,
-      address: '888 Forged Company St',
-      appointment_date: new Date().toISOString(),
-      type: 'SURVEY',
-      status: 'ASSIGNED',
-      company_id: COMPANY_B, // Forged company_id in payload
-    } as any,
-    admin
+      customerId: CUSTOMER_A,
+      assigneeId: USER_TECH_A,
+      address: '789 Tech Attempt St, Q1',
+      appointmentDate: new Date().toISOString(),
+    },
+    { userClient: techRealClient }
   );
-  assert.strictEqual(aptForged.company_id, COMPANY_A, 'Server must derive company_id from customer, ignoring client-forged company_id');
+  assert.strictEqual(resTech.success, false, 'TECHNICIAN scheduling must be denied');
+  assert(
+    resTech.message?.includes('Bạn không có quyền') || (resTech as any).code === 'ROLE_FORBIDDEN',
+    `Expected safe role denial, got: ${resTech.message}`
+  );
+
+  // Scenario D: Forged company ID -> fail closed; server authority wins, zero foreign record written
+  const resForged = await createSurveyAppointmentAction(
+    {
+      customerId: CUSTOMER_A,
+      assigneeId: USER_TECH_A,
+      address: '888 Forged Company St',
+      appointmentDate: new Date().toISOString(),
+      companyId: COMPANY_B, // Forged company_id in input
+    },
+    { userClient: saleRealClient }
+  );
+  assert.strictEqual(resForged.success, false, 'Forged companyId must fail closed');
+  assert(
+    resForged.message?.includes('Doanh nghiệp không khớp') || (resForged as any).code === 'COMPANY_MISMATCH',
+    `Expected company mismatch failure, got: ${resForged.message}`
+  );
+
   const { data: dbForged } = await admin
     .from('appointments')
-    .select('company_id')
-    .eq('id', aptForged.id)
-    .single();
-  assert.strictEqual(dbForged?.company_id, COMPANY_A);
+    .select('id')
+    .eq('company_id', COMPANY_B)
+    .eq('address', '888 Forged Company St');
+  assert.strictEqual(dbForged?.length || 0, 0, 'No record may be written to COMPANY_B');
 
-  // Scenario 7: Customer from another company -> fail closed
-  await assert.rejects(
-    async () => {
-      await createAppointment(
-        {
-          customer_id: CUSTOMER_B, // Customer B belongs to Company B
-          assignee_id: USER_TECH_A, // Tech A belongs to Company A
-          address: 'Cross-company St',
-          appointment_date: new Date().toISOString(),
-          type: 'SURVEY',
-          status: 'ASSIGNED',
-        },
-        admin
-      );
+  // Scenario E: Cross-company customer -> fail closed
+  const resCrossCust = await createSurveyAppointmentAction(
+    {
+      customerId: CUSTOMER_B, // Belongs to Company B
+      assigneeId: USER_TECH_A,
+      address: 'Cross-company Customer St',
+      appointmentDate: new Date().toISOString(),
     },
-    /Người được phân công phải là kỹ thuật viên đang hoạt động thuộc cùng công ty/
+    { userClient: saleRealClient }
+  );
+  assert.strictEqual(resCrossCust.success, false, 'Cross-company customer scheduling must fail closed');
+  assert(
+    resCrossCust.message?.includes('Không tìm thấy hồ sơ khách hàng') || (resCrossCust as any).code === 'CUSTOMER_NOT_FOUND',
+    `Expected customer not found failure, got: ${resCrossCust.message}`
   );
 
-  // Scenario 8: Technician receives no raw phone
-  assert.strictEqual((aptSale.customer as any)?.phone, undefined, 'Customer phone must NOT be exposed');
-  assert.strictEqual((aptSale.customer as any)?.raw_phone, undefined, 'Customer raw_phone must NOT be exposed');
+  // Scenario F: Cross-company technician -> fail closed
+  const resCrossTech = await createSurveyAppointmentAction(
+    {
+      customerId: CUSTOMER_A,
+      assigneeId: USER_TECH_B, // Tech belongs to Company B
+      address: 'Cross-company Tech St',
+      appointmentDate: new Date().toISOString(),
+    },
+    { userClient: saleRealClient }
+  );
+  assert.strictEqual(resCrossTech.success, false, 'Cross-company technician scheduling must fail closed');
+  assert(
+    resCrossTech.message?.includes('Người được phân công phải là kỹ thuật viên') || (resCrossTech as any).code === 'INVALID_TECHNICIAN',
+    `Expected invalid technician failure, got: ${resCrossTech.message}`
+  );
 
-  const companyTechs = await getActiveCompanyTechnicians(COMPANY_A, admin);
-  assert(companyTechs.length >= 1, 'Must find active company technicians');
-  for (const t of companyTechs) {
-    assert.strictEqual((t as any).phone, undefined, 'Technician phone must NOT be exposed');
-    assert.strictEqual((t as any).raw_phone, undefined, 'Technician raw_phone must NOT be exposed');
-    assert.strictEqual((t as any).email, undefined, 'Technician email must NOT be exposed');
-    assert(t.id && t.full_name, 'Technician must only have id and full_name');
+  // Scenario G: Inactive technician -> fail closed
+  const resInactiveTech = await createSurveyAppointmentAction(
+    {
+      customerId: CUSTOMER_A,
+      assigneeId: USER_INACTIVE_TECH_A, // Membership INACTIVE in Company A
+      address: 'Inactive Tech St',
+      appointmentDate: new Date().toISOString(),
+    },
+    { userClient: saleRealClient }
+  );
+  assert.strictEqual(resInactiveTech.success, false, 'Inactive technician scheduling must fail closed');
+  assert(
+    resInactiveTech.message?.includes('Người được phân công phải là kỹ thuật viên') || (resInactiveTech as any).code === 'INVALID_TECHNICIAN',
+    `Expected invalid technician failure, got: ${resInactiveTech.message}`
+  );
+
+  // Scenario H: Privacy boundary check
+  // 1. Technician dropdown listing via action (Zero-Phone boundary)
+  const techListRes = await getActiveCompanyTechniciansAction({ userClient: saleRealClient });
+  assert.strictEqual(techListRes.success, true);
+  assert(techListRes.technicians && techListRes.technicians.length > 0);
+  for (const t of techListRes.technicians) {
+    assert(t.id, 'Technician must have id');
+    assert(t.full_name, 'Technician must have full_name');
+    assert.strictEqual((t as any).phone, undefined, 'Zero phone in technician list');
+    assert.strictEqual((t as any).raw_phone, undefined, 'Zero raw_phone in technician list');
+    assert.strictEqual((t as any).normalized_phone, undefined, 'Zero normalized_phone in technician list');
+    assert.strictEqual((t as any).email, undefined, 'Zero email in technician list');
   }
+
+  // 2. Created appointment DTO (from Scenario A)
+  const aptDto = resSale.appointment!;
+  assert.strictEqual((aptDto.customer as any)?.phone, undefined, 'Customer phone must NOT be exposed');
+  assert.strictEqual((aptDto.customer as any)?.raw_phone, undefined, 'Customer raw_phone must NOT be exposed');
+  assert.strictEqual((aptDto.customer as any)?.normalized_phone, undefined, 'Customer normalized_phone must NOT be exposed');
+  assert.strictEqual((aptDto.customer as any)?.email, undefined, 'Customer email must NOT be exposed');
+  assert.strictEqual((aptDto.assignee as any)?.phone, undefined, 'Assignee phone must NOT be exposed');
+  assert.strictEqual((aptDto.assignee as any)?.raw_phone, undefined, 'Assignee raw_phone must NOT be exposed');
+  assert.strictEqual((aptDto.assignee as any)?.normalized_phone, undefined, 'Assignee normalized_phone must NOT be exposed');
+  assert.strictEqual((aptDto.assignee as any)?.email, undefined, 'Assignee email must NOT be exposed');
 
   testPass('Section 7: Survey scheduling security, role authorization, tenant isolation, and zero-phone boundary verified across all 8 scenarios');
 
@@ -1603,8 +1678,8 @@ async function run() {
   testPass('Section 8: Survey to Pricing DB contract, snapshot preservation, fail-closed NEED_INFO, tenant mismatch, and policy mismatch verified');
 
   // --------------------------------------------------------------------------
-  // Test 20: Real End-to-End Product Journey (Section 9)
-  // SALE creates Survey Appointment -> Tech accepts -> Tech starts -> Tech completes real Survey (complete_survey_atomic) -> canonical pricing trigger -> PriceCalculation exists -> Quotations retrieval sees it
+  // Test 20: Product Action End-to-End Journey (Section 9)
+  // SALE schedules via Server Action (real RLS) -> Tech accepts via Action -> Tech starts via Action -> Tech completes real Survey (complete_survey_atomic) -> SALE triggers calculatePriceFromSurveyAction -> PriceCalculation exists & CALCULATED
   // --------------------------------------------------------------------------
   const E2E_CUSTOMER_ID = crypto.randomUUID();
   await admin.from('customers').insert({
@@ -1616,36 +1691,29 @@ async function run() {
     stage: 'LEAD_NEW',
   });
 
-  // Step 1: SALE creates Survey Appointment
-  const e2eApt = await createAppointment(
+  // Step 1: SALE creates Survey Appointment via production Server Action under real RLS
+  const e2eAptRes = await createSurveyAppointmentAction(
     {
-      customer_id: E2E_CUSTOMER_ID,
-      assignee_id: USER_TECH_A,
+      customerId: E2E_CUSTOMER_ID,
+      assigneeId: USER_TECH_A,
       address: '777 Dai Lo Dong Tay, Q1',
-      appointment_date: new Date().toISOString(),
-      type: 'SURVEY',
-      status: 'ASSIGNED',
+      appointmentDate: new Date().toISOString(),
     },
-    admin
+    { userClient: saleRealClient }
   );
-  assert(e2eApt.id);
+  assert(e2eAptRes.success && e2eAptRes.appointment, `SALE appointment action failed: ${e2eAptRes.message}`);
+  const e2eApt = e2eAptRes.appointment;
   assert.strictEqual(e2eApt.type, 'SURVEY');
   assert.strictEqual(e2eApt.company_id, COMPANY_A);
   assert.strictEqual(e2eApt.customer_id, E2E_CUSTOMER_ID);
 
-  // Step 2: Tech accepts appointment
-  const { error: acceptErr } = await admin
-    .from('appointments')
-    .update({ status: 'ACCEPTED' })
-    .eq('id', e2eApt.id);
-  assert(!acceptErr, `Tech accept error: ${acceptErr?.message}`);
+  // Step 2: Tech accepts appointment via production Server Action under real RLS
+  const acceptRes = await acceptSurveyAppointmentAction(e2eApt.id, { userClient: techRealClient });
+  assert(acceptRes.success, `Tech accept action failed: ${acceptRes.message}`);
 
-  // Step 3: Tech starts survey on-site
-  const { error: startErr } = await admin
-    .from('appointments')
-    .update({ status: 'IN_PROGRESS' })
-    .eq('id', e2eApt.id);
-  assert(!startErr, `Tech start error: ${startErr?.message}`);
+  // Step 3: Tech starts survey on-site via production Server Action under real RLS
+  const startRes = await startSurveyAppointmentAction(e2eApt.id, { userClient: techRealClient });
+  assert(startRes.success, `Tech start action failed: ${startRes.message}`);
 
   // Step 4: Technician completes real Survey via complete_survey_atomic
   // Ensure survey-photos bucket exists
@@ -1707,28 +1775,38 @@ async function run() {
     .single();
   assert.strictEqual(e2eAptRow?.status, 'COMPLETED');
 
-  // Step 5: Canonical pricing trigger/action (Option B / Trusted Server Service)
-  // NO manual DB insert of price_calculations!
-  const e2eCalc = await calculatePriceFromSurvey(
-    {
-      companyId: COMPANY_A,
-      surveyId: e2eSurveyId,
-    },
-    SALE_A_CLIENT
+  // Step 5: Canonical pricing trigger via production Server Action (Option B / Trusted Server Action)
+  // Executed with authenticated SALE client under real RLS
+  const e2eCalcRes = await calculatePriceFromSurveyAction(
+    { surveyId: e2eSurveyId },
+    { userClient: saleRealClient }
   );
+  assert(e2eCalcRes.success && e2eCalcRes.calculationId, `Calculate price action failed: ${e2eCalcRes.message}`);
 
   // Step 6: PriceCalculation exists and is CALCULATED
-  assert(e2eCalc.id, 'PriceCalculation must exist');
-  assert.strictEqual(e2eCalc.status, 'CALCULATED');
-  assert.strictEqual(e2eCalc.amount, 15000000); // 2.5 * 1.2 * 5,000,000 = 15,000,000
-  assert.strictEqual((e2eCalc.input_data as any).width, 2.5);
-  assert.strictEqual((e2eCalc.input_data as any).height, 1.2);
-  assert.strictEqual((e2eCalc.input_data as any).unit, 'm');
+  assert.strictEqual(e2eCalcRes.status, 'CALCULATED');
+  assert.strictEqual(e2eCalcRes.amount, 15000000); // 2.5 * 1.2 * 5,000,000 = 15,000,000
 
-  // Step 7: Quotations retrieval sees it
-  const quotations = await getPriceCalculations(COMPANY_A, undefined, BOSS_A_CLIENT);
-  const quotationItem = quotations.find((q) => q.id === e2eCalc.id);
-  assert(quotationItem, 'Quotation must be visible in Quotations retrieval');
+  // Verify snapshot in DB
+  const { data: calcRow, error: calcRowErr } = await admin
+    .from('price_calculations')
+    .select('*')
+    .eq('id', e2eCalcRes.calculationId)
+    .single();
+  assert(!calcRowErr && calcRow, 'Price calculation row must exist in DB');
+  assert.strictEqual(calcRow.survey_id, e2eSurveyId);
+  assert.strictEqual(calcRow.status, 'CALCULATED');
+  assert.strictEqual(Number(calcRow.amount), 15000000);
+  assert.strictEqual(calcRow.company_id, COMPANY_A);
+  assert.strictEqual(calcRow.customer_id, E2E_CUSTOMER_ID);
+  assert.strictEqual((calcRow.input_data as any).width, 2.5);
+  assert.strictEqual((calcRow.input_data as any).height, 1.2);
+  assert.strictEqual((calcRow.input_data as any).unit, 'm');
+
+  // Step 7: Quotations retrieval sees it under real RLS
+  const quotations = await getPriceCalculations(COMPANY_A, undefined, saleRealClient);
+  const quotationItem = quotations.find((q) => q.id === e2eCalcRes.calculationId);
+  assert(quotationItem, 'Quotation must be visible in Quotations retrieval for SALE');
   assert.strictEqual(quotationItem.customer_id, E2E_CUSTOMER_ID);
   assert.strictEqual(quotationItem.amount, 15000000);
   assert.strictEqual(quotationItem.status, 'CALCULATED');
@@ -1738,17 +1816,17 @@ async function run() {
   assert.strictEqual(e2eApt.company_id, COMPANY_A);
   assert.strictEqual(e2eSurveyRow.company_id, COMPANY_A);
   assert.strictEqual(e2eSurveyRow.customer_id, E2E_CUSTOMER_ID);
-  assert.strictEqual(e2eCalc.company_id, COMPANY_A);
-  assert.strictEqual(e2eCalc.customer_id, E2E_CUSTOMER_ID);
-  assert.strictEqual(e2eCalc.survey_id, e2eSurveyId);
-  assert.strictEqual(e2eCalc.pricing_policy_id, POLICY_A_ID);
+  assert.strictEqual(calcRow.company_id, COMPANY_A);
+  assert.strictEqual(calcRow.customer_id, E2E_CUSTOMER_ID);
+  assert.strictEqual(calcRow.survey_id, e2eSurveyId);
+  assert.strictEqual(calcRow.pricing_policy_id, POLICY_A_ID);
 
   assert.strictEqual(e2eApt.company_id, e2eSurveyRow.company_id);
-  assert.strictEqual(e2eSurveyRow.company_id, e2eCalc.company_id);
-  assert.strictEqual(e2eSurveyRow.customer_id, e2eCalc.customer_id);
-  assert.strictEqual(e2eSurveyRow.id, e2eCalc.survey_id);
+  assert.strictEqual(e2eSurveyRow.company_id, calcRow.company_id);
+  assert.strictEqual(e2eSurveyRow.customer_id, calcRow.customer_id);
+  assert.strictEqual(e2eSurveyRow.id, calcRow.survey_id);
 
-  testPass('Section 9: Real end-to-end product journey verified: Appointment -> Accept -> Start -> Complete Survey -> Calculate Price -> Quotations retrieval; all IDs strictly bound; zero manual DB inserts');
+  testPass('Section 9: Product Action End-to-End Journey verified: SALE schedules via Server Action (real RLS) -> Tech accepts via Action -> Tech starts via Action -> Tech completes real Survey -> SALE triggers calculatePriceFromSurveyAction -> Quotations retrieval sees it; all IDs strictly bound; zero service-role write bypass');
 
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
