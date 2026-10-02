@@ -9,7 +9,6 @@ DECLARE
     r RECORD;
     v_new_calc_id uuid;
 BEGIN
-    SET session_replication_role = 'replica';
     FOR r IN (
         SELECT o.id as order_id, o.company_id, o.customer_id, o.price_calculation_id
         FROM (
@@ -27,10 +26,45 @@ BEGIN
         FROM public.price_calculations
         WHERE id = r.price_calculation_id;
 
+        -- Strictly scope replica mode to rewriting the order's immutable price_calculation_id
+        SET session_replication_role = 'replica';
         UPDATE public.orders
         SET price_calculation_id = v_new_calc_id
         WHERE id = r.order_id;
+        SET session_replication_role = 'origin';
+
+        -- Append-only audit record for historical duplicate order remediation
+        INSERT INTO public.audit_logs (
+            id,
+            company_id,
+            user_id,
+            action,
+            resource_type,
+            resource_id,
+            customer_id,
+            result,
+            metadata,
+            created_at
+        ) VALUES (
+            gen_random_uuid(),
+            r.company_id,
+            NULL,
+            'ORDER_PRICE_CALCULATION_REBOUND_MIGRATION',
+            'orders',
+            r.order_id,
+            r.customer_id,
+            'SUCCESS',
+            jsonb_build_object(
+                'migration', '20261002220001',
+                'original_price_calculation_id', r.price_calculation_id,
+                'replacement_price_calculation_id', v_new_calc_id,
+                'reason', 'historical_duplicate_remediation'
+            ),
+            now()
+        );
     END LOOP;
+
+    -- Ensure session_replication_role is guaranteed origin
     SET session_replication_role = 'origin';
 
     IF NOT EXISTS (

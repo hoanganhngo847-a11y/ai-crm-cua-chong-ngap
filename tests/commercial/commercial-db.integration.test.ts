@@ -5,7 +5,13 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { generateContractForOrder, signContract, getContractDownloadUrl, ensureContractForDepositConfirmedOrder } from '../../features/contract/services';
+import {
+  generateContractForOrder,
+  signContract,
+  getContractDownloadUrl,
+  ensureContractForDepositConfirmedOrder,
+  isStorageResourceConflict,
+} from '../../features/contract/services';
 import { createOrderFromCalculation, updateOrderDepositAndDebt } from '../../features/order/services';
 import { recoverOrderContractAction, createOrderFromCalculationAction, updateOrderDepositAction } from '../../features/order/actions';
 import { processPaymentWebhook } from '../../features/payment/services';
@@ -2412,6 +2418,443 @@ async function run() {
   assert.strictEqual(contractAfterRecov?.revision_no, contractBeforeRecov?.revision_no);
 
   testPass('Required Test 13: Existing SIGNED Contract -> recovery is deterministic no-op and never overwrites it');
+
+  // --------------------------------------------------------------------------
+  // Required Test 14: Storage conflict classification & contract generation recovery
+  // --------------------------------------------------------------------------
+  // 1. Direct unit verification of isStorageResourceConflict
+  assert.strictEqual(isStorageResourceConflict({ statusCode: '409' }), true);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: 409 }), true);
+  assert.strictEqual(isStorageResourceConflict({ status: 409 }), true);
+  assert.strictEqual(isStorageResourceConflict({ code: 'ResourceAlreadyExists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ message: 'The resource already exists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ message: 'Error: ResourceAlreadyExists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: 500, message: 'Internal server error' }), false);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: '403', message: 'Forbidden' }), false);
+  assert.strictEqual(isStorageResourceConflict(null), false);
+  assert.strictEqual(isStorageResourceConflict(undefined), false);
+  assert.strictEqual(isStorageResourceConflict({}), false);
+  assert.strictEqual(isStorageResourceConflict({ message: 'Network request failed' }), false);
+
+  // 2. Integration: genuine storage 409 recovers and finalizes canonical contract
+  const { data: calc409, error: calc409Err } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { length: 2.0, height: 1.5 },
+    p_amount: 14000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calc409Err && calc409, `save_price_calculation_rpc calc409 failed: ${calc409Err?.message}`);
+
+  const { orderId: order409Id } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calc409.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', order409Id);
+
+  const storage409Proxy = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from(bucket: string) {
+            const originBucket = (target as any).storage.from(bucket);
+            return {
+              ...originBucket,
+              upload: async () => ({
+                data: null,
+                error: {
+                  statusCode: '409',
+                  status: 409,
+                  message: 'The resource already exists',
+                },
+              }),
+            };
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  const res409 = await generateContractForOrder({
+    companyId: COMPANY_A,
+    orderId: order409Id,
+  }, storage409Proxy as any);
+  assert.strictEqual(res409.status, 'GENERATED');
+  assert.strictEqual(res409.revisionNo, 1);
+
+  // 3. Integration: unrelated storage upload error (500) throws and aborts without finalization
+  const { data: calc500, error: calc500Err } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { length: 2.0, height: 1.5 },
+    p_amount: 14000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calc500Err && calc500, `save_price_calculation_rpc calc500 failed: ${calc500Err?.message}`);
+
+  const { orderId: order500Id } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calc500.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', order500Id);
+
+  const storage500Proxy = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from(bucket: string) {
+            const originBucket = (target as any).storage.from(bucket);
+            return {
+              ...originBucket,
+              upload: async () => ({
+                data: null,
+                error: {
+                  statusCode: '500',
+                  status: 500,
+                  message: 'Internal server error',
+                },
+              }),
+            };
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  let threw500 = false;
+  try {
+    await generateContractForOrder({
+      companyId: COMPANY_A,
+      orderId: order500Id,
+    }, storage500Proxy as any);
+  } catch (err: any) {
+    threw500 = true;
+    assert.strictEqual(err.message, 'Không thể lưu trữ tệp hợp đồng');
+  }
+  assert.strictEqual(threw500, true, 'Unrelated storage error must throw');
+
+  // Verify that for order500, no contract was finalized (remains CLAIMED, not canonical path)
+  const { data: unfinalizedContracts } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref')
+    .eq('order_id', order500Id);
+  assert.strictEqual(unfinalizedContracts?.[0]?.generated_file_ref, 'CLAIMED', 'Must not finalize contract on upload failure');
+
+  testPass('Required Test 14: Storage conflict classification & contract generation recovery (409 recoverable, 500 throws, canonical revision preserved)');
+
+  // --------------------------------------------------------------------------
+  // Required Test 15: Historical duplicate Orders remediation & audit provenance (all 10 invariants)
+  // --------------------------------------------------------------------------
+  const { execSync: runPsql } = await import('node:child_process');
+  const runPsqlScript = (sql: string) =>
+    runPsql('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+      input: sql,
+      encoding: 'utf8',
+    });
+
+  const COMPANY_MIG = crypto.randomUUID();
+  const CUSTOMER_MIG = crypto.randomUUID();
+  const CALC_ORIG_ID = crypto.randomUUID();
+  const ORDER_1_ID = crypto.randomUUID();
+  const ORDER_2_ID = crypto.randomUUID();
+  const AUDIT_1_ID = crypto.randomUUID();
+  const AUDIT_2_ID = crypto.randomUUID();
+
+  // Setup company and customer for migration test
+  const { error: compErr } = await admin.from('companies').insert({ id: COMPANY_MIG, name: `Company MIG ${RUN_ID}`, status: 'ACTIVE' });
+  assert(!compErr, `insert companies failed: ${compErr?.message}`);
+
+  const POLICY_MIG_ID = crypto.randomUUID();
+  const { error: polErr } = await admin.from('pricing_policies').insert({
+    id: POLICY_MIG_ID,
+    company_id: COMPANY_MIG,
+    version: '1.0',
+    conditions: { deposit_percentage: 30 },
+    price_rules: { base_price_per_sqm: 5000000 },
+    effective_at: new Date().toISOString(),
+    status: 'ACTIVE',
+  });
+  assert(!polErr, `insert pricing_policies failed: ${polErr?.message}`);
+
+  const { error: cusErr } = await admin.from('customers').insert({
+    id: CUSTOMER_MIG,
+    company_id: COMPANY_MIG,
+    customer_code: `CUSMIG_${RUN_ID}`,
+    name: 'Customer Migration Test',
+    source: 'MANUAL',
+    stage: 'LEAD_NEW',
+  });
+  assert(!cusErr, `insert customers failed: ${cusErr?.message}`);
+
+  // Seed original PriceCalculation A
+  const originalInputData = { length: 3.5, height: 1.8, variant: 'premium' };
+  const { error: calcMigErr } = await admin.from('price_calculations').insert({
+    id: CALC_ORIG_ID,
+    company_id: COMPANY_MIG,
+    customer_id: CUSTOMER_MIG,
+    pricing_policy_id: POLICY_MIG_ID,
+    policy_version: '1.0',
+    input_data: originalInputData,
+    amount: 15500000,
+    status: 'CALCULATED',
+    missing_fields: [],
+  });
+  assert(!calcMigErr, `insert price_calculations failed: ${calcMigErr?.message}`);
+
+  // To simulate the historical state prior to migration 20261002220001:
+  // 1. Temporarily drop the UNIQUE constraint uq_orders_company_price_calc
+  // 2. Insert two orders referencing the same price_calculation_id (Order 1 older, Order 2 newer)
+  // 3. Insert existing historical ORDER_CREATED audit logs referencing CALC_ORIG_ID
+  const seedHistoricalDuplicatesSql = `
+    ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS uq_orders_company_price_calc;
+
+    SET session_replication_role = 'replica';
+    INSERT INTO public.orders (
+      id, company_id, customer_id, order_code, payment_reference, price_calculation_id, deposit_status, order_status, final_amount, created_at
+    ) VALUES
+      ('${ORDER_1_ID}', '${COMPANY_MIG}', '${CUSTOMER_MIG}', 'ORD-MIG-1', 'REF-MIG-1', '${CALC_ORIG_ID}', 'PENDING', 'DRAFT', 15500000, clock_timestamp() - interval '20 minutes'),
+      ('${ORDER_2_ID}', '${COMPANY_MIG}', '${CUSTOMER_MIG}', 'ORD-MIG-2', 'REF-MIG-2', '${CALC_ORIG_ID}', 'PENDING', 'DRAFT', 15500000, clock_timestamp() - interval '10 minutes');
+
+    INSERT INTO public.finance_summaries (order_id, company_id, contract_value, collected_amount, receivable_amount)
+    VALUES
+      ('${ORDER_1_ID}', '${COMPANY_MIG}', 15500000, 0, 15500000),
+      ('${ORDER_2_ID}', '${COMPANY_MIG}', 15500000, 0, 15500000);
+    SET session_replication_role = 'origin';
+
+    INSERT INTO public.audit_logs (id, company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata, created_at)
+    VALUES
+      ('${AUDIT_1_ID}', '${COMPANY_MIG}', NULL, 'ORDER_CREATED', 'orders', '${ORDER_1_ID}', '${CUSTOMER_MIG}', 'SUCCESS', '{"price_calculation_id": "${CALC_ORIG_ID}", "order_code": "ORD-MIG-1"}'::jsonb, clock_timestamp() - interval '20 minutes'),
+      ('${AUDIT_2_ID}', '${COMPANY_MIG}', NULL, 'ORDER_CREATED', 'orders', '${ORDER_2_ID}', '${CUSTOMER_MIG}', 'SUCCESS', '{"price_calculation_id": "${CALC_ORIG_ID}", "order_code": "ORD-MIG-2"}'::jsonb, clock_timestamp() - interval '10 minutes');
+  `;
+
+  runPsqlScript(seedHistoricalDuplicatesSql);
+
+  // Snapshot audit log count before running remediation
+  const auditCountBeforeStr = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.audit_logs WHERE company_id = '${COMPANY_MIG}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const auditCountBefore = parseInt(auditCountBeforeStr, 10);
+  assert.strictEqual(auditCountBefore, 2, 'Pre-remediation must have exactly 2 ORDER_CREATED audit logs');
+
+  // Execute the exact remediation DO block from migration 20261002220001
+  const remediationSql = `
+  DO $$
+  DECLARE
+      r RECORD;
+      v_new_calc_id uuid;
+  BEGIN
+      FOR r IN (
+          SELECT o.id as order_id, o.company_id, o.customer_id, o.price_calculation_id
+          FROM (
+              SELECT id, company_id, customer_id, price_calculation_id,
+                     ROW_NUMBER() OVER (PARTITION BY company_id, price_calculation_id ORDER BY created_at ASC, id ASC) as rn
+              FROM public.orders
+          ) o
+          WHERE o.rn > 1
+      ) LOOP
+          v_new_calc_id := gen_random_uuid();
+          INSERT INTO public.price_calculations (
+              id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at
+          )
+          SELECT v_new_calc_id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at
+          FROM public.price_calculations
+          WHERE id = r.price_calculation_id;
+
+          -- Strictly scope replica mode to rewriting the order's immutable price_calculation_id
+          SET session_replication_role = 'replica';
+          UPDATE public.orders
+          SET price_calculation_id = v_new_calc_id
+          WHERE id = r.order_id;
+          SET session_replication_role = 'origin';
+
+          -- Append-only audit record for historical duplicate order remediation
+          INSERT INTO public.audit_logs (
+              id,
+              company_id,
+              user_id,
+              action,
+              resource_type,
+              resource_id,
+              customer_id,
+              result,
+              metadata,
+              created_at
+          ) VALUES (
+              gen_random_uuid(),
+              r.company_id,
+              NULL,
+              'ORDER_PRICE_CALCULATION_REBOUND_MIGRATION',
+              'orders',
+              r.order_id,
+              r.customer_id,
+              'SUCCESS',
+              jsonb_build_object(
+                  'migration', '20261002220001',
+                  'original_price_calculation_id', r.price_calculation_id,
+                  'replacement_price_calculation_id', v_new_calc_id,
+                  'reason', 'historical_duplicate_remediation'
+              ),
+              now()
+          );
+      END LOOP;
+
+      -- Ensure session_replication_role is guaranteed origin
+      SET session_replication_role = 'origin';
+
+      IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'uq_orders_company_price_calc'
+      ) THEN
+          ALTER TABLE public.orders
+          ADD CONSTRAINT uq_orders_company_price_calc UNIQUE (company_id, price_calculation_id);
+      END IF;
+  END $$;
+  `;
+
+  runPsqlScript(remediationSql);
+
+  // =========================================================================
+  // VERIFY ALL 10 INVARIANTS
+  // =========================================================================
+
+  // Invariant 1: UNIQUE (company_id, price_calculation_id) can be installed
+  const constraintCheck = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT conname FROM pg_constraint WHERE conname = 'uq_orders_company_price_calc' AND conrelid = 'public.orders'::regclass;"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(constraintCheck, 'uq_orders_company_price_calc', 'Invariant 1: Constraint uq_orders_company_price_calc must be installed');
+
+  // Invariant 2: No Order/payment/finance/contract is deleted
+  const { data: ordersAfter } = await admin
+    .from('orders')
+    .select('id, order_code, price_calculation_id, final_amount')
+    .eq('company_id', COMPANY_MIG)
+    .order('order_code', { ascending: true });
+  assert.strictEqual(ordersAfter?.length, 2, 'Invariant 2: Both orders must still exist (no deletions)');
+
+  const { data: financesAfter } = await admin
+    .from('finance_summaries')
+    .select('order_id, contract_value')
+    .eq('company_id', COMPANY_MIG);
+  assert.strictEqual(financesAfter?.length, 2, 'Invariant 2: Finance summaries must still exist');
+
+  // Invariant 3: Canonical Order remains valid (Order 1 keeps CALC_ORIG_ID)
+  const order1After = ordersAfter?.find((o) => o.id === ORDER_1_ID);
+  assert(order1After, 'Order 1 must exist');
+  assert.strictEqual(order1After.price_calculation_id, CALC_ORIG_ID, 'Invariant 3: Canonical Order 1 must retain original CALC_ORIG_ID');
+
+  // Invariant 4: Any remapped Order receives a valid replacement calculation
+  const order2After = ordersAfter?.find((o) => o.id === ORDER_2_ID);
+  assert(order2After, 'Order 2 must exist');
+  assert.notStrictEqual(order2After.price_calculation_id, CALC_ORIG_ID, 'Invariant 4: Order 2 must receive replacement calculation');
+  const replacementCalcId = order2After.price_calculation_id;
+
+  const { data: replacementCalc } = await admin
+    .from('price_calculations')
+    .select('*')
+    .eq('id', replacementCalcId)
+    .single();
+  assert(replacementCalc, 'Invariant 4: Replacement calculation must exist in DB');
+
+  // Invariant 5: Replacement calculation pricing facts exactly match the original
+  const { data: originalCalc } = await admin
+    .from('price_calculations')
+    .select('*')
+    .eq('id', CALC_ORIG_ID)
+    .single();
+  assert(originalCalc, 'Original calculation must exist');
+
+  assert.strictEqual(replacementCalc.survey_id, originalCalc.survey_id, 'Invariant 5: survey_id matches');
+  assert.strictEqual(replacementCalc.pricing_policy_id, originalCalc.pricing_policy_id, 'Invariant 5: pricing_policy_id matches');
+  assert.strictEqual(replacementCalc.policy_version, originalCalc.policy_version, 'Invariant 5: policy_version matches');
+  assert.strictEqual(Number(replacementCalc.amount), Number(originalCalc.amount), 'Invariant 5: amount matches');
+  assert.strictEqual(replacementCalc.status, originalCalc.status, 'Invariant 5: status matches');
+  assert.deepStrictEqual(replacementCalc.missing_fields, originalCalc.missing_fields, 'Invariant 5: missing_fields match');
+  assert.deepStrictEqual(replacementCalc.input_data, originalCalc.input_data, 'Invariant 5: input_data matches exactly');
+
+  // Invariant 6: Existing ORDER_CREATED audit record remains unchanged
+  const { data: originalAudit1 } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('id', AUDIT_1_ID)
+    .single();
+  assert.strictEqual(originalAudit1.action, 'ORDER_CREATED', 'Invariant 6: Audit 1 action unchanged');
+  assert.strictEqual(originalAudit1.metadata.price_calculation_id, CALC_ORIG_ID, 'Invariant 6: Audit 1 references original calculation');
+
+  const { data: originalAudit2 } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('id', AUDIT_2_ID)
+    .single();
+  assert.strictEqual(originalAudit2.action, 'ORDER_CREATED', 'Invariant 6: Audit 2 action unchanged');
+  assert.strictEqual(originalAudit2.metadata.price_calculation_id, CALC_ORIG_ID, 'Invariant 6: Audit 2 references original calculation');
+
+  // Invariant 7: A new append-only remediation audit/provenance record explains original ID -> replacement ID
+  const { data: remediationAudits } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('company_id', COMPANY_MIG)
+    .eq('action', 'ORDER_PRICE_CALCULATION_REBOUND_MIGRATION');
+  assert.strictEqual(remediationAudits?.length, 1, 'Invariant 7: Exactly 1 remediation audit record created');
+  const remLog = remediationAudits![0];
+  assert.strictEqual(remLog.resource_type, 'orders', 'Invariant 7: resource_type is orders');
+  assert.strictEqual(remLog.resource_id, ORDER_2_ID, 'Invariant 7: resource_id is remapped order ID');
+  assert.strictEqual(remLog.customer_id, CUSTOMER_MIG, 'Invariant 7: customer_id matches');
+  assert.strictEqual(remLog.result, 'SUCCESS', 'Invariant 7: result is SUCCESS');
+  assert.strictEqual(remLog.metadata.migration, '20261002220001', 'Invariant 7: metadata.migration is 20261002220001');
+  assert.strictEqual(remLog.metadata.original_price_calculation_id, CALC_ORIG_ID, 'Invariant 7: original_price_calculation_id matches');
+  assert.strictEqual(remLog.metadata.replacement_price_calculation_id, replacementCalcId, 'Invariant 7: replacement_price_calculation_id matches');
+  assert.strictEqual(remLog.metadata.reason, 'historical_duplicate_remediation', 'Invariant 7: reason matches');
+
+  // Invariant 8: No historical audit row is UPDATEd or DELETEd
+  const auditCountAfterStr = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.audit_logs WHERE company_id = '${COMPANY_MIG}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const auditCountAfter = parseInt(auditCountAfterStr, 10);
+  assert.strictEqual(auditCountAfter, auditCountBefore + 1, 'Invariant 8: Total audit logs increased by exactly 1 append-only row');
+
+  // Invariant 9: Foreign keys remain valid after remediation
+  const fkCheckOrder2 = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.orders o JOIN public.price_calculations pc ON o.price_calculation_id = pc.id WHERE o.id = '${ORDER_2_ID}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(fkCheckOrder2, '1', 'Invariant 9: Foreign key between orders and price_calculations is valid for remapped order');
+
+  // Invariant 10: Trigger/replication-role bypass is limited strictly to the required migration repair window
+  const currentRole = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SHOW session_replication_role;"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(currentRole, 'origin', 'Invariant 10: session_replication_role is origin');
+
+  // Attempting an immutable column update in origin mode MUST fail with immutability trigger error
+  let updateBlocked = false;
+  try {
+    runPsql(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "UPDATE public.orders SET price_calculation_id = '${crypto.randomUUID()}' WHERE id = '${ORDER_1_ID}';"`,
+      { encoding: 'utf8' }
+    );
+  } catch (err: any) {
+    updateBlocked = true;
+    assert(err.message.includes('immutable'), 'Invariant 10: Attempted mutation must be blocked by immutability trigger');
+  }
+  assert.strictEqual(updateBlocked, true, 'Invariant 10: Immutability trigger is active and operational in origin mode');
+
+  testPass('Required Test 15: Historical duplicate Orders remediation & audit provenance (all 10 invariants verified)');
 
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);

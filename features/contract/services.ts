@@ -6,6 +6,39 @@ import { createAuthorizedSignedUrl } from '@/lib/sensitive/signed-urls';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/**
+ * Typed safe error shape for Supabase Storage upload errors.
+ * Covers StorageApiError (status, statusCode, code, message) and
+ * StorageError (status, statusCode, message) without requiring `any`.
+ */
+interface StorageErrorLike {
+  statusCode?: string | number;
+  status?: string | number;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Determines whether a storage upload error represents a recoverable
+ * ResourceAlreadyExists / HTTP 409 conflict.
+ *
+ * Canonical storage paths are deterministic per (contractId, revision),
+ * so a 409 means a concurrent caller already uploaded the same content.
+ */
+export function isStorageResourceConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as StorageErrorLike;
+  if (e.statusCode === '409' || e.statusCode === 409) return true;
+  if (e.status === 409) return true;
+  if (e.code === 'ResourceAlreadyExists') return true;
+  if (typeof e.message === 'string') {
+    if (e.message.includes('already exists') || e.message.includes('ResourceAlreadyExists')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface ContractListItemDTO {
   id: string;
   orderId: string;
@@ -132,11 +165,7 @@ export async function generateContractForOrder(
     // ResourceAlreadyExists (409) is safe to ignore: canonical path is deterministic per
     // (contractId, revision), so a pre-existing file means a concurrent caller already
     // uploaded the same content. Proceed to finalize.
-    const isResourceConflict =
-      (uploadError as any)?.statusCode === '409' ||
-      (uploadError as any)?.status === 409 ||
-      (uploadError as any)?.message?.includes('already exists') ||
-      (uploadError as any)?.message?.includes('ResourceAlreadyExists');
+    const isResourceConflict = isStorageResourceConflict(uploadError);
 
     if (!isResourceConflict) {
       console.error('Lỗi khi upload file hợp đồng:', uploadError);
