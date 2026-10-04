@@ -34,7 +34,6 @@ import {
   createInstallationSchedule,
   acceptInstallationAppointment,
   startInstallationWork,
-  scheduleInstallation,
   updateInstallationStatus,
   attachInstallationEvidence,
   completeInstallationAndHandover,

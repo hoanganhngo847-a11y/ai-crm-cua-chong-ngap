@@ -8,9 +8,7 @@ import type {
   CompleteInstallationInput,
   CreateInstallationScheduleInput,
   CreateInstallationScheduleResult,
-  InstallationDTO,
   InstallationStatus,
-  ScheduleInstallationInput,
   SettableInstallationStatus,
 } from './types';
 export { isValidCanonicalInstallationStorageRef } from './evidence';
@@ -31,7 +29,7 @@ export async function verifyTechnicianInstallationAssignment(companyId: string,u
  const {data:i,error} = await admin.from('installations').select('appointment_id').eq('company_id',companyId).eq('id',installationId).maybeSingle();
  if(error || !i) throw new OperationsError('RESOURCE_NOT_FOUND');
  const {data:a,error:ae} = await admin.from('appointments').select('assignee_id,status').eq('company_id',companyId).eq('id',i.appointment_id).maybeSingle();
- if(ae || !a || a.assignee_id !== userId || !['ASSIGNED','ACCEPTED','IN_PROGRESS'].includes(a.status)) throw new AuthError('Bạn không được phân công thực hiện công việc này',403);
+ if(ae || !a || a.assignee_id !== userId || !['ACCEPTED','IN_PROGRESS'].includes(a.status)) throw new AuthError('Bạn không được phân công hoặc chưa nhận công việc này',403);
 }
 
 export async function createInstallationSchedule(
@@ -122,11 +120,6 @@ export async function startInstallationWork(
     }
   );
   return { success: true, idempotent: Boolean(result?.idempotent) };
-}
-
-export async function scheduleInstallation(companyId: string,input: ScheduleInstallationInput,overrideAdminClient?: OperationsClient,actorId?: string): Promise<InstallationDTO> {
- const i = await operationsRpc(overrideAdminClient || createAdminClient(),'schedule_installation_atomic',{p_company_id:companyId,p_order_id:input.orderId,p_customer_id:input.customerId,p_appointment_id:input.appointmentId,p_crew:input.crew,p_actor_id:actorId});
- return {id:i.id,companyId:i.company_id,customerId:i.customer_id,orderId:i.order_id,appointmentId:i.appointment_id,crew:i.crew,status:i.status,photos:i.photos,handoverRef:i.handover_ref,completedAt:i.completed_at,createdAt:i.created_at,updatedAt:i.updated_at};
 }
 export async function updateInstallationStatus(companyId: string,installationId: string,status: SettableInstallationStatus,overrideAdminClient?: OperationsClient,actor?: OperationsActor): Promise<void> {
  await operationsRpc(overrideAdminClient || createAdminClient(),'mutate_installation_atomic',{p_company_id:companyId,p_installation_id:installationId,p_actor_id:actor?.userId,p_status:status});

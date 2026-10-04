@@ -13,6 +13,7 @@ const messages: Record<string, string> = {
  MISSING_EVIDENCE: 'Cần ảnh hiện trường và biên bản PDF.',
  EVIDENCE_CHANGED: 'Tài liệu đã thay đổi. Vui lòng thử lại.',
  STORAGE_OBJECT_NOT_FOUND: 'Không tìm thấy tệp tài liệu.',
+ INSTALLATION_SCHEDULE_ALREADY_EXISTS_WITH_DIFFERENT_PAYLOAD: 'Đơn hàng đã có lịch lắp đặt với thông tin khác.',
 };
 export class OperationsError extends Error {
  constructor(public code: string) { super(messages[code] || 'Thao tác không thành công. Vui lòng thử lại.'); }

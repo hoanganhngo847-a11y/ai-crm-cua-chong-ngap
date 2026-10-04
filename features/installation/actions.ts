@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import { prepareEvidence } from './evidence';
-import { sanitizeErrorMessage } from '../operations/server';
+import { sanitizeErrorMessage, OperationsError } from '../operations/server';
 import { getActorContext, requireCompanyRole } from '../../lib/auth/context';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
@@ -11,7 +11,6 @@ import {
     attachInstallationEvidence,
     completeInstallationAndHandover,
     createInstallationSchedule,
-    scheduleInstallation,
     startInstallationWork,
     updateInstallationStatus,
     verifyStorageObjectExists,
@@ -21,8 +20,6 @@ import type {
     CompleteInstallationInput,
     CreateInstallationScheduleInput,
     CreateInstallationScheduleResult,
-    InstallationDTO,
-    ScheduleInstallationInput,
     SettableInstallationStatus,
 } from './types';
 
@@ -43,13 +40,6 @@ const acceptInstallationAppointmentSchema = z.object({
 
 const startInstallationWorkSchema = z.object({
     installationId: z.string().uuid({ message: 'Mã công việc lắp đặt không hợp lệ.' }),
-});
-
-const scheduleInstallationSchema = z.object({
-    customerId: z.string().uuid(),
-    orderId: z.string().uuid(),
-    appointmentId: z.string().uuid(),
-    crew: z.array(z.string()).min(1, 'Danh sách đội thợ (crew) phải có ít nhất 1 người.'),
 });
 
 const updateInstallationStatusSchema = z.object({
@@ -163,35 +153,6 @@ export async function startInstallationWorkAction(
 }
 
 /**
- * Action: Lên lịch lắp đặt (Legacy schedule helper)
- */
-export async function scheduleInstallationAction(
-    input: ScheduleInstallationInput
-): Promise<{ success: boolean; data?: InstallationDTO; error?: string }> {
-    try {
-        const parsed = scheduleInstallationSchema.safeParse(input);
-        if (!parsed.success) {
-            return {
-                success: false,
-                error: `Dữ liệu không hợp lệ: ${parsed.error.issues.map((e) => e.message).join(', ')}`,
-            };
-        }
-
-        const actor = await getActorContext();
-        if (!actor?.companyId) {
-            return { success: false, error: 'Chưa xác định tổ chức làm việc.' };
-        }
-
-        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
-
-        const data = await scheduleInstallation(actor.companyId, parsed.data, undefined, actor.userId);
-        return { success: true, data };
-    } catch (err: unknown) {
-        return { success: false, error: sanitizeErrorMessage(err, 'Lỗi đặt lịch lắp đặt.') };
-    }
-}
-
-/**
  * Action: Cập nhật trạng thái lắp đặt
  * - Ràng buộc: SettableInstallationStatus (Loại bỏ COMPLETED).
  * - Nếu caller là TECHNICIAN: bắt buộc kiểm tra appointments liên kết (P0).
@@ -264,11 +225,28 @@ export async function uploadInstallationEvidenceAction(
         const file = formData.get('file') as File | null;
 
         const evidence = prepareEvidence(actor.companyId, installationId, rawEvidenceType || '', file!);
+        const admin = createAdminClient();
         if (actor.role === APPLICATION_ROLES.TECHNICIAN) {
-            await verifyTechnicianInstallationAssignment(actor.companyId, actor.userId, installationId);
+            await verifyTechnicianInstallationAssignment(actor.companyId, actor.userId, installationId, admin);
+        } else {
+            const { data: inst } = await admin
+                .from('installations')
+                .select('appointment_id')
+                .eq('company_id', actor.companyId)
+                .eq('id', installationId)
+                .maybeSingle();
+            if (!inst) throw new OperationsError('RESOURCE_NOT_FOUND');
+            const { data: appt } = await admin
+                .from('appointments')
+                .select('status')
+                .eq('company_id', actor.companyId)
+                .eq('id', inst.appointment_id)
+                .maybeSingle();
+            if (!appt || !['ACCEPTED', 'IN_PROGRESS'].includes(appt.status)) {
+                throw new OperationsError('INVALID_STATE_TRANSITION');
+            }
         }
         const canonicalPath = evidence.path;
-        const admin = createAdminClient();
 
         // Đọc nội dung tệp sang buffer
         const arrayBuffer = await file!.arrayBuffer();

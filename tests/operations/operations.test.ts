@@ -7,7 +7,6 @@ import { sanitizeErrorMessage, operationsRpc, type OperationsClient } from '../.
 import { AuthError } from '../../lib/auth/context';
 import { createProductionOrderAction } from '../../features/production/actions';
 import {
-  scheduleInstallationAction,
   createInstallationScheduleAction,
   acceptInstallationAppointmentAction,
   startInstallationWorkAction,
@@ -51,7 +50,6 @@ test('missing RPC fails closed without any table mutation', async () => {
 test('UUID and datetime inputs reject before any authentication/database access', async () => {
  assert.equal((await createProductionOrderAction({orderId:'bad',deadline:'tomorrow',specs:{},materials:{}})).success,false);
  assert.equal((await createProductionOrderAction({orderId:randomUUID(),deadline:'2026-02-30',specs:{},materials:{}})).success,false);
- assert.equal((await scheduleInstallationAction({customerId:'bad',orderId:randomUUID(),appointmentId:randomUUID(),crew:['team']})).success,false);
  assert.equal((await createInstallationScheduleAction({orderId:'bad',technicianId:randomUUID(),startTime:new Date().toISOString(),address:'Hanoi',crew:['Tech 1']})).success,false);
  assert.equal((await createInstallationScheduleAction({orderId:randomUUID(),technicianId:'bad',startTime:new Date().toISOString(),address:'Hanoi',crew:['Tech 1']})).success,false);
  assert.equal((await createInstallationScheduleAction({orderId:randomUUID(),technicianId:randomUUID(),startTime:'invalid-date',address:'Hanoi',crew:['Tech 1']})).success,false);

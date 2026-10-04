@@ -299,16 +299,20 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                       <div className="text-xs font-medium text-slate-400 mb-2 flex items-center justify-between">
                         <span>Ảnh hiện trường ({item.photos.length})</span>
                         {item.status !== 'COMPLETED' && (
-                          <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
-                            + Tải ảnh mới
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              disabled={isLoading}
-                              onChange={(e) => handleFileUpload(item.id, 'PHOTO', e)}
-                            />
-                          </label>
+                          item.appointmentStatus === 'ASSIGNED' ? (
+                            <span className="text-[11px] text-amber-400/80 italic">Cần nhận việc trước khi tải ảnh</span>
+                          ) : (
+                            <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
+                              + Tải ảnh mới
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={isLoading}
+                                onChange={(e) => handleFileUpload(item.id, 'PHOTO', e)}
+                              />
+                            </label>
+                          )
                         )}
                       </div>
                       {item.photos.length === 0 ? (
@@ -332,16 +336,20 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                       <div className="text-xs font-medium text-slate-400 mb-2 flex items-center justify-between">
                         <span>Biên bản nghiệm thu</span>
                         {item.status !== 'COMPLETED' && (
-                          <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
-                            {item.handoverRef ? 'Thay thế biên bản' : '+ Tải biên bản (PDF/Ảnh)'}
-                            <input
-                              type="file"
-                              accept="application/pdf,image/*"
-                              className="hidden"
-                              disabled={isLoading}
-                              onChange={(e) => handleFileUpload(item.id, 'HANDOVER', e)}
-                            />
-                          </label>
+                          item.appointmentStatus === 'ASSIGNED' ? (
+                            <span className="text-[11px] text-amber-400/80 italic">Cần nhận việc trước khi tải biên bản</span>
+                          ) : (
+                            <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
+                              {item.handoverRef ? 'Thay thế biên bản' : '+ Tải biên bản (PDF/Ảnh)'}
+                              <input
+                                type="file"
+                                accept="application/pdf,image/*"
+                                className="hidden"
+                                disabled={isLoading}
+                                onChange={(e) => handleFileUpload(item.id, 'HANDOVER', e)}
+                              />
+                            </label>
+                          )
                         )}
                       </div>
                       {item.handoverRef ? (
