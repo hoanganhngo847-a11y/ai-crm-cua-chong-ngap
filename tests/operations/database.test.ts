@@ -8,7 +8,7 @@ import { prepareEvidence } from '../../features/installation/evidence';
 const container='supabase_db_ai-crm-cua-chong-ngap';
 const sql=(query: string)=>execFileSync('docker',['exec','-i',container,'psql','-X','-qAt','-U','supabase_admin','-d','postgres','-v','ON_ERROR_STOP=1'],{input:query,encoding:'utf8',stdio:['pipe','pipe','pipe']}).trim();
 const q=(v: unknown)=>`'${String(v).replaceAll("'","''")}'`;
-const c=randomUUID(), other=randomUUID(), customer=randomUUID(), boss=randomUUID(), tech=randomUUID(), tech2=randomUUID(), policy=randomUUID(), price=randomUUID();
+const c=randomUUID(), other=randomUUID(), customer=randomUUID(), boss=randomUUID(), sale=randomUUID(), tech=randomUUID(), tech2=randomUUID(), policy=randomUUID(), price=randomUUID();
 const actor={userId:tech,role:'TECHNICIAN'};
 function concurrent(query: string) {
  return new Promise<string>((resolve,reject)=>{
@@ -51,12 +51,12 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
  INSERT INTO public.customers(id,company_id,name,source,stage) VALUES(${q(customer)},${q(c)},'Test only','MANUAL','LEAD_NEW');
  INSERT INTO public.pricing_policies(id,company_id,version,conditions,price_rules,effective_at,status) VALUES(${q(policy)},${q(c)},'test','{"standard_materials": {"aluminum": "6063-T5"}}','{}',now(),'ACTIVE');
  INSERT INTO public.price_calculations(id,company_id,customer_id,pricing_policy_id,policy_version,input_data,amount,status) VALUES(${q(price)},${q(c)},${q(customer)},${q(policy)},'test','{"width": 2, "height": 1}',100,'CALCULATED');`);
- for(const [id,role] of [[boss,'BOSS_ADMIN'],[tech,'TECHNICIAN'],[tech2,'TECHNICIAN']]) sql(`INSERT INTO auth.users(id) VALUES(${q(id)}); INSERT INTO public.user_profiles(id,full_name,status) VALUES(${q(id)},'Test only','ACTIVE') ON CONFLICT(id) DO UPDATE SET status='ACTIVE'; INSERT INTO public.company_members(company_id,user_id,role,status) VALUES(${q(c)},${q(id)},${q(role)},'ACTIVE');`);
+ for(const [id,role] of [[boss,'BOSS_ADMIN'],[sale,'SALE'],[tech,'TECHNICIAN'],[tech2,'TECHNICIAN']]) sql(`INSERT INTO auth.users(id) VALUES(${q(id)}); INSERT INTO public.user_profiles(id,full_name,status) VALUES(${q(id)},'Test only','ACTIVE') ON CONFLICT(id) DO UPDATE SET status='ACTIVE'; INSERT INTO public.company_members(company_id,user_id,role,status) VALUES(${q(c)},${q(id)},${q(role)},'ACTIVE');`);
  await t.test('migration applied; bucket private, constrained and RPC grants restricted',async()=>{
-  assert.equal(sql("SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version='20260928000001'"),'1');
+  assert.equal(sql("SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version='20261004180001'"),'1');
   const {data,error}=await admin.storage.getBucket('installation-docs');assert.equal(error,null);assert.equal(data?.public,false);assert.equal(data?.file_size_limit,10485760);
-  const funcs=JSON.parse(sql(`SELECT json_agg(json_build_object('name',proname,'safe',prosecdef AND proconfig @> ARRAY['search_path=""'],'anon',has_function_privilege('anon',oid,'execute'),'auth',has_function_privilege('authenticated',oid,'execute'),'service',has_function_privilege('service_role',oid,'execute'))) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('create_production_order_atomic','update_production_progress_atomic','record_quality_check_atomic','schedule_installation_atomic','mutate_installation_atomic','complete_installation_atomic','update_warranty_status_atomic')`));
-  assert.equal(funcs.length,7);for(const f of funcs){assert.ok(f.safe,f.name);assert.equal(f.anon,false);assert.equal(f.auth,false);assert.equal(f.service,true);}
+  const funcs=JSON.parse(sql(`SELECT json_agg(json_build_object('name',proname,'safe',prosecdef AND proconfig @> ARRAY['search_path=""'],'anon',has_function_privilege('anon',oid,'execute'),'auth',has_function_privilege('authenticated',oid,'execute'),'service',has_function_privilege('service_role',oid,'execute'))) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('create_production_order_atomic','update_production_progress_atomic','record_quality_check_atomic','schedule_installation_atomic','mutate_installation_atomic','complete_installation_atomic','update_warranty_status_atomic','create_installation_schedule_atomic','accept_installation_appointment_atomic','start_installation_work_atomic')`));
+  assert.equal(funcs.length,10);for(const f of funcs){assert.ok(f.safe,f.name);assert.equal(f.anon,false);assert.equal(f.auth,false);assert.equal(f.service,true);}
   assert.ok((await anon.rpc('create_production_order_atomic',create(randomUUID()))).error);
  });
  await t.test('atomic production success and one audit',async()=>{
@@ -97,6 +97,120 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
   await reject('schedule_installation_atomic',schedule(o,appt('ACCEPTED','SURVEY')));
   const i=await rpc('schedule_installation_atomic',schedule(o,appt('ASSIGNED')));assert.equal(i.status,'SCHEDULED');
   const {o:cancelled}=await ready();sql(`UPDATE public.orders SET order_status='CANCELLED' WHERE id=${q(cancelled)}`);await reject('schedule_installation_atomic',schedule(cancelled,appt()));
+ });
+ await t.test('atomic installation scheduling, concurrency and full negative test suite', async () => {
+  const { o: readyOrder } = await ready();
+  const schedInput = (orderId = readyOrder, techId = tech, actorId = boss, companyId = c) => ({
+    p_company_id: companyId,
+    p_order_id: orderId,
+    p_actor_id: actorId,
+    p_technician_id: techId,
+    p_start_time: '2026-10-10T08:00:00Z',
+    p_address: '456 Tran Phu, Q.5',
+    p_crew: ['Thợ Chính', 'Thợ Phụ'],
+  });
+
+  // 1. SALE cannot schedule installation
+  await reject('create_installation_schedule_atomic', schedInput(readyOrder, tech, sale), 'PERMISSION_DENIED');
+
+  // 2. TECHNICIAN cannot schedule arbitrary installation
+  await reject('create_installation_schedule_atomic', schedInput(readyOrder, tech, tech), 'PERMISSION_DENIED');
+
+  // 3. Cross-company Order rejected
+  await reject('create_installation_schedule_atomic', schedInput(randomUUID(), tech, boss), 'RESOURCE_NOT_FOUND');
+
+  // 4. Cross-company Technician rejected
+  await reject('create_installation_schedule_atomic', schedInput(readyOrder, randomUUID(), boss), 'PERMISSION_DENIED');
+
+  // 5. Inactive Technician rejected
+  sql(`UPDATE public.company_members SET status='INACTIVE' WHERE user_id=${q(tech2)} AND company_id=${q(c)}`);
+  await reject('create_installation_schedule_atomic', schedInput(readyOrder, tech2, boss), 'PERMISSION_DENIED');
+  sql(`UPDATE public.company_members SET status='ACTIVE' WHERE user_id=${q(tech2)} AND company_id=${q(c)}`);
+
+  // 6. QC not PASSED rejected
+  const unpassedOrder = order();
+  const unpassedProd = await rpc('create_production_order_atomic', create(unpassedOrder));
+  await rpc('update_production_progress_atomic', progress(unpassedProd.id, 'IN_PRODUCTION'));
+  await reject('create_installation_schedule_atomic', schedInput(unpassedOrder, tech, boss), 'INVALID_STATE_TRANSITION');
+
+  // 7. Order not READY_FOR_INSTALL rejected (e.g. order cancelled)
+  const cancelledOrder = order();
+  const cancelledProd = await rpc('create_production_order_atomic', create(cancelledOrder));
+  await rpc('update_production_progress_atomic', progress(cancelledProd.id, 'IN_PRODUCTION'));
+  await rpc('update_production_progress_atomic', progress(cancelledProd.id, 'QC_IN_PROGRESS'));
+  await rpc('record_quality_check_atomic', qc(cancelledProd.id));
+  sql(`UPDATE public.orders SET order_status='CANCELLED' WHERE id=${q(cancelledOrder)}`);
+  await reject('create_installation_schedule_atomic', schedInput(cancelledOrder, tech, boss), 'INVALID_STATE_TRANSITION');
+
+  // 8. SURVEY Appointment cannot be substituted / accepted
+  const surveyApptId = appt('ASSIGNED', 'SURVEY');
+  await reject('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: surveyApptId, p_actor_id: tech }, 'INVALID_INPUT');
+
+  // 14. Concurrent schedule requests produce exactly one Appointment + Installation
+  const { o: concOrder } = await ready();
+  const concCalls = await Promise.all(
+    Array.from({ length: 10 }, () =>
+      admin.rpc('create_installation_schedule_atomic', schedInput(concOrder, tech, boss))
+    )
+  );
+  assert.equal(concCalls.filter((r) => !r.error).length, 10, 'All 10 calls succeed');
+  assert.equal(sql(`SELECT count(*) FROM public.installations WHERE order_id=${q(concOrder)}`), '1', 'Exactly 1 installation created');
+  assert.equal(sql(`SELECT count(*) FROM public.appointments WHERE company_id=${q(c)} AND type='INSTALLATION' AND address='456 Tran Phu, Q.5'`), '1', 'Exactly 1 appointment created');
+  const idempotentCount = concCalls.filter((r) => r.data?.idempotent === true).length;
+  assert.equal(idempotentCount, 9, '9 retries resolved idempotently');
+
+  // Happy path scheduling for lifecycle test
+  const schedResult = await rpc('create_installation_schedule_atomic', schedInput(readyOrder, tech, boss));
+  assert.equal(schedResult.success, true);
+  assert.equal(schedResult.idempotent, false);
+  assert.equal(schedResult.appointment.status, 'ASSIGNED');
+  assert.equal(schedResult.installation.status, 'SCHEDULED');
+  assert.equal(sql(`SELECT count(*) FROM public.audit_logs WHERE resource_id=${q(schedResult.installation.id)} AND action='SCHEDULE_INSTALLATION'`), '1');
+
+  // 9. Technician A cannot accept Technician B appointment
+  const { o: techBOrder } = await ready();
+  const schedB = await rpc('create_installation_schedule_atomic', schedInput(techBOrder, tech2, boss));
+  await reject('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: schedB.appointment.id, p_actor_id: tech }, 'PERMISSION_DENIED');
+
+  // Boss cannot impersonate technician acceptance
+  await reject('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: schedB.appointment.id, p_actor_id: boss }, 'PERMISSION_DENIED');
+
+  // 10. Technician A cannot mutate Technician B Installation
+  await reject('mutate_installation_atomic', { p_company_id: c, p_installation_id: schedB.installation.id, p_actor_id: tech, p_status: 'IN_TRANSIT' }, 'PERMISSION_DENIED');
+
+  // 11. Handover / mutation before ACCEPTED/IN_PROGRESS fails
+  await reject('mutate_installation_atomic', { p_company_id: c, p_installation_id: schedResult.installation.id, p_actor_id: tech, p_status: 'IN_TRANSIT' }, 'INVALID_STATE_TRANSITION');
+
+  // Technician accepts appointment (ASSIGNED -> ACCEPTED)
+  const acceptRes = await rpc('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: schedResult.appointment.id, p_actor_id: tech });
+  assert.equal(acceptRes.success, true);
+  assert.equal(acceptRes.idempotent, false);
+  assert.equal(sql(`SELECT status FROM public.appointments WHERE id=${q(schedResult.appointment.id)}`), 'ACCEPTED');
+
+  // Idempotent retry of accept returns idempotent: true
+  const retryAccept = await rpc('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: schedResult.appointment.id, p_actor_id: tech });
+  assert.equal(retryAccept.idempotent, true);
+
+  // Technician starts work (ACCEPTED -> IN_PROGRESS)
+  const startRes = await rpc('start_installation_work_atomic', { p_company_id: c, p_installation_id: schedResult.installation.id, p_actor_id: tech });
+  assert.equal(startRes.success, true);
+  assert.equal(startRes.idempotent, false);
+  assert.equal(sql(`SELECT status FROM public.appointments WHERE id=${q(schedResult.appointment.id)}`), 'IN_PROGRESS');
+
+  // Idempotent start returns idempotent: true
+  const retryStart = await rpc('start_installation_work_atomic', { p_company_id: c, p_installation_id: schedResult.installation.id, p_actor_id: tech });
+  assert.equal(retryStart.idempotent, true);
+
+  // Also verify mutating installation with ACCEPTED appointment automatically promotes to IN_PROGRESS
+  await rpc('accept_installation_appointment_atomic', { p_company_id: c, p_appointment_id: schedB.appointment.id, p_actor_id: tech2 });
+  assert.equal(sql(`SELECT status FROM public.appointments WHERE id=${q(schedB.appointment.id)}`), 'ACCEPTED');
+  await rpc('mutate_installation_atomic', { p_company_id: c, p_installation_id: schedB.installation.id, p_actor_id: tech2, p_status: 'IN_TRANSIT' });
+  assert.equal(sql(`SELECT status FROM public.appointments WHERE id=${q(schedB.appointment.id)}`), 'IN_PROGRESS');
+
+  // Entering INSTALLING advances order_status from READY_FOR_INSTALL to INSTALLING
+  assert.equal(sql(`SELECT order_status FROM public.orders WHERE id=${q(techBOrder)}`), 'READY_FOR_INSTALL');
+  await rpc('mutate_installation_atomic', { p_company_id: c, p_installation_id: schedB.installation.id, p_actor_id: tech2, p_status: 'INSTALLING' });
+  assert.equal(sql(`SELECT order_status FROM public.orders WHERE id=${q(techBOrder)}`), 'INSTALLING');
  });
  const fixture=await installation();
  const photo=prepareEvidence(c,fixture.i.id,'PHOTO',new File([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')],'test.png',{type:'image/png'}));
@@ -148,6 +262,8 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
   await Promise.all([completeInstallationAndHandover(c,{installationId:fixture.i.id},admin,actor),completeInstallationAndHandover(c,{installationId:fixture.i.id},admin,actor)]);
   await completeInstallationAndHandover(c,{installationId:fixture.i.id},admin,actor);
   assert.equal(sql(`SELECT order_status FROM public.orders WHERE id=${q(fixture.o)}`),'COMPLETED');
+  assert.equal(sql(`SELECT status FROM public.installations WHERE id=${q(fixture.i.id)}`),'COMPLETED');
+  assert.equal(sql(`SELECT status FROM public.appointments WHERE id=${q(fixture.a)}`),'COMPLETED');
   assert.equal(sql(`SELECT count(*) FROM public.audit_logs WHERE resource_id=${q(fixture.i.id)} AND action='COMPLETE_INSTALLATION_AND_HANDOVER'`),'1');
   assert.equal(sql(`SELECT count(*) FROM public.operations_outbox WHERE order_id=${q(fixture.o)} AND event_type='ORDER_COMPLETED'`),'1');
  });

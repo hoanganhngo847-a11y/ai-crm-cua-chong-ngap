@@ -6,6 +6,8 @@ import {
   updateInstallationStatusAction,
   uploadInstallationEvidenceAction,
   completeInstallationAction,
+  acceptInstallationAppointmentAction,
+  startInstallationWorkAction,
 } from '../actions';
 import type { FieldWorkspaceData } from '../installation-service';
 import type { SettableInstallationStatus } from '../types';
@@ -57,6 +59,46 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
         setErrorMsg(res.error || 'Cập nhật trạng thái thất bại');
       } else {
         setSuccessMsg(`Đã cập nhật trạng thái sang "${STATUS_LABELS[nextStatus] || nextStatus}"`);
+        router.refresh();
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Lỗi xử lý';
+      setErrorMsg(message);
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleAcceptAppointment = async (appointmentId: string) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setLoadingId(appointmentId);
+    try {
+      const res = await acceptInstallationAppointmentAction({ appointmentId });
+      if (!res.success) {
+        setErrorMsg(res.error || 'Nhận việc thất bại');
+      } else {
+        setSuccessMsg('Đã nhận việc thành công! Bạn có thể bắt đầu tác nghiệp thi công.');
+        router.refresh();
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Lỗi xử lý';
+      setErrorMsg(message);
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleStartWork = async (installationId: string) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setLoadingId(installationId);
+    try {
+      const res = await startInstallationWorkAction({ installationId });
+      if (!res.success) {
+        setErrorMsg(res.error || 'Bắt đầu công việc thất bại');
+      } else {
+        setSuccessMsg('Đã bắt đầu công việc lắp đặt.');
         router.refresh();
       }
     } catch (e: unknown) {
@@ -217,7 +259,22 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      {item.appointmentStatus && (
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+                            item.appointmentStatus === 'COMPLETED'
+                              ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/60'
+                              : item.appointmentStatus === 'IN_PROGRESS'
+                              ? 'bg-blue-950/60 text-blue-300 border-blue-800/60'
+                              : item.appointmentStatus === 'ACCEPTED'
+                              ? 'bg-cyan-950/60 text-cyan-300 border-cyan-800/60'
+                              : 'bg-amber-950/60 text-amber-300 border-amber-800/60'
+                          }`}
+                        >
+                          Lịch hẹn: {STATUS_LABELS[item.appointmentStatus] || item.appointmentStatus}
+                        </span>
+                      )}
                       <span
                         className={`px-3 py-1 rounded-full text-xs font-semibold ${
                           item.status === 'COMPLETED'
@@ -302,37 +359,69 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
 
                   {/* Actions Bar */}
                   {item.status !== 'COMPLETED' && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-400">Chuyển trạng thái:</span>
-                        {allowedTransitions.map((st) => (
-                          <button
-                            key={st}
-                            disabled={isLoading}
-                            onClick={() => handleStatusChange(item.id, st)}
-                            className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
-                          >
-                            {STATUS_LABELS[st] || st}
-                          </button>
-                        ))}
-                      </div>
+                    <div className="space-y-3 pt-2">
+                      {item.appointmentStatus === 'ASSIGNED' ? (
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-amber-950/30 border border-amber-800/50 rounded-lg">
+                          <div className="text-xs text-amber-300">
+                            <span className="font-semibold">Công việc mới được phân công:</span> Vui lòng nhận việc trước khi triển khai cập nhật trạng thái thi công.
+                          </div>
+                          {data.role === 'TECHNICIAN' ? (
+                            <button
+                              id={`accept-job-${item.id}`}
+                              disabled={isLoading}
+                              onClick={() => handleAcceptAppointment(item.appointmentId)}
+                              className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all disabled:opacity-50 whitespace-nowrap"
+                            >
+                              {isLoading ? 'Đang xử lý...' : 'Nhận việc'}
+                            </button>
+                          ) : (
+                            <span className="text-xs text-amber-400 italic">Đang chờ kỹ thuật viên nhận việc</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {item.appointmentStatus === 'ACCEPTED' && data.role === 'TECHNICIAN' && (
+                              <button
+                                id={`start-work-${item.id}`}
+                                disabled={isLoading}
+                                onClick={() => handleStartWork(item.id)}
+                                className="px-3 py-1 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all disabled:opacity-50"
+                              >
+                                {isLoading ? 'Đang xử lý...' : 'Bắt đầu công việc'}
+                              </button>
+                            )}
+                            <span className="text-xs text-slate-400">Chuyển trạng thái:</span>
+                            {allowedTransitions.map((st) => (
+                              <button
+                                key={st}
+                                disabled={isLoading}
+                                onClick={() => handleStatusChange(item.id, st)}
+                                className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
+                              >
+                                {STATUS_LABELS[st] || st}
+                              </button>
+                            ))}
+                          </div>
 
-                      <div>
-                        {item.status === 'HANDOVER_PENDING' && (
-                          <button
-                            disabled={!canComplete || isLoading}
-                            onClick={() => handleCompleteHandover(item.id)}
-                            className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={
-                              !canComplete
-                                ? 'Yêu cầu tối thiểu 1 ảnh hiện trường và 1 biên bản nghiệm thu'
-                                : 'Xác nhận hoàn tất bàn giao đơn hàng'
-                            }
-                          >
-                            {isLoading ? 'Đang xử lý...' : 'Nghiệm thu & Hoàn tất bàn giao'}
-                          </button>
-                        )}
-                      </div>
+                          <div>
+                            {item.status === 'HANDOVER_PENDING' && (
+                              <button
+                                disabled={!canComplete || isLoading}
+                                onClick={() => handleCompleteHandover(item.id)}
+                                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={
+                                  !canComplete
+                                    ? 'Yêu cầu tối thiểu 1 ảnh hiện trường và 1 biên bản nghiệm thu'
+                                    : 'Xác nhận hoàn tất bàn giao đơn hàng'
+                                }
+                              >
+                                {isLoading ? 'Đang xử lý...' : 'Nghiệm thu & Hoàn tất bàn giao'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

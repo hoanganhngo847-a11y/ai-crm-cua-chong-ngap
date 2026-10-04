@@ -171,33 +171,61 @@ export async function deriveCanonicalProductionFacts(
   }
 
   // Derive canonical specs
-  let cwMm: number | null = null;
-  let bhMm: number | null = null;
+  let canonicalSpecs: Record<string, unknown> | null = null;
 
   if (surveyData?.measurements) {
     const m = surveyData.measurements;
-    cwMm = m.clear_width_mm ? Number(m.clear_width_mm) : null;
-    bhMm = m.barrier_height_mm ? Number(m.barrier_height_mm) : null;
+    const cwMm = m.clear_width_mm ? Number(m.clear_width_mm) : null;
+    const bhMm = m.barrier_height_mm ? Number(m.barrier_height_mm) : null;
+    if (!cwMm || !bhMm || cwMm <= 0 || bhMm <= 0) {
+      return {
+        canRelease: false,
+        reason: 'NEED_INFO: Thiếu kích thước chuẩn (clear_width_mm hoặc barrier_height_mm)',
+        contractSigned: true,
+      };
+    }
+    const dimStr = `${cwMm}x${bhMm}mm`;
+    canonicalSpecs = {
+      dimensions: dimStr,
+      clear_width_mm: cwMm,
+      barrier_height_mm: bhMm,
+    };
   } else if (calc.input_data) {
     const inp = calc.input_data;
-    cwMm = inp.clear_width_mm ? Number(inp.clear_width_mm) : inp.width ? Number(inp.width) : null;
-    bhMm = inp.barrier_height_mm ? Number(inp.barrier_height_mm) : inp.height ? Number(inp.height) : null;
+    const w = inp.width !== undefined && inp.width !== null && inp.width !== '' ? Number(inp.width) : null;
+    const h = inp.height !== undefined && inp.height !== null && inp.height !== '' ? Number(inp.height) : null;
+    const cwMm = inp.clear_width_mm !== undefined && inp.clear_width_mm !== null && inp.clear_width_mm !== '' ? Number(inp.clear_width_mm) : null;
+    const bhMm = inp.barrier_height_mm !== undefined && inp.barrier_height_mm !== null && inp.barrier_height_mm !== '' ? Number(inp.barrier_height_mm) : null;
+
+    if (w !== null && h !== null && w > 0 && h > 0) {
+      const dimStr = `${Math.round(w * 100)}x${Math.round(h * 100)}cm`;
+      canonicalSpecs = {
+        dimensions: dimStr,
+        width: w,
+        height: h,
+      };
+    } else if (cwMm !== null && bhMm !== null && cwMm > 0 && bhMm > 0) {
+      const dimStr = `${cwMm}x${bhMm}mm`;
+      canonicalSpecs = {
+        dimensions: dimStr,
+        clear_width_mm: cwMm,
+        barrier_height_mm: bhMm,
+      };
+    } else if (inp.dimensions && String(inp.dimensions).trim()) {
+      const dimStr = String(inp.dimensions).trim();
+      canonicalSpecs = {
+        dimensions: dimStr,
+      };
+    }
   }
 
-  if (!cwMm || !bhMm || cwMm <= 0 || bhMm <= 0) {
+  if (!canonicalSpecs) {
     return {
       canRelease: false,
-      reason: 'NEED_INFO: Thiếu kích thước chuẩn (clear_width_mm hoặc barrier_height_mm)',
+      reason: 'NEED_INFO: Thiếu kích thước chuẩn (clear_width_mm hoặc barrier_height_mm hoặc width/height)',
       contractSigned: true,
     };
   }
-
-  const dimStr = `${cwMm}x${bhMm}mm`;
-  const canonicalSpecs: Record<string, unknown> = {
-    dimensions: dimStr,
-    clear_width_mm: cwMm,
-    barrier_height_mm: bhMm,
-  };
 
   const gateType = surveyData?.measurements?.gate_type || calc.input_data?.gate_type;
   if (gateType) canonicalSpecs.gate_type = gateType;
@@ -228,8 +256,16 @@ export interface ProductionDashboardOrderDTO {
 }
 
 export interface ProductionDashboardDTO {
-  productionOrders: Array<ProductionOrderDTO & { orderCode: string; customerName: string }>;
+  productionOrders: Array<ProductionOrderDTO & {
+    orderCode: string;
+    customerName: string;
+    orderStatus?: string;
+    customerAddress?: string;
+    installationId?: string | null;
+    installationStatus?: string | null;
+  }>;
   eligibleOrders: ProductionDashboardOrderDTO[];
+  technicians: Array<{ id: string; fullName: string }>;
 }
 
 export async function getProductionDashboardData(
@@ -255,13 +291,49 @@ export async function getProductionDashboardData(
       orders (
         id,
         order_code,
+        order_status,
         customers (
-          name
+          name,
+          address
         )
       )
     `)
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
+
+  // 2. Fetch existing installations for this company to display schedule state
+  const { data: installations } = await admin
+    .from('installations')
+    .select('id, order_id, status, appointment_id')
+    .eq('company_id', companyId);
+
+  const installMap = new Map((installations || []).map((inst: { order_id: string; id: string; status: string }) => [inst.order_id, inst]));
+
+  // 3. Fetch active technicians for scheduling
+  const { data: rawTechs } = await admin
+    .from('company_members')
+    .select(`
+      user_id,
+      user_profiles (
+        id,
+        full_name,
+        status
+      )
+    `)
+    .eq('company_id', companyId)
+    .eq('status', 'ACTIVE')
+    .eq('role', 'TECHNICIAN');
+
+  const technicians = (rawTechs || [])
+    .map((m: Record<string, unknown>) => {
+      const up = m.user_profiles as { id?: string; full_name?: string; status?: string } | null;
+      if (up?.status !== 'ACTIVE') return null;
+      return {
+        id: String(m.user_id),
+        fullName: up?.full_name || 'Kỹ thuật viên',
+      };
+    })
+    .filter((t): t is { id: string; fullName: string } => Boolean(t));
 
   interface ProdOrderJoinRow {
     id: string;
@@ -277,26 +349,34 @@ export async function getProductionDashboardData(
     orders?: {
       id?: string;
       order_code?: string;
-      customers?: { name?: string };
+      order_status?: string;
+      customers?: { name?: string; address?: string };
     };
   }
 
-  const productionOrders = ((prodOrders || []) as unknown as ProdOrderJoinRow[]).map((p) => ({
-    id: p.id,
-    companyId: p.company_id,
-    orderId: p.order_id,
-    specs: p.specs,
-    materials: p.materials,
-    status: p.status,
-    deadline: p.deadline,
-    qcStatus: p.qc_status,
-    createdAt: p.created_at,
-    updatedAt: p.updated_at,
-    orderCode: p.orders?.order_code || p.order_id.slice(0, 8),
-    customerName: p.orders?.customers?.name || 'Khách hàng',
-  }));
+  const productionOrders = ((prodOrders || []) as unknown as ProdOrderJoinRow[]).map((p) => {
+    const install = installMap.get(p.order_id);
+    return {
+      id: p.id,
+      companyId: p.company_id,
+      orderId: p.order_id,
+      specs: p.specs,
+      materials: p.materials,
+      status: p.status,
+      deadline: p.deadline,
+      qcStatus: p.qc_status,
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+      orderCode: p.orders?.order_code || p.order_id.slice(0, 8),
+      customerName: p.orders?.customers?.name || 'Khách hàng',
+      orderStatus: p.orders?.order_status || 'UNKNOWN',
+      customerAddress: p.orders?.customers?.address || '',
+      installationId: install?.id || null,
+      installationStatus: install?.status || null,
+    };
+  });
 
-  // 2. Fetch eligible orders not yet in production
+  // 4. Fetch eligible orders not yet in production
   const { data: candidateOrders } = await admin
     .from('orders')
     .select(`
@@ -341,5 +421,6 @@ export async function getProductionDashboardData(
   return {
     productionOrders,
     eligibleOrders,
+    technicians,
   };
 }

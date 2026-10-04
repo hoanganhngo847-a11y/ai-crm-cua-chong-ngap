@@ -7,15 +7,20 @@ import { getActorContext, requireCompanyRole } from '../../lib/auth/context';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
 import {
+    acceptInstallationAppointment,
     attachInstallationEvidence,
     completeInstallationAndHandover,
+    createInstallationSchedule,
     scheduleInstallation,
+    startInstallationWork,
     updateInstallationStatus,
     verifyStorageObjectExists,
     verifyTechnicianInstallationAssignment,
 } from './installation-service';
 import type {
     CompleteInstallationInput,
+    CreateInstallationScheduleInput,
+    CreateInstallationScheduleResult,
     InstallationDTO,
     ScheduleInstallationInput,
     SettableInstallationStatus,
@@ -24,15 +29,31 @@ import type {
 // ==============================================================================
 // RUNTIME VALIDATION SCHEMAS (ZOD - P1)
 // ==============================================================================
+const createInstallationScheduleSchema = z.object({
+    orderId: z.string().uuid({ message: 'Mã đơn hàng không hợp lệ.' }),
+    technicianId: z.string().uuid({ message: 'Mã kỹ thuật viên không hợp lệ.' }),
+    startTime: z.string().datetime({ message: 'Thời gian bắt đầu lắp đặt không hợp lệ.' }),
+    address: z.string().min(1, 'Địa chỉ lắp đặt không được để trống.'),
+    crew: z.array(z.string()).min(1, 'Danh sách đội thợ (crew) phải có ít nhất 1 người.'),
+});
+
+const acceptInstallationAppointmentSchema = z.object({
+    appointmentId: z.string().uuid({ message: 'Mã lịch hẹn không hợp lệ.' }),
+});
+
+const startInstallationWorkSchema = z.object({
+    installationId: z.string().uuid({ message: 'Mã công việc lắp đặt không hợp lệ.' }),
+});
+
 const scheduleInstallationSchema = z.object({
-    customerId: z.uuid(),
-    orderId: z.uuid(),
-    appointmentId: z.uuid(),
+    customerId: z.string().uuid(),
+    orderId: z.string().uuid(),
+    appointmentId: z.string().uuid(),
     crew: z.array(z.string()).min(1, 'Danh sách đội thợ (crew) phải có ít nhất 1 người.'),
 });
 
 const updateInstallationStatusSchema = z.object({
-    installationId: z.uuid(),
+    installationId: z.string().uuid(),
     status: z.enum([
         'SCHEDULED',
         'IN_TRANSIT',
@@ -46,11 +67,103 @@ const updateInstallationStatusSchema = z.object({
 });
 
 const completeInstallationSchema = z.object({
-    installationId: z.uuid(),
+    installationId: z.string().uuid(),
 });
 
 /**
- * Action: Lên lịch lắp đặt (Việc 30)
+ * Action: Lên lịch lắp đặt nguyên tử (Blocker 1 & 2)
+ * - BOSS_ADMIN chỉ định kỹ thuật viên, thời gian, địa chỉ, đội thợ.
+ * - Server tạo đồng thời Appointment (ASSIGNED) và Installation (SCHEDULED) trong 1 transaction.
+ */
+export async function createInstallationScheduleAction(
+    input: CreateInstallationScheduleInput
+): Promise<{ success: boolean; data?: CreateInstallationScheduleResult; error?: string }> {
+    try {
+        const parsed = createInstallationScheduleSchema.safeParse(input);
+        if (!parsed.success) {
+            return {
+                success: false,
+                error: `Dữ liệu không hợp lệ: ${parsed.error.issues.map((e) => e.message).join(', ')}`,
+            };
+        }
+
+        const actor = await getActorContext();
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức làm việc hoặc danh tính.' };
+        }
+
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.BOSS_ADMIN]);
+
+        const data = await createInstallationSchedule(actor.companyId, parsed.data, undefined, actor.userId);
+        return { success: true, data };
+    } catch (err: unknown) {
+        return { success: false, error: sanitizeErrorMessage(err, 'Lỗi đặt lịch lắp đặt.') };
+    }
+}
+
+/**
+ * Action: Kỹ thuật viên nhận việc lắp đặt (Blocker 3)
+ * - Server chuyển trạng thái lịch hẹn: ASSIGNED -> ACCEPTED.
+ * - Chỉ kỹ thuật viên được phân công chính xác mới có quyền nhận việc.
+ */
+export async function acceptInstallationAppointmentAction(
+    input: { appointmentId: string }
+): Promise<{ success: boolean; idempotent?: boolean; error?: string }> {
+    try {
+        const parsed = acceptInstallationAppointmentSchema.safeParse(input);
+        if (!parsed.success) {
+            return {
+                success: false,
+                error: `Dữ liệu không hợp lệ: ${parsed.error.issues.map((e) => e.message).join(', ')}`,
+            };
+        }
+
+        const actor = await getActorContext();
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức làm việc hoặc danh tính.' };
+        }
+
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.TECHNICIAN]);
+
+        const result = await acceptInstallationAppointment(actor.companyId, parsed.data.appointmentId, undefined, actor);
+        return { success: true, idempotent: result.idempotent };
+    } catch (err: unknown) {
+        return { success: false, error: sanitizeErrorMessage(err, 'Lỗi nhận việc lắp đặt.') };
+    }
+}
+
+/**
+ * Action: Bắt đầu công việc lắp đặt
+ * - Server chuyển trạng thái lịch hẹn: ACCEPTED -> IN_PROGRESS.
+ */
+export async function startInstallationWorkAction(
+    input: { installationId: string }
+): Promise<{ success: boolean; idempotent?: boolean; error?: string }> {
+    try {
+        const parsed = startInstallationWorkSchema.safeParse(input);
+        if (!parsed.success) {
+            return {
+                success: false,
+                error: `Dữ liệu không hợp lệ: ${parsed.error.issues.map((e) => e.message).join(', ')}`,
+            };
+        }
+
+        const actor = await getActorContext();
+        if (!actor?.companyId || !actor?.userId) {
+            return { success: false, error: 'Chưa xác định tổ chức làm việc hoặc danh tính.' };
+        }
+
+        await requireCompanyRole(actor.companyId, [APPLICATION_ROLES.TECHNICIAN]);
+
+        const result = await startInstallationWork(actor.companyId, parsed.data.installationId, undefined, actor);
+        return { success: true, idempotent: result.idempotent };
+    } catch (err: unknown) {
+        return { success: false, error: sanitizeErrorMessage(err, 'Lỗi bắt đầu công việc lắp đặt.') };
+    }
+}
+
+/**
+ * Action: Lên lịch lắp đặt (Legacy schedule helper)
  */
 export async function scheduleInstallationAction(
     input: ScheduleInstallationInput

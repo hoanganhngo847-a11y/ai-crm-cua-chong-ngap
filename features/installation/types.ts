@@ -48,3 +48,30 @@ export interface AttachInstallationEvidenceInput {
     fileKey: string;
     type: InstallationEvidenceType;
 }
+
+export interface AppointmentDTO {
+    id: string;
+    companyId: string;
+    customerId: string;
+    type: 'SURVEY' | 'INSTALLATION';
+    startTime: string;
+    assigneeId: string;
+    address: string;
+    status: string;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
+export interface CreateInstallationScheduleInput {
+    orderId: string;
+    technicianId: string;
+    startTime: string;
+    address: string;
+    crew: string[];
+}
+
+export interface CreateInstallationScheduleResult {
+    installation: InstallationDTO;
+    appointment: AppointmentDTO;
+    idempotent: boolean;
+}
