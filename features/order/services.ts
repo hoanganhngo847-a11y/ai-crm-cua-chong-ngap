@@ -1,12 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { verifyActorForCompany } from '@/lib/server-auth/authorize';
 import { APPLICATION_ROLES } from '@/shared/constants/roles';
-import { generateContractForOrder } from '@/features/contract/services';
+import { ensureContractForDepositConfirmedOrder } from '@/features/contract/services';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
 /**
  * Server-authoritative Order Creation from a validated price calculation snapshot.
+ * Protected by database-authoritative UNIQUE (company_id, price_calculation_id) and idempotent RPC.
  */
 export async function createOrderFromCalculation(
   params: {
@@ -25,24 +26,13 @@ export async function createOrderFromCalculation(
     client
   );
 
-  // 2. Generate server payment reference
+  // 2. Generate candidate server payment reference
   const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
   const paymentReference = `DH-${Date.now().toString().slice(-4)}${randomSuffix}`;
 
   const adminSupabase = createAdminClient();
 
-  // Prevent duplicate order creation on the same price calculation
-  const { data: existingOrder } = await adminSupabase
-    .from('orders')
-    .select('id, order_code')
-    .eq('company_id', companyId)
-    .eq('price_calculation_id', priceCalculationId)
-    .maybeSingle();
-
-  if (existingOrder) {
-    throw new Error(`ORDER_ALREADY_EXISTS: Đơn hàng đã tồn tại cho bảng tính giá này (${existingOrder.order_code})`);
-  }
-
+  // 3. Authoritative lock + idempotent check executed inside RPC
   const { data, error } = await adminSupabase.rpc('create_order_from_calculation_rpc', {
     p_company_id: companyId,
     p_customer_id: customerId,
@@ -56,12 +46,25 @@ export async function createOrderFromCalculation(
     throw error;
   }
 
-  return { ...data, paymentReference };
+  const canonicalPaymentRef = data.paymentReference || paymentReference;
+
+  return {
+    status: data.status,
+    orderId: data.orderId,
+    orderCode: data.orderCode,
+    finalAmount: data.finalAmount,
+    depositStatus: data.depositStatus,
+    orderStatus: data.orderStatus,
+    paymentReference: canonicalPaymentRef,
+    // Backwards compatibility aliases
+    order_id: data.orderId,
+    order_code: data.orderCode,
+  };
 }
 
 /**
  * Updates manual order deposit and debt (BOSS_ADMIN only).
- * If deposit threshold is reached, automatically triggers contract generation.
+ * If deposit threshold is reached, automatically triggers contract generation / recovery.
  */
 export async function updateOrderDepositAndDebt(
   params: {
@@ -70,7 +73,8 @@ export async function updateOrderDepositAndDebt(
     depositAmount: number;
     idempotencyKey: string;
   },
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  adminClientOverride?: SupabaseClient
 ) {
   const { companyId, orderId, depositAmount, idempotencyKey } = params;
 
@@ -81,7 +85,7 @@ export async function updateOrderDepositAndDebt(
     client
   );
 
-  const adminSupabase = createAdminClient();
+  const adminSupabase = adminClientOverride || createAdminClient();
 
   // 2. Atomic RPC call with strict DB-level BOSS check and cumulative threshold calculation
   const { data, error } = await adminSupabase.rpc('update_order_deposit_rpc', {
@@ -97,17 +101,42 @@ export async function updateOrderDepositAndDebt(
     throw error || new Error('Không thể cập nhật cọc');
   }
 
-  // 3. Automated contract generation if deposit threshold was reached
-  if (data.depositConfirmed) {
+  // 3. Re-read canonical Order state to determine deposit status & ensure contract recovery
+  const { data: orderRow } = await adminSupabase
+    .from('orders')
+    .select('id, company_id, deposit_status')
+    .eq('id', orderId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  const isDepositConfirmed =
+    orderRow?.deposit_status === 'CONFIRMED' || orderRow?.deposit_status === 'DEPOSIT_CONFIRMED';
+
+  let contractId: string | null = null;
+  let contractStatus: string | null = null;
+  let contractGenerationStatus: 'GENERATED' | 'ALREADY_EXISTS' | 'PENDING_RECOVERY' | 'NOT_ELIGIBLE' =
+    isDepositConfirmed ? 'PENDING_RECOVERY' : 'NOT_ELIGIBLE';
+
+  if (isDepositConfirmed) {
     try {
-      await generateContractForOrder({ companyId, orderId });
+      const contractRes = await ensureContractForDepositConfirmedOrder(companyId, orderId, adminSupabase);
+      contractId = contractRes.contractId;
+      contractStatus = contractRes.status;
+      contractGenerationStatus =
+        (contractRes.contractGenerationStatus as 'GENERATED' | 'ALREADY_EXISTS') || 'GENERATED';
     } catch (genError) {
-      console.error('Lỗi khi tự động tạo hợp đồng sau cọc:', genError);
-      // Contract claim will remain eligible or be picked up by reconciliation
+      console.error('Lỗi khi tự động tạo/khôi phục hợp đồng sau cọc:', genError);
+      contractGenerationStatus = 'PENDING_RECOVERY';
     }
   }
 
-  return data;
+  return {
+    ...data,
+    depositConfirmed: isDepositConfirmed,
+    contractId,
+    contractStatus,
+    contractGenerationStatus,
+  };
 }
 
 export interface OrderListItemDTO {
@@ -173,6 +202,7 @@ export async function getOrdersWithDetails(
         status,
         revision_no,
         is_current,
+        generated_file_ref,
         signed_file_ref
       ),
       production_orders (
@@ -199,7 +229,7 @@ export async function getOrdersWithDetails(
     created_at: string;
     customers?: { id?: string; name?: string; customer_code?: string } | null;
     finance_summaries?: { contract_value?: number; collected_amount?: number; receivable_amount?: number } | null;
-    contracts?: Array<{ id: string; status: string; revision_no: number; is_current: boolean; signed_file_ref?: string | null }> | null;
+    contracts?: Array<{ id: string; status: string; revision_no: number; is_current: boolean; generated_file_ref?: string | null; signed_file_ref?: string | null }> | null;
     production_orders?: { id?: string; status?: string } | null;
   }
 
@@ -207,8 +237,13 @@ export async function getOrdersWithDetails(
     const cust = row.customers || {};
     const fin = row.finance_summaries || {};
     const currentContract = Array.isArray(row.contracts)
-      ? row.contracts.find((c) => c.is_current) || row.contracts[0] || null
+      ? row.contracts.find((c) => c.is_current && c.status !== 'SUPERSEDED') || row.contracts[0] || null
       : null;
+    const isUsableContract = Boolean(
+      currentContract &&
+      currentContract.generated_file_ref &&
+      currentContract.generated_file_ref !== 'CLAIMED'
+    );
     const prod = row.production_orders || null;
 
     const collected = Number(fin.collected_amount ?? 0);
@@ -228,9 +263,9 @@ export async function getOrdersWithDetails(
       collectedAmount: collected,
       receivableAmount: receivable,
       depositConfirmed: row.deposit_status === 'CONFIRMED' || row.deposit_status === 'DEPOSIT_CONFIRMED',
-      contractId: currentContract ? currentContract.id : null,
-      contractStatus: currentContract ? currentContract.status : null,
-      contractRevision: currentContract ? currentContract.revision_no : null,
+      contractId: isUsableContract && currentContract ? currentContract.id : null,
+      contractStatus: isUsableContract && currentContract ? currentContract.status : null,
+      contractRevision: isUsableContract && currentContract ? currentContract.revision_no : null,
       isContractSigned: Boolean(currentContract?.signed_file_ref && currentContract?.status === 'SIGNED'),
       productionOrderId: prod?.id || null,
       productionStatus: prod?.status || null,

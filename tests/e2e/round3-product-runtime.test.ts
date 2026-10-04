@@ -318,20 +318,24 @@ async function run() {
   assert.strictEqual(orderRow!.order_status, 'DRAFT', 'Initial status must be DRAFT');
 
   // 1.3 Duplicate / Retry Creation on same Calculation
-  let duplicateErr: any = null;
-  try {
-    await createOrderFromCalculation(
-      {
-        companyId: COMPANY_ID,
-        customerId: CUSTOMER_ID,
-        priceCalculationId: validCalc.id,
-      },
-      saleClient
-    );
-  } catch (err: any) {
-    duplicateErr = err;
-  }
-  assert.ok(duplicateErr, 'Duplicate order creation on same calculation must be rejected');
+  const duplicateResult = await createOrderFromCalculation(
+    {
+      companyId: COMPANY_ID,
+      customerId: CUSTOMER_ID,
+      priceCalculationId: validCalc.id,
+    },
+    saleClient
+  );
+  assert.strictEqual(duplicateResult.status, 'ALREADY_EXISTS', 'Duplicate creation must return ALREADY_EXISTS');
+  assert.strictEqual(duplicateResult.orderId, ORDER_ID, 'Duplicate must resolve to the same orderId');
+  assert.strictEqual(duplicateResult.paymentReference, orderResult.paymentReference, 'Duplicate must return canonical payment reference');
+
+  const { count: orderCount } = await admin
+    .from('orders')
+    .select('*', { count: 'exact', head: true })
+    .eq('company_id', COMPANY_ID)
+    .eq('price_calculation_id', validCalc.id);
+  assert.strictEqual(orderCount, 1, 'Exactly one order must exist for price calculation');
   pass('Duplicate order creation is rejected');
 
   // 1.4 Manual Deposit Mutation Authorization: SALE is Forbidden, BOSS_ADMIN is Allowed

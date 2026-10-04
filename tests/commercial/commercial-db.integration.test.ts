@@ -5,8 +5,15 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { generateContractForOrder, signContract, getContractDownloadUrl } from '../../features/contract/services';
+import {
+  generateContractForOrder,
+  signContract,
+  getContractDownloadUrl,
+  ensureContractForDepositConfirmedOrder,
+  isStorageResourceConflict,
+} from '../../features/contract/services';
 import { createOrderFromCalculation, updateOrderDepositAndDebt } from '../../features/order/services';
+import { recoverOrderContractAction, createOrderFromCalculationAction, updateOrderDepositAction } from '../../features/order/actions';
 import { processPaymentWebhook } from '../../features/payment/services';
 import { calculateAndSavePriceCalculation, calculatePriceFromSurvey, getPriceCalculations } from '../../features/pricing/services';
 import { createAppointment, getActiveCompanyTechnicians } from '../../features/survey/services/appointment.service';
@@ -575,11 +582,22 @@ async function run() {
   const ORDER_B_ID = orderBData.orderId;
 
   // Dedicated order for Company A to test cross-tenant payment reference without mutating ORDER_A_ID
+  const { data: calcACross } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const PAYMENT_REF_A_CROSS = `DH-TESTAX${RUN_ID.toUpperCase()}`;
   const { data: orderACrossData, error: orderACrossErr } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcACross.id,
     p_payment_reference: PAYMENT_REF_A_CROSS,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -748,20 +766,42 @@ async function run() {
   // --------------------------------------------------------------------------
   // Test 11: Manual deposit authorization, idempotency, and ORDER BINDING (Section 2)
   // --------------------------------------------------------------------------
-  // Create Order 1 and Order 2 in Company A
+  // Create Order 1 and Order 2 in Company A with distinct price calculations
+  const { data: calcMan1 } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: orderMan1 } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcMan1.id,
     p_payment_reference: `DH-MAN1${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
   const ORDER_MAN_1_ID = orderMan1.orderId;
 
+  const { data: calcMan2 } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: orderMan2 } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcMan2.id,
     p_payment_reference: `DH-MAN2${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -836,10 +876,21 @@ async function run() {
   // Test 12: Contract generation & Dynamic Revision Model (Section 9)
   // --------------------------------------------------------------------------
   // Unconfirmed deposit order fails contract generation claim
+  const { data: calcUnconf } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
   const { data: unconfirmedOrder } = await admin.rpc('create_order_from_calculation_rpc', {
     p_company_id: COMPANY_A,
     p_customer_id: CUSTOMER_A,
-    p_price_calculation_id: CALCULATION_ID,
+    p_price_calculation_id: calcUnconf.id,
     p_payment_reference: `DH-UNCONF${RUN_ID}`,
     p_actor_user_id: USER_BOSS_A,
   });
@@ -1146,10 +1197,21 @@ async function run() {
   // Test 14b: Failure recovery - upload succeeds, DB finalize fails before commit
   // --------------------------------------------------------------------------
   {
+    const { data: calcRecovB } = await admin.rpc('save_price_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_survey_id: null,
+      p_pricing_policy_id: POLICY_B_ID,
+      p_policy_version: 'v1',
+      p_input_data: { width: 2, height: 1.2 },
+      p_amount: 12000000,
+      p_status: 'CALCULATED',
+      p_missing_fields: [],
+    });
     const { data: orderRecovData } = await admin.rpc('create_order_from_calculation_rpc', {
       p_company_id: COMPANY_B,
       p_customer_id: CUSTOMER_B,
-      p_price_calculation_id: CALC_B_ID,
+      p_price_calculation_id: calcRecovB.id,
       p_payment_reference: `DH-RECOV-B-${Date.now()}`,
       p_actor_user_id: USER_BOSS_B,
     });
@@ -1242,12 +1304,23 @@ async function run() {
 
   // --------------------------------------------------------------------------
   // Test 14c: Ambiguous commit recovery - DB finalize committed but response lost
-  // --------------------------------------------------------------------------
   {
+    const { data: calcAmbigB, error: calcAmbigErr } = await admin.rpc('save_price_calculation_rpc', {
+      p_company_id: COMPANY_B,
+      p_customer_id: CUSTOMER_B,
+      p_survey_id: null,
+      p_pricing_policy_id: POLICY_B_ID,
+      p_policy_version: 'v1',
+      p_input_data: { width: 3, height: 2 },
+      p_amount: 12000000,
+      p_status: 'CALCULATED',
+      p_missing_fields: [],
+    });
+    assert(!calcAmbigErr && calcAmbigB, `save_price_calculation_rpc failed: ${calcAmbigErr?.message}`);
     const { data: orderAmbigData } = await admin.rpc('create_order_from_calculation_rpc', {
       p_company_id: COMPANY_B,
       p_customer_id: CUSTOMER_B,
-      p_price_calculation_id: CALC_B_ID,
+      p_price_calculation_id: calcAmbigB.id,
       p_payment_reference: `DH-AMBIG-B-${Date.now()}`,
       p_actor_user_id: USER_BOSS_B,
     });
@@ -1827,6 +1900,961 @@ async function run() {
   assert.strictEqual(e2eSurveyRow.id, calcRow.survey_id);
 
   testPass('Section 9: Product Action End-to-End Journey verified: SALE schedules via Server Action (real RLS) -> Tech accepts via Action -> Tech starts via Action -> Tech completes real Survey -> SALE triggers calculatePriceFromSurveyAction -> Quotations retrieval sees it; all IDs strictly bound; zero service-role write bypass');
+
+  // ==========================================================================
+  // Section 10: P1-008 Commercial Exactly-Once & Recovery Invariant Tests
+  // ==========================================================================
+
+  // --------------------------------------------------------------------------
+  // Required Test 1: 10 concurrent create-order attempts from one PriceCalculation -> exactly 1 Order
+  // --------------------------------------------------------------------------
+  const { data: calcConc, error: calcConcErr } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calcConcErr && calcConc, `save_price_calculation_rpc failed: ${calcConcErr?.message}`);
+
+  const concurrentAttempts = Array.from({ length: 10 }, () =>
+    createOrderFromCalculation({
+      companyId: COMPANY_A,
+      customerId: CUSTOMER_A,
+      priceCalculationId: calcConc.id,
+    }, BOSS_A_CLIENT)
+  );
+
+  const concResults = await Promise.all(concurrentAttempts);
+  const firstOrderId = concResults[0].orderId;
+  const firstPayRef = concResults[0].paymentReference;
+
+  for (const res of concResults) {
+    assert.strictEqual(res.orderId, firstOrderId, 'All concurrent attempts must resolve to the same orderId');
+    assert.strictEqual(res.paymentReference, firstPayRef, 'All concurrent attempts must resolve to the same paymentReference');
+  }
+
+  const { data: ordersForCalc, error: ordersForCalcErr } = await admin
+    .from('orders')
+    .select('id')
+    .eq('price_calculation_id', calcConc.id);
+  assert(!ordersForCalcErr && ordersForCalc.length === 1, `Must have exactly 1 order row in DB, found ${ordersForCalc?.length}`);
+
+  const { data: financeForCalc, error: financeForCalcErr } = await admin
+    .from('finance_summaries')
+    .select('order_id')
+    .eq('order_id', firstOrderId);
+  assert(!financeForCalcErr && financeForCalc.length === 1, `Must have exactly 1 finance summary row in DB, found ${financeForCalc?.length}: ${financeForCalcErr?.message}`);
+
+  testPass('Required Test 1: 10 concurrent create-order attempts from one PriceCalculation -> exactly 1 Order, 1 finance_summary, same orderId & paymentReference');
+
+  // --------------------------------------------------------------------------
+  // Required Test 2: Existing Order retry returns same orderId/paymentReference
+  // --------------------------------------------------------------------------
+  const retryOrderRes = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcConc.id,
+  }, BOSS_A_CLIENT);
+  assert.strictEqual(retryOrderRes.status, 'ALREADY_EXISTS', 'Retry must return ALREADY_EXISTS');
+  assert.strictEqual(retryOrderRes.orderId, firstOrderId, 'Retry must return existing orderId');
+  assert.strictEqual(retryOrderRes.paymentReference, firstPayRef, 'Retry must not generate a second paymentReference');
+
+  testPass('Required Test 2: Existing Order retry returns same orderId/paymentReference deterministically without creating duplicate');
+
+  // --------------------------------------------------------------------------
+  // Required Test 3: Manual deposit commit + lost response + retry same command ID -> money counted once
+  // --------------------------------------------------------------------------
+  const { data: calcManDep } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: manDepOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcManDep.id,
+  }, BOSS_A_CLIENT);
+
+  const manDepCommandId = `cmd-manual-deposit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const firstDepositRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manDepOrderId,
+    depositAmount: 3000000,
+    idempotencyKey: manDepCommandId,
+  }, BOSS_A_CLIENT);
+
+  assert.strictEqual(firstDepositRes.status, 'MATCHED');
+
+  // Simulate retry with exact same command ID, orderId, and amount
+  const retryDepositRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manDepOrderId,
+    depositAmount: 3000000,
+    idempotencyKey: manDepCommandId,
+  }, BOSS_A_CLIENT);
+
+  assert.strictEqual(retryDepositRes.status, 'ALREADY_PROCESSED');
+
+  const { data: txsForCmd } = await admin
+    .from('payment_transactions')
+    .select('id, amount')
+    .eq('provider_ref', manDepCommandId);
+  assert.strictEqual(txsForCmd?.length, 1, 'Exactly one payment_transaction row must exist for command ID');
+
+  const { data: finAfterRetry } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', manDepOrderId)
+    .single();
+  assert.strictEqual(Number(finAfterRetry?.collected_amount), 3000000, 'Collected amount must increase exactly once');
+
+  testPass('Required Test 3: Manual deposit commit + lost response + retry same command ID -> money counted once (ALREADY_PROCESSED)');
+
+  // --------------------------------------------------------------------------
+  // Required Test 4: Same manual command ID + changed amount -> rejected
+  // --------------------------------------------------------------------------
+  let threwChangedAmount = false;
+  try {
+    await updateOrderDepositAndDebt({
+      companyId: COMPANY_A,
+      orderId: manDepOrderId,
+      depositAmount: 4000000, // Different amount!
+      idempotencyKey: manDepCommandId,
+    }, BOSS_A_CLIENT);
+  } catch (err: any) {
+    threwChangedAmount = true;
+    assert(err.message.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'), `Unexpected error: ${err.message}`);
+  }
+  assert(threwChangedAmount, 'Must reject retry with same command ID but changed amount');
+
+  testPass('Required Test 4: Same manual command ID + changed amount -> rejected fail-closed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 5: Same manual command ID + changed Order -> rejected
+  // --------------------------------------------------------------------------
+  const { data: calcOtherOrder } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: otherOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcOtherOrder.id,
+  }, BOSS_A_CLIENT);
+
+  let threwChangedOrder = false;
+  try {
+    await updateOrderDepositAndDebt({
+      companyId: COMPANY_A,
+      orderId: otherOrderId, // Different order!
+      depositAmount: 3000000,
+      idempotencyKey: manDepCommandId,
+    }, BOSS_A_CLIENT);
+  } catch (err: any) {
+    threwChangedOrder = true;
+    assert(err.message.includes('PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD'), `Unexpected error: ${err.message}`);
+  }
+  assert(threwChangedOrder, 'Must reject retry with same command ID but changed order');
+
+  testPass('Required Test 5: Same manual command ID + changed Order -> rejected fail-closed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 6: Payment reaches deposit threshold + contract storage generation fails
+  // --------------------------------------------------------------------------
+  const { data: calcWebhookFail } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const webhookOrderRes = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcWebhookFail.id,
+  }, BOSS_A_CLIENT);
+  const webhookOrderId = webhookOrderRes.orderId;
+  const webhookPayRef = webhookOrderRes.paymentReference;
+
+  // Create a proxy admin client where storage upload returns error
+  const failingStorageAdmin = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from: (bucket: string) => {
+            const bucketObj = (target as any).storage.from(bucket);
+            return new Proxy(bucketObj, {
+              get(bTarget, bProp) {
+                if (bProp === 'upload') {
+                  return async () => ({
+                    data: null,
+                    error: new Error('SIMULATED_STORAGE_OUTAGE_ON_CONTRACT_UPLOAD'),
+                  });
+                }
+                return (bTarget as any)[bProp];
+              },
+            });
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  const webhookProviderRef = `WH-FAIL-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const webhookOccurredAt = new Date().toISOString();
+  const webhookResult1 = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_A1,
+    provider_ref: webhookProviderRef,
+    amount: 5000000, // Reaches deposit threshold (50% of 10,000,000)
+    occurred_at: webhookOccurredAt,
+    transfer_content: `Chuyen khoan ${webhookPayRef}`,
+  }, failingStorageAdmin as any);
+
+  assert.strictEqual(webhookResult1.status, 'MATCHED', 'Payment webhook itself succeeds with MATCHED');
+
+  // Verify payment committed and deposit confirmed
+  const { data: orderAfterWhFail } = await admin
+    .from('orders')
+    .select('deposit_status')
+    .eq('id', webhookOrderId)
+    .single();
+  assert.strictEqual(orderAfterWhFail?.deposit_status, 'DEPOSIT_CONFIRMED', 'Order deposit_status must be DEPOSIT_CONFIRMED');
+
+  // Verify no usable contract exists
+  const { data: contractsWhFail } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref')
+    .eq('order_id', webhookOrderId);
+  const usableWhContract = contractsWhFail?.find(c => c.status === 'GENERATED' && c.generated_file_ref && c.generated_file_ref !== 'CLAIMED');
+  assert(!usableWhContract, 'No usable contract must exist after storage generation failure');
+
+  testPass('Required Test 6: Payment reaches deposit threshold + contract storage generation fails -> payment committed, DEPOSIT_CONFIRMED, no usable contract');
+
+  // --------------------------------------------------------------------------
+  // Required Test 7: Same webhook retries -> payment remains counted once and contract generation recovers
+  // --------------------------------------------------------------------------
+  // Now call processPaymentWebhook with normal admin client (storage working)
+  const webhookResult2 = await processPaymentWebhook({
+    provider: PROVIDER,
+    provider_account: ACC_A1,
+    provider_ref: webhookProviderRef,
+    amount: 5000000,
+    occurred_at: webhookOccurredAt,
+    transfer_content: `Chuyen khoan ${webhookPayRef}`,
+  }, admin);
+
+  assert.strictEqual(webhookResult2.status, 'ALREADY_PROCESSED', 'Webhook retry must return ALREADY_PROCESSED');
+
+  // Payment counted once
+  const { data: finWhRetry } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', webhookOrderId)
+    .single();
+  assert.strictEqual(Number(finWhRetry?.collected_amount), 5000000, 'Collected amount must remain 5,000,000 (not double counted)');
+
+  // Contract generation recovered!
+  const { data: recoveredContracts } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref, is_current')
+    .eq('order_id', webhookOrderId)
+    .eq('is_current', true);
+  assert.strictEqual(recoveredContracts?.length, 1, 'Exactly one current contract must exist');
+  assert.strictEqual(recoveredContracts[0].status, 'GENERATED');
+  assert(recoveredContracts[0].generated_file_ref && recoveredContracts[0].generated_file_ref !== 'CLAIMED', 'Contract must have valid generated_file_ref');
+
+  testPass('Required Test 7: Same webhook retries -> ALREADY_PROCESSED, payment counted once, contract generation recovers');
+
+  // --------------------------------------------------------------------------
+  // Required Test 8: Manual deposit reaches threshold + contract generation fails
+  // --------------------------------------------------------------------------
+  const { data: calcManFail } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: manFailOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcManFail.id,
+  }, BOSS_A_CLIENT);
+
+  const manFailCmdId = `cmd-man-fail-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const manFailRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manFailOrderId,
+    depositAmount: 5000000, // Reaches deposit threshold
+    idempotencyKey: manFailCmdId,
+  }, BOSS_A_CLIENT, failingStorageAdmin as any);
+
+  assert.strictEqual(manFailRes.status, 'MATCHED');
+  assert.strictEqual(manFailRes.depositConfirmed, true);
+  assert.strictEqual(manFailRes.contractGenerationStatus, 'PENDING_RECOVERY');
+
+  const { data: orderAfterManFail } = await admin
+    .from('orders')
+    .select('deposit_status')
+    .eq('id', manFailOrderId)
+    .single();
+  assert.strictEqual(orderAfterManFail?.deposit_status, 'DEPOSIT_CONFIRMED');
+
+  testPass('Required Test 8: Manual deposit reaches threshold + contract generation fails -> returns PENDING_RECOVERY, deposit committed');
+
+  // --------------------------------------------------------------------------
+  // Required Test 9: Same manual command retry -> deposit remains counted once and contract recovers
+  // --------------------------------------------------------------------------
+  const manRecoverRes = await updateOrderDepositAndDebt({
+    companyId: COMPANY_A,
+    orderId: manFailOrderId,
+    depositAmount: 5000000,
+    idempotencyKey: manFailCmdId,
+  }, BOSS_A_CLIENT, admin);
+
+  assert.strictEqual(manRecoverRes.status, 'ALREADY_PROCESSED');
+  assert.strictEqual(manRecoverRes.depositConfirmed, true);
+  assert(
+    manRecoverRes.contractGenerationStatus === 'GENERATED' || manRecoverRes.contractGenerationStatus === 'ALREADY_EXISTS',
+    `Expected GENERATED or ALREADY_EXISTS, got ${manRecoverRes.contractGenerationStatus}`
+  );
+  assert(manRecoverRes.contractId, 'contractId must be returned on recovery');
+
+  const { data: finManRecover } = await admin
+    .from('finance_summaries')
+    .select('collected_amount')
+    .eq('order_id', manFailOrderId)
+    .single();
+  assert.strictEqual(Number(finManRecover?.collected_amount), 5000000, 'Collected amount must not double-count');
+
+  testPass('Required Test 9: Same manual command retry -> deposit remains counted once and contract recovers');
+
+  // --------------------------------------------------------------------------
+  // Required Test 10: Deposit-confirmed Order without Contract -> recovery UI/action successfully creates canonical Contract
+  // --------------------------------------------------------------------------
+  const { data: calcRecovAction } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: recovActionOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcRecovAction.id,
+  }, BOSS_A_CLIENT);
+
+  // Direct DB update to set DEPOSIT_CONFIRMED without contract (simulating recovery needed)
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', recovActionOrderId);
+
+  // Invoke recoverOrderContractAction as authorized BOSS
+  const recovActionResultBoss = await recoverOrderContractAction(
+    { orderId: recovActionOrderId },
+    { userClient: bossRealClient }
+  );
+
+  assert.strictEqual(recovActionResultBoss.success, true, `Recovery action failed: ${recovActionResultBoss.error}`);
+  assert.strictEqual(recovActionResultBoss.contractGenerationStatus, 'GENERATED');
+  assert(recovActionResultBoss.contractId, 'Must return contractId');
+
+  const { data: dbContractRecov } = await admin
+    .from('contracts')
+    .select('id, status, is_current')
+    .eq('id', recovActionResultBoss.contractId)
+    .single();
+  assert.strictEqual(dbContractRecov?.status, 'GENERATED');
+  assert.strictEqual(dbContractRecov?.is_current, true);
+
+  testPass('Required Test 10: Deposit-confirmed Order without Contract -> recovery UI/action successfully creates canonical Contract');
+
+  // --------------------------------------------------------------------------
+  // Required Test 11: Deposit-not-confirmed Order -> recovery action rejected
+  // --------------------------------------------------------------------------
+  const { data: calcUnconfirmed } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: unconfirmedOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcUnconfirmed.id,
+  }, BOSS_A_CLIENT);
+
+  // Call recovery action on unconfirmed order
+  const recovUnconfResult = await recoverOrderContractAction(
+    { orderId: unconfirmedOrderId },
+    { userClient: bossRealClient }
+  );
+  assert.strictEqual(recovUnconfResult.success, false, 'Must fail for unconfirmed order');
+  assert(recovUnconfResult.error?.includes('DEPOSIT_NOT_CONFIRMED') || recovUnconfResult.error?.includes('chưa xác nhận cọc'), `Unexpected error message: ${recovUnconfResult.error}`);
+
+  // Also test unauthorized role (TECHNICIAN)
+  const recovTechResult = await recoverOrderContractAction(
+    { orderId: recovActionOrderId },
+    { userClient: techRealClient }
+  );
+  assert.strictEqual(recovTechResult.success, false, 'Must fail for TECHNICIAN role');
+
+  testPass('Required Test 11: Deposit-not-confirmed Order -> recovery action rejected fail-closed, unauthorized roles rejected');
+
+  // --------------------------------------------------------------------------
+  // Required Test 12: Concurrent recovery calls -> exactly one current contract/revision
+  // --------------------------------------------------------------------------
+  const { data: calcConcRecov } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { width: 2, height: 1.5 },
+    p_amount: 10000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  const { orderId: concRecovOrderId } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calcConcRecov.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', concRecovOrderId);
+
+  // 10 concurrent recovery calls
+  const concRecoveryCalls = Array.from({ length: 10 }, () =>
+    ensureContractForDepositConfirmedOrder(COMPANY_A, concRecovOrderId)
+  );
+
+  const concRecovResults = await Promise.all(concRecoveryCalls);
+  const canonicalRecovContractId = concRecovResults[0].contractId;
+
+  for (const r of concRecovResults) {
+    assert.strictEqual(r.contractId, canonicalRecovContractId, 'All concurrent recovery calls must return the same contractId');
+  }
+
+  const { data: allContractsForOrder } = await admin
+    .from('contracts')
+    .select('id, revision_no, is_current')
+    .eq('order_id', concRecovOrderId);
+
+  assert.strictEqual(allContractsForOrder?.length, 1, `Must have exactly 1 contract row, found ${allContractsForOrder?.length}`);
+  assert.strictEqual(allContractsForOrder[0].revision_no, 1, 'Must be revision 1');
+  assert.strictEqual(allContractsForOrder[0].is_current, true, 'Must be is_current = true');
+
+  testPass('Required Test 12: Concurrent recovery calls (10 concurrent) -> exactly one current contract/revision');
+
+  // --------------------------------------------------------------------------
+  // Required Test 13: Existing SIGNED Contract -> recovery is deterministic no-op and never overwrites it
+  // --------------------------------------------------------------------------
+  const signRes = await signContract({
+    companyId: COMPANY_A,
+    contractId: canonicalRecovContractId,
+    signedPdfBuffer: validPdfBytes,
+  }, BOSS_A_CLIENT);
+  assert.strictEqual(signRes.success, true);
+  assert.strictEqual(signRes.status, 'SIGNED');
+
+  // Verify contract is SIGNED in DB
+  const { data: contractBeforeRecov } = await admin
+    .from('contracts')
+    .select('status, signed_file_ref, revision_no')
+    .eq('id', canonicalRecovContractId)
+    .single();
+  assert.strictEqual(contractBeforeRecov?.status, 'SIGNED');
+  const originalSignedPath = contractBeforeRecov?.signed_file_ref;
+
+  // Now call recovery on the SIGNED contract
+  const signedRecovResult = await ensureContractForDepositConfirmedOrder(COMPANY_A, concRecovOrderId);
+  assert.strictEqual(signedRecovResult.contractId, canonicalRecovContractId);
+  assert.strictEqual(signedRecovResult.status, 'SIGNED');
+  assert.strictEqual(signedRecovResult.contractGenerationStatus, 'ALREADY_EXISTS');
+
+  // Re-verify DB state is completely untouched
+  const { data: contractAfterRecov } = await admin
+    .from('contracts')
+    .select('status, signed_file_ref, revision_no')
+    .eq('id', canonicalRecovContractId)
+    .single();
+  assert.strictEqual(contractAfterRecov?.status, 'SIGNED');
+  assert.strictEqual(contractAfterRecov?.signed_file_ref, originalSignedPath);
+  assert.strictEqual(contractAfterRecov?.revision_no, contractBeforeRecov?.revision_no);
+
+  testPass('Required Test 13: Existing SIGNED Contract -> recovery is deterministic no-op and never overwrites it');
+
+  // --------------------------------------------------------------------------
+  // Required Test 14: Storage conflict classification & contract generation recovery
+  // --------------------------------------------------------------------------
+  // 1. Direct unit verification of isStorageResourceConflict
+  assert.strictEqual(isStorageResourceConflict({ statusCode: '409' }), true);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: 409 }), true);
+  assert.strictEqual(isStorageResourceConflict({ status: 409 }), true);
+  assert.strictEqual(isStorageResourceConflict({ code: 'ResourceAlreadyExists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ message: 'The resource already exists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ message: 'Error: ResourceAlreadyExists' }), true);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: 500, message: 'Internal server error' }), false);
+  assert.strictEqual(isStorageResourceConflict({ statusCode: '403', message: 'Forbidden' }), false);
+  assert.strictEqual(isStorageResourceConflict(null), false);
+  assert.strictEqual(isStorageResourceConflict(undefined), false);
+  assert.strictEqual(isStorageResourceConflict({}), false);
+  assert.strictEqual(isStorageResourceConflict({ message: 'Network request failed' }), false);
+
+  // 2. Integration: genuine storage 409 recovers and finalizes canonical contract
+  const { data: calc409, error: calc409Err } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { length: 2.0, height: 1.5 },
+    p_amount: 14000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calc409Err && calc409, `save_price_calculation_rpc calc409 failed: ${calc409Err?.message}`);
+
+  const { orderId: order409Id } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calc409.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', order409Id);
+
+  const storage409Proxy = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from(bucket: string) {
+            const originBucket = (target as any).storage.from(bucket);
+            return {
+              ...originBucket,
+              upload: async () => ({
+                data: null,
+                error: {
+                  statusCode: '409',
+                  status: 409,
+                  message: 'The resource already exists',
+                },
+              }),
+            };
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  const res409 = await generateContractForOrder({
+    companyId: COMPANY_A,
+    orderId: order409Id,
+  }, storage409Proxy as any);
+  assert.strictEqual(res409.status, 'GENERATED');
+  assert.strictEqual(res409.revisionNo, 1);
+
+  // 3. Integration: unrelated storage upload error (500) throws and aborts without finalization
+  const { data: calc500, error: calc500Err } = await admin.rpc('save_price_calculation_rpc', {
+    p_company_id: COMPANY_A,
+    p_customer_id: CUSTOMER_A,
+    p_survey_id: null,
+    p_pricing_policy_id: POLICY_A_ID,
+    p_policy_version: 'v1',
+    p_input_data: { length: 2.0, height: 1.5 },
+    p_amount: 14000000,
+    p_status: 'CALCULATED',
+    p_missing_fields: [],
+  });
+  assert(!calc500Err && calc500, `save_price_calculation_rpc calc500 failed: ${calc500Err?.message}`);
+
+  const { orderId: order500Id } = await createOrderFromCalculation({
+    companyId: COMPANY_A,
+    customerId: CUSTOMER_A,
+    priceCalculationId: calc500.id,
+  }, BOSS_A_CLIENT);
+  await admin.from('orders').update({ deposit_status: 'DEPOSIT_CONFIRMED' }).eq('id', order500Id);
+
+  const storage500Proxy = new Proxy(admin, {
+    get(target, prop) {
+      if (prop === 'storage') {
+        return {
+          from(bucket: string) {
+            const originBucket = (target as any).storage.from(bucket);
+            return {
+              ...originBucket,
+              upload: async () => ({
+                data: null,
+                error: {
+                  statusCode: '500',
+                  status: 500,
+                  message: 'Internal server error',
+                },
+              }),
+            };
+          },
+        };
+      }
+      return (target as any)[prop];
+    },
+  });
+
+  let threw500 = false;
+  try {
+    await generateContractForOrder({
+      companyId: COMPANY_A,
+      orderId: order500Id,
+    }, storage500Proxy as any);
+  } catch (err: any) {
+    threw500 = true;
+    assert.strictEqual(err.message, 'Không thể lưu trữ tệp hợp đồng');
+  }
+  assert.strictEqual(threw500, true, 'Unrelated storage error must throw');
+
+  // Verify that for order500, no contract was finalized (remains CLAIMED, not canonical path)
+  const { data: unfinalizedContracts } = await admin
+    .from('contracts')
+    .select('id, status, generated_file_ref')
+    .eq('order_id', order500Id);
+  assert.strictEqual(unfinalizedContracts?.[0]?.generated_file_ref, 'CLAIMED', 'Must not finalize contract on upload failure');
+
+  testPass('Required Test 14: Storage conflict classification & contract generation recovery (409 recoverable, 500 throws, canonical revision preserved)');
+
+  // --------------------------------------------------------------------------
+  // Required Test 15: Historical duplicate Orders remediation & audit provenance (all 10 invariants)
+  // --------------------------------------------------------------------------
+  const { execSync: runPsql } = await import('node:child_process');
+  const runPsqlScript = (sql: string) =>
+    runPsql('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+      input: sql,
+      encoding: 'utf8',
+    });
+
+  const COMPANY_MIG = crypto.randomUUID();
+  const CUSTOMER_MIG = crypto.randomUUID();
+  const CALC_ORIG_ID = crypto.randomUUID();
+  const ORDER_1_ID = crypto.randomUUID();
+  const ORDER_2_ID = crypto.randomUUID();
+  const AUDIT_1_ID = crypto.randomUUID();
+  const AUDIT_2_ID = crypto.randomUUID();
+
+  // Setup company and customer for migration test
+  const { error: compErr } = await admin.from('companies').insert({ id: COMPANY_MIG, name: `Company MIG ${RUN_ID}`, status: 'ACTIVE' });
+  assert(!compErr, `insert companies failed: ${compErr?.message}`);
+
+  const POLICY_MIG_ID = crypto.randomUUID();
+  const { error: polErr } = await admin.from('pricing_policies').insert({
+    id: POLICY_MIG_ID,
+    company_id: COMPANY_MIG,
+    version: '1.0',
+    conditions: { deposit_percentage: 30 },
+    price_rules: { base_price_per_sqm: 5000000 },
+    effective_at: new Date().toISOString(),
+    status: 'ACTIVE',
+  });
+  assert(!polErr, `insert pricing_policies failed: ${polErr?.message}`);
+
+  const { error: cusErr } = await admin.from('customers').insert({
+    id: CUSTOMER_MIG,
+    company_id: COMPANY_MIG,
+    customer_code: `CUSMIG_${RUN_ID}`,
+    name: 'Customer Migration Test',
+    source: 'MANUAL',
+    stage: 'LEAD_NEW',
+  });
+  assert(!cusErr, `insert customers failed: ${cusErr?.message}`);
+
+  // Seed original PriceCalculation A
+  const originalInputData = { length: 3.5, height: 1.8, variant: 'premium' };
+  const { error: calcMigErr } = await admin.from('price_calculations').insert({
+    id: CALC_ORIG_ID,
+    company_id: COMPANY_MIG,
+    customer_id: CUSTOMER_MIG,
+    pricing_policy_id: POLICY_MIG_ID,
+    policy_version: '1.0',
+    input_data: originalInputData,
+    amount: 15500000,
+    status: 'CALCULATED',
+    missing_fields: [],
+  });
+  assert(!calcMigErr, `insert price_calculations failed: ${calcMigErr?.message}`);
+
+  // To simulate the historical state prior to migration 20261002220001:
+  // 1. Temporarily drop the UNIQUE constraint uq_orders_company_price_calc
+  // 2. Insert two orders referencing the same price_calculation_id (Order 1 older, Order 2 newer)
+  // 3. Insert existing historical ORDER_CREATED audit logs referencing CALC_ORIG_ID
+  const seedHistoricalDuplicatesSql = `
+    ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS uq_orders_company_price_calc;
+
+    SET session_replication_role = 'replica';
+    INSERT INTO public.orders (
+      id, company_id, customer_id, order_code, payment_reference, price_calculation_id, deposit_status, order_status, final_amount, created_at
+    ) VALUES
+      ('${ORDER_1_ID}', '${COMPANY_MIG}', '${CUSTOMER_MIG}', 'ORD-MIG-1', 'REF-MIG-1', '${CALC_ORIG_ID}', 'PENDING', 'DRAFT', 15500000, clock_timestamp() - interval '20 minutes'),
+      ('${ORDER_2_ID}', '${COMPANY_MIG}', '${CUSTOMER_MIG}', 'ORD-MIG-2', 'REF-MIG-2', '${CALC_ORIG_ID}', 'PENDING', 'DRAFT', 15500000, clock_timestamp() - interval '10 minutes');
+
+    INSERT INTO public.finance_summaries (order_id, company_id, contract_value, collected_amount, receivable_amount)
+    VALUES
+      ('${ORDER_1_ID}', '${COMPANY_MIG}', 15500000, 0, 15500000),
+      ('${ORDER_2_ID}', '${COMPANY_MIG}', 15500000, 0, 15500000);
+    SET session_replication_role = 'origin';
+
+    INSERT INTO public.audit_logs (id, company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata, created_at)
+    VALUES
+      ('${AUDIT_1_ID}', '${COMPANY_MIG}', NULL, 'ORDER_CREATED', 'orders', '${ORDER_1_ID}', '${CUSTOMER_MIG}', 'SUCCESS', '{"price_calculation_id": "${CALC_ORIG_ID}", "order_code": "ORD-MIG-1"}'::jsonb, clock_timestamp() - interval '20 minutes'),
+      ('${AUDIT_2_ID}', '${COMPANY_MIG}', NULL, 'ORDER_CREATED', 'orders', '${ORDER_2_ID}', '${CUSTOMER_MIG}', 'SUCCESS', '{"price_calculation_id": "${CALC_ORIG_ID}", "order_code": "ORD-MIG-2"}'::jsonb, clock_timestamp() - interval '10 minutes');
+  `;
+
+  runPsqlScript(seedHistoricalDuplicatesSql);
+
+  // Snapshot audit log count before running remediation
+  const auditCountBeforeStr = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.audit_logs WHERE company_id = '${COMPANY_MIG}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const auditCountBefore = parseInt(auditCountBeforeStr, 10);
+  assert.strictEqual(auditCountBefore, 2, 'Pre-remediation must have exactly 2 ORDER_CREATED audit logs');
+
+  // Execute the exact remediation DO block from migration 20261002220001
+  const remediationSql = `
+  DO $$
+  DECLARE
+      r RECORD;
+      v_new_calc_id uuid;
+  BEGIN
+      FOR r IN (
+          SELECT o.id as order_id, o.company_id, o.customer_id, o.price_calculation_id
+          FROM (
+              SELECT id, company_id, customer_id, price_calculation_id,
+                     ROW_NUMBER() OVER (PARTITION BY company_id, price_calculation_id ORDER BY created_at ASC, id ASC) as rn
+              FROM public.orders
+          ) o
+          WHERE o.rn > 1
+      ) LOOP
+          v_new_calc_id := gen_random_uuid();
+          INSERT INTO public.price_calculations (
+              id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at
+          )
+          SELECT v_new_calc_id, company_id, customer_id, survey_id, pricing_policy_id, policy_version, input_data, amount, status, missing_fields, created_at
+          FROM public.price_calculations
+          WHERE id = r.price_calculation_id;
+
+          -- Strictly scope replica mode to rewriting the order's immutable price_calculation_id
+          SET session_replication_role = 'replica';
+          UPDATE public.orders
+          SET price_calculation_id = v_new_calc_id
+          WHERE id = r.order_id;
+          SET session_replication_role = 'origin';
+
+          -- Append-only audit record for historical duplicate order remediation
+          INSERT INTO public.audit_logs (
+              id,
+              company_id,
+              user_id,
+              action,
+              resource_type,
+              resource_id,
+              customer_id,
+              result,
+              metadata,
+              created_at
+          ) VALUES (
+              gen_random_uuid(),
+              r.company_id,
+              NULL,
+              'ORDER_PRICE_CALCULATION_REBOUND_MIGRATION',
+              'orders',
+              r.order_id,
+              r.customer_id,
+              'SUCCESS',
+              jsonb_build_object(
+                  'migration', '20261002220001',
+                  'original_price_calculation_id', r.price_calculation_id,
+                  'replacement_price_calculation_id', v_new_calc_id,
+                  'reason', 'historical_duplicate_remediation'
+              ),
+              now()
+          );
+      END LOOP;
+
+      -- Ensure session_replication_role is guaranteed origin
+      SET session_replication_role = 'origin';
+
+      IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'uq_orders_company_price_calc'
+      ) THEN
+          ALTER TABLE public.orders
+          ADD CONSTRAINT uq_orders_company_price_calc UNIQUE (company_id, price_calculation_id);
+      END IF;
+  END $$;
+  `;
+
+  runPsqlScript(remediationSql);
+
+  // =========================================================================
+  // VERIFY ALL 10 INVARIANTS
+  // =========================================================================
+
+  // Invariant 1: UNIQUE (company_id, price_calculation_id) can be installed
+  const constraintCheck = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT conname FROM pg_constraint WHERE conname = 'uq_orders_company_price_calc' AND conrelid = 'public.orders'::regclass;"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(constraintCheck, 'uq_orders_company_price_calc', 'Invariant 1: Constraint uq_orders_company_price_calc must be installed');
+
+  // Invariant 2: No Order/payment/finance/contract is deleted
+  const { data: ordersAfter } = await admin
+    .from('orders')
+    .select('id, order_code, price_calculation_id, final_amount')
+    .eq('company_id', COMPANY_MIG)
+    .order('order_code', { ascending: true });
+  assert.strictEqual(ordersAfter?.length, 2, 'Invariant 2: Both orders must still exist (no deletions)');
+
+  const { data: financesAfter } = await admin
+    .from('finance_summaries')
+    .select('order_id, contract_value')
+    .eq('company_id', COMPANY_MIG);
+  assert.strictEqual(financesAfter?.length, 2, 'Invariant 2: Finance summaries must still exist');
+
+  // Invariant 3: Canonical Order remains valid (Order 1 keeps CALC_ORIG_ID)
+  const order1After = ordersAfter?.find((o) => o.id === ORDER_1_ID);
+  assert(order1After, 'Order 1 must exist');
+  assert.strictEqual(order1After.price_calculation_id, CALC_ORIG_ID, 'Invariant 3: Canonical Order 1 must retain original CALC_ORIG_ID');
+
+  // Invariant 4: Any remapped Order receives a valid replacement calculation
+  const order2After = ordersAfter?.find((o) => o.id === ORDER_2_ID);
+  assert(order2After, 'Order 2 must exist');
+  assert.notStrictEqual(order2After.price_calculation_id, CALC_ORIG_ID, 'Invariant 4: Order 2 must receive replacement calculation');
+  const replacementCalcId = order2After.price_calculation_id;
+
+  const { data: replacementCalc } = await admin
+    .from('price_calculations')
+    .select('*')
+    .eq('id', replacementCalcId)
+    .single();
+  assert(replacementCalc, 'Invariant 4: Replacement calculation must exist in DB');
+
+  // Invariant 5: Replacement calculation pricing facts exactly match the original
+  const { data: originalCalc } = await admin
+    .from('price_calculations')
+    .select('*')
+    .eq('id', CALC_ORIG_ID)
+    .single();
+  assert(originalCalc, 'Original calculation must exist');
+
+  assert.strictEqual(replacementCalc.survey_id, originalCalc.survey_id, 'Invariant 5: survey_id matches');
+  assert.strictEqual(replacementCalc.pricing_policy_id, originalCalc.pricing_policy_id, 'Invariant 5: pricing_policy_id matches');
+  assert.strictEqual(replacementCalc.policy_version, originalCalc.policy_version, 'Invariant 5: policy_version matches');
+  assert.strictEqual(Number(replacementCalc.amount), Number(originalCalc.amount), 'Invariant 5: amount matches');
+  assert.strictEqual(replacementCalc.status, originalCalc.status, 'Invariant 5: status matches');
+  assert.deepStrictEqual(replacementCalc.missing_fields, originalCalc.missing_fields, 'Invariant 5: missing_fields match');
+  assert.deepStrictEqual(replacementCalc.input_data, originalCalc.input_data, 'Invariant 5: input_data matches exactly');
+
+  // Invariant 6: Existing ORDER_CREATED audit record remains unchanged
+  const { data: originalAudit1 } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('id', AUDIT_1_ID)
+    .single();
+  assert.strictEqual(originalAudit1.action, 'ORDER_CREATED', 'Invariant 6: Audit 1 action unchanged');
+  assert.strictEqual(originalAudit1.metadata.price_calculation_id, CALC_ORIG_ID, 'Invariant 6: Audit 1 references original calculation');
+
+  const { data: originalAudit2 } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('id', AUDIT_2_ID)
+    .single();
+  assert.strictEqual(originalAudit2.action, 'ORDER_CREATED', 'Invariant 6: Audit 2 action unchanged');
+  assert.strictEqual(originalAudit2.metadata.price_calculation_id, CALC_ORIG_ID, 'Invariant 6: Audit 2 references original calculation');
+
+  // Invariant 7: A new append-only remediation audit/provenance record explains original ID -> replacement ID
+  const { data: remediationAudits } = await admin
+    .from('audit_logs')
+    .select('*')
+    .eq('company_id', COMPANY_MIG)
+    .eq('action', 'ORDER_PRICE_CALCULATION_REBOUND_MIGRATION');
+  assert.strictEqual(remediationAudits?.length, 1, 'Invariant 7: Exactly 1 remediation audit record created');
+  const remLog = remediationAudits![0];
+  assert.strictEqual(remLog.resource_type, 'orders', 'Invariant 7: resource_type is orders');
+  assert.strictEqual(remLog.resource_id, ORDER_2_ID, 'Invariant 7: resource_id is remapped order ID');
+  assert.strictEqual(remLog.customer_id, CUSTOMER_MIG, 'Invariant 7: customer_id matches');
+  assert.strictEqual(remLog.result, 'SUCCESS', 'Invariant 7: result is SUCCESS');
+  assert.strictEqual(remLog.metadata.migration, '20261002220001', 'Invariant 7: metadata.migration is 20261002220001');
+  assert.strictEqual(remLog.metadata.original_price_calculation_id, CALC_ORIG_ID, 'Invariant 7: original_price_calculation_id matches');
+  assert.strictEqual(remLog.metadata.replacement_price_calculation_id, replacementCalcId, 'Invariant 7: replacement_price_calculation_id matches');
+  assert.strictEqual(remLog.metadata.reason, 'historical_duplicate_remediation', 'Invariant 7: reason matches');
+
+  // Invariant 8: No historical audit row is UPDATEd or DELETEd
+  const auditCountAfterStr = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.audit_logs WHERE company_id = '${COMPANY_MIG}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  const auditCountAfter = parseInt(auditCountAfterStr, 10);
+  assert.strictEqual(auditCountAfter, auditCountBefore + 1, 'Invariant 8: Total audit logs increased by exactly 1 append-only row');
+
+  // Invariant 9: Foreign keys remain valid after remediation
+  const fkCheckOrder2 = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SELECT count(*) FROM public.orders o JOIN public.price_calculations pc ON o.price_calculation_id = pc.id WHERE o.id = '${ORDER_2_ID}';"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(fkCheckOrder2, '1', 'Invariant 9: Foreign key between orders and price_calculations is valid for remapped order');
+
+  // Invariant 10: Trigger/replication-role bypass is limited strictly to the required migration repair window
+  const currentRole = runPsql(
+    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -U postgres -d postgres -c "SHOW session_replication_role;"`,
+    { encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(currentRole, 'origin', 'Invariant 10: session_replication_role is origin');
+
+  // Attempting an immutable column update in origin mode MUST fail with immutability trigger error
+  let updateBlocked = false;
+  try {
+    runPsql(
+      `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "UPDATE public.orders SET price_calculation_id = '${crypto.randomUUID()}' WHERE id = '${ORDER_1_ID}';"`,
+      { encoding: 'utf8' }
+    );
+  } catch (err: any) {
+    updateBlocked = true;
+    assert(err.message.includes('immutable'), 'Invariant 10: Attempted mutation must be blocked by immutability trigger');
+  }
+  assert.strictEqual(updateBlocked, true, 'Invariant 10: Immutability trigger is active and operational in origin mode');
+
+  testPass('Required Test 15: Historical duplicate Orders remediation & audit provenance (all 10 invariants verified)');
 
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
