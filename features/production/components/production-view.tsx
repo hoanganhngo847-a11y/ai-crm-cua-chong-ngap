@@ -8,6 +8,7 @@ import {
   updateProductionProgressAction,
   recordQualityCheckAction,
 } from '../actions';
+import { createInstallationScheduleAction } from '@/features/installation/actions';
 
 interface ProductionViewProps {
   initialData: ProductionDashboardDTO;
@@ -20,6 +21,11 @@ export default function ProductionView({ initialData }: ProductionViewProps) {
   const [qcModalOrder, setQcModalOrder] = useState<ProductionOrderDTO | null>(null);
   const [qcStatus, setQcStatus] = useState<QCStatus>('PASSED');
   const [qcNotes, setQcNotes] = useState<string>('');
+  const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<ProductionDashboardDTO['productionOrders'][number] | null>(null);
+  const [scheduleTechId, setScheduleTechId] = useState<string>('');
+  const [scheduleStartTime, setScheduleStartTime] = useState<string>('');
+  const [scheduleAddress, setScheduleAddress] = useState<string>('');
+  const [scheduleCrew, setScheduleCrew] = useState<string>('');
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -120,6 +126,85 @@ export default function ProductionView({ initialData }: ProductionViewProps) {
         }
       } catch (err: unknown) {
         alert(err instanceof Error ? err.message : 'Lỗi ghi nhận QC.');
+      } finally {
+        setLoadingAction(null);
+      }
+    });
+  };
+
+  const handleOpenScheduleModal = (order: ProductionDashboardDTO['productionOrders'][number]) => {
+    setSelectedScheduleOrder(order);
+    const defaultTech = data.technicians[0]?.id || '';
+    setScheduleTechId(defaultTech);
+    const defaultDate = new Date();
+    defaultDate.setDate(defaultDate.getDate() + 1);
+    defaultDate.setHours(9, 0, 0, 0);
+    setScheduleStartTime(defaultDate.toISOString().slice(0, 16));
+    setScheduleAddress(order.customerAddress || '');
+    setScheduleCrew(data.technicians[0]?.fullName || 'Đội thi công chính');
+    setFeedback(null);
+  };
+
+  const handleScheduleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedScheduleOrder || loadingAction || isPending) return;
+
+    if (!scheduleTechId) {
+      setFeedback({ type: 'error', message: 'Vui lòng chọn kỹ thuật viên phụ trách.' });
+      return;
+    }
+    if (!scheduleStartTime) {
+      setFeedback({ type: 'error', message: 'Vui lòng chọn thời gian bắt đầu lắp đặt.' });
+      return;
+    }
+    if (!scheduleAddress.trim()) {
+      setFeedback({ type: 'error', message: 'Vui lòng nhập địa chỉ lắp đặt.' });
+      return;
+    }
+    const crewList = scheduleCrew
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    if (crewList.length === 0) {
+      setFeedback({ type: 'error', message: 'Vui lòng nhập ít nhất 1 người trong đội thợ.' });
+      return;
+    }
+
+    setLoadingAction(`schedule_${selectedScheduleOrder.id}`);
+    setFeedback(null);
+
+    startTransition(async () => {
+      try {
+        const res = await createInstallationScheduleAction({
+          orderId: selectedScheduleOrder.orderId,
+          technicianId: scheduleTechId,
+          startTime: new Date(scheduleStartTime).toISOString(),
+          address: scheduleAddress.trim(),
+          crew: crewList,
+        });
+
+        if (res.success && res.data) {
+          setFeedback({
+            type: 'success',
+            message: res.data.idempotent
+              ? 'Lịch lắp đặt đã tồn tại cho đơn hàng này.'
+              : 'Đã lên lịch lắp đặt thành công!',
+          });
+          setTimeout(() => {
+            setSelectedScheduleOrder(null);
+            window.location.reload();
+          }, 1200);
+        } else {
+          setFeedback({
+            type: 'error',
+            message: res.error || 'Không thể lên lịch lắp đặt.',
+          });
+        }
+      } catch (err: unknown) {
+        setFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Lỗi hệ thống khi lên lịch lắp đặt.',
+        });
       } finally {
         setLoadingAction(null);
       }
@@ -350,7 +435,21 @@ export default function ProductionView({ initialData }: ProductionViewProps) {
                           <span className="text-xs text-emerald-400 font-medium">✓ Sẵn sàng bàn giao</span>
                         )}
                         {p.status === 'READY_FOR_DISPATCH' && (
-                          <span className="text-xs text-blue-400 font-medium">Đã xuất xưởng</span>
+                          p.qcStatus === 'PASSED' && p.orderStatus === 'READY_FOR_INSTALL' && !p.installationId ? (
+                            <button
+                              onClick={() => handleOpenScheduleModal(p)}
+                              disabled={isLoading}
+                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition shadow"
+                            >
+                              Lên lịch lắp đặt
+                            </button>
+                          ) : p.installationId ? (
+                            <span className="text-xs text-emerald-400 font-medium font-mono">
+                              Đã lên lịch ({p.installationStatus || 'SCHEDULED'})
+                            </span>
+                          ) : (
+                            <span className="text-xs text-blue-400 font-medium">Đã xuất xưởng</span>
+                          )
                         )}
                       </div>
                     </td>
@@ -508,6 +607,117 @@ export default function ProductionView({ initialData }: ProductionViewProps) {
                   className="px-4 py-2 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white transition disabled:opacity-50"
                 >
                   {loadingAction ? 'Đang lưu...' : 'Lưu kết quả QC'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SCHEDULE INSTALLATION MODAL */}
+      {selectedScheduleOrder && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-white">
+                Lên lịch lắp đặt — Đơn hàng {selectedScheduleOrder.orderCode}
+              </h3>
+              <button
+                onClick={() => setSelectedScheduleOrder(null)}
+                className="text-slate-400 hover:text-white text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            {feedback && (
+              <div
+                className={`p-3 rounded-lg text-xs font-medium ${
+                  feedback.type === 'success'
+                    ? 'bg-emerald-950/80 border border-emerald-800 text-emerald-300'
+                    : 'bg-rose-950/80 border border-rose-800 text-rose-300'
+                }`}
+              >
+                {feedback.message}
+              </div>
+            )}
+
+            <form onSubmit={handleScheduleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Kỹ thuật viên phụ trách <span className="text-rose-400">*</span>
+                </label>
+                {data.technicians.length === 0 ? (
+                  <p className="text-xs text-amber-400 italic">Không có kỹ thuật viên khả dụng trong hệ thống.</p>
+                ) : (
+                  <select
+                    value={scheduleTechId}
+                    onChange={(e) => setScheduleTechId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                  >
+                    {data.technicians.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.fullName} ({t.id.slice(0, 8)})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Thời gian bắt đầu lắp đặt <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={scheduleStartTime}
+                  onChange={(e) => setScheduleStartTime(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Địa chỉ lắp đặt <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={scheduleAddress}
+                  onChange={(e) => setScheduleAddress(e.target.value)}
+                  placeholder="Nhập địa chỉ công trình thực tế..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Đội thợ thi công (crew) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={scheduleCrew}
+                  onChange={(e) => setScheduleCrew(e.target.value)}
+                  placeholder="Danh sách thợ, phân cách bằng dấu phẩy..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">Phân tách tên các thành viên đội thợ bằng dấu phẩy (,)</p>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedScheduleOrder(null)}
+                  disabled={loadingAction !== null}
+                  className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={loadingAction !== null || data.technicians.length === 0}
+                  className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50"
+                >
+                  {loadingAction ? 'Đang xử lý...' : 'Xác nhận lên lịch lắp đặt'}
                 </button>
               </div>
             </form>

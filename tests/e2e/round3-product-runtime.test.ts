@@ -31,7 +31,9 @@ import {
 } from '../../features/production/production-service';
 import {
   getTechnicianFieldWorkspaceData,
-  scheduleInstallation,
+  createInstallationSchedule,
+  acceptInstallationAppointment,
+  startInstallationWork,
   updateInstallationStatus,
   attachInstallationEvidence,
   completeInstallationAndHandover,
@@ -523,31 +525,23 @@ async function run() {
   pass('Production progresses to READY_FOR_DISPATCH with QC PASSED and order advances to READY_FOR_INSTALL');
 
   // 2.4 Field / Technician Workspace
-  // Schedule installation appointment for tech
-  const APPOINTMENT_ID = crypto.randomUUID();
-  await admin.from('appointments').insert({
-    id: APPOINTMENT_ID,
-    company_id: COMPANY_ID,
-    customer_id: CUSTOMER_ID,
-    type: 'INSTALLATION',
-    start_time: new Date(Date.now() + 86400000).toISOString(),
-    assignee_id: tech.id,
-    address: '123 Đường Bờ Sông, Q.8, TP.HCM',
-    status: 'ACCEPTED',
-  });
-
-  const installDto = await scheduleInstallation(
+  // Schedule installation atomically via createInstallationSchedule (product flow)
+  const scheduleRes = await createInstallationSchedule(
     COMPANY_ID,
     {
-      customerId: CUSTOMER_ID,
       orderId: ORDER_ID,
-      appointmentId: APPOINTMENT_ID,
+      technicianId: tech.id,
+      startTime: new Date(Date.now() + 86400000).toISOString(),
+      address: '123 Đường Bờ Sông, Q.8, TP.HCM',
       crew: ['Nguyễn Văn Thợ 1', 'Trần Văn Thợ 2'],
     },
     admin,
     boss.id
   );
-  const INSTALLATION_ID = installDto.id;
+  const INSTALLATION_ID = scheduleRes.installation.id;
+  const APPOINTMENT_ID = scheduleRes.appointment.id;
+  assert.strictEqual(scheduleRes.appointment.status, 'ASSIGNED', 'Appointment starts ASSIGNED');
+  assert.strictEqual(scheduleRes.installation.status, 'SCHEDULED', 'Installation starts SCHEDULED');
 
   // Technician workspace shows current assigned job
   // 1. Create survey appointments: current active vs historical
@@ -634,32 +628,26 @@ async function run() {
   if (poErr) throw poErr;
   await admin.from('orders').update({ order_status: 'READY_FOR_INSTALL' }).eq('id', otherOrderId);
 
-  const otherApptId = crypto.randomUUID();
-  await admin.from('appointments').insert({
-    id: otherApptId,
-    company_id: COMPANY_ID,
-    customer_id: CUSTOMER_ID,
-    type: 'INSTALLATION',
-    start_time: new Date(Date.now() + 86400000).toISOString(),
-    assignee_id: otherTech.id,
-    address: '789 Đường Thợ Khác, Q.7, TP.HCM',
-    status: 'ACCEPTED',
-  });
-  const otherInstallDto = await scheduleInstallation(
+  const otherScheduleRes = await createInstallationSchedule(
     COMPANY_ID,
     {
-      customerId: CUSTOMER_ID,
       orderId: otherOrderId,
-      appointmentId: otherApptId,
+      technicianId: otherTech.id,
+      startTime: new Date(Date.now() + 86400000).toISOString(),
+      address: '789 Đường Thợ Khác, Q.7, TP.HCM',
       crew: ['Thợ Khác 1'],
     },
     admin,
     boss.id
   );
+  const otherInstallDto = otherScheduleRes.installation;
+  const otherApptId = otherScheduleRes.appointment.id;
+  assert.strictEqual(otherScheduleRes.appointment.status, 'ASSIGNED');
 
   const techWorkspace = await getTechnicianFieldWorkspaceData(COMPANY_ID, tech.id, 'TECHNICIAN', admin);
   assert.strictEqual(techWorkspace.installations.length, 1, 'Assigned technician sees current installation');
   assert.strictEqual(techWorkspace.installations[0].id, INSTALLATION_ID);
+  assert.strictEqual(techWorkspace.installations[0].appointmentStatus, 'ASSIGNED');
   assert.ok(
     !techWorkspace.installations.some((i) => i.id === otherInstallDto.id),
     'Assigned technician does NOT see other technician installation'
@@ -675,11 +663,39 @@ async function run() {
   const otherTechWorkspace = await getTechnicianFieldWorkspaceData(COMPANY_ID, otherTech.id, 'TECHNICIAN', admin);
   assert.strictEqual(otherTechWorkspace.installations.length, 1, 'Other technician sees their own installation');
   assert.strictEqual(otherTechWorkspace.installations[0].id, otherInstallDto.id);
+  assert.strictEqual(otherTechWorkspace.installations[0].appointmentStatus, 'ASSIGNED');
   assert.ok(
     !otherTechWorkspace.installations.some((i) => i.id === INSTALLATION_ID),
     'Other technician does NOT see first technician installation'
   );
   pass('Technician workspace filters strictly by current assignment (active work only, zero cross-technician leak)');
+
+  // Technician cannot mutate installation before accepting appointment
+  let assignedMutateError: any = null;
+  try {
+    await updateInstallationStatus(COMPANY_ID, INSTALLATION_ID, 'IN_TRANSIT', admin, { userId: tech.id, role: 'TECHNICIAN' });
+  } catch (err: any) {
+    assignedMutateError = err;
+  }
+  assert.ok(assignedMutateError, 'Technician cannot mutate installation before accepting appointment');
+
+  // Technician accepts appointment (ASSIGNED -> ACCEPTED)
+  const acceptRes = await acceptInstallationAppointment(
+    COMPANY_ID,
+    APPOINTMENT_ID,
+    admin,
+    { userId: tech.id, role: 'TECHNICIAN' }
+  );
+  assert.strictEqual(acceptRes.success, true);
+  assert.strictEqual(acceptRes.idempotent, false);
+
+  // Other technician also accepts their appointment
+  await acceptInstallationAppointment(
+    COMPANY_ID,
+    otherApptId,
+    admin,
+    { userId: otherTech.id, role: 'TECHNICIAN' }
+  );
 
   // Unassigned technician cannot mutate installation
   let unassignedMutateError: any = null;
@@ -696,6 +712,16 @@ async function run() {
   }
   assert.ok(unassignedMutateError, 'Unassigned technician cannot mutate installation status');
   pass('Unassigned technician mutation rejected (PERMISSION_DENIED)');
+
+  // Technician starts work (ACCEPTED -> IN_PROGRESS)
+  const startRes = await startInstallationWork(
+    COMPANY_ID,
+    INSTALLATION_ID,
+    admin,
+    { userId: tech.id, role: 'TECHNICIAN' }
+  );
+  assert.strictEqual(startRes.success, true);
+  assert.strictEqual(startRes.idempotent, false);
 
   // Assigned technician updates progress: SCHEDULED -> IN_TRANSIT -> INSTALLING -> TESTING -> HANDOVER_PENDING
   await updateInstallationStatus(COMPANY_ID, INSTALLATION_ID, 'IN_TRANSIT', admin, { userId: tech.id, role: 'TECHNICIAN' });
@@ -738,7 +764,14 @@ async function run() {
 
   const { data: completedOrder } = await admin.from('orders').select('order_status').eq('id', ORDER_ID).single();
   assert.strictEqual(completedOrder!.order_status, 'COMPLETED', 'Order status must be COMPLETED after handover');
-  pass('Handover completion validates verified evidence and transitions order to COMPLETED');
+
+  const { data: completedInstall } = await admin.from('installations').select('status').eq('id', INSTALLATION_ID).single();
+  assert.strictEqual(completedInstall!.status, 'COMPLETED', 'Installation status must be COMPLETED after handover');
+
+  const { data: completedAppt } = await admin.from('appointments').select('status').eq('id', APPOINTMENT_ID).single();
+  assert.strictEqual(completedAppt!.status, 'COMPLETED', 'Appointment status must be COMPLETED after handover');
+
+  pass('Handover completion validates verified evidence and transitions Installation, Order, and Appointment to COMPLETED');
 
   // Verify completed installation is removed from technician active workspace
   const techWorkspaceAfterHandover = await getTechnicianFieldWorkspaceData(COMPANY_ID, tech.id, 'TECHNICIAN', admin);
