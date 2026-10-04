@@ -66,6 +66,9 @@ function executeRawSql(sql: string) {
   });
 }
 
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
+
 // Dedicated Deterministic UUID Fixtures for M9.6A E2E Integration Gate
 const COMPANY_A_ID = 'e0000000-0000-0000-0000-000000000001';
 const COMPANY_B_ID = 'e0000000-0000-0000-0000-000000000002';
@@ -124,40 +127,13 @@ async function ensureTestUser(
   companyId: string,
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
-
-  let userId = existing?.id;
-  if (!userId) {
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email: config.email,
-      password: config.password,
-      email_confirm: true,
-      user_metadata: { full_name: config.fullName },
-    });
-    if (error || !data.user) {
-      throw new Error(`Failed to create user ${config.email}: ${error?.message}`);
-    }
-    userId = data.user.id;
-  }
-
-  await adminClient.from('user_profiles').upsert({
-    id: userId,
-    full_name: config.fullName,
-    status: 'ACTIVE',
+  return reconcileAuthUserFixture(adminClient, {
+    email: config.email,
+    password: config.password,
+    fullName: config.fullName,
+    companyId,
+    role,
   });
-
-  await adminClient.from('company_members').upsert(
-    {
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status: 'ACTIVE',
-    },
-    { onConflict: 'company_id,user_id' }
-  );
-
-  return userId;
 }
 
 async function loginUser(config: { email: string; password: string }): Promise<SupabaseClient> {
@@ -176,18 +152,7 @@ async function setupFixtures() {
   console.log('--- Setting up M9.6A Current-System Integration Fixtures ---');
 
   // Clean prior test runs for these dedicated tenant UUIDs
-  executeRawSql(`
-    DELETE FROM public.finance_summaries WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.orders WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    ALTER TABLE public.price_calculations DISABLE TRIGGER trg_price_calculations_immutability;
-    DELETE FROM public.price_calculations WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    ALTER TABLE public.price_calculations ENABLE TRIGGER trg_price_calculations_immutability;
-    DELETE FROM public.pricing_policies WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.response_sla_windows WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.interactions WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.sales_style_profiles WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.ai_analyses WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-  `);
+  await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
 
   // 1. Companies
   const { error: compErr } = await adminClient.from('companies').upsert([
@@ -1072,6 +1037,10 @@ async function runAllScenarios() {
     const orderId = 'e4000000-0000-0000-0000-000000000001';
 
     executeRawSql(`
+      DELETE FROM public.operations_outbox WHERE company_id = '${COMPANY_A_ID}';
+      DELETE FROM public.warranty_tickets WHERE company_id = '${COMPANY_A_ID}';
+      DELETE FROM public.installations WHERE company_id = '${COMPANY_A_ID}';
+      DELETE FROM public.contracts WHERE company_id = '${COMPANY_A_ID}';
       DELETE FROM public.finance_summaries WHERE company_id = '${COMPANY_A_ID}';
       DELETE FROM public.orders WHERE company_id = '${COMPANY_A_ID}';
       ALTER TABLE public.price_calculations DISABLE TRIGGER trg_price_calculations_immutability;
@@ -1172,4 +1141,11 @@ setupFixtures()
   .catch((err) => {
     console.error('Fatal error during integration tests:', err);
     process.exit(1);
+  })
+  .finally(async () => {
+    try {
+      await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+    } catch (e) {
+      console.warn('Post-test cleanup warning:', e);
+    }
   });

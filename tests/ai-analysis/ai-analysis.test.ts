@@ -17,6 +17,8 @@ import type {
   AiAnalysisInput,
   AiAnalysisStageSuggestion,
 } from '../../shared/contracts/ai-analysis';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 // Local Supabase configuration
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
@@ -86,6 +88,9 @@ function assert(condition: boolean, message: string) {
 async function setupDatabaseFixtures() {
   console.log('--- Setting up AI Analysis test database fixtures ---');
 
+  // Clean previous test runs
+  await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+
   // 1. Companies
   const { error: errComp } = await adminClient.from('companies').upsert([
     { id: COMPANY_A_ID, name: 'AI Test Company A', status: 'ACTIVE' },
@@ -99,41 +104,13 @@ async function setupDatabaseFixtures() {
     companyId: string,
     role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
   ) {
-    const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    const existing = list?.users.find((u) => u.email === config.email);
-
-    let userId = existing?.id;
-    if (!userId) {
-      const { data, error } = await adminClient.auth.admin.createUser({
-        email: config.email,
-        password: config.password,
-        email_confirm: true,
-        user_metadata: { full_name: config.fullName },
-      });
-      if (error || !data.user) {
-        throw new Error(`Failed to create ${config.email}: ${error?.message}`);
-      }
-      userId = data.user.id;
-    }
-
-    await adminClient.from('user_profiles').upsert({
-      id: userId,
-      full_name: config.fullName,
-      status: 'ACTIVE',
+    return reconcileAuthUserFixture(adminClient, {
+      email: config.email,
+      password: config.password,
+      fullName: config.fullName,
+      companyId,
+      role,
     });
-
-    const { error: memberErr } = await adminClient.from('company_members').upsert(
-      {
-        company_id: companyId,
-        user_id: userId,
-        role,
-        status: 'ACTIVE',
-      },
-      { onConflict: 'company_id,user_id' }
-    );
-    if (memberErr) {
-      throw new Error(`Failed to configure member ${config.email}: ${memberErr.message}`);
-    }
   }
 
   await ensureUser({ ...USER_BOSS, fullName: 'AI Sếp Quản Trị' }, COMPANY_A_ID, 'BOSS_ADMIN');
@@ -1093,7 +1070,15 @@ async function runAllTests() {
   }
 }
 
-runAllTests().catch((err) => {
-  console.error('Fatal test error:', err);
-  process.exit(1);
-});
+runAllTests()
+  .catch((err) => {
+    console.error('Fatal test error:', err);
+    process.exit(1);
+  })
+  .finally(async () => {
+    try {
+      await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+    } catch (e) {
+      console.warn('Post-test cleanup warning:', e);
+    }
+  });

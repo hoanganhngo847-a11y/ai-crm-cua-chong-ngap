@@ -10,6 +10,8 @@ import type {
   CompanyAnalyticsDailySeries,
   CompanyAnalyticsOverview,
 } from '../../shared/contracts/analytics';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const ANON_KEY =
@@ -91,43 +93,14 @@ async function ensureUser(
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN',
   status: 'ACTIVE' | 'INACTIVE' = 'ACTIVE'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
-
-  let userId = existing?.id;
-  if (!userId) {
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email: config.email,
-      password: config.password,
-      email_confirm: true,
-      user_metadata: { full_name: config.fullName },
-    });
-    if (error || !data.user) {
-      throw new Error(`Failed to create ${config.email}: ${error?.message}`);
-    }
-    userId = data.user.id;
-  }
-
-  await adminClient.from('user_profiles').upsert({
-    id: userId,
-    full_name: config.fullName,
-    status: 'ACTIVE',
+  return reconcileAuthUserFixture(adminClient, {
+    email: config.email,
+    password: config.password,
+    fullName: config.fullName,
+    companyId,
+    role,
+    status,
   });
-
-  const { error: memberErr } = await adminClient.from('company_members').upsert(
-    {
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status,
-    },
-    { onConflict: 'company_id,user_id' }
-  );
-  if (memberErr) {
-    throw new Error(`Failed to configure member ${config.email}: ${memberErr.message}`);
-  }
-
-  return userId;
 }
 
 // Period test bounds: September 10, 2026 to September 20, 2026 UTC
@@ -180,27 +153,8 @@ async function setupDatabaseFixtures() {
 
   anonClient = createAnonClient();
 
-  // Clean existing analytics test data for Company A
-  executeRawSql(`
-    DELETE FROM public.finance_summaries WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.orders WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    ALTER TABLE public.price_calculations DISABLE TRIGGER trg_price_calculations_immutability;
-    DELETE FROM public.price_calculations WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    ALTER TABLE public.price_calculations ENABLE TRIGGER trg_price_calculations_immutability;
-    DELETE FROM public.pricing_policies WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.surveys WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.appointments WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.care_deliveries WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.care_campaigns WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.calls WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.response_sla_windows WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.interactions WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    DELETE FROM public.conversations WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    ALTER TABLE public.customer_stage_histories DISABLE TRIGGER trg_append_only_stage_histories;
-    DELETE FROM public.customer_stage_histories WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-    ALTER TABLE public.customer_stage_histories ENABLE TRIGGER trg_append_only_stage_histories;
-    DELETE FROM public.customers WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}', '${COMPANY_EMPTY_ID}');
-  `);
+  // Clean existing analytics test data for Company A, B, and Empty using complete FK-safe helper
+  cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID, COMPANY_EMPTY_ID]);
 
   console.log('--- Seeding deterministic test fixtures for Company A ---');
 
@@ -370,7 +324,8 @@ async function setupDatabaseFixtures() {
 }
 
 async function runTests() {
-  await setupDatabaseFixtures();
+  try {
+    await setupDatabaseFixtures();
 
   // ============================================================================
   // TEST GROUP 1: Security Boundary & Role Authorization (Fail-Closed)
@@ -1212,6 +1167,9 @@ async function runTests() {
     assert(emptyOverview.financeSnapshot.collectedAmount === '0.00', 'Test 52: Empty collectedAmount is "0.00"');
     assert(emptyOverview.financeSnapshot.receivableAmount === '0.00', 'Test 52: Empty receivableAmount is "0.00"');
     assert(emptyOverview.financeSnapshot.completedRevenue === '0.00', 'Test 52: Empty completedRevenue is "0.00"');
+  }
+  } finally {
+    cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID, COMPANY_EMPTY_ID]);
   }
 
   console.log(`\n==================================================`);

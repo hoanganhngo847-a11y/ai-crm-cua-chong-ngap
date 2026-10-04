@@ -50,7 +50,7 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
   return {o,p,a:sched.appointment.id,i:sched.installation};
  };
  const uploaded: string[]=[];
- const createdAuthUsers: string[]=[];
+ const createdAuthUsers: string[]=[boss, sale, tech, tech2];
  try {
  sql(`INSERT INTO public.companies(id,name) VALUES(${q(c)},'Operations integration fixture'),(${q(other)},'Other test tenant');
  INSERT INTO public.customers(id,company_id,name,source,stage) VALUES(${q(customer)},${q(c)},'Test only','MANUAL','LEAD_NEW');
@@ -638,9 +638,12 @@ test('real local Supabase Operations gate (requires clean start/reset)',async t=
  });
  } finally {
   if(uploaded.length)await admin.storage.from('installation-docs').remove(uploaded);
-  for(const uid of createdAuthUsers) { try { await admin.auth.admin.deleteUser(uid); } catch {} }
-  for(const table of ['operations_outbox','warranty_tickets','installations','production_orders','contracts','orders','appointments','price_calculations','pricing_policies','customers','company_members']) {
-   try { sql(`DELETE FROM public.${table} WHERE company_id IN (${q(c)},${q(other)})`); } catch {}
+  for(const table of ['operations_outbox','warranty_tickets','installations','production_orders','contracts','orders','appointments','price_calculations','pricing_policies','customers','company_members','companies']) {
+   try { sql(`DELETE FROM public.${table} WHERE company_id IN (${q(c)},${q(other)}) OR id IN (${q(c)},${q(other)})`); } catch {}
+  }
+  for(const uid of createdAuthUsers) {
+   try { await admin.auth.admin.deleteUser(uid); } catch {}
+   try { sql(`DELETE FROM public.user_profiles WHERE id=${q(uid)}; DELETE FROM auth.users WHERE id=${q(uid)};`); } catch {}
   }
  }
 });

@@ -31,6 +31,8 @@ import {
   persistSalesStyleProfile,
 } from '../../features/sales-style/services/sales-style-store';
 import type { SalesStyleOutput } from '../../shared/contracts/sales-style';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const SUPABASE_ANON_KEY =
@@ -91,40 +93,13 @@ async function ensureTestUser(
   companyId: string,
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
-
-  let userId = existing?.id;
-  if (!userId) {
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email: config.email,
-      password: config.password,
-      email_confirm: true,
-      user_metadata: { full_name: config.fullName },
-    });
-    if (error || !data.user) {
-      throw new Error(`Failed to create user ${config.email}: ${error?.message}`);
-    }
-    userId = data.user.id;
-  }
-
-  await adminClient.from('user_profiles').upsert({
-    id: userId,
-    full_name: config.fullName,
-    status: 'ACTIVE',
+  return reconcileAuthUserFixture(adminClient, {
+    email: config.email,
+    password: config.password,
+    fullName: config.fullName,
+    companyId,
+    role,
   });
-
-  await adminClient.from('company_members').upsert(
-    {
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status: 'ACTIVE',
-    },
-    { onConflict: 'company_id,user_id' }
-  );
-
-  return userId;
 }
 
 async function loginUser(creds: { email: string; password: string }): Promise<SupabaseClient> {
@@ -145,6 +120,9 @@ async function setupAuthClients(): Promise<void> {
   console.log('--- Authenticating clients for Security Boundaries Gate ---');
   adminClient = createAdminClient();
   anonClient = createAnonClient();
+
+  // Clean prior fixtures for these test companies
+  await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
 
   // Ensure companies exist
   await adminClient.from('companies').upsert([
@@ -192,6 +170,9 @@ export async function runSecurityBoundariesGate(): Promise<void> {
     const convoAuthId = 'e2910000-0000-0000-0000-000000000001';
     const intSourceId = 'e3900000-0000-0000-0000-000000000001';
 
+    await adminClient.from('sales_style_profiles').delete().eq('company_id', COMPANY_A_ID);
+    await adminClient.from('outbound_deliveries').delete().eq('interaction_id', intSourceId);
+    await adminClient.from('response_sla_windows').delete().eq('interaction_id', intSourceId);
     await adminClient.from('interactions').delete().eq('id', intSourceId);
     await adminClient.from('conversations').delete().eq('id', convoAuthId);
     await adminClient.from('customers').delete().eq('id', custAuthId);
@@ -826,4 +807,11 @@ setupAuthClients()
   .catch((err) => {
     console.error('Fatal error during security boundaries gate:', err);
     process.exit(1);
+  })
+  .finally(async () => {
+    try {
+      await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+    } catch (e) {
+      console.warn('Post-test cleanup warning:', e);
+    }
   });

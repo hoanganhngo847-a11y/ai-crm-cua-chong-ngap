@@ -11,6 +11,8 @@ import type {
   SalesStyleOutput,
   SalesStyleSourceRef,
 } from '../../shared/contracts/sales-style';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const ANON_KEY =
@@ -100,43 +102,14 @@ async function ensureUser(
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN',
   status: 'ACTIVE' | 'INACTIVE' = 'ACTIVE'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
-
-  let userId = existing?.id;
-  if (!userId) {
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email: config.email,
-      password: config.password,
-      email_confirm: true,
-      user_metadata: { full_name: config.fullName },
-    });
-    if (error || !data.user) {
-      throw new Error(`Failed to create ${config.email}: ${error?.message}`);
-    }
-    userId = data.user.id;
-  }
-
-  await adminClient.from('user_profiles').upsert({
-    id: userId,
-    full_name: config.fullName,
-    status: 'ACTIVE',
+  return reconcileAuthUserFixture(adminClient, {
+    email: config.email,
+    password: config.password,
+    fullName: config.fullName,
+    companyId,
+    role,
+    status,
   });
-
-  const { error: memberErr } = await adminClient.from('company_members').upsert(
-    {
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status,
-    },
-    { onConflict: 'company_id,user_id' }
-  );
-  if (memberErr) {
-    throw new Error(`Failed to configure member ${config.email}: ${memberErr.message}`);
-  }
-
-  return userId;
 }
 
 const SAMPLE_STYLE_OUTPUT: SalesStyleOutput = {
@@ -178,6 +151,9 @@ const SAMPLE_STYLE_OUTPUT: SalesStyleOutput = {
 
 async function setupDatabaseFixtures() {
   console.log('--- Setting up Sales Style Activation test fixtures ---');
+
+  // Clean previous runs
+  await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
 
   // 1. Companies
   const { error: errComp } = await adminClient.from('companies').upsert([
@@ -1431,7 +1407,15 @@ async function runTests() {
   console.log('==================================================\n');
 }
 
-runTests().catch((err: unknown) => {
-  console.error('Fatal test error:', err);
-  process.exit(1);
-});
+runTests()
+  .catch((err: unknown) => {
+    console.error('Fatal test error:', err);
+    process.exit(1);
+  })
+  .finally(async () => {
+    try {
+      await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+    } catch (e) {
+      console.warn('Post-test cleanup warning:', e);
+    }
+  });

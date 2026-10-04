@@ -59,51 +59,54 @@ function testPass(msg: string) {
 }
 
 async function run() {
-  const RUN_ID = crypto.randomBytes(4).toString('hex');
-  const COMPANY_A = crypto.randomUUID();
-  const COMPANY_B = crypto.randomUUID();
+  const createdUserIds: string[] = [];
+  try {
+    const RUN_ID = crypto.randomBytes(4).toString('hex');
+    const COMPANY_A = crypto.randomUUID();
+    const COMPANY_B = crypto.randomUUID();
 
-  // Setup companies
-  await admin.from('companies').upsert([
-    { id: COMPANY_A, name: `Company A ${RUN_ID}`, status: 'ACTIVE' },
-    { id: COMPANY_B, name: `Company B ${RUN_ID}`, status: 'ACTIVE' },
-  ]);
+    // Setup companies
+    await admin.from('companies').upsert([
+      { id: COMPANY_A, name: `Company A ${RUN_ID}`, status: 'ACTIVE' },
+      { id: COMPANY_B, name: `Company B ${RUN_ID}`, status: 'ACTIVE' },
+    ]);
 
-  async function createUserWithRole(
-    email: string,
-    fullName: string,
-    companyId: string,
-    role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
-  ) {
-    const { data: userData, error: userErr } = await admin.auth.admin.createUser({
-      email,
-      password: 'Password123!@#',
-      email_confirm: true,
-      user_metadata: { full_name: fullName },
-    });
-    if (userErr || !userData.user) {
-      throw new Error(`Failed to create ${email}: ${userErr?.message}`);
+    async function createUserWithRole(
+      email: string,
+      fullName: string,
+      companyId: string,
+      role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
+    ) {
+      const { data: userData, error: userErr } = await admin.auth.admin.createUser({
+        email,
+        password: 'Password123!@#',
+        email_confirm: true,
+        user_metadata: { full_name: fullName },
+      });
+      if (userErr || !userData.user) {
+        throw new Error(`Failed to create ${email}: ${userErr?.message}`);
+      }
+      const userId = userData.user.id;
+      createdUserIds.push(userId);
+
+      await admin.from('user_profiles').upsert({
+        id: userId,
+        full_name: fullName,
+        status: 'ACTIVE',
+      });
+
+      const { error: memberErr } = await admin.from('company_members').upsert({
+        company_id: companyId,
+        user_id: userId,
+        role,
+        status: 'ACTIVE',
+      });
+      if (memberErr) {
+        throw new Error(`Failed to add company member ${email}: ${memberErr.message}`);
+      }
+
+      return userId;
     }
-    const userId = userData.user.id;
-
-    await admin.from('user_profiles').upsert({
-      id: userId,
-      full_name: fullName,
-      status: 'ACTIVE',
-    });
-
-    const { error: memberErr } = await admin.from('company_members').upsert({
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status: 'ACTIVE',
-    });
-    if (memberErr) {
-      throw new Error(`Failed to add company member ${email}: ${memberErr.message}`);
-    }
-
-    return userId;
-  }
 
   const USER_BOSS_A_EMAIL = `boss_a_${RUN_ID}@test.local`;
   const USER_SALE_A_EMAIL = `sale_a_${RUN_ID}@test.local`;
@@ -2859,6 +2862,13 @@ async function run() {
   console.log(`\n================================================================`);
   console.log(`COMMERCIAL DB INTEGRATION TESTS COMPLETED: ${passCount} PASSED, 0 FAILED`);
   console.log(`================================================================\n`);
+  } finally {
+    for (const uid of createdUserIds) {
+      try {
+        await admin.auth.admin.deleteUser(uid);
+      } catch {}
+    }
+  }
 }
 
 run().catch((err) => {

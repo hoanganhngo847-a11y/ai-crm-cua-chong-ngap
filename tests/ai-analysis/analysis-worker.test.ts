@@ -22,22 +22,18 @@ const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const COMPANY_ID = 'c1000000-0000-0000-0000-000000000001';
-const CUSTOMER_ID = 'c2000000-0000-0000-0000-000000000001';
-const EMPTY_CUSTOMER_ID = 'c2000000-0000-0000-0000-000000000002';
-const CONVERSATION_ID = 'c3000000-0000-0000-0000-000000000001';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
 
-import { execSync } from 'child_process';
-
-function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
-    input: sql,
-    encoding: 'utf8',
-  });
-}
+const COMPANY_ID = '8a000000-0000-0000-0000-000000000001';
+const CUSTOMER_ID = '8b000000-0000-0000-0000-000000000001';
+const EMPTY_CUSTOMER_ID = '8b000000-0000-0000-0000-000000000002';
+const CONVERSATION_ID = '8c000000-0000-0000-0000-000000000001';
 
 async function setupFixtures() {
   console.log('--- Setting up AI Analysis Worker Fixtures ---');
+
+  // Pre-clean prior runs using complete FK-ordered helper
+  cleanupCompanyFixtures(COMPANY_ID);
 
   // Upsert company
   await adminClient.from('companies').upsert({
@@ -45,14 +41,6 @@ async function setupFixtures() {
     name: 'AI Analysis Worker Test Co',
     status: 'ACTIVE',
   });
-
-  // Clean prior runs via raw SQL
-  executeRawSql(`
-    DELETE FROM public.ai_analyses WHERE company_id = '${COMPANY_ID}';
-    DELETE FROM public.interactions WHERE company_id = '${COMPANY_ID}';
-    DELETE FROM public.conversations WHERE company_id = '${COMPANY_ID}';
-    DELETE FROM public.customers WHERE company_id = '${COMPANY_ID}';
-  `);
 
   // Upsert customer with stage = LEAD_NEW
   await adminClient.from('customers').upsert([
@@ -85,7 +73,7 @@ async function setupFixtures() {
   // Seed interactions with varied statuses and types
   // 1. Valid customer sanitized message (SHOULD BE INGESTED)
   const { error: insErr1 } = await adminClient.from('interactions').upsert({
-    id: 'c4000000-0000-0000-0000-000000000001',
+    id: '8d000000-0000-0000-0000-000000000001',
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     conversation_id: CONVERSATION_ID,
@@ -101,7 +89,7 @@ async function setupFixtures() {
 
   // 2. Pending sanitization message (MUST BE EXCLUDED)
   const { error: insErr2 } = await adminClient.from('interactions').upsert({
-    id: 'c4000000-0000-0000-0000-000000000002',
+    id: '8d000000-0000-0000-0000-000000000002',
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     conversation_id: CONVERSATION_ID,
@@ -117,7 +105,7 @@ async function setupFixtures() {
 
   // 3. Failed sanitization message (MUST BE EXCLUDED)
   const { error: insErr3 } = await adminClient.from('interactions').upsert({
-    id: 'c4000000-0000-0000-0000-000000000003',
+    id: '8d000000-0000-0000-0000-000000000003',
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     conversation_id: CONVERSATION_ID,
@@ -133,7 +121,7 @@ async function setupFixtures() {
 
   // 4. Internal Note (MUST BE EXCLUDED)
   const { error: insErr4 } = await adminClient.from('interactions').upsert({
-    id: 'c4000000-0000-0000-0000-000000000004',
+    id: '8d000000-0000-0000-0000-000000000004',
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     conversation_id: CONVERSATION_ID,
@@ -149,7 +137,7 @@ async function setupFixtures() {
 
   // 5. Another valid customer message (SHOULD BE INGESTED)
   const { error: insErr5 } = await adminClient.from('interactions').upsert({
-    id: 'c4000000-0000-0000-0000-000000000005',
+    id: '8d000000-0000-0000-0000-000000000005',
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     conversation_id: CONVERSATION_ID,
@@ -169,7 +157,8 @@ async function runTests() {
   console.log('RUNNING AI CUSTOMER ANALYSIS WORKER TEST SUITE');
   console.log('================================================================');
 
-  await setupFixtures();
+  try {
+    await setupFixtures();
 
   // ============================================================================
   // TEST 1: OpenAiCustomerAnalysisModel configuration & defaults
@@ -285,6 +274,9 @@ async function runTests() {
 
   assert(thrown, 'Test 5: Throws NoAnalyzableSourcesError when customer has no valid interactions');
   console.log('[PASS] Test 5: Correctly throws NoAnalyzableSourcesError on empty evidence');
+  } finally {
+    cleanupCompanyFixtures(COMPANY_ID);
+  }
 
   console.log('\n================================================================');
   console.log('AI CUSTOMER ANALYSIS WORKER TEST SUITE: ALL PASSED');

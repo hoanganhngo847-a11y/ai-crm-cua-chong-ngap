@@ -5,6 +5,8 @@ import {
   resolveResponseSlaOnSaleReply,
   claimResponseSlaForAi,
 } from '../../features/automation/response-sla/services/response-sla-store';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 // Local Supabase configuration
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
@@ -95,6 +97,9 @@ function assert(condition: boolean, message: string) {
 async function setupDatabaseFixtures() {
   console.log('--- Setting up Response SLA test database fixtures ---');
 
+  // Pre-seed clean isolation for suite-owned company namespaces
+  cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+
   // 1. Companies
   const { error: errComp } = await adminClient.from('companies').upsert([
     { id: COMPANY_A_ID, name: 'SLA Test Company A', status: 'ACTIVE' },
@@ -103,51 +108,27 @@ async function setupDatabaseFixtures() {
   if (errComp) throw new Error(`Companies upsert failed: ${errComp.message}`);
 
   // 1b. Ensure company memberships and auth users for test users in COMPANY_A_ID
-  async function ensureUser(
-    config: { email: string; password: string; fullName: string },
-    companyId: string,
-    role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
-  ) {
-    const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    const existing = list?.users.find((u) => u.email === config.email);
-
-    let userId = existing?.id;
-    if (!userId) {
-      const { data, error } = await adminClient.auth.admin.createUser({
-        email: config.email,
-        password: config.password,
-        email_confirm: true,
-        user_metadata: { full_name: config.fullName },
-      });
-      if (error || !data.user) {
-        throw new Error(`Failed to create ${config.email}: ${error?.message}`);
-      }
-      userId = data.user.id;
-    }
-
-    await adminClient.from('user_profiles').upsert({
-      id: userId,
-      full_name: config.fullName,
-      status: 'ACTIVE',
-    });
-
-    const { error: memberErr } = await adminClient.from('company_members').upsert(
-      {
-        company_id: companyId,
-        user_id: userId,
-        role,
-        status: 'ACTIVE',
-      },
-      { onConflict: 'company_id,user_id' }
-    );
-    if (memberErr) {
-      throw new Error(`Failed to configure member ${config.email}: ${memberErr.message}`);
-    }
-  }
-
-  await ensureUser({ ...USER_BOSS, fullName: 'Lê Quản Trị (Sếp)' }, COMPANY_A_ID, 'BOSS_ADMIN');
-  await ensureUser({ ...USER_SALE, fullName: 'Nguyễn Văn Sale' }, COMPANY_A_ID, 'SALE');
-  await ensureUser({ ...USER_TECH, fullName: 'Trần Kỹ Thuật' }, COMPANY_A_ID, 'TECHNICIAN');
+  await reconcileAuthUserFixture(adminClient, {
+    email: USER_BOSS.email,
+    password: USER_BOSS.password,
+    fullName: 'Lê Quản Trị (Sếp)',
+    companyId: COMPANY_A_ID,
+    role: 'BOSS_ADMIN',
+  });
+  await reconcileAuthUserFixture(adminClient, {
+    email: USER_SALE.email,
+    password: USER_SALE.password,
+    fullName: 'Nguyễn Văn Sale',
+    companyId: COMPANY_A_ID,
+    role: 'SALE',
+  });
+  await reconcileAuthUserFixture(adminClient, {
+    email: USER_TECH.email,
+    password: USER_TECH.password,
+    fullName: 'Trần Kỹ Thuật',
+    companyId: COMPANY_A_ID,
+    role: 'TECHNICIAN',
+  });
 
   // 2. Customers
   const { error: errCust } = await adminClient.from('customers').upsert([
@@ -225,7 +206,8 @@ async function setupDatabaseFixtures() {
 }
 
 async function runTests() {
-  await setupDatabaseFixtures();
+  try {
+    await setupDatabaseFixtures();
 
   console.log('\n==================================================');
   console.log('RUNNING RESPONSE SLA PERSISTENCE & CONCURRENCY TESTS');
@@ -1040,19 +1022,18 @@ async function runTests() {
   const nonHanSaleCreatedAt = new Date().toISOString();
 
   executeRawSql(`
-    INSERT INTO public.conversations (id, company_id, customer_id, channel, status, external_conversation_id)
-    VALUES ('${CONVO_NON_HAN_ID}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', 'ZALO', 'OPEN', 'zalo_convo_99')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
-    VALUES ('${INT_NON_HAN_CUST}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'INBOUND', 'CUSTOMER', now() - interval '2 minutes')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
-    VALUES ('${INT_NON_HAN_SALE}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'OUTBOUND', 'SALE', '${nonHanSaleCreatedAt}')
-    ON CONFLICT (id) DO UPDATE SET created_at = '${nonHanSaleCreatedAt}';
-
     DELETE FROM public.response_sla_windows WHERE conversation_id = '${CONVO_NON_HAN_ID}';
+    DELETE FROM public.interactions WHERE id IN ('${INT_NON_HAN_CUST}', '${INT_NON_HAN_SALE}');
+    DELETE FROM public.conversations WHERE id = '${CONVO_NON_HAN_ID}';
+
+    INSERT INTO public.conversations (id, company_id, customer_id, channel, status, external_conversation_id)
+    VALUES ('${CONVO_NON_HAN_ID}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', 'ZALO', 'OPEN', 'zalo_convo_99');
+
+    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
+    VALUES ('${INT_NON_HAN_CUST}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'INBOUND', 'CUSTOMER', now() - interval '2 minutes');
+
+    INSERT INTO public.interactions (id, company_id, customer_id, conversation_id, channel, type, direction, actor_type, created_at)
+    VALUES ('${INT_NON_HAN_SALE}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${CONVO_NON_HAN_ID}', 'ZALO', 'MESSAGE', 'OUTBOUND', 'SALE', '${nonHanSaleCreatedAt}');
   `);
 
   await openResponseSlaWindow({
@@ -1082,6 +1063,9 @@ async function runTests() {
   assert(!validNonHanErr, `Test 25k: Valid non-Hán resolve succeeded: ${validNonHanErr?.message}`);
   const nonHanRow = Array.isArray(validNonHanData) ? validNonHanData[0] : validNonHanData;
   assert(nonHanRow?.state === 'SALE_RESPONDED', 'Test 25k: Window transitioned to SALE_RESPONDED');
+  } finally {
+    cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+  }
 
   console.log('\n==================================================');
   console.log(`RESPONSE SLA DB TESTS: ${passCount} PASSED, ${failCount} FAILED`);
