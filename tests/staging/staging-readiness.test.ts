@@ -37,26 +37,29 @@ async function runStagingReadinessGate() {
     cronRoutes.set(cron.path, cron.schedule);
   }
 
-  const REQUIRED_CRONS = [
-    '/api/cron/response-sla-worker',
-    '/api/cron/voice-scheduler',
-    '/api/cron/zalo-care',
-  ];
+  const REQUIRED_CRONS: Record<string, string> = {
+    '/api/cron/response-sla-worker': '* * * * *',
+    '/api/cron/voice-scheduler': '*/5 * * * *',
+    '/api/cron/zalo-care': '*/15 * * * *',
+  };
 
-  for (const route of REQUIRED_CRONS) {
-    assert.ok(cronRoutes.has(route), `Missing required cron route in vercel.json: ${route}`);
-  }
+  for (const [route, expectedSchedule] of Object.entries(REQUIRED_CRONS)) {
+    assert.equal(
+      cronRoutes.get(route),
+      expectedSchedule,
+      `Cron cadence mismatch for ${route}: expected "${expectedSchedule}", got "${cronRoutes.get(route)}"`
+    );
 
-  // Response SLA worker must run at least every 5 minutes (preferred every minute "* * * * *")
-  const slaSchedule = cronRoutes.get('/api/cron/response-sla-worker');
-  assert.ok(slaSchedule, 'Response SLA worker schedule must be defined');
-  testPass(`All canonical cron routes scheduled in vercel.json (response-sla-worker: "${slaSchedule}")`);
-
-  // Verify cron route handler files exist
-  for (const route of REQUIRED_CRONS) {
     const routeFilePath = path.resolve(process.cwd(), 'app' + route + '/route.ts');
-    assert.ok(fs.existsSync(routeFilePath), `Route implementation file must exist: ${routeFilePath}`);
+    assert.ok(
+      fs.existsSync(routeFilePath),
+      `Route implementation file must exist: ${routeFilePath}`
+    );
   }
+
+  testPass(
+    `All canonical cron routes scheduled with exact cadences (response-sla-worker: "${REQUIRED_CRONS['/api/cron/response-sla-worker']}", voice-scheduler: "${REQUIRED_CRONS['/api/cron/voice-scheduler']}", zalo-care: "${REQUIRED_CRONS['/api/cron/zalo-care']}")`
+  );
   testPass('All scheduled cron route handler files exist in app/api/cron/');
 
   // --------------------------------------------------------------------------
