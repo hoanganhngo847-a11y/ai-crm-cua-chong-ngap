@@ -52,11 +52,12 @@ test('PostgreSQL Survey hardening (isolated database, real functions/RLS/transac
   try {
     const schema = docker(['pg_dump','-U','supabase_admin','-d','postgres','--schema-only','--no-publications','--no-subscriptions','--no-owner']);
     sql(schema);
+    const bucketsData = docker(['pg_dump','-U','supabase_admin','-d','postgres','--data-only','-t','storage.buckets']);
+    sql(bucketsData);
     sql(readFileSync('supabase/migrations/20260917000001_0005_survey_atomic_completion.sql','utf8'));
     sql(readFileSync('supabase/migrations/20260924000001_survey_integrity_hardening.sql','utf8'));
     sql(`INSERT INTO public.companies(id,name) VALUES (${q(company)},'Survey test'),(${q(otherCompany)},'Other tenant');
-      INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'Fixture','MANUAL','LEAD_NEW');
-      INSERT INTO storage.buckets(id,name,public) VALUES ('survey-photos','survey-photos',false) ON CONFLICT DO NOTHING;`);
+      INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'Fixture','MANUAL','LEAD_NEW');`);
     for (const [id,role,memberStatus,profileStatus,fixtureCompany] of [
       [tech,'TECHNICIAN','ACTIVE','ACTIVE',company], [boss,'BOSS_ADMIN','ACTIVE','ACTIVE',company],
       [otherTech,'TECHNICIAN','ACTIVE','ACTIVE',company],[inactive,'TECHNICIAN','INACTIVE','ACTIVE',company],
@@ -65,6 +66,44 @@ test('PostgreSQL Survey hardening (isolated database, real functions/RLS/transac
       INSERT INTO public.user_profiles(id,full_name,status) VALUES (${q(id)},'Fixture',${q(profileStatus)})
         ON CONFLICT (id) DO UPDATE SET full_name = 'Fixture', status = ${q(profileStatus)};
       INSERT INTO public.company_members(company_id,user_id,role,status) VALUES (${q(fixtureCompany)},${q(id)},${q(role)},${q(memberStatus)});`);
+
+    await t.test('migrations alone provisioned required private storage buckets and security policies', () => {
+      const rows = JSON.parse(sql(`SELECT json_agg(json_build_object('id', id, 'public', public, 'file_size_limit', file_size_limit, 'allowed_mime_types', allowed_mime_types)) FROM storage.buckets;`));
+      assert.ok(rows, 'Expected storage.buckets to have rows');
+      const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
+
+      for (const bucketId of ['survey-photos', 'installation-docs', 'contracts']) {
+        assert.ok(byId[bucketId], `Expected bucket ${bucketId} to exist from migrations alone`);
+        assert.equal(byId[bucketId].public, false, `Expected bucket ${bucketId} to be private`);
+        assert.equal(byId[bucketId].file_size_limit, 10485760, `Expected bucket ${bucketId} max file size 10MiB`);
+      }
+
+      assert.deepEqual(byId['survey-photos'].allowed_mime_types?.sort(), ['image/jpeg', 'image/png', 'image/webp'].sort());
+      assert.deepEqual(byId['installation-docs'].allowed_mime_types?.sort(), ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].sort());
+
+      // Verify direct client bypass is blocked by restrictive policies
+      const policies = JSON.parse(sql(`SELECT json_agg(policyname) FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND permissive = 'RESTRICTIVE';`));
+      for (const expectedPolicy of [
+        'survey_photos_no_client_insert',
+        'survey_photos_no_client_update',
+        'survey_photos_no_client_delete',
+        'operations_evidence_no_client_insert',
+        'operations_evidence_no_client_update',
+        'operations_evidence_no_client_delete',
+        'contracts_no_client_insert',
+        'contracts_no_client_update',
+        'contracts_no_client_delete',
+      ]) {
+        assert.ok(policies.includes(expectedPolicy), `Expected policy ${expectedPolicy} to exist`);
+      }
+
+      // Verify ordinary authenticated and anon users cannot bypass server upload path directly
+      for (const role of ['anon', 'authenticated']) {
+        for (const bucket of ['survey-photos', 'installation-docs', 'contracts']) {
+          reject(`SET ROLE ${role}; INSERT INTO storage.objects(bucket_id, name) VALUES (${q(bucket)}, 'bypass.jpg');`, /new row violates row-level security policy/);
+        }
+      }
+    });
 
     await t.test('RPC EXECUTE denied to anon/authenticated; service_role allowed; SECURITY DEFINER/search_path', () => {
       const id = appointment();

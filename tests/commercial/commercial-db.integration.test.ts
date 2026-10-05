@@ -1792,9 +1792,7 @@ async function run() {
   assert(startRes.success, `Tech start action failed: ${startRes.message}`);
 
   // Step 4: Technician completes real Survey via complete_survey_atomic
-  // Ensure survey-photos bucket exists
-  await admin.storage.createBucket('survey-photos', { public: false }).catch(() => {});
-  // Seed mandatory photo objects in storage
+  // Seed mandatory photo objects in storage (bucket is provisioned by migrations)
   for (const slot of ['OVERVIEW', 'BOTTOM_LEFT', 'BOTTOM_RIGHT']) {
     const photoPath = `${COMPANY_A}/${E2E_CUSTOMER_ID}/${e2eApt.id}/${slot}.jpg`;
     await admin.storage.from('survey-photos').upload(photoPath, Buffer.from('fake-jpeg-photo-content'), {
