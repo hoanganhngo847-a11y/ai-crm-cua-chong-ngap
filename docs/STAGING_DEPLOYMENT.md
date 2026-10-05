@@ -101,40 +101,35 @@ Staging Auth must be configured with the staging application origin, never `http
 
 ---
 
-## 4. Vercel Staging Project Provisioning & Scheduling Plan Prerequisite
+## 4. Vercel Staging Project Provisioning & Scheduling Architecture
 
-### HARD PREREQUISITE: Vercel Plan & Scheduling Capability
+### STAGING DEFAULT: Vercel Hobby + cron-job.org
 The product runtime strictly requires high-frequency background cron jobs:
 - `/api/cron/response-sla-worker`: Every 1 minute (`* * * * *`) to maintain the 5-minute customer response SLA.
 - `/api/cron/voice-scheduler`: Every 5 minutes (`*/5 * * * *`).
 - `/api/cron/zalo-care`: Every 15 minutes (`*/15 * * * *`).
 
-> [!CAUTION]
-> **Vercel Hobby Plan Incompatibility:**  
-> The Vercel Hobby plan only supports daily cron schedules (once per day). It does NOT support minute-level cron frequencies.  
-> Furthermore, Vercel Cron Jobs only invoke the project's **PRODUCTION** deployment, not preview deployments.  
->  
-> **MANDATORY PREREQUISITE:**  
-> **Vercel Pro-or-higher scheduling capability is required OR an equivalent external scheduler capable of <= 5 minute cadence must be used.**  
->  
-> For the Vercel-native design:  
-> **STAGING VERCEL PROJECT MUST USE A PLAN THAT SUPPORTS THE REQUIRED CRON FREQUENCIES.**  
->  
-> **FAIL-CLOSED POLICY:**  
-> If the Vercel plan cannot support the configured cadence:  
-> **STOP.**  
-> Do not deploy by silently degrading schedules. Degrading schedules breaks product SLAs.
+> [!NOTE]
+> **Default zero-cost staging scheduling:**
+> `cron-job.org` $\rightarrow$ Vercel Hobby cron endpoints.
+>
+> Vercel Pro native cron is an optional future alternative, not a prerequisite for staging.
+>
+> **Vercel Hobby Plan Compatibility:**
+> The Vercel Hobby plan only supports daily cron schedules (once per day). It does NOT support minute-level native cron frequencies. To achieve zero hosting-plan cost without degrading the required 1-minute, 5-minute, and 15-minute cadences, staging uses an external free scheduler: `cron-job.org`.
+>
+> `cron-job.org` is a free third-party scheduler without a contractual availability or uptime SLA guarantee. It triggers the staging HTTPS endpoints over public network using Bearer token authentication.
 
 ### Dedicated Staging Vercel Project Workflow
-A dedicated staging Vercel project must treat the staging deployment as that project's production deployment so Vercel Cron Jobs execute against staging. Preview deployment Cron execution is NOT supported by Vercel.
+A dedicated staging Vercel project hosts the staging application:
 
 Execute the following workflow:
 1. **Dedicated Project:** Create a separate, dedicated project in Vercel (e.g. `ai-crm-cua-chong-ngap-staging`), completely isolated from production.
 2. **Link GitHub Repository:** Connect the project to `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`.
-3. **Configure Production Branch:** In Project Settings -> Git -> Production Branch, configure the staging branch (e.g. `staging` or `fix/stg-001-staging-readiness-wiring`) as the project's production branch, OR explicitly promote the staging deployment to production within this dedicated staging project.
+3. **Configure Production Branch:** In Project Settings -> Git -> Production Branch, configure the staging branch (e.g. `staging` or `fix/stg-002-free-external-scheduler`) as the project's production branch, OR explicitly promote the staging deployment to production within this dedicated staging project.
 4. **Verify Commit SHA:** Inspect deployment details and verify that `VERCEL_GIT_COMMIT_SHA` matches the exact immutable commit SHA recorded in Section 1.
 5. **Configure Staging-Only Environment Variables:** Populate the environment matrix (see Section 5 below) exclusively for this project.
-6. **Verify Cron Jobs Registered:** In Vercel Project Settings -> Cron Jobs, verify that all three cron workers are registered and active on the project's production deployment.
+6. **Vercel-Native Crons Disabled:** `vercel.json` contains no native crons (`{}`). Crons are orchestrated externally via `cron-job.org` (see Section 7).
 
 ---
 
@@ -199,28 +194,96 @@ Staging external integrations must point **exclusively** to the specialized cano
 
 ---
 
-## 7. Cron Schedule Verification
+## 7. External Scheduler Configuration (cron-job.org) & Cadence Verification
 
-`vercel.json` schedules three canonical background workers:
+Staging uses `cron-job.org` as the canonical free external scheduler triggering the Vercel Hobby staging deployment over HTTPS.
+
+### Target Architecture
+
+```text
+cron-job.org
+     |
+     | HTTPS
+     | Authorization: Bearer <STAGING_CRON_SECRET>
+     v
+Vercel Hobby staging app
+     |
+     +-- /api/cron/response-sla-worker  (every 1 minute)
+     +-- /api/cron/voice-scheduler      (every 5 minutes)
+     +-- /api/cron/zalo-care            (every 15 minutes)
+```
+
+### Canonical Scheduler Manifest (`config/external-scheduler.json`)
+
+The schedules and HTTP methods are declaratively defined in `config/external-scheduler.json`:
 
 ```json
 {
-  "crons": [
+  "provider": "cron-job.org",
+  "jobs": [
     {
+      "name": "response-sla-worker",
       "path": "/api/cron/response-sla-worker",
-      "schedule": "* * * * *"
+      "schedule": "* * * * *",
+      "method": "GET"
     },
     {
+      "name": "voice-scheduler",
       "path": "/api/cron/voice-scheduler",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/5 * * * *",
+      "method": "GET"
     },
     {
+      "name": "zalo-care",
       "path": "/api/cron/zalo-care",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/15 * * * *",
+      "method": "GET"
     }
   ]
 }
 ```
+
+> [!IMPORTANT]
+> **Secret and Host Isolation:**
+> `config/external-scheduler.json` contains no secrets, tokens, or deployment domains. `CRON_SECRET`, Bearer header values, and target hostnames remain external configuration.
+
+### Exact cron-job.org Job Configuration
+
+After the Vercel staging deployment URL is active, log into the `cron-job.org` console and configure three jobs:
+
+#### Job 1: Response SLA Worker
+- **URL:** `https://<staging-domain>/api/cron/response-sla-worker`
+- **Schedule:** Every 1 minute (`* * * * *`)
+- **HTTP Method:** `GET`
+- **Custom Header:** `Authorization: Bearer <STAGING_CRON_SECRET>`
+
+#### Job 2: Voice Scheduler
+- **URL:** `https://<staging-domain>/api/cron/voice-scheduler`
+- **Schedule:** Every 5 minutes (`*/5 * * * *`)
+- **HTTP Method:** `GET`
+- **Custom Header:** `Authorization: Bearer <STAGING_CRON_SECRET>`
+
+#### Job 3: Zalo Care Worker
+- **URL:** `https://<staging-domain>/api/cron/zalo-care`
+- **Schedule:** Every 15 minutes (`*/15 * * * *`)
+- **HTTP Method:** `GET`
+- **Custom Header:** `Authorization: Bearer <STAGING_CRON_SECRET>`
+
+> [!CAUTION]
+> **Secret Uniformity & Confidentiality:**
+> Use the **SAME** staging-only `CRON_SECRET` configured in the staging Vercel project environment variables.
+> Never commit actual secrets to source control or repository documentation.
+
+### External Scheduler Security Requirements
+
+- **HTTPS only:** All scheduled requests must use `https://`. Unencrypted HTTP is prohibited.
+- **Staging-specific CRON_SECRET:** Generate a unique, cryptographically random secret (32+ chars, e.g. `openssl rand -hex 32`) dedicated to staging.
+- **Never reuse production secret:** Production `CRON_SECRET` must never be used in staging or external test accounts.
+- **Never include secret in URL query string:** Token in query strings leaks into server logs, proxy access logs, and referrer headers.
+- **Header-only authorization:** Authorization must strictly be transmitted via the `Authorization: Bearer <STAGING_CRON_SECRET>` HTTP request header.
+- **Immediate rotation:** Rotate `CRON_SECRET` in both Vercel and cron-job.org immediately if scheduler account credentials or secrets are suspected compromised.
+- **No IP allowlisting dependency:** Do not configure IP allowlisting for scheduler endpoints because cron-job.org source IP addresses can dynamically change. Any IP filtering must be defense-in-depth only and must NEVER replace Bearer authentication.
+- **Availability disclaimer:** `cron-job.org` is a free third-party scheduler service without contractual uptime or SLA guarantees. For mission-critical production environments, Vercel Pro native cron or an enterprise scheduler with strict SLA guarantees remains the recommended approach.
 
 ### Post-Deployment Verification Commands
 
@@ -297,13 +360,15 @@ npm run test:staging-readiness
 ```
 
 This gate automatically verifies:
-1. `vercel.json` contains all required cron paths with compliant schedules (`* * * * *` for response SLA worker).
-2. All cron route implementation files exist in `app/api/cron/`.
-3. `.env.example` documents all mandatory staging environment variables without exposing server secrets.
-4. Supabase has provisioned `survey-photos` and `installation-docs` with exact private and MIME configurations, and canonical `contracts` bucket exists from historical migrations (orphan `contract-documents` bucket is not provisioned).
-5. Storage RLS restricts direct client uploads: attempts by anonymous and authenticated ordinary users fail closed under RLS (using valid MIME types), and service-role uploads succeed.
-6. All canonical external webhook route handlers exist.
+1. `vercel.json` does NOT define Vercel-native high-frequency crons (`{}` empty configuration ensuring Vercel Hobby compatibility and preventing accidental reintroduction).
+2. `config/external-scheduler.json` exists with provider `cron-job.org` and exact canonical cadences (`* * * * *` for response-sla-worker, `*/5 * * * *` for voice-scheduler, `*/15 * * * *` for zalo-care) using `GET` method.
+3. All cron route implementation files exist in `app/api/cron/`.
+4. All three cron endpoints enforce fail-closed authorization: reject missing Authorization header (401), reject invalid Bearer token (401), reject spoofed headers (401), fail closed if CRON_SECRET is missing in production (503), and successfully reach worker logic when given a valid staging `CRON_SECRET`.
+5. `.env.example` documents all mandatory staging environment variables without exposing server secrets.
+6. Supabase has provisioned `survey-photos` and `installation-docs` with exact private and MIME configurations, and canonical `contracts` bucket exists from historical migrations (orphan `contract-documents` bucket is not provisioned).
+7. Storage RLS restricts direct client uploads: attempts by anonymous and authenticated ordinary users fail closed under RLS (using valid MIME types), and service-role uploads succeed.
+8. All canonical external webhook route handlers exist.
 
 > [!NOTE]
-> The automated local gate verifies repository-level configuration and local Supabase storage RLS. Verification of the remote Vercel account plan (Pro-or-higher scheduling capability) must be performed manually as a preflight step before hosted deployment.
+> The automated local gate verifies repository-level configuration, external scheduler manifests, fail-closed cron authorization, and local Supabase storage RLS. Registration of the three scheduled jobs in the `cron-job.org` console must be completed after the hosted staging Vercel domain is provisioned.
 

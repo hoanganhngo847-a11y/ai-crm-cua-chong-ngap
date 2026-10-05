@@ -1,0 +1,23 @@
+{
+  "provider": "cron-job.org",
+  "jobs": [
+    {
+      "name": "response-sla-worker",
+      "path": "/api/cron/response-sla-worker",
+      "schedule": "* * * * *",
+      "method": "GET"
+    },
+    {
+      "name": "voice-scheduler",
+      "path": "/api/cron/voice-scheduler",
+      "schedule": "*/5 * * * *",
+      "method": "GET"
+    },
+    {
+      "name": "zalo-care",
+      "path": "/api/cron/zalo-care",
+      "schedule": "*/15 * * * *",
+      "method": "GET"
+    }
+  ]
+}
