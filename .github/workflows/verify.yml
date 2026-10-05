@@ -28,6 +28,7 @@ jobs:
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
       - run: npm run test:integration-gate
+      - run: npm run test:fixture-repeatability
       - run: npm run test:omnichannel
       - run: npm run test:omnichannel:db
       - run: npm run test:operations

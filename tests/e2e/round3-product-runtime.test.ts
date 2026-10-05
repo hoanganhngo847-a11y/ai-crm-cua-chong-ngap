@@ -138,6 +138,8 @@ async function run() {
   console.log('STARTING ROUND 3 PRODUCT WIRING & REAL RUNTIME REGRESSION SUITE');
   console.log('================================================================\n');
 
+  const createdUserIds: string[] = [];
+  try {
   const RUN_ID = crypto.randomBytes(4).toString('hex');
   const COMPANY_ID = crypto.randomUUID();
   const OTHER_COMPANY_ID = crypto.randomUUID();
@@ -178,6 +180,7 @@ async function run() {
     });
     if (error || !userRes.user) throw error || new Error('User creation failed');
     const uid = userRes.user.id;
+    createdUserIds.push(uid);
 
     await admin.from('user_profiles').upsert({
       id: uid,
@@ -4490,6 +4493,13 @@ async function run() {
   console.log('\n================================================================');
   console.log(`ALL ${testCount} ROUND 3 PRODUCT WIRING & REAL RUNTIME TESTS PASSED!`);
   console.log('================================================================\n');
+  } finally {
+    for (const uid of createdUserIds) {
+      try {
+        await admin.auth.admin.deleteUser(uid);
+      } catch {}
+    }
+  }
 }
 
 run().catch((err) => {

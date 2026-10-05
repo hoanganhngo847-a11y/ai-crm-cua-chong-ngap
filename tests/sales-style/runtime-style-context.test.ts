@@ -37,19 +37,15 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
-function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
-    input: sql,
-    encoding: 'utf8',
-  });
-}
+import { cleanupCompanyFixtures, executeRawSql } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
-const COMPANY_A_ID = 'f0000000-0000-0000-0000-000000000001';
-const COMPANY_B_ID = 'f0000000-0000-0000-0000-000000000002';
-const CUSTOMER_A_ID = 'f1000000-0000-0000-0000-000000000001';
-const CONVO_A_ID = 'f2000000-0000-0000-0000-000000000001';
-const INT_A_1 = 'f3000000-0000-0000-0000-000000000001';
-const INT_A_2 = 'f3000000-0000-0000-0000-000000000002';
+const COMPANY_A_ID = 'f0100000-0000-0000-0000-000000000001';
+const COMPANY_B_ID = 'f0100000-0000-0000-0000-000000000002';
+const CUSTOMER_A_ID = 'f0200000-0000-0000-0000-000000000001';
+const CONVO_A_ID = 'f0300000-0000-0000-0000-000000000001';
+const INT_A_1 = 'f0400000-0000-0000-0000-000000000001';
+const INT_A_2 = 'f0400000-0000-0000-0000-000000000002';
 
 const USER_BOSS = { email: 'runtime_style_boss@trusted.local', password: 'Password123!', fullName: 'Boss Runtime Style' };
 const USER_SALE = { email: 'runtime_style_sale@trusted.local', password: 'Password123!', fullName: 'Sale Runtime Style' };
@@ -71,43 +67,13 @@ async function ensureUser(
   companyId: string,
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN'
 ): Promise<string> {
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
-
-  let userId = existing?.id;
-  if (!userId) {
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email: config.email,
-      password: config.password,
-      email_confirm: true,
-      user_metadata: { full_name: config.fullName },
-    });
-    if (error || !data.user) {
-      throw new Error(`Failed to create ${config.email}: ${error?.message}`);
-    }
-    userId = data.user.id;
-  }
-
-  await adminClient.from('user_profiles').upsert({
-    id: userId,
-    full_name: config.fullName,
-    status: 'ACTIVE',
+  return reconcileAuthUserFixture(adminClient, {
+    email: config.email,
+    password: config.password,
+    fullName: config.fullName,
+    companyId,
+    role,
   });
-
-  const { error: memberErr } = await adminClient.from('company_members').upsert(
-    {
-      company_id: companyId,
-      user_id: userId,
-      role,
-      status: 'ACTIVE',
-    },
-    { onConflict: 'company_id,user_id' }
-  );
-  if (memberErr) {
-    throw new Error(`Failed to configure member ${config.email}: ${memberErr.message}`);
-  }
-
-  return userId;
 }
 
 const VALID_STYLE_OUTPUT: SalesStyleOutput = {
@@ -150,28 +116,19 @@ const VALID_STYLE_OUTPUT: SalesStyleOutput = {
 async function setup() {
   console.log('--- Setting up Runtime Sales Style Context Fixtures ---');
 
+  // Clean prior data across all dependent tables using canonical FK-safe helper
+  cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+
   // Upsert companies
   await adminClient.from('companies').upsert([
     { id: COMPANY_A_ID, name: 'Runtime Style Test Co A', status: 'ACTIVE' },
     { id: COMPANY_B_ID, name: 'Runtime Style Test Co B', status: 'ACTIVE' },
   ]);
 
-  // Clean company_members for our test companies first to allow clean rerun
-  executeRawSql(`
-    DELETE FROM public.company_members WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-  `);
-
   // Ensure users (Each company has at most 1 active SALE)
   bossUserId = await ensureUser(USER_BOSS, COMPANY_A_ID, 'BOSS_ADMIN');
   saleUserId = await ensureUser(USER_SALE, COMPANY_A_ID, 'SALE');
   saleOtherUserId = await ensureUser(USER_SALE_OTHER, COMPANY_B_ID, 'SALE');
-
-  // Clean prior data
-  executeRawSql(`
-    DELETE FROM public.response_sla_windows WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.sales_style_profiles WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-    DELETE FROM public.interactions WHERE company_id IN ('${COMPANY_A_ID}', '${COMPANY_B_ID}');
-  `);
 
   // Setup customer & conversation
   const { error: custErr } = await adminClient.from('customers').upsert({
@@ -241,8 +198,9 @@ async function setup() {
 }
 
 async function runTests() {
-  await setup();
-  console.log('--- Running Runtime Sales Style Context Tests ---');
+  try {
+    await setup();
+    console.log('--- Running Runtime Sales Style Context Tests ---');
 
   // Test 1: Unassigned / missing saleUserId returns safe neutral default
   {
@@ -375,6 +333,9 @@ async function runTests() {
     assert.ok(resCorrupted.styleContextPrompt.includes(NEUTRAL_DEFAULT_STYLE_INSTRUCTIONS), 'Must fallback to neutral default');
 
     logPass('Test 6: Policy violation in active profile triggers fail-closed fallback to neutral default');
+  }
+  } finally {
+    cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
   }
 
   console.log(`\nAll ${passCount} tests in runtime-style-context.test.ts PASSED!`);

@@ -6,6 +6,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { claimResponseSlaForAi } from '../../features/automation/response-sla/services/response-sla-store';
 import { fetchCompanyAnalyticsOverview } from '../../features/analytics/services/analytics-store';
 import { elevateClientToAal2 } from '../e2e/test-mfa-helpers';
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const ANON_KEY =
@@ -80,6 +82,9 @@ let saleBClient: SupabaseClient;
 async function setupFixtures() {
   console.log('--- Setting up Facebook SLA Runtime Fixtures ---');
 
+  // Clean previous runs
+  await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+
   // Upsert Company A and Company B
   await adminClient.from('companies').upsert([
     { id: COMPANY_A_ID, name: 'Facebook SLA Test Co A', status: 'ACTIVE' },
@@ -87,72 +92,30 @@ async function setupFixtures() {
   ]);
 
   // Ensure Sale User A
-  const { data: saleAAuth } = await adminClient.auth.admin.createUser({
+  await reconcileAuthUserFixture(adminClient, {
     email: SALE_A_EMAIL,
     password: PASSWORD,
-    email_confirm: true,
-  }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    return { data: { user: users.users.find((u) => u.email === SALE_A_EMAIL) } };
-  });
-
-  const saleAId = saleAAuth?.user?.id || SALE_A_USER_ID;
-  await adminClient.from('user_profiles').upsert({
-    id: saleAId,
-    full_name: 'Sale Facebook SLA A',
-    status: 'ACTIVE',
-  });
-  await adminClient.from('company_members').upsert({
-    company_id: COMPANY_A_ID,
-    user_id: saleAId,
+    fullName: 'Sale Facebook SLA A',
+    companyId: COMPANY_A_ID,
     role: 'SALE',
-    status: 'ACTIVE',
   });
 
   // Ensure Boss User A
-  const { data: bossAAuth } = await adminClient.auth.admin.createUser({
+  await reconcileAuthUserFixture(adminClient, {
     email: BOSS_A_EMAIL,
     password: PASSWORD,
-    email_confirm: true,
-  }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    return { data: { user: users.users.find((u) => u.email === BOSS_A_EMAIL) } };
-  });
-
-  const bossAId = bossAAuth?.user?.id || BOSS_A_USER_ID;
-  await adminClient.from('user_profiles').upsert({
-    id: bossAId,
-    full_name: 'Boss Facebook SLA A',
-    status: 'ACTIVE',
-  });
-  await adminClient.from('company_members').upsert({
-    company_id: COMPANY_A_ID,
-    user_id: bossAId,
+    fullName: 'Boss Facebook SLA A',
+    companyId: COMPANY_A_ID,
     role: 'BOSS_ADMIN',
-    status: 'ACTIVE',
   });
 
   // Ensure Sale User B (Company B)
-  const { data: saleBAuth } = await adminClient.auth.admin.createUser({
+  await reconcileAuthUserFixture(adminClient, {
     email: SALE_B_EMAIL,
     password: PASSWORD,
-    email_confirm: true,
-  }).catch(async () => {
-    const { data: users } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-    return { data: { user: users.users.find((u) => u.email === SALE_B_EMAIL) } };
-  });
-
-  const saleBId = saleBAuth?.user?.id || SALE_B_USER_ID;
-  await adminClient.from('user_profiles').upsert({
-    id: saleBId,
-    full_name: 'Sale Facebook SLA B',
-    status: 'ACTIVE',
-  });
-  await adminClient.from('company_members').upsert({
-    company_id: COMPANY_B_ID,
-    user_id: saleBId,
+    fullName: 'Sale Facebook SLA B',
+    companyId: COMPANY_B_ID,
     role: 'SALE',
-    status: 'ACTIVE',
   });
 
   // Log in Sale client A
@@ -1577,7 +1540,15 @@ async function runTests() {
   console.log('================================================================\n');
 }
 
-runTests().catch((err) => {
-  console.error('Fatal error in Facebook SLA Runtime test suite:', err);
-  process.exit(1);
-});
+runTests()
+  .catch((err) => {
+    console.error('Fatal error in Facebook SLA Runtime test suite:', err);
+    process.exit(1);
+  })
+  .finally(async () => {
+    try {
+      await cleanupCompanyFixtures([COMPANY_A_ID, COMPANY_B_ID]);
+    } catch (e) {
+      console.warn('Facebook SLA cleanup warning:', e);
+    }
+  });

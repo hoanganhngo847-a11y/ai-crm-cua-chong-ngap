@@ -48,6 +48,9 @@ function createTestClient(): SupabaseClient {
   });
 }
 
+import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
+
 // Test company/customer/conversation/membership IDs
 const TEST_COMPANY_ID = 'a0a0a0a0-0001-4000-8000-000000000001';
 const TEST_COMPANY_ID_2 = 'a0a0a0a0-0002-4000-8000-000000000002';
@@ -57,6 +60,9 @@ let testUserId = '';
 
 // Seed helpers
 async function seedTestData(client: SupabaseClient) {
+  // Pre-seed clean isolation for suite-owned company namespaces
+  cleanupCompanyFixtures([TEST_COMPANY_ID, TEST_COMPANY_ID_2]);
+
   // Company 1 (for ingest tests)
   const { error: c1Err } = await client.from('companies').upsert({
     id: TEST_COMPANY_ID,
@@ -73,79 +79,38 @@ async function seedTestData(client: SupabaseClient) {
   }, { onConflict: 'id' });
   if (c2Err) throw new Error(`Failed to upsert company 2: ${c2Err.message}`);
 
-  // Ensure user in auth.users
+  // Ensure user in auth.users, profile and company_members via canonical helper
   const email = 'test-sale-inbox@test.vn';
-  const { data: list } = await client.auth.admin.listUsers({ perPage: 1000 });
-  let user = list?.users.find((u) => u.email === email);
-  if (!user) {
-    const { data: created, error: uErr } = await client.auth.admin.createUser({
-      email,
-      password: 'TestPassword123!',
-      email_confirm: true,
-      user_metadata: { full_name: 'Test Sale User' },
-    });
-    if (uErr || !created.user) {
-      throw new Error(`Failed to create test user: ${uErr?.message}`);
-    }
-    user = created.user;
-  }
-  testUserId = user.id;
-
-  // User profile for actor attribution tests
-  const { error: pErr } = await client.from('user_profiles').upsert({
-    id: testUserId,
-    full_name: 'Test Sale User',
-    status: 'ACTIVE',
-  }, { onConflict: 'id' });
-  if (pErr) throw new Error(`Failed to upsert user profile: ${pErr.message}`);
-
-  // Company membership (for outbound actor authorization)
-  const { error: mErr } = await client.from('company_members').upsert({
-    company_id: TEST_COMPANY_ID_2,
-    user_id: testUserId,
+  testUserId = await reconcileAuthUserFixture(client, {
+    email,
+    password: 'TestPassword123!',
+    fullName: 'Test Sale User',
+    companyId: TEST_COMPANY_ID_2,
     role: 'SALE',
-    status: 'ACTIVE',
-  }, { onConflict: 'company_id,user_id' });
-  if (mErr) throw new Error(`Failed to upsert company member: ${mErr.message}`);
+  });
 
   // Customer for outbound tests
-  const { data: existingCust } = await client
-    .from('customers')
-    .select('id')
-    .eq('id', TEST_CUSTOMER_ID)
-    .maybeSingle();
-
-  if (!existingCust) {
-    const { error: custErr } = await client.from('customers').insert({
-      id: TEST_CUSTOMER_ID,
-      company_id: TEST_COMPANY_ID_2,
-      name: 'Test Outbound Customer',
-      customer_code: 'KC-OUTB-TEST',
-      stage: 'LEAD_NEW',
-      source: 'FACEBOOK',
-    });
-    if (custErr) throw new Error(`Failed to insert customer: ${custErr.message}`);
-  }
+  const { error: custErr } = await client.from('customers').insert({
+    id: TEST_CUSTOMER_ID,
+    company_id: TEST_COMPANY_ID_2,
+    name: 'Test Outbound Customer',
+    customer_code: 'KC-OUTB-TEST',
+    stage: 'LEAD_NEW',
+    source: 'FACEBOOK',
+  });
+  if (custErr) throw new Error(`Failed to insert customer: ${custErr.message}`);
 
   // Conversation for outbound tests
-  const { data: existingConv } = await client
-    .from('conversations')
-    .select('id')
-    .eq('id', TEST_CONVERSATION_ID)
-    .maybeSingle();
-
-  if (!existingConv) {
-    const { error: convErr } = await client.from('conversations').insert({
-      id: TEST_CONVERSATION_ID,
-      company_id: TEST_COMPANY_ID_2,
-      customer_id: TEST_CUSTOMER_ID,
-      channel: 'FACEBOOK',
-      external_conversation_id: 'fb-conv-test-001',
-      status: 'OPEN',
-      unread_count: 0,
-    });
-    if (convErr) throw new Error(`Failed to insert conversation: ${convErr.message}`);
-  }
+  const { error: convErr } = await client.from('conversations').insert({
+    id: TEST_CONVERSATION_ID,
+    company_id: TEST_COMPANY_ID_2,
+    customer_id: TEST_CUSTOMER_ID,
+    channel: 'FACEBOOK',
+    external_conversation_id: 'fb-conv-test-001',
+    status: 'OPEN',
+    unread_count: 0,
+  });
+  if (convErr) throw new Error(`Failed to insert conversation: ${convErr.message}`);
 }
 
 // ============================================================================

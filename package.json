@@ -26,6 +26,7 @@
     "test:sales-style-runtime": "tsx --conditions=react-server tests/sales-style/runtime-style-context.test.ts",
     "test:e2e-current": "tsx --conditions=react-server tests/e2e/current-system.integration.test.ts && tsx --conditions=react-server tests/e2e/security-boundaries.test.ts",
     "test:migration-integrity": "tsx --conditions=react-server tests/e2e/migration-integrity.test.ts",
+    "test:fixture-repeatability": "tsx --conditions=react-server tests/e2e/fixture-repeatability.test.ts",
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test:operations": "tsx --conditions=react-server --test tests/operations/operations.test.ts tests/operations/database.test.ts",
