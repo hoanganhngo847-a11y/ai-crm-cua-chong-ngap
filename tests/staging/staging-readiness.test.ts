@@ -27,20 +27,20 @@ const SUPABASE_SERVICE_ROLE_KEY =
 
 async function runStagingReadinessGate() {
   // --------------------------------------------------------------------------
-  // 1. Vercel Hobby Compatibility & External Scheduler Manifest
+  // 1. External Scheduler Manifest & Platform-Native Cron Decoupling
   // --------------------------------------------------------------------------
-  console.log('--- 1. Vercel Hobby Compatibility & External Scheduler Manifest ---');
+  console.log('--- 1. External Scheduler Manifest & Platform-Native Cron Decoupling ---');
 
-  // 1a. Vercel Hobby Compatibility: vercel.json must NOT define Vercel-native crons
+  // 1a. Hosting Decoupling: vercel.json must NOT define Vercel-native crons
   const vercelJsonPath = path.resolve(process.cwd(), 'vercel.json');
   assert.ok(fs.existsSync(vercelJsonPath), 'vercel.json must exist');
 
   const vercelConfig = JSON.parse(fs.readFileSync(vercelJsonPath, 'utf8'));
   assert.ok(
     !vercelConfig.crons || (Array.isArray(vercelConfig.crons) && vercelConfig.crons.length === 0),
-    'vercel.json must NOT define Vercel-native high-frequency crons for Vercel Hobby compatibility. Found "crons" array with active jobs.'
+    'vercel.json must NOT define platform-native cron jobs. External scheduler manifest is authoritative.'
   );
-  testPass('Vercel Hobby config contains no native high-frequency cron jobs');
+  testPass('No Vercel-native cron jobs configured');
 
   // 1b. External Scheduler Manifest: config/external-scheduler.json
   const schedulerJsonPath = path.resolve(process.cwd(), 'config/external-scheduler.json');
@@ -53,6 +53,7 @@ async function runStagingReadinessGate() {
     `Expected scheduler provider "cron-job.org", got "${schedulerConfig.provider}"`
   );
   testPass('External scheduler provider: cron-job.org');
+  testPass('External scheduler manifest is hosting-provider independent');
 
   assert.ok(Array.isArray(schedulerConfig.jobs), 'external-scheduler.json must define a "jobs" array');
 
@@ -150,7 +151,7 @@ async function runStagingReadinessGate() {
       const resValid = await route.handler(reqValid);
       assert.notEqual(resValid.status, 401, `${route.name} must not reject valid Bearer token with 401`);
       assert.notEqual(resValid.status, 503, `${route.name} must not return 503 when configured and authorized`);
-      testPass(`${route.name} fail-closed auth verified (rejects missing/invalid/spoofed with 401, reaches worker on valid Bearer)`);
+      testPass(`${route.name} fail-closed auth verified (rejects missing/invalid/spoofed with 401, reaches worker execution on valid Bearer)`);
     }
   } finally {
     env.CRON_SECRET = originalEnvCronSecret;

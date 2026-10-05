@@ -109,7 +109,7 @@ async function runCronAuthorizationSuite() {
         503,
         `Authorized request with valid staging CRON_SECRET must not return 503 on ${route.name}`
       );
-      testPass(`${route.name} accepts valid staging CRON_SECRET and reaches worker (status ${resValid.status})`);
+      testPass(`${route.name} accepts valid staging CRON_SECRET and reaches worker execution (passes auth)`);
     }
 
     console.log('\n================================================================');
