@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 
 export interface ReconcileAuthUserConfig {
   email: string;
@@ -7,6 +7,38 @@ export interface ReconcileAuthUserConfig {
   companyId: string;
   role: 'BOSS_ADMIN' | 'SALE' | 'TECHNICIAN';
   status?: 'ACTIVE' | 'INACTIVE';
+}
+
+/**
+ * Robustly find an auth user across all pages without assuming the user is on page 1.
+ */
+async function findAuthUserByEmail(
+  adminClient: SupabaseClient,
+  email: string
+): Promise<User | null> {
+  const target = email.toLowerCase().trim();
+  let page = 1;
+  const perPage = 100;
+
+  while (true) {
+    const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      throw new Error(`Failed to list auth users (page ${page}): ${error.message}`);
+    }
+    if (!data?.users || data.users.length === 0) {
+      return null;
+    }
+
+    const found = data.users.find((u) => u.email?.toLowerCase().trim() === target);
+    if (found) {
+      return found;
+    }
+
+    if (!data.nextPage || data.nextPage <= page || data.users.length < perPage) {
+      return null;
+    }
+    page = data.nextPage;
+  }
 }
 
 /**
@@ -23,8 +55,7 @@ export async function reconcileAuthUserFixture(
   const status = config.status || 'ACTIVE';
 
   // 1. Find or create user
-  const { data: list } = await adminClient.auth.admin.listUsers({ perPage: 1000 });
-  const existing = list?.users.find((u) => u.email === config.email);
+  const existing = await findAuthUserByEmail(adminClient, config.email);
 
   let userId: string;
   if (!existing) {
@@ -35,16 +66,21 @@ export async function reconcileAuthUserFixture(
       user_metadata: { full_name: fullName },
     });
     if (error || !data.user) {
-      throw new Error(`Failed to create test user ${config.email}: ${error?.message}`);
+      throw new Error(`Failed to create test user ${config.email}: ${error?.message || 'Unknown error'}`);
     }
     userId = data.user.id;
   } else {
     userId = existing.id;
-    await adminClient.auth.admin.updateUserById(userId, {
+    const { error: updateErr } = await adminClient.auth.admin.updateUserById(userId, {
       password,
       email_confirm: true,
       user_metadata: { full_name: fullName },
     });
+    if (updateErr) {
+      throw new Error(
+        `Failed to reconcile password/metadata for test user ${config.email} (${userId}): ${updateErr.message}`
+      );
+    }
   }
 
   // 2. Upsert user profile

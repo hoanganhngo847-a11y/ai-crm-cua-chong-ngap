@@ -1,24 +1,54 @@
 import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
- * Returns the active PostgreSQL Supabase docker container name.
+ * Returns the active PostgreSQL Supabase docker container name deterministically
+ * derived from this project's supabase/config.toml, failing closed if the expected
+ * project container is not running.
  */
-function getPostgresContainer(): string {
+function getDeterministicPostgresContainer(): string {
+  let projectId = 'ai-crm-cua-chong-ngap';
   try {
-    const out = execSync('docker ps --filter "name=supabase_db" --format "{{.Names}}"', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-    if (out) return out.split('\n')[0].trim();
-  } catch {}
-  return 'supabase_db_ai-crm-cua-chong-ngap';
+    const configPath = path.resolve(__dirname, '../../supabase/config.toml');
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, 'utf8');
+      const match = content.match(/project_id\s*=\s*["']([^"']+)["']/);
+      if (match?.[1]) {
+        projectId = match[1].trim();
+      }
+    }
+  } catch {
+    // fallback to default projectId
+  }
+
+  const expectedContainer = process.env.SUPABASE_DB_CONTAINER || `supabase_db_${projectId}`;
+  try {
+    const isRunning = execSync(
+      `docker inspect -f '{{.State.Running}}' ${expectedContainer}`,
+      {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }
+    ).trim();
+
+    if (isRunning !== 'true') {
+      throw new Error(`Container "${expectedContainer}" State.Running is "${isRunning}" (expected true).`);
+    }
+    return expectedContainer;
+  } catch (err: any) {
+    throw new Error(
+      `[fixture-cleanup] Failed to resolve deterministic Supabase DB container for project "${projectId}": ` +
+      `Expected running container "${expectedContainer}". ${err?.message || err}`
+    );
+  }
 }
 
 /**
  * Executes raw SQL against the local Supabase PostgreSQL container via psql.
  */
 export function executeRawSql(sql: string): string {
-  const container = getPostgresContainer();
+  const container = getDeterministicPostgresContainer();
   return execSync(`docker exec -i ${container} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',

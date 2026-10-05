@@ -592,39 +592,34 @@ async function main() {
 
   const client = createTestClient();
 
-  try {
-    // Seed test data
-    console.log('Seeding test data...');
-    await seedTestData(client);
-    console.log('✓ Test data seeded\n');
+  // Seed test data
+  console.log('Seeding test data...');
+  await seedTestData(client);
+  console.log('✓ Test data seeded\n');
 
-    // --- Ingest Tests ---
-    console.log('--- ingest_provider_message_atomic ---');
-    await testIngestRejectsEmptyProviderUserId(client);
-    await testIngestRejectsEmptyMessageId(client);
-    await testIngestFirstContactCreatesCustomer(client);
-    await testIngestDuplicateMessageIdempotent(client);
-    await testIngestSanitizationStatusMapping(client);
-    await testIngestConcurrentFirstContactCreatesExactlyOneCustomer(client);
+  // --- Ingest Tests ---
+  console.log('--- ingest_provider_message_atomic ---');
+  await testIngestRejectsEmptyProviderUserId(client);
+  await testIngestRejectsEmptyMessageId(client);
+  await testIngestFirstContactCreatesCustomer(client);
+  await testIngestDuplicateMessageIdempotent(client);
+  await testIngestSanitizationStatusMapping(client);
+  await testIngestConcurrentFirstContactCreatesExactlyOneCustomer(client);
 
-    // --- Outbound Tests ---
-    console.log('\n--- record_outbound_interaction_atomic ---');
-    await testOutboundCreatesRecords(client);
-    await testOutboundIdempotency(client);
-    await testOutboundPayloadMismatchRejected(client);
-    await testOutboundActorAttribution(client);
+  // --- Outbound Tests ---
+  console.log('\n--- record_outbound_interaction_atomic ---');
+  await testOutboundCreatesRecords(client);
+  await testOutboundIdempotency(client);
+  await testOutboundPayloadMismatchRejected(client);
+  await testOutboundActorAttribution(client);
 
-    // --- Claim Tests ---
-    console.log('\n--- claim_pending_outbound_deliveries ---');
-    await testClaimPendingDeliveries(client);
+  // --- Claim Tests ---
+  console.log('\n--- claim_pending_outbound_deliveries ---');
+  await testClaimPendingDeliveries(client);
 
-    // --- RLS Tests ---
-    console.log('\n--- RLS Enforcement ---');
-    await testOutboundDeliveriesRLS(client);
-  } finally {
-    console.log('\nCleaning up inbox test fixtures...');
-    cleanupCompanyFixtures([TEST_COMPANY_ID, TEST_COMPANY_ID_2]);
-  }
+  // --- RLS Tests ---
+  console.log('\n--- RLS Enforcement ---');
+  await testOutboundDeliveriesRLS(client);
 
   // --- Summary ---
   console.log('\n================================================================');
