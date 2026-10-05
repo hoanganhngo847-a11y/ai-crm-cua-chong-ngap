@@ -1,10 +1,13 @@
 -- ==============================================================================
 -- Migration: Staging Storage Bucket Provisioning
 --
--- Idempotently provisions required runtime storage buckets:
+-- Idempotently provisions required runtime storage buckets genuinely missing
+-- from historical migrations:
 -- 1. survey-photos: private, 10MiB limit, image/jpeg, image/png, image/webp
 -- 2. installation-docs: private, 10MiB limit, image/jpeg, image/png, image/webp, application/pdf
--- 3. contract-documents & contracts: private, 10MiB limit, application/pdf
+--
+-- Note: 'contracts' is canonically provisioned and hardened by historical migration
+-- 20260929220004_contract_storage_hardening.sql and remains untouched.
 --
 -- Hardened security model:
 -- Direct client access (anon and authenticated) is strictly prohibited via restrictive RLS.
@@ -81,37 +84,3 @@ CREATE POLICY operations_evidence_no_client_select ON storage.objects
     AS RESTRICTIVE FOR SELECT TO anon, authenticated 
     USING (bucket_id <> 'installation-docs');
 
--- 3. contract-documents
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-    'contract-documents',
-    'contract-documents',
-    false,
-    10485760,
-    ARRAY['application/pdf']
-)
-ON CONFLICT (id) DO UPDATE SET 
-    public = false, 
-    file_size_limit = 10485760,
-    allowed_mime_types = ARRAY['application/pdf'];
-
-DROP POLICY IF EXISTS contract_documents_no_client_insert ON storage.objects;
-CREATE POLICY contract_documents_no_client_insert ON storage.objects 
-    AS RESTRICTIVE FOR INSERT TO anon, authenticated 
-    WITH CHECK (bucket_id <> 'contract-documents');
-
-DROP POLICY IF EXISTS contract_documents_no_client_update ON storage.objects;
-CREATE POLICY contract_documents_no_client_update ON storage.objects 
-    AS RESTRICTIVE FOR UPDATE TO anon, authenticated 
-    USING (bucket_id <> 'contract-documents') 
-    WITH CHECK (bucket_id <> 'contract-documents');
-
-DROP POLICY IF EXISTS contract_documents_no_client_delete ON storage.objects;
-CREATE POLICY contract_documents_no_client_delete ON storage.objects 
-    AS RESTRICTIVE FOR DELETE TO anon, authenticated 
-    USING (bucket_id <> 'contract-documents');
-
-DROP POLICY IF EXISTS contract_documents_no_client_select ON storage.objects;
-CREATE POLICY contract_documents_no_client_select ON storage.objects 
-    AS RESTRICTIVE FOR SELECT TO anon, authenticated 
-    USING (bucket_id <> 'contract-documents');

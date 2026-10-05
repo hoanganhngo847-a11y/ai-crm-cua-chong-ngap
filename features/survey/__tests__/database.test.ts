@@ -72,7 +72,7 @@ test('PostgreSQL Survey hardening (isolated database, real functions/RLS/transac
       assert.ok(rows, 'Expected storage.buckets to have rows');
       const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
 
-      for (const bucketId of ['contract-documents', 'survey-photos', 'installation-docs']) {
+      for (const bucketId of ['survey-photos', 'installation-docs', 'contracts']) {
         assert.ok(byId[bucketId], `Expected bucket ${bucketId} to exist from migrations alone`);
         assert.equal(byId[bucketId].public, false, `Expected bucket ${bucketId} to be private`);
         assert.equal(byId[bucketId].file_size_limit, 10485760, `Expected bucket ${bucketId} max file size 10MiB`);
@@ -80,7 +80,6 @@ test('PostgreSQL Survey hardening (isolated database, real functions/RLS/transac
 
       assert.deepEqual(byId['survey-photos'].allowed_mime_types?.sort(), ['image/jpeg', 'image/png', 'image/webp'].sort());
       assert.deepEqual(byId['installation-docs'].allowed_mime_types?.sort(), ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].sort());
-      assert.deepEqual(byId['contract-documents'].allowed_mime_types?.sort(), ['application/pdf'].sort());
 
       // Verify direct client bypass is blocked by restrictive policies
       const policies = JSON.parse(sql(`SELECT json_agg(policyname) FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND permissive = 'RESTRICTIVE';`));
@@ -91,17 +90,17 @@ test('PostgreSQL Survey hardening (isolated database, real functions/RLS/transac
         'operations_evidence_no_client_insert',
         'operations_evidence_no_client_update',
         'operations_evidence_no_client_delete',
-        'contract_documents_no_client_insert',
-        'contract_documents_no_client_update',
-        'contract_documents_no_client_delete',
+        'contracts_no_client_insert',
+        'contracts_no_client_update',
+        'contracts_no_client_delete',
       ]) {
         assert.ok(policies.includes(expectedPolicy), `Expected policy ${expectedPolicy} to exist`);
       }
 
       // Verify ordinary authenticated and anon users cannot bypass server upload path directly
       for (const role of ['anon', 'authenticated']) {
-        for (const bucket of ['survey-photos', 'installation-docs', 'contract-documents']) {
-          reject(`SET ROLE ${role}; INSERT INTO storage.objects(bucket_id, name) VALUES (${q(bucket)}, 'bypass.bin');`, /new row violates row-level security policy/);
+        for (const bucket of ['survey-photos', 'installation-docs', 'contracts']) {
+          reject(`SET ROLE ${role}; INSERT INTO storage.objects(bucket_id, name) VALUES (${q(bucket)}, 'bypass.jpg');`, /new row violates row-level security policy/);
         }
       }
     });

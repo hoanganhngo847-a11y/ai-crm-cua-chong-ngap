@@ -63,9 +63,11 @@ Expected bucket matrix:
 |:---|:---:|:---:|:---|:---|
 | `survey-photos` | `false` | 10 MiB (`10485760`) | `image/jpeg`, `image/png`, `image/webp` | On-site survey measurement photos |
 | `installation-docs` | `false` | 10 MiB (`10485760`) | `image/jpeg`, `image/png`, `image/webp`, `application/pdf` | Installation photos & handover documents |
-| `contracts` | `false` | 10 MiB (`10485760`) | `application/pdf` | Generated and signed customer contracts |
-| `contract-documents` | `false` | 10 MiB (`10485760`) | `application/pdf` | Contract documents compatibility alias |
+| `contracts` | `false` | 10 MiB (`10485760`) | `NULL` | Generated and signed customer contracts (canonical bucket from `20260929220004`) |
 | `call-recordings` | `false` | 25 MiB (`26214400`) | N/A | Call recordings for voice media pipeline |
+
+> [!NOTE]
+> **Canonical Contract Storage:** The canonical contract storage bucket is `contracts` (`STORAGE_BUCKET_MAP.CONTRACT = 'contracts'`), provisioned by historical migration `20260929220004_contract_storage_hardening.sql`. No product runtime uses `contract-documents`.
 
 ### Security Invariant
 All buckets enforce restrictive RLS (`RESTRICTIVE FOR INSERT, UPDATE, DELETE, SELECT TO anon, authenticated`) prohibiting direct client read/write. Storage operations are performed exclusively via server-authorized `service_role` clients and short-lived signed URLs.
@@ -93,14 +95,53 @@ Staging Auth must be configured with the staging application origin, never `http
 - The production codebase enforces `AAL2` (Authenticator App TOTP) for privileged operations:
   - Boss Admin actions (Sales Style profile approval/activation, sensitive customer data unmasking)
   - Contract signing actions
-- Verify staging users can enroll TOTP via `/settings/security` or standard Supabase MFA flow.
+- Verify staging users can enroll and verify TOTP via the canonical product routes:
+  - `/admin/mfa/enroll` (Enroll TOTP authenticator factor and display QR code / secret)
+  - `/admin/mfa/verify` (Verify code and elevate session to AAL2)
 
 ---
 
-## 4. Vercel Environment Matrix
+## 4. Vercel Staging Project Provisioning & Scheduling Plan Prerequisite
+
+### HARD PREREQUISITE: Vercel Plan & Scheduling Capability
+The product runtime strictly requires high-frequency background cron jobs:
+- `/api/cron/response-sla-worker`: Every 1 minute (`* * * * *`) to maintain the 5-minute customer response SLA.
+- `/api/cron/voice-scheduler`: Every 5 minutes (`*/5 * * * *`).
+- `/api/cron/zalo-care`: Every 15 minutes (`*/15 * * * *`).
+
+> [!CAUTION]
+> **Vercel Hobby Plan Incompatibility:**  
+> The Vercel Hobby plan only supports daily cron schedules (once per day). It does NOT support minute-level cron frequencies.  
+> Furthermore, Vercel Cron Jobs only invoke the project's **PRODUCTION** deployment, not preview deployments.  
+>  
+> **MANDATORY PREREQUISITE:**  
+> **Vercel Pro-or-higher scheduling capability is required OR an equivalent external scheduler capable of <= 5 minute cadence must be used.**  
+>  
+> For the Vercel-native design:  
+> **STAGING VERCEL PROJECT MUST USE A PLAN THAT SUPPORTS THE REQUIRED CRON FREQUENCIES.**  
+>  
+> **FAIL-CLOSED POLICY:**  
+> If the Vercel plan cannot support the configured cadence:  
+> **STOP.**  
+> Do not deploy by silently degrading schedules. Degrading schedules breaks product SLAs.
+
+### Dedicated Staging Vercel Project Workflow
+A dedicated staging Vercel project must treat the staging deployment as that project's production deployment so Vercel Cron Jobs execute against staging. Preview deployment Cron execution is NOT supported by Vercel.
+
+Execute the following workflow:
+1. **Dedicated Project:** Create a separate, dedicated project in Vercel (e.g. `ai-crm-cua-chong-ngap-staging`), completely isolated from production.
+2. **Link GitHub Repository:** Connect the project to `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`.
+3. **Configure Production Branch:** In Project Settings -> Git -> Production Branch, configure the staging branch (e.g. `staging` or `fix/stg-001-staging-readiness-wiring`) as the project's production branch, OR explicitly promote the staging deployment to production within this dedicated staging project.
+4. **Verify Commit SHA:** Inspect deployment details and verify that `VERCEL_GIT_COMMIT_SHA` matches the exact immutable commit SHA recorded in Section 1.
+5. **Configure Staging-Only Environment Variables:** Populate the environment matrix (see Section 5 below) exclusively for this project.
+6. **Verify Cron Jobs Registered:** In Vercel Project Settings -> Cron Jobs, verify that all three cron workers are registered and active on the project's production deployment.
+
+---
+
+## 5. Vercel Environment Matrix
 
 Configure these environment variables in Vercel under **Project Settings -> Environment Variables**.  
-Scope them strictly to **Preview / Staging** (or Production respectively).
+Scope them strictly to this dedicated staging project.
 
 | Variable Name | Environment Scope | Visibility | Secret? | Description / Contract |
 |:---|:---:|:---:|:---:|:---|
@@ -138,7 +179,7 @@ Scope them strictly to **Preview / Staging** (or Production respectively).
 
 ---
 
-## 5. Canonical External Callback Map
+## 6. Canonical External Callback Map
 
 Staging external integrations must point **exclusively** to the specialized canonical routes.  
 
@@ -158,7 +199,7 @@ Staging external integrations must point **exclusively** to the specialized cano
 
 ---
 
-## 6. Cron Schedule Verification
+## 7. Cron Schedule Verification
 
 `vercel.json` schedules three canonical background workers:
 
@@ -219,7 +260,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 
 ---
 
-## 7. Staging Provider Setup Guidelines
+## 8. Staging Provider Setup Guidelines
 
 To guarantee isolation between staging and production:
 
@@ -247,7 +288,7 @@ To guarantee isolation between staging and production:
 
 ---
 
-## 8. Automated Staging Readiness Verification Gate
+## 9. Automated Staging Readiness Verification Gate
 
 Before deploying, run the local staging readiness gate:
 
@@ -256,9 +297,13 @@ npm run test:staging-readiness
 ```
 
 This gate automatically verifies:
-1. `vercel.json` contains all required cron paths with compliant schedules.
+1. `vercel.json` contains all required cron paths with compliant schedules (`* * * * *` for response SLA worker).
 2. All cron route implementation files exist in `app/api/cron/`.
 3. `.env.example` documents all mandatory staging environment variables without exposing server secrets.
-4. Supabase has provisioned `survey-photos`, `installation-docs`, `contracts`, and `contract-documents` with exact private and MIME configurations.
-5. Storage RLS restricts direct client uploads and verifies server-authorized write access.
+4. Supabase has provisioned `survey-photos` and `installation-docs` with exact private and MIME configurations, and canonical `contracts` bucket exists from historical migrations (orphan `contract-documents` bucket is not provisioned).
+5. Storage RLS restricts direct client uploads: attempts by anonymous and authenticated ordinary users fail closed under RLS (using valid MIME types), and service-role uploads succeed.
 6. All canonical external webhook route handlers exist.
+
+> [!NOTE]
+> The automated local gate verifies repository-level configuration and local Supabase storage RLS. Verification of the remote Vercel account plan (Pro-or-higher scheduling capability) must be performed manually as a preflight step before hosted deployment.
+

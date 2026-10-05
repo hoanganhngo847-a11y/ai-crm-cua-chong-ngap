@@ -150,11 +150,6 @@ async function runStagingReadinessGate() {
       file_size_limit: 10485760, // 10 MiB
       allowed_mime_types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
     },
-    'contract-documents': {
-      public: false,
-      file_size_limit: 10485760, // 10 MiB
-      allowed_mime_types: ['application/pdf'],
-    },
     contracts: {
       public: false,
       file_size_limit: 10485760, // 10 MiB
@@ -194,45 +189,152 @@ async function runStagingReadinessGate() {
     );
   }
 
+  // Ensure orphan contract-documents is NOT provisioned
+  assert.ok(!bucketMap.has('contract-documents'), 'Orphan bucket "contract-documents" must NOT exist (canonical is "contracts")');
+  testPass('Orphan bucket "contract-documents" is not provisioned (canonical is "contracts")');
+
   // --------------------------------------------------------------------------
-  // 4. Storage write authority and client bypass prevention
+  // 4. Storage write authority and client bypass prevention (RLS verification)
   // --------------------------------------------------------------------------
-  console.log('\n--- 4. Storage Client Write Authority Restrictions ---');
+  console.log('\n--- 4. Storage Client Write Authority Restrictions (Valid-MIME RLS Proof) ---');
   const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: { persistSession: false },
   });
 
-  const testFilePayload = Buffer.from('unauthorized-payload');
+  const BUCKET_PROBE_SPECS = [
+    {
+      bucketId: 'survey-photos',
+      fileName: `probe-${Date.now()}.jpg`,
+      contentType: 'image/jpeg',
+      payload: Buffer.from('\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x01\x00\x60\x00\x60\x00\x00\xFF\xDB\x00\x43\x00probe-bytes'),
+    },
+    {
+      bucketId: 'installation-docs',
+      fileName: `probe-${Date.now()}.jpg`,
+      contentType: 'image/jpeg',
+      payload: Buffer.from('\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x01\x00\x60\x00\x60\x00\x00\xFF\xDB\x00\x43\x00probe-bytes'),
+    },
+    {
+      bucketId: 'contracts',
+      fileName: `probe-${Date.now()}.pdf`,
+      contentType: 'application/pdf',
+      payload: Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF'),
+    },
+  ];
 
-  for (const bucketId of ['survey-photos', 'installation-docs', 'contract-documents', 'contracts']) {
-    // Direct anon upload attempt must be rejected by restrictive policy
-    const { error: uploadError } = await anonClient.storage
-      .from(bucketId)
-      .upload(`probe-${Date.now()}.bin`, testFilePayload, { contentType: 'application/octet-stream' });
+  // 4a. Anonymous user direct upload with VALID MIME must be rejected by RLS (not MIME)
+  for (const spec of BUCKET_PROBE_SPECS) {
+    const { error: anonError } = await anonClient.storage
+      .from(spec.bucketId)
+      .upload(`anon-${spec.fileName}`, spec.payload, { contentType: spec.contentType });
 
     assert.ok(
-      uploadError,
-      `Direct client upload to private bucket "${bucketId}" MUST fail closed under restrictive RLS`
+      anonError,
+      `Direct anon upload to private bucket "${spec.bucketId}" MUST fail closed under restrictive RLS`
     );
-    testPass(`Direct client upload to "${bucketId}" rejected fail-closed`);
+    assert.notEqual(
+      (anonError as any)?.statusCode,
+      '415',
+      `Anon upload to "${spec.bucketId}" was rejected by 415 InvalidMimeType instead of RLS policy`
+    );
+    assert.ok(
+      anonError.message.includes('row-level security') ||
+        (anonError as any)?.code === 'AccessDenied' ||
+        (anonError as any)?.statusCode === '403',
+      `Expected RLS authorization rejection for anon on "${spec.bucketId}", got: ${anonError.message}`
+    );
+    testPass(`Direct anon upload to "${spec.bucketId}" rejected by RLS using valid MIME (${spec.contentType})`);
   }
 
-  // Verify service-role client CAN upload and create signed URL
-  const probePath = `staging-probe-${Date.now()}.jpg`;
-  const { error: adminUploadErr } = await adminClient.storage
-    .from('survey-photos')
-    .upload(probePath, Buffer.from('fake-jpeg-bytes'), { contentType: 'image/jpeg' });
-  assert.equal(adminUploadErr, null, `Admin upload to survey-photos failed: ${adminUploadErr?.message}`);
+  // 4b. Authenticated ordinary user direct upload with VALID MIME must be rejected by RLS
+  const testUserEmail = `staging-readiness-${Date.now()}@example.test`;
+  const testUserPassword = `StagingPass-${Date.now()}!`;
+  const { data: createdUser, error: createUserErr } = await adminClient.auth.admin.createUser({
+    email: testUserEmail,
+    password: testUserPassword,
+    email_confirm: true,
+  });
+  assert.equal(createUserErr, null, `Failed to create ordinary test user: ${createUserErr?.message}`);
+  assert.ok(createdUser?.user?.id, 'Expected user id');
 
-  const { data: signedData, error: signErr } = await adminClient.storage
-    .from('survey-photos')
-    .createSignedUrl(probePath, 60);
-  assert.equal(signErr, null, `Admin createSignedUrl failed: ${signErr?.message}`);
-  assert.ok(signedData?.signedUrl, 'Signed URL should be returned for authorized admin');
+  try {
+    const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false },
+    });
+    const { error: signInErr } = await authClient.auth.signInWithPassword({
+      email: testUserEmail,
+      password: testUserPassword,
+    });
+    assert.equal(signInErr, null, `Sign-in failed for ordinary test user: ${signInErr?.message}`);
 
-  // Cleanup probe file
-  await adminClient.storage.from('survey-photos').remove([probePath]);
-  testPass('Authorized server/service-role upload and signed URL generation succeed');
+    for (const spec of BUCKET_PROBE_SPECS) {
+      const { error: authError } = await authClient.storage
+        .from(spec.bucketId)
+        .upload(`auth-${spec.fileName}`, spec.payload, { contentType: spec.contentType });
+
+      assert.ok(
+        authError,
+        `Direct authenticated user upload to private bucket "${spec.bucketId}" MUST fail closed under restrictive RLS`
+      );
+      assert.notEqual(
+        (authError as any)?.statusCode,
+        '415',
+        `Authenticated upload to "${spec.bucketId}" was rejected by 415 InvalidMimeType instead of RLS policy`
+      );
+      assert.ok(
+        authError.message.includes('row-level security') ||
+          (authError as any)?.code === 'AccessDenied' ||
+          (authError as any)?.statusCode === '403',
+        `Expected RLS authorization rejection for ordinary authenticated user on "${spec.bucketId}", got: ${authError.message}`
+      );
+      testPass(
+        `Direct authenticated user upload to "${spec.bucketId}" rejected by RLS using valid MIME (${spec.contentType})`
+      );
+    }
+  } finally {
+    if (createdUser?.user?.id) {
+      await adminClient.auth.admin.deleteUser(createdUser.user.id);
+    }
+  }
+
+  // 4c. SQL-level restrictive policy assertions on storage.objects
+  const { executeRawSql } = await import('../helpers/fixture-cleanup');
+  const policiesRaw = executeRawSql(
+    `SELECT policyname FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND permissive = 'RESTRICTIVE';`
+  );
+  for (const policyName of [
+    'survey_photos_no_client_insert',
+    'survey_photos_no_client_update',
+    'survey_photos_no_client_delete',
+    'operations_evidence_no_client_insert',
+    'operations_evidence_no_client_update',
+    'operations_evidence_no_client_delete',
+    'contracts_no_client_insert',
+    'contracts_no_client_update',
+    'contracts_no_client_delete',
+  ]) {
+    assert.ok(policiesRaw.includes(policyName), `Expected restrictive policy "${policyName}" to exist on storage.objects`);
+  }
+  assert.ok(!policiesRaw.includes('contract_documents_no_client_insert'), 'Orphan policy contract_documents_no_client_insert must not exist');
+  testPass('All SQL restrictive RLS policies for runtime buckets verified on storage.objects');
+
+  // 4d. Authorized service-role server upload and signed URL generation succeed
+  for (const spec of BUCKET_PROBE_SPECS) {
+    const adminPath = `admin-${spec.fileName}`;
+    const { error: adminUploadErr } = await adminClient.storage
+      .from(spec.bucketId)
+      .upload(adminPath, spec.payload, { contentType: spec.contentType });
+    assert.equal(adminUploadErr, null, `Admin upload to ${spec.bucketId} failed: ${adminUploadErr?.message}`);
+
+    const { data: signedData, error: signErr } = await adminClient.storage
+      .from(spec.bucketId)
+      .createSignedUrl(adminPath, 60);
+    assert.equal(signErr, null, `Admin createSignedUrl for ${spec.bucketId} failed: ${signErr?.message}`);
+    assert.ok(signedData?.signedUrl, `Signed URL should be returned for ${spec.bucketId}`);
+
+    await adminClient.storage.from(spec.bucketId).remove([adminPath]);
+    testPass(`Authorized service-role upload and signed URL generation succeed for "${spec.bucketId}"`);
+  }
 
   // --------------------------------------------------------------------------
   // 5. Canonical external webhook ingress endpoints
