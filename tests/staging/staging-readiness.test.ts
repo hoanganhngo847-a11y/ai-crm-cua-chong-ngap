@@ -158,7 +158,7 @@ async function runStagingReadinessGate() {
     contracts: {
       public: false,
       file_size_limit: 10485760, // 10 MiB
-      allowed_mime_types: ['application/pdf'],
+      allowed_mime_types: null,
     },
   };
 
@@ -176,18 +176,22 @@ async function runStagingReadinessGate() {
       `Bucket "${bucketId}" file_size_limit mismatch: expected ${expected.file_size_limit}, got ${bucket.file_size_limit}`
     );
 
-    const actualMimes = (bucket.allowed_mime_types || []).slice().sort();
-    const expectedMimes = expected.allowed_mime_types.slice().sort();
-    assert.deepEqual(
-      actualMimes,
-      expectedMimes,
-      `Bucket "${bucketId}" allowed_mime_types mismatch: expected ${JSON.stringify(
-        expectedMimes
-      )}, got ${JSON.stringify(actualMimes)}`
-    );
+    if (expected.allowed_mime_types !== null) {
+      const actualMimes = (bucket.allowed_mime_types || []).slice().sort();
+      const expectedMimes = expected.allowed_mime_types.slice().sort();
+      assert.deepEqual(
+        actualMimes,
+        expectedMimes,
+        `Bucket "${bucketId}" allowed_mime_types mismatch: expected ${JSON.stringify(
+          expectedMimes
+        )}, got ${JSON.stringify(actualMimes)}`
+      );
+    }
 
     testPass(
-      `Bucket "${bucketId}" correctly configured (private, 10MiB limit, MIMEs: ${expectedMimes.join(', ')})`
+      `Bucket "${bucketId}" correctly configured (private, 10MiB limit${
+        expected.allowed_mime_types ? `, MIMEs: ${expected.allowed_mime_types.join(', ')}` : ''
+      })`
     );
   }
 

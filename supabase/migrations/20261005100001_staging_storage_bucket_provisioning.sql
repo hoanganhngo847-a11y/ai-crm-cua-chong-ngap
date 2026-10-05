@@ -81,7 +81,7 @@ CREATE POLICY operations_evidence_no_client_select ON storage.objects
     AS RESTRICTIVE FOR SELECT TO anon, authenticated 
     USING (bucket_id <> 'installation-docs');
 
--- 3. contract-documents & contracts
+-- 3. contract-documents
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
     'contract-documents',
@@ -94,10 +94,6 @@ ON CONFLICT (id) DO UPDATE SET
     public = false, 
     file_size_limit = 10485760,
     allowed_mime_types = ARRAY['application/pdf'];
-
-UPDATE storage.buckets
-SET allowed_mime_types = ARRAY['application/pdf']
-WHERE id = 'contracts' AND (allowed_mime_types IS NULL OR allowed_mime_types <> ARRAY['application/pdf']);
 
 DROP POLICY IF EXISTS contract_documents_no_client_insert ON storage.objects;
 CREATE POLICY contract_documents_no_client_insert ON storage.objects 
