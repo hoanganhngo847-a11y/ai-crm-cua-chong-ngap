@@ -189,8 +189,7 @@ async function runStagingReadinessGate() {
     }
 
     testPass(
-      `Bucket "${bucketId}" correctly configured (private, 10MiB limit${
-        expected.allowed_mime_types ? `, MIMEs: ${expected.allowed_mime_types.join(', ')}` : ''
+      `Bucket "${bucketId}" correctly configured (private, 10MiB limit${expected.allowed_mime_types ? `, MIMEs: ${expected.allowed_mime_types.join(', ')}` : ''
       })`
     );
   }
