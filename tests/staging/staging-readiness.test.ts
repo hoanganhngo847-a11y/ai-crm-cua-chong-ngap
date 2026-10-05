@@ -137,7 +137,7 @@ async function runStagingReadinessGate() {
     {
       public: boolean;
       file_size_limit: number;
-      allowed_mime_types: string[];
+      allowed_mime_types: string[] | null;
     }
   > = {
     'survey-photos': {
