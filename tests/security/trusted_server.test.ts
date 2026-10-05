@@ -490,11 +490,11 @@ async function setupTestData() {
   await adminClient.storage.createBucket('contracts', { public: false }).catch(() => {});
   await adminClient.storage.createBucket('call-recordings', { public: false }).catch(() => {});
   await adminClient.storage.createBucket('installation-docs', { public: false }).catch(() => {});
-  await adminClient.storage.from('survey-photos').upload('survey_photo1.jpg', Buffer.from('test photo'), { upsert: true }).catch(() => {});
-  await adminClient.storage.from('contracts').upload('contracts/contract_001.pdf', Buffer.from('test contract'), { upsert: true }).catch(() => {});
-  await adminClient.storage.from('call-recordings').upload('call-recordings/call_001.mp3', Buffer.from('test audio'), { upsert: true }).catch(() => {});
-  await adminClient.storage.from('installation-docs').upload('installation_photo1.jpg', Buffer.from('test installation photo'), { upsert: true }).catch(() => {});
-  await adminClient.storage.from('installation-docs').upload('handover_001.pdf', Buffer.from('test handover'), { upsert: true }).catch(() => {});
+  await adminClient.storage.from('survey-photos').upload('survey_photo1.jpg', Buffer.from('test photo'), { contentType: 'image/jpeg', upsert: true }).catch(() => {});
+  await adminClient.storage.from('contracts').upload('contracts/contract_001.pdf', Buffer.from('test contract'), { contentType: 'application/pdf', upsert: true }).catch(() => {});
+  await adminClient.storage.from('call-recordings').upload('call-recordings/call_001.mp3', Buffer.from('test audio'), { contentType: 'audio/mpeg', upsert: true }).catch(() => {});
+  await adminClient.storage.from('installation-docs').upload('installation_photo1.jpg', Buffer.from('test installation photo'), { contentType: 'image/jpeg', upsert: true }).catch(() => {});
+  await adminClient.storage.from('installation-docs').upload('handover_001.pdf', Buffer.from('test handover'), { contentType: 'application/pdf', upsert: true }).catch(() => {});
 
   console.log('✓ Test fixtures setup complete.\n');
 }
