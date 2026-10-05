@@ -1,7 +1,11 @@
 import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { GET as responseSlaWorker } from '../../app/api/cron/response-sla-worker/route';
+import { GET as voiceScheduler } from '../../app/api/cron/voice-scheduler/route';
+import { GET as zaloCare } from '../../app/api/cron/zalo-care/route';
 
 console.log('================================================================');
 console.log('STARTING STAGING READINESS GATE VERIFICATION');
@@ -23,31 +27,59 @@ const SUPABASE_SERVICE_ROLE_KEY =
 
 async function runStagingReadinessGate() {
   // --------------------------------------------------------------------------
-  // 1. Vercel deployment cron configuration
+  // 1. External Scheduler Manifest & Platform-Native Cron Decoupling
   // --------------------------------------------------------------------------
-  console.log('--- 1. Vercel Cron Configuration ---');
+  console.log('--- 1. External Scheduler Manifest & Platform-Native Cron Decoupling ---');
+
+  // 1a. Hosting Decoupling: vercel.json must NOT define Vercel-native crons
   const vercelJsonPath = path.resolve(process.cwd(), 'vercel.json');
   assert.ok(fs.existsSync(vercelJsonPath), 'vercel.json must exist');
 
   const vercelConfig = JSON.parse(fs.readFileSync(vercelJsonPath, 'utf8'));
-  assert.ok(Array.isArray(vercelConfig.crons), 'vercel.json must define a "crons" array');
+  assert.ok(
+    !vercelConfig.crons || (Array.isArray(vercelConfig.crons) && vercelConfig.crons.length === 0),
+    'vercel.json must NOT define platform-native cron jobs. External scheduler manifest is authoritative.'
+  );
+  testPass('No Vercel-native cron jobs configured');
 
-  const cronRoutes = new Map<string, string>();
-  for (const cron of vercelConfig.crons) {
-    cronRoutes.set(cron.path, cron.schedule);
-  }
+  // 1b. External Scheduler Manifest: config/external-scheduler.json
+  const schedulerJsonPath = path.resolve(process.cwd(), 'config/external-scheduler.json');
+  assert.ok(fs.existsSync(schedulerJsonPath), 'config/external-scheduler.json must exist');
 
-  const REQUIRED_CRONS: Record<string, string> = {
-    '/api/cron/response-sla-worker': '* * * * *',
-    '/api/cron/voice-scheduler': '*/5 * * * *',
-    '/api/cron/zalo-care': '*/15 * * * *',
+  const schedulerConfig = JSON.parse(fs.readFileSync(schedulerJsonPath, 'utf8'));
+  assert.equal(
+    schedulerConfig.provider,
+    'cron-job.org',
+    `Expected scheduler provider "cron-job.org", got "${schedulerConfig.provider}"`
+  );
+  testPass('External scheduler provider: cron-job.org');
+  testPass('External scheduler manifest is hosting-provider independent');
+
+  assert.ok(Array.isArray(schedulerConfig.jobs), 'external-scheduler.json must define a "jobs" array');
+
+  const REQUIRED_EXTERNAL_JOBS: Record<string, { cadence: string; method: string }> = {
+    '/api/cron/response-sla-worker': { cadence: '* * * * *', method: 'GET' },
+    '/api/cron/voice-scheduler': { cadence: '*/5 * * * *', method: 'GET' },
+    '/api/cron/zalo-care': { cadence: '*/15 * * * *', method: 'GET' },
   };
 
-  for (const [route, expectedSchedule] of Object.entries(REQUIRED_CRONS)) {
+  const jobMap = new Map<string, { name: string; path: string; schedule: string; method: string }>();
+  for (const job of schedulerConfig.jobs) {
+    jobMap.set(job.path, job);
+  }
+
+  for (const [route, expected] of Object.entries(REQUIRED_EXTERNAL_JOBS)) {
+    const job = jobMap.get(route);
+    assert.ok(job, `Missing job entry in config/external-scheduler.json for ${route}`);
     assert.equal(
-      cronRoutes.get(route),
-      expectedSchedule,
-      `Cron cadence mismatch for ${route}: expected "${expectedSchedule}", got "${cronRoutes.get(route)}"`
+      job.schedule,
+      expected.cadence,
+      `Schedule cadence mismatch for ${route}: expected "${expected.cadence}", got "${job?.schedule}"`
+    );
+    assert.equal(
+      job.method,
+      expected.method,
+      `HTTP method mismatch for ${route}: expected "${expected.method}", got "${job?.method}"`
     );
 
     const routeFilePath = path.resolve(process.cwd(), 'app' + route + '/route.ts');
@@ -55,12 +87,76 @@ async function runStagingReadinessGate() {
       fs.existsSync(routeFilePath),
       `Route implementation file must exist: ${routeFilePath}`
     );
+
+    const jobName = route.replace('/api/cron/', '');
+    testPass(`${jobName} cadence: ${expected.cadence}`);
   }
 
-  testPass(
-    `All canonical cron routes scheduled with exact cadences (response-sla-worker: "${REQUIRED_CRONS['/api/cron/response-sla-worker']}", voice-scheduler: "${REQUIRED_CRONS['/api/cron/voice-scheduler']}", zalo-care: "${REQUIRED_CRONS['/api/cron/zalo-care']}")`
-  );
-  testPass('All scheduled cron route handler files exist in app/api/cron/');
+  testPass('All external scheduler route handler files exist in app/api/cron/');
+
+  // 1c. Fail-Closed Authorization Verification for Cron Endpoints
+  console.log('\n--- 1c. Cron Endpoints Fail-Closed Authorization ---');
+  const cronEndpointDefs = [
+    { name: 'response-sla-worker', path: '/api/cron/response-sla-worker', handler: responseSlaWorker },
+    { name: 'voice-scheduler', path: '/api/cron/voice-scheduler', handler: voiceScheduler },
+    { name: 'zalo-care', path: '/api/cron/zalo-care', handler: zaloCare },
+  ];
+
+  const TEST_CRON_SECRET = 'staging-cron-secret-fail-closed-readiness-probe';
+  const env = process.env as Record<string, string | undefined>;
+  const originalEnvCronSecret = env.CRON_SECRET;
+  const originalNodeEnv = env.NODE_ENV;
+
+  try {
+    for (const route of cronEndpointDefs) {
+      env.CRON_SECRET = TEST_CRON_SECRET;
+      delete env.NODE_ENV;
+
+      // 1. Missing Authorization header -> 401
+      const reqMissing = new NextRequest(`http://localhost${route.path}`);
+      const resMissing = await route.handler(reqMissing);
+      assert.equal(resMissing.status, 401, `${route.name} must reject missing Authorization with 401`);
+
+      // 2. Wrong Bearer token -> 401
+      const reqWrong = new NextRequest(`http://localhost${route.path}`, {
+        headers: { authorization: 'Bearer wrong-bearer-token' },
+      });
+      const resWrong = await route.handler(reqWrong);
+      assert.equal(resWrong.status, 401, `${route.name} must reject wrong Bearer token with 401`);
+
+      // 3. Fake bypass headers without valid token -> 401
+      const reqBypass = new NextRequest(`http://localhost${route.path}`, {
+        headers: {
+          'user-agent': 'vercel-cron/1.0',
+          'x-vercel-cron-schedule': '* * * * *',
+          'x-forwarded-for': '127.0.0.1',
+        },
+      });
+      const resBypass = await route.handler(reqBypass);
+      assert.equal(resBypass.status, 401, `${route.name} must reject fake bypass headers with 401`);
+
+      // 4. Missing CRON_SECRET in production -> 503 fail-closed
+      delete env.CRON_SECRET;
+      env.NODE_ENV = 'production';
+      const reqNoSecret = new NextRequest(`http://localhost${route.path}`);
+      const resNoSecret = await route.handler(reqNoSecret);
+      assert.equal(resNoSecret.status, 503, `${route.name} must fail closed with 503 when CRON_SECRET is unconfigured in production`);
+
+      // 5. Authorized request with correct staging CRON_SECRET -> reaches worker
+      env.CRON_SECRET = TEST_CRON_SECRET;
+      env.NODE_ENV = 'production';
+      const reqValid = new NextRequest(`http://localhost${route.path}`, {
+        headers: { authorization: `Bearer ${TEST_CRON_SECRET}` },
+      });
+      const resValid = await route.handler(reqValid);
+      assert.notEqual(resValid.status, 401, `${route.name} must not reject valid Bearer token with 401`);
+      assert.notEqual(resValid.status, 503, `${route.name} must not return 503 when configured and authorized`);
+      testPass(`${route.name} fail-closed auth verified (rejects missing/invalid/spoofed with 401, reaches worker execution on valid Bearer)`);
+    }
+  } finally {
+    env.CRON_SECRET = originalEnvCronSecret;
+    env.NODE_ENV = originalNodeEnv;
+  }
 
   // --------------------------------------------------------------------------
   // 2. Environment contract (.env.example)

@@ -1,16 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/response-sla-worker",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/voice-scheduler",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/zalo-care",
-      "schedule": "*/15 * * * *"
-    }
-  ]
-}
+{}
