@@ -182,14 +182,16 @@ async function main() {
     cleanupCompanyFixtures([TEST_COMPANY_ID, TEST_COMPANY_ID_2]);
 
     // Seed parent company and dirty customer for foreign key requirements
-    await adminClient.from('companies').upsert({
+    const { error: cErr } = await adminClient.from('companies').upsert({
       id: TEST_COMPANY_ID_2,
-      name: 'Test Company 2',
-      code: 'TEST2',
-      tier: 'BASIC',
+      name: 'Test Outbound Company',
+      status: 'ACTIVE',
     }, { onConflict: 'id' });
+    if (cErr) {
+      throw new Error(`Failed to upsert company: ${cErr.message}`);
+    }
 
-    await adminClient.from('customers').insert({
+    const { error: custErr } = await adminClient.from('customers').insert({
       id: DIRTY_STALE_CUSTOMER_ID,
       company_id: TEST_COMPANY_ID_2,
       name: 'Dirty Stale Customer',
@@ -197,6 +199,9 @@ async function main() {
       stage: 'LEAD_NEW',
       source: 'ZALO',
     });
+    if (custErr) {
+      throw new Error(`Failed to insert dirty customer: ${custErr.message}`);
+    }
 
     // 1B. Deliberately inject stale/corrupt conversation row under deterministic TEST_CONVERSATION_ID
     console.log('1B. Deliberately injecting stale/corrupted conversation fixture...');
