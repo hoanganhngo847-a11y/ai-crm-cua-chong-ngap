@@ -11,6 +11,7 @@ import {
 } from '../actions';
 import type { FieldWorkspaceData } from '../installation-service';
 import type { SettableInstallationStatus } from '../types';
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
 
 interface FieldWorkspaceViewProps {
   initialData: FieldWorkspaceData;
@@ -119,6 +120,12 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
 
     setErrorMsg(null);
     setSuccessMsg(null);
+
+    if (file.size > PRODUCT_UPLOAD_MAX_BYTES) {
+      setErrorMsg('Dung lượng tệp không được vượt quá 10MB.');
+      return;
+    }
+
     setLoadingId(installationId);
 
     const formData = new FormData();

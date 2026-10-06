@@ -6,6 +6,15 @@ import { createClient } from '@supabase/supabase-js';
 import { GET as responseSlaWorker } from '../../app/api/cron/response-sla-worker/route';
 import { GET as voiceScheduler } from '../../app/api/cron/voice-scheduler/route';
 import { GET as zaloCare } from '../../app/api/cron/zalo-care/route';
+import nextConfig from '../../next.config';
+import {
+  PRODUCT_UPLOAD_MAX_BYTES,
+  NEXT_UPLOAD_TRANSPORT_MAX_BYTES,
+  parseSizeLimitToBytes,
+} from '../../config/upload-policy';
+import { MAX_PHOTO_SIZE_BYTES } from '../../features/survey/services/storage-upload.service';
+import { EVIDENCE_MAX_BYTES } from '../../features/installation/evidence';
+import { MAX_CONTRACT_PDF_SIZE_BYTES } from '../../features/contract/services';
 
 console.log('================================================================');
 console.log('STARTING STAGING READINESS GATE VERIFICATION');
@@ -453,6 +462,61 @@ async function runStagingReadinessGate() {
     assert.ok(fs.existsSync(fullPath), `Canonical callback endpoint "${route.name}" must exist at ${route.path}`);
     testPass(`Canonical callback endpoint "${route.name}" exists (${route.path})`);
   }
+
+  // --------------------------------------------------------------------------
+  // 6. Upload Transport Hardening & Next.js Buffer Limits
+  // --------------------------------------------------------------------------
+  console.log('\n--- 6. Upload Transport Hardening & Next.js Buffer Limits ---');
+
+  // 6a. Product Upload Max Bytes == 10 MiB (10,485,760 bytes)
+  assert.equal(
+    PRODUCT_UPLOAD_MAX_BYTES,
+    10 * 1024 * 1024,
+    `PRODUCT_UPLOAD_MAX_BYTES must equal 10 MiB, got ${PRODUCT_UPLOAD_MAX_BYTES}`
+  );
+  assert.equal(MAX_PHOTO_SIZE_BYTES, PRODUCT_UPLOAD_MAX_BYTES);
+  assert.equal(EVIDENCE_MAX_BYTES, PRODUCT_UPLOAD_MAX_BYTES);
+  assert.equal(MAX_CONTRACT_PDF_SIZE_BYTES, PRODUCT_UPLOAD_MAX_BYTES);
+  testPass('Product upload maximum: 10 MiB');
+
+  // 6b. Next Server Action transport envelope exceeds product maximum
+  const serverActionsConfig = nextConfig.experimental?.serverActions;
+  assert.ok(
+    serverActionsConfig?.bodySizeLimit !== undefined,
+    'next.config.ts must configure experimental.serverActions.bodySizeLimit'
+  );
+  const actionLimitBytes = parseSizeLimitToBytes(serverActionsConfig.bodySizeLimit);
+  assert.ok(
+    actionLimitBytes > PRODUCT_UPLOAD_MAX_BYTES,
+    `Next Server Action body limit (${actionLimitBytes}) must exceed PRODUCT_UPLOAD_MAX_BYTES (${PRODUCT_UPLOAD_MAX_BYTES})`
+  );
+  assert.ok(
+    actionLimitBytes >= NEXT_UPLOAD_TRANSPORT_MAX_BYTES,
+    `Next Server Action body limit (${actionLimitBytes}) must be >= NEXT_UPLOAD_TRANSPORT_MAX_BYTES (${NEXT_UPLOAD_TRANSPORT_MAX_BYTES})`
+  );
+  testPass('Next Server Action transport envelope exceeds product maximum');
+
+  // 6c. Next proxy transport envelope exceeds product maximum
+  const proxyLimit = nextConfig.experimental?.proxyClientMaxBodySize;
+  assert.ok(
+    proxyLimit !== undefined,
+    'next.config.ts must configure experimental.proxyClientMaxBodySize'
+  );
+  const proxyLimitBytes = parseSizeLimitToBytes(proxyLimit);
+  assert.ok(
+    proxyLimitBytes > PRODUCT_UPLOAD_MAX_BYTES,
+    `Next proxyClientMaxBodySize (${proxyLimitBytes}) must exceed PRODUCT_UPLOAD_MAX_BYTES (${PRODUCT_UPLOAD_MAX_BYTES})`
+  );
+  assert.ok(
+    proxyLimitBytes >= NEXT_UPLOAD_TRANSPORT_MAX_BYTES,
+    `Next proxyClientMaxBodySize (${proxyLimitBytes}) must be >= NEXT_UPLOAD_TRANSPORT_MAX_BYTES (${NEXT_UPLOAD_TRANSPORT_MAX_BYTES})`
+  );
+  testPass('Next proxy transport envelope exceeds product maximum');
+
+  // 6d. Upload transport preserves server-authorized Storage model
+  const proxyTsFile = path.resolve(process.cwd(), 'proxy.ts');
+  assert.ok(fs.existsSync(proxyTsFile), 'proxy.ts must exist and remain active');
+  testPass('Upload transport preserves server-authorized Storage model');
 
   console.log('\n================================================================');
   console.log(`STAGING READINESS GATE RESULTS: ${passCount} PASSED, 0 FAILED`);

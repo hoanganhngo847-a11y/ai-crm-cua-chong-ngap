@@ -2,7 +2,8 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { OperationsError } from '../operations/server';
-export const EVIDENCE_MAX_BYTES = 10 * 1024 * 1024;
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
+export const EVIDENCE_MAX_BYTES = PRODUCT_UPLOAD_MAX_BYTES;
 const formats: Record<string, { type: 'photo' | 'handover'; extensions: string[]; extension: string }> = {
  'image/jpeg': { type: 'photo', extensions: ['jpg','jpeg'], extension: 'jpg' },
  'image/png': { type: 'photo', extensions: ['png'], extension: 'png' },

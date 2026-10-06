@@ -10,6 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test:staging-readiness": "tsx --conditions=react-server tests/staging/staging-readiness.test.ts",
     "test:cron-auth": "tsx --conditions=react-server tests/staging/cron-authorization.test.ts",
+    "test:upload-transport": "tsx --conditions=react-server tests/staging/upload-transport-readiness.test.ts",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/trusted_server.test.ts",
     "test:p0-security": "tsx --conditions=react-server tests/security/p0_security_regression.test.ts",
