@@ -35,9 +35,10 @@ export interface CustomerRouteContext {
  * - SALE: Được xem danh sách với số điện thoại đã che (ví dụ: 09******12).
  * - TECHNICIAN: Bị từ chối truy cập (403 Forbidden).
  */
-export async function GET(request: NextRequest, context?: CustomerRouteContext) {
+export async function GET(request: NextRequest, context?: unknown) {
   try {
-    const actor = context?.actor !== undefined ? context.actor : await getActorContext();
+    const typedContext = context as CustomerRouteContext | undefined;
+    const actor = typedContext?.actor !== undefined ? typedContext.actor : await getActorContext();
 
     if (!actor || actor.profileStatus !== 'ACTIVE') {
       return NextResponse.json(
@@ -74,7 +75,7 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10), 1), 100);
     const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
 
-    const adminClient = context?.adminClient || (await createServerClient());
+    const adminClient = typedContext?.adminClient || (await createServerClient());
 
     // Lấy danh sách ID khách hàng có tin nhắn phản hồi mới (PENDING_SALE) từ Hộp thư
     const pendingSaleCustomerIds = new Set<string>();
@@ -400,9 +401,10 @@ export async function GET(request: NextRequest, context?: CustomerRouteContext) 
  * - BOSS_ADMIN và SALE được phép tạo khách hàng.
  * - TECHNICIAN bị từ chối (403 Forbidden).
  */
-export async function POST(request: NextRequest, context?: CustomerRouteContext) {
+export async function POST(request: NextRequest, context?: unknown) {
   try {
-    const actor = context?.actor !== undefined ? context.actor : await getActorContext();
+    const typedContext = context as CustomerRouteContext | undefined;
+    const actor = typedContext?.actor !== undefined ? typedContext.actor : await getActorContext();
 
     if (!actor || actor.profileStatus !== 'ACTIVE') {
       return NextResponse.json(
@@ -429,7 +431,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
       );
     }
 
-    const adminClient = context?.adminClient || (await createServerClient());
+    const adminClient = typedContext?.adminClient || (await createServerClient());
 
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
@@ -499,7 +501,7 @@ export async function POST(request: NextRequest, context?: CustomerRouteContext)
           isTrustedProvider: false, // SERVER AUTHORITY: Luồng CRM thủ công không phải Webhook/OAuth
           actorUserId: actor.userId,
         },
-        context?.adminClient
+        typedContext?.adminClient
       );
     } catch (serviceErr: unknown) {
       const errMsg =

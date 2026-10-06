@@ -48,7 +48,10 @@ export default async function DashboardLayout({
             {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
               <>
                 <Link href="/crm" className="text-slate-300 hover:text-white transition">
-                  CRM &amp; Hộp thư
+                  CRM
+                </Link>
+                <Link href="/inbox" className="text-slate-300 hover:text-white transition">
+                  Hộp thư
                 </Link>
                 <Link href="/quotations" className="text-slate-300 hover:text-white transition">
                   Báo giá

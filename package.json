@@ -37,7 +37,7 @@
     "test:omnichannel:db": "tsx tests/omnichannel/database.test.ts",
     "test:zalo:db": "tsx --conditions=react-server tests/zalo/zalo_supabase.integration.test.ts",
     "test:crm": "npx tsx --conditions=react-server tests/crm/test_p0_fail_closed_and_zero_phone.ts && npx tsx --conditions=react-server tests/crm/test_p0_atomic_compensation.ts && npx tsx --conditions=react-server tests/crm/test_p0_urgent_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_history_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_allowlist.ts && npx tsx --conditions=react-server tests/crm/test_p1_server_authority_identity.ts",
-    "test:inbox": "npx tsx --conditions=react-server tests/inbox/test_p0_inbox_tenant_isolation.ts && npx tsx --conditions=react-server tests/inbox/test_p0_zero_phone_sanitization.ts && npx tsx --conditions=react-server tests/inbox/test_p0_webhook_fail_closed.ts",
+    "test:inbox": "npx tsx --conditions=react-server tests/inbox/test_p0_inbox_tenant_isolation.ts && npx tsx --conditions=react-server tests/inbox/test_p0_zero_phone_sanitization.ts && npx tsx --conditions=react-server tests/inbox/test_p0_webhook_fail_closed.ts && npx tsx --conditions=react-server tests/inbox/test_inbox_navigation_and_rbac.ts",
     "test:inbox:db": "tsx --conditions=react-server tests/inbox/database.test.ts",
     "test:commercial": "tsx --conditions=react-server tests/commercial/pricing.test.ts && tsx --conditions=react-server tests/commercial/payment.test.ts && tsx --conditions=react-server tests/commercial/contract.test.ts",
     "test:commercial:db": "tsx --conditions=react-server tests/commercial/commercial-db.integration.test.ts",

@@ -11,6 +11,19 @@ interface InboxViewProps {
   initialCustomerId?: string | null;
 }
 
+function formatMessageTime(dateStr?: string): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return isNaN(d.getTime())
+    ? ''
+    : d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function getInitials(name?: string): string {
+  if (!name || !name.trim()) return 'KH';
+  return name.trim().slice(0, 2).toUpperCase();
+}
+
 export default function InboxView({ initialCustomerId }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -326,8 +339,25 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                 ))}
               </div>
             ) : conversations.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                Không tìm thấy cuộc trò chuyện nào.
+              <div className="p-6 text-center space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                    />
+                  </svg>
+                </div>
+                <div className="text-xs font-semibold text-slate-300">Chưa có hội thoại</div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  {search.trim()
+                    ? `Không tìm thấy kết quả phù hợp cho "${search}".`
+                    : channelFilter !== 'all'
+                      ? `Chưa có hội thoại trên kênh ${channelFilter === 'zalo' ? 'Zalo OA' : 'Facebook Messenger'}. Hãy kết nối kênh để bắt đầu nhận tin nhắn.`
+                      : 'Chưa có hội thoại. Hãy kết nối Facebook Page hoặc Zalo OA để bắt đầu nhận tin nhắn.'}
+                </p>
               </div>
             ) : (
               conversations.map((conv) => {
@@ -358,16 +388,13 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                           {isZalo ? 'Z' : 'F'}
                         </span>
                         <span className="font-semibold text-white text-xs truncate max-w-[120px]">
-                          {conv.customer_name}
+                          {conv.customer_name || 'Khách hàng'}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-slate-500">
-                          {new Date(conv.updated_at).toLocaleTimeString('vi-VN', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          {formatMessageTime(conv.updated_at)}
                         </span>
                         {conv.unread_count > 0 && (
                           <span className="w-4 h-4 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center">
@@ -408,7 +435,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
               <div className="p-3.5 px-5 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-white">
-                    {selectedConversation.customer_name.slice(0, 2).toUpperCase()}
+                    {getInitials(selectedConversation.customer_name)}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -479,10 +506,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                           )}
                           <span>•</span>
                           <span>
-                            {new Date(msg.created_at).toLocaleTimeString('vi-VN', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
+                            {formatMessageTime(msg.created_at)}
                           </span>
                         </div>
 
@@ -612,6 +636,82 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                 </form>
               </div>
             </>
+          ) : conversations.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-slate-950 overflow-y-auto">
+              <div className="max-w-lg space-y-6">
+                <div className="relative mx-auto w-20 h-20 flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-3xl bg-blue-500/10 border border-blue-500/20 animate-pulse" />
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600/30 to-cyan-600/30 border border-blue-500/30 flex items-center justify-center text-blue-400 shadow-xl">
+                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                      />
+                    </svg>
+                  </div>
+                  <span className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-[10px] font-bold flex items-center justify-center shadow">
+                    Z
+                  </span>
+                  <span className="absolute -bottom-1 -left-1 w-6 h-6 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-bold flex items-center justify-center shadow">
+                    F
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <h3 className="text-base sm:text-lg font-bold text-white">
+                    Hộp Thư Đa Kênh — Chưa Có Hội Thoại
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                    Chưa có hội thoại. Hãy kết nối Facebook Page hoặc Zalo OA để bắt đầu nhận tin nhắn.
+                  </p>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                    Hệ thống AI CRM Cửa Chống Ngập sẵn sàng tiếp nhận tin nhắn từ Facebook Messenger và Zalo Official Account qua Webhook thời gian thực.
+                  </p>
+                </div>
+
+                {/* Omnichannel Channels Overview Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+                  <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-blue-500/40 transition space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-md bg-blue-500/20 text-blue-400 font-bold text-xs flex items-center justify-center">
+                        F
+                      </span>
+                      <span className="font-semibold text-white text-xs">Facebook Messenger</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Tiếp nhận tin nhắn tư vấn từ Fanpage Facebook. Tự động liên kết khách hàng và kích hoạt AI sau 5 phút.
+                    </p>
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-blue-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      <span>Sẵn sàng kết nối qua Webhook Meta</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/40 transition space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-md bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">
+                        Z
+                      </span>
+                      <span className="font-semibold text-white text-xs">Zalo OA</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Tiếp nhận tương tác từ Zalo Official Account. Tư vấn kích thước cửa, tính giá và chuyển giao Sale.
+                    </p>
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-cyan-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                      <span>Sẵn sàng kết nối qua Zalo Webhook</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-900/50 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>Cơ chế bảo mật Zero-Phone &amp; SLA 5 phút luôn hoạt động</span>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-center p-8 text-slate-500 text-xs">
               Vui lòng chọn một cuộc hội thoại từ danh sách bên trái để bắt đầu chat.
@@ -628,11 +728,11 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
               {/* Profile Card */}
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-3">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 mx-auto flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-600/20">
-                  {selectedConversation.customer_name.slice(0, 2).toUpperCase()}
+                  {getInitials(selectedConversation.customer_name)}
                 </div>
                 <div>
                   <h3 className="font-bold text-white text-sm">
-                    {selectedConversation.customer_name}
+                    {selectedConversation.customer_name || 'Khách hàng'}
                   </h3>
                   <span className="font-mono text-slate-400 text-xs">
                     {selectedConversation.customer_code}
@@ -701,7 +801,43 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
               </div>
             </>
           ) : (
-            <div className="p-8 text-center text-slate-500">Chưa chọn khách hàng.</div>
+            <div className="space-y-4 text-xs">
+              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-2">
+                <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h4 className="font-bold text-white text-xs">Trung Tâm Hỗ Trợ Đa Kênh</h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Chọn một cuộc trò chuyện để xem hồ sơ 360 khách hàng, lịch sử trao đổi và tạo gợi ý phản hồi AI.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl space-y-3">
+                <h4 className="font-semibold text-slate-300 uppercase tracking-wider text-[10px]">
+                  Quy trình nghiệp vụ đa kênh
+                </h4>
+                <ul className="space-y-2.5 text-[11px] text-slate-400">
+                  <li className="flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">1</span>
+                    <span>Khách gửi tin nhắn từ Facebook Messenger hoặc Zalo OA.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">2</span>
+                    <span>Webhook tiếp nhận, tự động liên kết khách hàng theo Zero-Phone.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">3</span>
+                    <span>Chuyên viên Sale trả lời trực tiếp hoặc nhận gợi ý trả lời từ AI.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">4</span>
+                    <span>Nếu Sale bận quá 5 phút, AI tự động phản hồi theo Policy Firewall.</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
           )}
         </div>
       </div>

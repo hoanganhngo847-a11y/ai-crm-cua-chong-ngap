@@ -1,15 +1,45 @@
-import React from 'react';
+import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
+import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 
 export default async function CrmDashboardPage() {
   const actor = await getActorContext();
 
+  if (!actor || actor.profileStatus !== 'ACTIVE') {
+    redirect('/login');
+  }
+
+  // Chặn Kỹ thuật viên (Chỉ BOSS_ADMIN và SALE được truy cập CRM)
+  if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
+    return (
+      <div className="p-8 max-w-xl mx-auto text-center space-y-4">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+        </div>
+        <h2 className="text-xl font-bold text-white">Truy Cập Bị Từ Chối</h2>
+        <p className="text-sm text-slate-400">
+          Khu vực CRM bán hàng chỉ dành cho Chuyên viên Sale và Ban quản trị. Kỹ thuật viên vui lòng truy cập{' '}
+          <a href="/field" className="text-blue-400 underline hover:text-blue-300">
+            Hiện trường &amp; Khảo sát
+          </a>.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">Hộp thư & CRM Bán hàng</h1>
+        <h1 className="text-2xl font-bold text-white">CRM Khách Hàng &amp; Bán Hàng</h1>
         <p className="text-sm text-slate-400">
-          Màn hình làm việc tập trung cho tư vấn khách hàng và chốt đơn (SALE duy nhất).
+          Màn hình quản lý khách hàng 360, cơ hội bán hàng và theo dõi chốt đơn.
         </p>
       </div>
 
