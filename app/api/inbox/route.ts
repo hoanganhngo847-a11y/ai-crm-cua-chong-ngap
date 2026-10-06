@@ -156,9 +156,10 @@ async function resolveInboxActor(
  * - Truyền companyId vào tất cả các lời gọi InboxService.
  * - Trả 404 NOT_FOUND nếu conversationId không tồn tại hoặc không thuộc quyền sở hữu của tenant.
  */
-export async function GET(request: NextRequest, context?: InboxRouteContext) {
+export async function GET(request: NextRequest, context?: unknown) {
   try {
-    const authResult = await resolveInboxActor(context);
+    const typedContext = context as InboxRouteContext | undefined;
+    const authResult = await resolveInboxActor(typedContext);
     if (authResult.errorResponse) {
       return authResult.errorResponse;
     }
@@ -176,7 +177,7 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
         companyId,
         conversationId,
         role,
-        context?.supabaseClient
+        typedContext?.supabaseClient
       );
       if (!conversation) {
         return NextResponse.json(
@@ -197,7 +198,7 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
           companyId,
           conversationId,
           role,
-          context?.supabaseClient,
+          typedContext?.supabaseClient,
           { userId, actorId: userId }
         );
       } catch (err: unknown) {
@@ -303,9 +304,9 @@ export async function GET(request: NextRequest, context?: InboxRouteContext) {
  * - RBAC: Chỉ SALE và BOSS_ADMIN được phép gửi. TECHNICIAN bị từ chối (403).
  * - Kiểm tra conversationId thuộc quyền sở hữu của caller companyId. Nếu không khớp ném 404 NOT_FOUND.
  */
-export async function POST(request: NextRequest, context?: InboxRouteContext) {
+export async function POST(request: NextRequest, context?: unknown) {
   try {
-    const authResult = await resolveInboxActor(context);
+    const authResult = await resolveInboxActor(context as InboxRouteContext | undefined);
     if (authResult.errorResponse) {
       return authResult.errorResponse;
     }

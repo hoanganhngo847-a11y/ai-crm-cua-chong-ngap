@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-import { NEXT_UPLOAD_TRANSPORT_MAX_BYTES } from "./config/upload-policy";
+import { NEXT_UPLOAD_TRANSPORT_MAX_BYTES } from "./config/upload-policy.ts";
 
 const nextConfig: NextConfig = {
   experimental: {
