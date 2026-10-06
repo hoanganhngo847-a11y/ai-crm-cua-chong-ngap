@@ -5,6 +5,7 @@ import { STORAGE_BUCKET_MAP, type SignedUrlResult } from '@/shared/contracts/sen
 import { createAuthorizedSignedUrl } from '@/lib/sensitive/signed-urls';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
 
 /**
  * Typed safe error shape for Supabase Storage upload errors.
@@ -53,7 +54,7 @@ export interface ContractListItemDTO {
   createdAt: string;
 }
 
-export const MAX_CONTRACT_PDF_SIZE_BYTES = 10 * 1024 * 1024; // 10MB canonical limit
+export const MAX_CONTRACT_PDF_SIZE_BYTES = PRODUCT_UPLOAD_MAX_BYTES; // 10MB canonical limit
 
 export function validateSignedPdf(buffer: Buffer): void {
   if (!buffer || buffer.length === 0) {

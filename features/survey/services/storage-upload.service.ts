@@ -23,7 +23,9 @@ function contextFor(a: { company_id: string; customer_id: string; id: string }):
   return { companyId: a.company_id, customerId: a.customer_id, appointmentId: a.id };
 }
 
-export const MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
+
+export const MAX_PHOTO_SIZE_BYTES = PRODUCT_UPLOAD_MAX_BYTES; // 10MB canonical limit
 
 export interface ImageSignatureResult {
   isValid: boolean;

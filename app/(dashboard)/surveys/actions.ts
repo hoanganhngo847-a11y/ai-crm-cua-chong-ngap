@@ -8,6 +8,7 @@ import {
   deleteSurveyPhotosForSlot,
   getSurveyPhotoSignedUrl,
 } from '../../../features/survey/services/storage-upload.service';
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
 
 export interface ActionResponse {
   success: boolean;
@@ -347,7 +348,7 @@ export async function uploadSurveyPhotoAction(
       return { success: false, message: 'Tệp tải lên rỗng (0 bytes).' };
     }
 
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > PRODUCT_UPLOAD_MAX_BYTES) {
       return { success: false, message: 'Dung lượng ảnh không được vượt quá 10MB.' };
     }
 

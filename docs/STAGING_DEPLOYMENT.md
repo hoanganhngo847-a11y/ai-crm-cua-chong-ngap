@@ -106,20 +106,19 @@ Staging Auth must be configured with the staging application origin, never `http
 ### Staging Architecture Specification
 
 - **Scheduler:**
-  `cron-job.org`
+  `cron-job.org` (External free scheduler: 1m / 5m / 15m cadences, HTTPS GET, Bearer auth)
 
-- **Hosting:**
-  `TBD` — must satisfy both:
-  1. commercial-use terms permit this project;
-  2. current Next.js application/runtime compatibility is verified.
+- **Hosting Candidate Classification:**
+  - **Preferred Candidate:** `Koyeb Free` (Eco Web Service, 512 MB RAM, 0.1 vCPU, Full Node.js runtime, official Next.js support)
+  - **Deployment Status:** `NOT YET PROVISIONED` (Evaluation recorded in `docs/STAGING_HOST_EVALUATION.md`; real deployment deferred to STG-004)
+  - **Fallback Candidate:** `Render Free` (750 free instance-hrs/mo, but continuous 1-min SLA pings consume nearly entire allowance)
+  - **Paid Alternative:** `Vercel Pro` ($20/mo, technically compatible)
+  - **Disqualified:** `Vercel Hobby` (prohibited by Vercel Terms for commercial projects)
 
 > [!WARNING]
 > **Vercel Hobby Non-Commercial-Use Incompatibility:**
-> Vercel Hobby must NOT be used as the canonical staging host for this commercial project under current Vercel Hobby non-commercial-use terms.
+> Vercel Hobby must **NOT** be used as the canonical staging host for this commercial project under current Vercel Hobby non-commercial-use terms.
 > This project is a commercial CRM containing sales pipelines, order management, deposit tracking, contract signing, production dispatch, installation scheduling, and warranty service workflows.
->
-> - **Vercel Pro:** Remains technically compatible but paid.
-> - **Free Commercial-Use-Compatible Staging Host:** A free commercial-use-compatible hosting provider will be evaluated separately before STG-003 provisioning. Do not select or prescribe a replacement hosting platform in this PR unless its compatibility with this repository's Next.js runtime is independently audited.
 
 ### Background Cadence Invariant
 Regardless of the ultimate hosting platform, the product runtime strictly requires high-frequency background cron execution:
@@ -127,16 +126,22 @@ Regardless of the ultimate hosting platform, the product runtime strictly requir
 - `/api/cron/voice-scheduler`: Every 5 minutes (`*/5 * * * *`).
 - `/api/cron/zalo-care`: Every 15 minutes (`*/15 * * * *`).
 
-The scheduler architecture is fully decoupled from the hosting platform: `cron-job.org` triggers standard HTTPS endpoints with Bearer token authentication, independent of whether the staging app runs on Vercel Pro, a containerized deployment, or an alternative commercial-compatible PaaS.
+The scheduler architecture is fully decoupled from the hosting platform: `cron-job.org` triggers standard HTTPS endpoints with Bearer token authentication, independent of whether the staging app runs on Koyeb, Vercel Pro, or an alternative commercial-compatible PaaS. Because `cron-job.org` calls `response-sla-worker` every minute, the Koyeb Free web service will normally remain awake once scheduler jobs are enabled.
 
-### Staging Application Deployment Workflow
-When provisioning the staging environment on an evaluated commercial-use-compatible host:
-1. **Dedicated Project:** Create a separate, dedicated project in the hosting platform, completely isolated from production.
-2. **Link GitHub Repository:** Connect the project to `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`.
-3. **Configure Staging Branch:** Deploy from the canonical staging branch (e.g. `staging` or `fix/stg-002-free-external-scheduler`).
-4. **Verify Commit SHA:** Inspect deployment details and verify that the deployed Git commit matches the exact immutable commit SHA recorded in Section 1.
-5. **Configure Staging-Only Environment Variables:** Populate the environment matrix (see Section 5 below) exclusively for staging.
-6. **Platform-Native Crons Disabled:** `vercel.json` contains no native crons (`{}`). Crons are orchestrated externally via `cron-job.org` (see Section 7).
+### Koyeb Deployment Contract (Documentation Only — STG-003 Hardening Phase)
+When provisioning the staging environment on Koyeb in the subsequent phase:
+- **Service Type:** Web Service
+- **Source:** GitHub repository (`hoanganhngo847-a11y/ai-crm-cua-chong-ngap`)
+- **Runtime:** Node.js
+- **Build Command:** `npm ci && npm run build`
+- **Run Command:** `npm run start`
+- **Application Port:** Dynamically bind to hosting-provided `PORT` environment variable (Next.js default handles `process.env.PORT`)
+- **Environment Scope:** Configure staging-only variables from Section 5 below
+- **Storage Backend:** Supabase Storage (`survey-photos`, `installation-docs`, `contracts`) — **NEVER** use local Koyeb filesystem for persistent application data
+- **Database & Auth:** Supabase dedicated staging project — **NEVER** create a Koyeb-managed database
+
+> [!IMPORTANT]
+> **Boundary Guard:** Do **NOT** execute this deployment during STG-003. Do not add a paid Koyeb instance. Do not create Koyeb resources. Do not add payment credentials. Supabase remains the canonical DB/Auth/Storage platform.
 
 ---
 
@@ -372,7 +377,26 @@ This gate automatically verifies:
 6. Supabase has provisioned `survey-photos` and `installation-docs` with exact private and MIME configurations, and canonical `contracts` bucket exists from historical migrations (orphan `contract-documents` bucket is not provisioned).
 7. Storage RLS restricts direct client uploads: attempts by anonymous and authenticated ordinary users fail closed under RLS (using valid MIME types), and service-role uploads succeed.
 8. All canonical external webhook route handlers exist.
+9. Upload transport hardening: canonical product upload limit is 10 MiB (`10485760` bytes), Next.js Server Action body limit (`12 MiB`) and proxy request buffering limit (`12 MiB`) provide >= 2 MiB multipart headroom, and server-authorized Storage upload architecture is preserved.
 
 > [!NOTE]
-> The automated local gate verifies repository-level configuration, external scheduler manifests, fail-closed cron authorization, and local Supabase storage RLS. Registration of the three scheduled jobs in the `cron-job.org` console must be completed after the hosted staging host is provisioned.
+> The automated local gate verifies repository-level configuration, external scheduler manifests, fail-closed cron authorization, upload transport limits, and local Supabase storage RLS. Registration of the three scheduled jobs in the `cron-job.org` console must be completed after the hosted staging host is provisioned.
 
+---
+
+## 10. Hosted-Upload Smoke Specification (Post-Provisioning Verification)
+
+During the subsequent staging provisioning phase (STG-004), after the real hosted environment is running, verify file uploads through the **REAL browser/server transport** (Client $\rightarrow$ HTTP POST FormData $\rightarrow$ Server Action $\rightarrow$ Server Auth $\rightarrow$ Supabase Storage):
+
+| Test Case | Payload Description | Expected Result | Verification Check |
+|:---|:---|:---:|:---|
+| **1. Small JPEG** | ~100 KiB valid JPEG image | **SUCCEED** | Upload succeeds, signed URL displays image, canonical DB record created |
+| **2. >1 MiB JPEG** | ~2–3 MiB valid JPEG image | **SUCCEED** | Overcomes default 1 MB Server Action barrier; uploaded and verified in storage |
+| **3. Near-Limit Photo** | ~9.8 MiB valid JPEG image | **SUCCEED** | Full product capacity accepted; transport envelope handles multipart overhead |
+| **4. Oversized Photo** | 10 MiB + 1 byte JPEG image | **REJECTED** | Server validation rejects with 400 / `Dung lượng ảnh không được vượt quá 10MB` |
+| **5. Invalid MIME** | Renamed `.exe` or `.txt` disguised as `.jpg` | **REJECTED** | Magic byte inspection detects invalid signature and rejects upload |
+| **6. Direct Client Storage** | Browser JS calling `supabase.storage.from(...).upload()` directly | **DENIED** | PostgreSQL storage RLS blocks anonymous and authenticated client uploads fail-closed |
+| **7. Near-Limit Handover PDF**| ~9.8 MiB valid PDF document | **SUCCEED** | Installation handover Server Action uploads successfully to `installation-docs` |
+
+> [!IMPORTANT]
+> This real-browser hosted-upload smoke test is **MANDATORY** before staging User Acceptance Testing (UAT) can commence.

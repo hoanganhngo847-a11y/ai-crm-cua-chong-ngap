@@ -4,6 +4,7 @@ import React, { useState, useTransition } from 'react';
 import Link from 'next/link';
 import type { ContractListItemDTO } from '../services';
 import { getContractDownloadUrlAction, signContractAction } from '../actions';
+import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
 
 interface ContractsViewProps {
   contracts: ContractListItemDTO[];
@@ -54,7 +55,7 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
       return;
     }
 
-    if (selectedFile.size > 10 * 1024 * 1024) {
+    if (selectedFile.size > PRODUCT_UPLOAD_MAX_BYTES) {
       setFeedback({ type: 'error', message: 'Dung lượng tệp ký vượt quá 10MB.' });
       return;
     }
