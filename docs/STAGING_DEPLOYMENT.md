@@ -109,8 +109,8 @@ Staging Auth must be configured with the staging application origin, never `http
   `cron-job.org` (External free scheduler: 1m / 5m / 15m cadences, HTTPS GET, Bearer auth)
 
 - **Hosting Candidate Classification:**
-  - **Preferred Candidate:** `Koyeb Free` (Eco Web Service, 512 MB RAM, 0.1 vCPU, Full Node.js runtime, official Next.js support)
-  - **Deployment Status:** `NOT YET PROVISIONED` (Evaluation recorded in `docs/STAGING_HOST_EVALUATION.md`; real deployment deferred to STG-004)
+  - **Preferred Candidate:** `Koyeb free Instance` (instance type: `free`, 512 MB RAM, 0.1 vCPU, 2 GB SSD, Full Node.js runtime, official Next.js support)
+  - **Deployment Status:** `PREFERRED DEMO/STAGING CANDIDATE — NOT PRODUCTION — NOT YET PROVISIONED` (Evaluation recorded in `docs/STAGING_HOST_EVALUATION.md`; real deployment deferred to STG-004)
   - **Fallback Candidate:** `Render Free` (750 free instance-hrs/mo, but continuous 1-min SLA pings consume nearly entire allowance)
   - **Paid Alternative:** `Vercel Pro` ($20/mo, technically compatible)
   - **Disqualified:** `Vercel Hobby` (prohibited by Vercel Terms for commercial projects)
@@ -120,25 +120,43 @@ Staging Auth must be configured with the staging application origin, never `http
 > Vercel Hobby must **NOT** be used as the canonical staging host for this commercial project under current Vercel Hobby non-commercial-use terms.
 > This project is a commercial CRM containing sales pipelines, order management, deposit tracking, contract signing, production dispatch, installation scheduling, and warranty service workflows.
 
+> [!WARNING]
+> **ZERO-COST GUARD:**
+> During STG-004 provisioning, select the Koyeb instance type named exactly `free`.
+>
+> Do NOT select any `eco-*`, Standard, GPU, database, Worker Service, Volume, or other paid resource.
+>
+> If `free` is unavailable in the account/region, STOP. Do not automatically fall back to a paid instance.
+
 ### Background Cadence Invariant
 Regardless of the ultimate hosting platform, the product runtime strictly requires high-frequency background cron execution:
 - `/api/cron/response-sla-worker`: Every 1 minute (`* * * * *`) to maintain the 5-minute customer response SLA.
 - `/api/cron/voice-scheduler`: Every 5 minutes (`*/5 * * * *`).
 - `/api/cron/zalo-care`: Every 15 minutes (`*/15 * * * *`).
 
-The scheduler architecture is fully decoupled from the hosting platform: `cron-job.org` triggers standard HTTPS endpoints with Bearer token authentication, independent of whether the staging app runs on Koyeb, Vercel Pro, or an alternative commercial-compatible PaaS. Because `cron-job.org` calls `response-sla-worker` every minute, the Koyeb Free web service will normally remain awake once scheduler jobs are enabled.
+The scheduler architecture is fully decoupled from the hosting platform: `cron-job.org` triggers standard HTTPS endpoints with Bearer token authentication, independent of whether the staging app runs on Koyeb, Vercel Pro, or an alternative commercial-compatible PaaS. Because `cron-job.org` calls `response-sla-worker` every minute, the Koyeb free web service instance will normally remain awake once scheduler jobs are enabled.
 
 ### Koyeb Deployment Contract (Documentation Only — STG-003 Hardening Phase)
 When provisioning the staging environment on Koyeb in the subsequent phase:
 - **Service Type:** Web Service
+- **Instance Type:** `free` (strictly do NOT select `eco-*` or any paid instance)
+- **Price Target:** $0
+- **Paid Fallback:** Forbidden without explicit user authorization
 - **Source:** GitHub repository (`hoanganhngo847-a11y/ai-crm-cua-chong-ngap`)
 - **Runtime:** Node.js
+- **Instance Specs:** 512 MB RAM, 0.1 vCPU, 2 GB SSD (ephemeral)
+- **Regions:** Frankfurt (`fra`) or Washington, D.C. (`was`)
 - **Build Command:** `npm ci && npm run build`
 - **Run Command:** `npm run start`
 - **Application Port:** Dynamically bind to hosting-provided `PORT` environment variable (Next.js default handles `process.env.PORT`)
 - **Environment Scope:** Configure staging-only variables from Section 5 below
 - **Storage Backend:** Supabase Storage (`survey-photos`, `installation-docs`, `contracts`) — **NEVER** use local Koyeb filesystem for persistent application data
 - **Database & Auth:** Supabase dedicated staging project — **NEVER** create a Koyeb-managed database
+- **Payment Verification Guard:**
+  - Koyeb may request payment-method/account validation depending on account verification.
+  - Adding a card/payment method is **NOT** authorized as part of STG-003.
+  - During STG-004, if Koyeb requires a payment method before the free demo can be provisioned, **STOP and obtain explicit user approval before entering or adding payment information**.
+  - No card should be added automatically.
 
 > [!IMPORTANT]
 > **Boundary Guard:** Do **NOT** execute this deployment during STG-003. Do not add a paid Koyeb instance. Do not create Koyeb resources. Do not add payment credentials. Supabase remains the canonical DB/Auth/Storage platform.
@@ -392,11 +410,14 @@ During the subsequent staging provisioning phase (STG-004), after the real hoste
 |:---|:---|:---:|:---|
 | **1. Small JPEG** | ~100 KiB valid JPEG image | **SUCCEED** | Upload succeeds, signed URL displays image, canonical DB record created |
 | **2. >1 MiB JPEG** | ~2–3 MiB valid JPEG image | **SUCCEED** | Overcomes default 1 MB Server Action barrier; uploaded and verified in storage |
-| **3. Near-Limit Photo** | ~9.8 MiB valid JPEG image | **SUCCEED** | Full product capacity accepted; transport envelope handles multipart overhead |
-| **4. Oversized Photo** | 10 MiB + 1 byte JPEG image | **REJECTED** | Server validation rejects with 400 / `Dung lượng ảnh không được vượt quá 10MB` |
-| **5. Invalid MIME** | Renamed `.exe` or `.txt` disguised as `.jpg` | **REJECTED** | Magic byte inspection detects invalid signature and rejects upload |
-| **6. Direct Client Storage** | Browser JS calling `supabase.storage.from(...).upload()` directly | **DENIED** | PostgreSQL storage RLS blocks anonymous and authenticated client uploads fail-closed |
-| **7. Near-Limit Handover PDF**| ~9.8 MiB valid PDF document | **SUCCEED** | Installation handover Server Action uploads successfully to `installation-docs` |
+| **3. Near-Limit Survey Photo** | ~9.8 MiB valid JPEG image | **SUCCEED** | Full product capacity accepted; transport envelope handles multipart overhead |
+| **4. Oversized Survey Photo** | 10 MiB + 1 byte JPEG image | **REJECTED** | Server validation rejects with 400 / `Dung lượng ảnh không được vượt quá 10MB` |
+| **5. Survey Invalid Image Smoke** | Renamed `.exe` or `.txt` disguised as `.jpg` | **REJECTED** | Survey image signature validation (`validateImageFileSignature`) inspects binary magic bytes and rejects invalid signature |
+| **6. Installation Invalid Evidence Smoke** | File with mismatched extension/MIME or unallowed type | **REJECTED** | Server validation (`prepareEvidence`) rejects invalid format or extension mismatch fail-closed |
+| **7. Contract Invalid Signed PDF Smoke** | Non-PDF content disguised as `.pdf` | **REJECTED** | Server validation (`validateSignedPdf`) verifies `%PDF-` header and rejects non-PDF content fail-closed |
+| **8. Direct Client Storage Write** | Browser JS calling `supabase.storage.from(...).upload()` directly | **DENIED** | PostgreSQL storage RLS blocks anonymous and authenticated client uploads fail-closed |
+| **9. Near-Limit Handover PDF** | ~9.8 MiB valid PDF document | **SUCCEED** | Installation handover Server Action uploads successfully to `installation-docs` |
+| **10. Oversized Handover PDF** | 10 MiB + 1 byte PDF document | **REJECTED** | Server validation (`prepareEvidence`) rejects before storage upload |
 
 > [!IMPORTANT]
 > This real-browser hosted-upload smoke test is **MANDATORY** before staging User Acceptance Testing (UAT) can commence.

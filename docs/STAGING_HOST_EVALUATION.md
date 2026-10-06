@@ -10,7 +10,7 @@
 
 | Hosting Provider / Tier | Commercial-Use Permitted? | Next.js 16 Runtime Compatibility | 10 MiB Upload Contract Preserved? | Status / Decision |
 |:---|:---:|:---:|:---:|:---|
-| **Koyeb Free** | **YES** (Standard MSA) | **Full Node.js Web Service** | **YES** (full HTTP streaming/buffering) | **PREFERRED CANDIDATE** (Not yet deployed) |
+| **Koyeb (free Instance)** | **YES** (Standard MSA) | **Full Node.js Web Service** | **YES** (full HTTP streaming/buffering) | **PREFERRED CANDIDATE** (Not yet deployed) |
 | **Render Free** | **YES** | Full Node.js Web Service | **YES** | **FALLBACK CANDIDATE** |
 | **Netlify Free** | **YES** | Serverless Functions | **NO** (6 MB payload limit) | **REJECTED** |
 | **Cloudflare Workers Free** | **YES** | OpenNext / Edge Runtime | **RISK** (10 ms CPU limit) | **REJECTED** |
@@ -19,23 +19,40 @@
 
 ---
 
-## 1. Preferred Candidate — Koyeb Free
+## 1. Preferred Candidate — Koyeb free Instance
 
-- **Status:** `PREFERRED STAGING CANDIDATE — NOT YET DEPLOYED`
+- **Status:** `PREFERRED DEMO/STAGING CANDIDATE — NOT PRODUCTION — NOT YET DEPLOYED`
 - **Runtime Model:** Full Node.js Web Service running in a lightweight microVM (Kuma engine).
 - **Next.js Support:** Official Koyeb Next.js deployment support with zero edge runtime polyfill requirements.
-- **Free Instance Allocation:**
-  - **Memory:** 512 MB RAM (Eco instance)
+- **Canonical Free Instance Allocation:**
+  - **Instance Type:** `free` (strictly distinct from paid `eco-*` instances such as `eco-nano` or `eco-micro`)
+  - **Memory:** 512 MB RAM
   - **CPU:** 0.1 vCPU
-  - **Disk:** 2 GB SSD local ephemeral storage (not used for persistent data)
-  - **Service Quota:** 1 free web service per organization
-- **Regions for Free Tier:** Frankfurt (`fra`), Washington, D.C. (`was`).
-- **Idle Behavior & Spin-down:**
-  - Standard Koyeb Free web services scale to zero after 1 hour of zero traffic.
+  - **Disk:** 2 GB SSD local ephemeral storage (not used for persistent application data)
+  - **Price:** $0 for the `free` Instance
+  - **Service Quota:** Exactly 1 free Web Service / `free` Instance per organization
+  - **Regions for Free Tier:** Frankfurt (`fra`) or Washington, D.C. (`was`)
+- **Idle Behavior & Scale-to-Zero:**
+  - Standard Koyeb `free` instances scale to zero after 1 hour without traffic.
   - **Continuous SLA Scheduler Interaction:** Because `cron-job.org` invokes `/api/cron/response-sla-worker` every 1 minute, the staging instance will normally remain awake once scheduler jobs are active.
+- **Outbound Data Transfer:**
+  - 100 GB outbound bandwidth per month included per account under current Koyeb documentation (subject to platform terms; do not assume indefinite zero-cost overage).
 - **Commercial / Professional Terms:** Koyeb Master Services Agreement (MSA) is written for customer professional and business use; commercial use is permitted across all tiers including Free.
-- **Production Guard:** Koyeb Free instances are strictly **NOT** approved for production use.
-- **Payment Verification Requirement:** Koyeb Starter plan requires a valid payment method / card validation for account anti-abuse verification, even though the Eco web instance itself incurs $0 charges.
+- **Production Guard:** Koyeb `free` instances are strictly **NOT** approved for production use.
+
+> [!WARNING]
+> **ZERO-COST GUARD:**
+> During STG-004 provisioning, select the Koyeb instance type named exactly `free`.
+>
+> Do NOT select any `eco-*`, Standard, GPU, database, Worker Service, Volume, or other paid resource.
+>
+> If `free` is unavailable in the account/region, STOP. Do not automatically fall back to a paid instance.
+
+- **Payment Verification Requirement:**
+  - Koyeb may request payment-method/account validation depending on account verification.
+  - Adding a card/payment method is **NOT** authorized as part of STG-003.
+  - During STG-004, if Koyeb requires a payment method before the free demo can be provisioned, **STOP and obtain explicit user approval before entering or adding payment information**.
+  - No card should be added automatically.
 - **Realistic Capacity Disclaimer:**
   - Koyeb Free offers **no contractual SLA** or uptime guarantee.
   - 0.1 vCPU and 512 MB RAM are **not yet proven** sufficient for heavy concurrent loads; real runtime behavior, memory consumption under 10 MiB uploads, and Turbopack SSR performance must be measured empirically during the STG-004 staging smoke test.
@@ -88,6 +105,6 @@
 
 ## Next Steps for STG-004
 
-1. Deploy application to Koyeb Free Web Service using the canonical contract defined in `docs/STAGING_DEPLOYMENT.md`.
+1. Provision application on Koyeb using the exact instance type `free` under the canonical contract defined in `docs/STAGING_DEPLOYMENT.md` (strictly adhering to the ZERO-COST GUARD).
 2. Conduct the real-browser hosted-upload smoke test specification (10 MiB JPEG/PDF roundtrip).
 3. Benchmark memory consumption under 512 MB constraints during concurrent file handling.
