@@ -10,6 +10,10 @@ import {
     secureEqual,
     validSignature,
 } from '@/features/omnichannel/facebook/core';
+import {
+    lookupFacebookDisplayName,
+    promoteFacebookCustomerDisplayName,
+} from '@/features/omnichannel/facebook/profile';
 
 import {
     binding,
@@ -86,6 +90,10 @@ export async function POST(request: Request) {
             if (event.kind === 'MESSAGE') {
                 const safe = sanitize(event.content);
 
+                // Keep the intake payload name stable for idempotent retries. Profile enrichment
+                // is deliberately best-effort and promoted to the customer record after ingestion.
+                const displayNamePromise = lookupFacebookDisplayName(config, event.sender);
+
                 await rpc('han_ingest', {
                     p_company: config.company,
                     p_channel: 'FACEBOOK',
@@ -99,6 +107,13 @@ export async function POST(request: Request) {
                     p_occurred: event.time,
                     p_payload: event.raw,
                 });
+
+                const displayName = await displayNamePromise;
+                await promoteFacebookCustomerDisplayName(
+                    config,
+                    event.sender,
+                    displayName,
+                );
             } else {
                 await rpc('han_receipt', {
                     p_company: config.company,
