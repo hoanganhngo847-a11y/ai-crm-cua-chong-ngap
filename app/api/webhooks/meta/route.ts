@@ -2,14 +2,15 @@ import { createHash } from 'node:crypto';
 
 import {
     ChannelError,
-    extractPhone,
     object,
     parseMeta,
     readBody,
-    sanitize,
     secureEqual,
     validSignature,
 } from '@/features/omnichannel/facebook/core';
+import {
+    processFacebookInboundPhonePrivacy,
+} from '@/features/omnichannel/facebook/phone-intake';
 import {
     lookupFacebookDisplayName,
     promoteFacebookCustomerDisplayName,
@@ -73,7 +74,6 @@ export async function POST(request: Request) {
         if (body.object !== 'page' || !Array.isArray(body.entry) || body.entry.length > 200) {
             throw new ChannelError('INVALID_WEBHOOK');
         }
-        // Validate every signed entry before writing any event.
         const batches = body.entry.map((value) => {
             const entry = object(value);
             if (typeof entry.id !== 'string') throw new ChannelError('INVALID_WEBHOOK');
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
             events.map((event) => ({ config, event })),
         )) {
             if (event.kind === 'MESSAGE') {
-                const safe = sanitize(event.content);
+                const phonePrivacy = processFacebookInboundPhonePrivacy(event.content);
 
                 // Keep the intake payload name stable for idempotent retries. Profile enrichment
                 // is deliberately best-effort and promoted to the customer record after ingestion.
@@ -100,12 +100,19 @@ export async function POST(request: Request) {
                     p_external: `${config.page}:${event.sender}`,
                     p_key: event.key,
                     p_name: 'Khách Messenger',
-                    p_phone: extractPhone(event.content),
+                    p_phone: phonePrivacy.phone,
                     p_content: event.content,
-                    p_safe: safe.content,
-                    p_safe_status: safe.status,
+                    p_safe: phonePrivacy.safeContent,
+                    p_safe_status: phonePrivacy.safeStatus,
                     p_occurred: event.time,
-                    p_payload: event.raw,
+                    p_payload: {
+                        ...event.raw,
+                        crm_phone_detection: {
+                            status: phonePrivacy.status,
+                            valid_count: phonePrivacy.validPhones.length,
+                            invalid_count: phonePrivacy.invalidCandidates.length,
+                        },
+                    },
                 });
 
                 const displayName = await displayNamePromise;
