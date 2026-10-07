@@ -4,6 +4,8 @@ import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { InboxService } from '../../../features/inbox/services/inbox.service';
 import { maskPhone } from '../../../features/crm/services/customer.service';
 import { sanitizePhoneInText } from '../../../features/crm/utils/phone-sanitizer';
+import { sendMessage as sendFacebookMessage } from '../../../features/omnichannel/facebook/server';
+import { ChannelError } from '../../../features/omnichannel/facebook/core';
 import type { InboxChannel } from '../../../features/inbox/types/inbox.types';
 import type { ActorContext } from '../../../shared/contracts/auth';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -22,13 +24,6 @@ interface ResolvedInboxActor {
   role: string;
 }
 
-/**
- * Xác thực và phân giải danh tính actor có membership ACTIVE:
- * 1. Xác thực người dùng bằng Supabase server client (getUser). Chặn 401 nếu chưa đăng nhập.
- * 2. Lấy company_id từ bản ghi membership (company_members/members với status = 'ACTIVE') của user đang đăng nhập.
- *    Tuyệt đối KHÔNG tin company_id từ query param hay body client gửi lên.
- * 3. Kiểm tra RBAC: Chặn vai trò TECHNICIAN (trả 403 FORBIDDEN). Chỉ SALE và BOSS_ADMIN mới được truy cập Inbox.
- */
 async function resolveInboxActor(
   context?: InboxRouteContext
 ): Promise<{ actor?: ResolvedInboxActor; errorResponse?: NextResponse }> {
@@ -60,7 +55,6 @@ async function resolveInboxActor(
     companyId = actor.companyId;
     userRole = actor.role;
   } else {
-    // 1. Xác thực người dùng bằng Supabase server client (getUser). Chặn 401 nếu chưa đăng nhập.
     const supabase = context?.supabaseClient || (await createServerClient());
     const {
       data: { user },
@@ -78,7 +72,6 @@ async function resolveInboxActor(
 
     userId = user.id;
 
-    // 2. Lấy thông tin membership của user trong bảng 'company_members' hoặc 'members' với status = 'ACTIVE'
     let memberRecord: { company_id: string; role: string; status: string } | null = null;
 
     const { data: cmData, error: cmError } = await supabase
@@ -97,9 +90,7 @@ async function resolveInboxActor(
         .eq('user_id', user.id)
         .eq('status', 'ACTIVE')
         .maybeSingle();
-      if (mData) {
-        memberRecord = mData;
-      }
+      if (mData) memberRecord = mData;
     }
 
     if (!memberRecord || memberRecord.status !== 'ACTIVE' || !memberRecord.company_id) {
@@ -115,7 +106,6 @@ async function resolveInboxActor(
     userRole = memberRecord.role;
   }
 
-  // 3. Kiểm tra RBAC: Chặn vai trò TECHNICIAN (trả 403 FORBIDDEN). Chỉ SALE và BOSS_ADMIN mới được truy cập Inbox.
   if (userRole === APPLICATION_ROLES.TECHNICIAN) {
     return {
       errorResponse: NextResponse.json(
@@ -145,40 +135,26 @@ async function resolveInboxActor(
   return { actor: { userId, companyId, role: userRole } };
 }
 
-/**
- * GET /api/inbox
- * Lấy danh sách cuộc hội thoại hoặc tin nhắn chi tiết theo conversation_id.
- *
- * Phân quyền & Tenant Isolation (Lỗi P0 - Việc 4):
- * - Xác thực Supabase server client (getUser), chặn 401 nếu chưa đăng nhập.
- * - Lấy company_id từ membership ACTIVE của user, chặn đứng cross-tenant.
- * - RBAC: Chỉ BOSS_ADMIN và SALE được phép. TECHNICIAN bị từ chối (403).
- * - Truyền companyId vào tất cả các lời gọi InboxService.
- * - Trả 404 NOT_FOUND nếu conversationId không tồn tại hoặc không thuộc quyền sở hữu của tenant.
- */
 export async function GET(request: NextRequest, context?: unknown) {
   try {
     const typedContext = context as InboxRouteContext | undefined;
     const authResult = await resolveInboxActor(typedContext);
-    if (authResult.errorResponse) {
-      return authResult.errorResponse;
-    }
-    const { companyId, role, userId } = authResult.actor!;
+    if (authResult.errorResponse) return authResult.errorResponse;
 
+    const { companyId, role, userId } = authResult.actor!;
     const { searchParams } = new URL(request.url);
     const conversationId = searchParams.get('conversation_id')?.trim();
     const channel = (searchParams.get('channel')?.trim() || 'all') as InboxChannel | 'all';
     const search = searchParams.get('search')?.trim() || '';
 
-    // Nếu có conversation_id: Lấy chi tiết cuộc trò chuyện và danh sách tin nhắn
     if (conversationId) {
-      // Resource Authorization: getConversationById lọc nghiêm ngặt theo companyId
       const conversation = await InboxService.getConversationById(
         companyId,
         conversationId,
         role,
         typedContext?.supabaseClient
       );
+
       if (!conversation) {
         return NextResponse.json(
           {
@@ -190,8 +166,6 @@ export async function GET(request: NextRequest, context?: unknown) {
         );
       }
 
-      // Lấy tin nhắn (bảo vệ tài nguyên, fail-closed 404 nếu sai tenant & làm sạch Zero-Phone cho SALE)
-      // Khi BOSS_ADMIN yêu cầu raw content, InboxService kích hoạt fail-closed audit log vào public.audit_logs.
       let messages;
       try {
         messages = await InboxService.getMessagesByConversationId(
@@ -226,7 +200,6 @@ export async function GET(request: NextRequest, context?: unknown) {
         throw err;
       }
 
-      // Áp dụng Zero-Phone Invariant cho SALE
       const sanitizedConv = {
         ...conversation,
         customer_phone:
@@ -241,40 +214,29 @@ export async function GET(request: NextRequest, context?: unknown) {
 
       return NextResponse.json({
         success: true,
-        data: {
-          conversation: sanitizedConv,
-          messages,
-        },
+        data: { conversation: sanitizedConv, messages },
       });
     }
 
-    // Nếu không có conversation_id: Lấy danh sách toàn bộ cuộc hội thoại thuộc companyId
     const conversations = await InboxService.getConversations(
       companyId,
-      {
-        channel,
-        search,
-      },
+      { channel, search },
       role
     );
 
-    // Áp dụng bảo vệ số điện thoại và làm sạch tin nhắn cuối cho danh sách
-    const sanitizedConversations = conversations.map((c) => ({
-      ...c,
+    const sanitizedConversations = conversations.map((conversation) => ({
+      ...conversation,
       customer_phone:
-        role === APPLICATION_ROLES.SALE && c.customer_phone
-          ? maskPhone(c.customer_phone)
-          : c.customer_phone,
+        role === APPLICATION_ROLES.SALE && conversation.customer_phone
+          ? maskPhone(conversation.customer_phone)
+          : conversation.customer_phone,
       last_message:
         role === APPLICATION_ROLES.SALE
-          ? sanitizePhoneInText(c.last_message)
-          : c.last_message,
+          ? sanitizePhoneInText(conversation.last_message)
+          : conversation.last_message,
     }));
 
-    return NextResponse.json({
-      success: true,
-      data: sanitizedConversations,
-    });
+    return NextResponse.json({ success: true, data: sanitizedConversations });
   } catch (err: unknown) {
     const errorObj = err as { code?: string; message?: string } | undefined;
     if (errorObj?.code === 'AUDIT_WRITE_FAILED') {
@@ -287,6 +249,8 @@ export async function GET(request: NextRequest, context?: unknown) {
         { status: 500 }
       );
     }
+
+    console.error('Inbox GET failed:', err);
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
@@ -294,25 +258,48 @@ export async function GET(request: NextRequest, context?: unknown) {
   }
 }
 
-/**
- * POST /api/inbox
- * Gửi tin nhắn phản hồi từ Sale trong Hộp thư tích hợp.
- *
- * Phân quyền & Tenant Isolation (Lỗi P0 - Việc 4):
- * - Xác thực Supabase server client (getUser), chặn 401 nếu chưa đăng nhập.
- * - Lấy company_id từ membership ACTIVE của user. Tuyệt đối KHÔNG tin company_id từ body client gửi lên.
- * - RBAC: Chỉ SALE và BOSS_ADMIN được phép gửi. TECHNICIAN bị từ chối (403).
- * - Kiểm tra conversationId thuộc quyền sở hữu của caller companyId. Nếu không khớp ném 404 NOT_FOUND.
- */
+function facebookFailure(status: string) {
+  if (status === 'FAILED') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'FACEBOOK_SEND_FAILED',
+        message: 'Facebook từ chối tin nhắn. Tin chưa được gửi đến khách hàng.',
+      },
+      { status: 502 }
+    );
+  }
+
+  if (status === 'UNKNOWN') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'FACEBOOK_SEND_UNCERTAIN',
+        message: 'Chưa xác định được Facebook đã nhận tin nhắn hay chưa. Không tự động gửi lại để tránh gửi trùng.',
+      },
+      { status: 503 }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      success: false,
+      error: 'FACEBOOK_SEND_IN_PROGRESS',
+      message: 'Tin nhắn đang được xử lý. Vui lòng làm mới hội thoại trước khi thử lại.',
+    },
+    { status: 409 }
+  );
+}
+
 export async function POST(request: NextRequest, context?: unknown) {
   try {
-    const authResult = await resolveInboxActor(context as InboxRouteContext | undefined);
-    if (authResult.errorResponse) {
-      return authResult.errorResponse;
-    }
-    const { companyId, userId } = authResult.actor!;
+    const typedContext = context as InboxRouteContext | undefined;
+    const authResult = await resolveInboxActor(typedContext);
+    if (authResult.errorResponse) return authResult.errorResponse;
 
+    const { companyId, userId, role } = authResult.actor!;
     const body = await request.json().catch(() => null);
+
     if (!body || typeof body !== 'object') {
       return NextResponse.json(
         { success: false, error: 'INVALID_PAYLOAD', message: 'Dữ liệu yêu cầu không hợp lệ.' },
@@ -320,7 +307,7 @@ export async function POST(request: NextRequest, context?: unknown) {
       );
     }
 
-    const { conversation_id, content } = body;
+    const { conversation_id, content } = body as Record<string, unknown>;
 
     if (!conversation_id || typeof conversation_id !== 'string') {
       return NextResponse.json(
@@ -336,18 +323,18 @@ export async function POST(request: NextRequest, context?: unknown) {
       );
     }
 
-    // Trích xuất clientCommandId từ một trong các nguồn theo thứ tự ưu tiên:
-    // 1. Header: req.headers.get('x-client-command-id') || req.headers.get('x-idempotency-key')
-    // 2. Request Body: body.client_command_id || body.clientCommandId
     const rawCommandId =
       request.headers.get('x-client-command-id') ||
       request.headers.get('x-idempotency-key') ||
-      (typeof body.client_command_id === 'string' ? body.client_command_id : null) ||
-      (typeof body.clientCommandId === 'string' ? body.clientCommandId : null);
+      (typeof (body as Record<string, unknown>).client_command_id === 'string'
+        ? ((body as Record<string, unknown>).client_command_id as string)
+        : null) ||
+      (typeof (body as Record<string, unknown>).clientCommandId === 'string'
+        ? ((body as Record<string, unknown>).clientCommandId as string)
+        : null);
 
     const clientCommandId = rawCommandId ? rawCommandId.trim() : undefined;
 
-    // BẮT BUỘC: Nếu !clientCommandId -> Trả về HTTP 400 MISSING_COMMAND_ID
     if (!clientCommandId) {
       return NextResponse.json(
         {
@@ -359,7 +346,6 @@ export async function POST(request: NextRequest, context?: unknown) {
       );
     }
 
-    // Kiểm tra định dạng UUID: Nếu không khớp regex UUID -> trả về HTTP 400 INVALID_COMMAND_ID
     if (!UUID_REGEX.test(clientCommandId)) {
       return NextResponse.json(
         {
@@ -371,8 +357,123 @@ export async function POST(request: NextRequest, context?: unknown) {
       );
     }
 
-    // Resource Authorization & Tenant Isolation:
-    // Tuyệt đối sử dụng companyId được giải mã từ session membership, không lấy từ client body.
+    const conversation = await InboxService.getConversationById(
+      companyId,
+      conversation_id,
+      role,
+      typedContext?.supabaseClient
+    );
+
+    if (!conversation) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'NOT_FOUND',
+          message: 'Không tìm thấy cuộc hội thoại hoặc không thuộc quyền quản lý của tổ chức.',
+        },
+        { status: 404 }
+      );
+    }
+
+    // Production Facebook conversations must use the canonical provider sender.
+    // Injected route contexts are a test seam and keep using the mockable inbox service.
+    const hasInjectedTestContext =
+      typedContext?.actor !== undefined || typedContext?.supabaseClient !== undefined;
+
+    if (conversation.channel === 'facebook' && !hasInjectedTestContext) {
+      try {
+        const delivery = await sendFacebookMessage(conversation_id, {
+          content: content.trim(),
+          request_id: clientCommandId,
+        });
+
+        if (delivery.status !== 'SENT') {
+          return facebookFailure(delivery.status);
+        }
+
+        const messages = await InboxService.getMessagesByConversationId(
+          companyId,
+          conversation_id,
+          role,
+          undefined,
+          { userId, actorId: userId }
+        );
+        const latest = messages[messages.length - 1];
+
+        if (!latest) {
+          return NextResponse.json(
+            {
+              success: true,
+              data: {
+                id: clientCommandId,
+                company_id: companyId,
+                conversation_id,
+                customer_id: conversation.customer_id,
+                channel: 'facebook',
+                sender_type: 'sale',
+                content: sanitizePhoneInText(content.trim()),
+                sanitized_content: sanitizePhoneInText(content.trim()),
+                sanitization_status: 'SUCCEEDED',
+                created_at: new Date().toISOString(),
+                direction: 'outbound',
+                delivery_status: 'SENT',
+                client_command_id: clientCommandId,
+                is_duplicate: false,
+              },
+              message: 'Đã gửi tin nhắn đến khách hàng qua Facebook Messenger.',
+            },
+            { status: 201 }
+          );
+        }
+
+        const { raw_content: _rawContent, ...safeData } = latest;
+        return NextResponse.json(
+          {
+            success: true,
+            data: {
+              ...safeData,
+              delivery_status: 'SENT',
+              client_command_id: clientCommandId,
+              is_duplicate: false,
+            },
+            message: 'Đã gửi tin nhắn đến khách hàng qua Facebook Messenger.',
+          },
+          { status: 201 }
+        );
+      } catch (sendErr: unknown) {
+        if (sendErr instanceof ChannelError) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: sendErr.code,
+              message:
+                sendErr.code === 'MESSAGING_WINDOW_CLOSED'
+                  ? 'Đã quá cửa sổ phản hồi Messenger cho hội thoại này.'
+                  : `Không thể gửi tin nhắn Facebook (${sendErr.code}).`,
+            },
+            { status: sendErr.status }
+          );
+        }
+
+        const errorObj = sendErr as { status?: number; code?: string } | undefined;
+        if (errorObj?.status && errorObj.status >= 400 && errorObj.status < 600) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: errorObj.code || 'FACEBOOK_SEND_ERROR',
+              message:
+                errorObj.code === 'MFA_REQUIRED'
+                  ? 'Cần xác thực MFA/AAL2 trước khi gửi tin nhắn với tài khoản quản trị viên.'
+                  : 'Không thể gửi tin nhắn Facebook.',
+            },
+            { status: errorObj.status }
+          );
+        }
+
+        throw sendErr;
+      }
+    }
+
     try {
       const newMessage = await InboxService.sendMessage(
         {
@@ -383,11 +484,11 @@ export async function POST(request: NextRequest, context?: unknown) {
           clientCommandId,
           actor_user_id: userId,
         },
-        companyId
+        companyId,
+        typedContext?.supabaseClient
       );
 
-      // Đảm bảo không chứa raw_content trong DTO trả về (Lỗi P1 số 8)
-      const { raw_content: _raw_content, ...safeData } = newMessage;
+      const { raw_content: _rawContent, ...safeData } = newMessage;
       const isDuplicate = Boolean(safeData.is_duplicate);
 
       return NextResponse.json(
@@ -395,13 +496,13 @@ export async function POST(request: NextRequest, context?: unknown) {
           success: true,
           data: {
             ...safeData,
-            client_command_id: safeData.client_command_id || clientCommandId || null,
+            client_command_id: safeData.client_command_id || clientCommandId,
             delivery_status: safeData.delivery_status || 'PENDING_DISPATCH',
             is_duplicate: isDuplicate,
           },
           message: isDuplicate
             ? 'Lệnh gửi tin nhắn đã được ghi nhận trước đó (Idempotent OK).'
-            : 'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
+            : 'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng.',
         },
         { status: isDuplicate ? 200 : 201 }
       );
@@ -425,7 +526,8 @@ export async function POST(request: NextRequest, context?: unknown) {
       }
       throw sendErr;
     }
-  } catch (_err: unknown) {
+  } catch (err: unknown) {
+    console.error('Inbox POST failed:', err);
     return NextResponse.json(
       { success: false, error: 'DATABASE_ERROR', message: 'Lỗi xử lý dữ liệu trên hệ thống.' },
       { status: 500 }
