@@ -2,6 +2,7 @@ import { sanitize } from './core';
 
 const PHONE_CANDIDATE_SOURCE = String.raw`(?:\+|00)?[0-9](?:[\s()./_,:\-]*[0-9]){3,}`;
 const PHONE_INTENT_REGEX = /(?:sđt|sdt|số\s*(?:điện\s*thoại|dt)|điện\s*thoại|phone|liên\s*hệ|zalo)/iu;
+const PHONE_INTENT_GLOBAL_REGEX = /(?:sđt|sdt|số\s*(?:điện\s*thoại|dt)|điện\s*thoại|phone|liên\s*hệ|zalo)/giu;
 const VIETNAM_MOBILE_NATIONAL = /^(?:3[2-9]|5[25689]|7[06789]|8[1-9]|9[0-46-9])\d{7}$/;
 const VIETNAM_LANDLINE_NATIONAL = /^2\d{8,9}$/;
 
@@ -107,7 +108,15 @@ function classifyCandidates(content: string) {
                 ? 'INVALID'
                 : 'NONE';
 
-    return { normalized, valid, invalid, status, hasPhoneIntent };
+    return { valid, invalid, status };
+}
+
+function numberToken(index: number): string {
+    return `INVALIDNUMBERTOKEN${String.fromCharCode(65 + (index % 26))}${'Q'.repeat(Math.floor(index / 26) + 1)}`;
+}
+
+function labelToken(index: number): string {
+    return `CONTACTLABELTOKEN${String.fromCharCode(65 + (index % 26))}${'R'.repeat(Math.floor(index / 26) + 1)}`;
 }
 
 function sanitizePreservingInvalidPhones(
@@ -118,30 +127,39 @@ function sanitizePreservingInvalidPhones(
         .normalize('NFKC')
         .replace(/[\u200B-\u200D\uFEFF]/g, '');
     const protectedValues: string[] = [];
+    const protectedLabels: string[] = [];
 
-    // Core sanitizer is intentionally fail-closed and historically redacts every long number.
-    // Protect non-phone numeric values first so invalid phone attempts, prices, dates and codes
-    // remain visible to Sale/AI; valid phones are replaced before reaching the core sanitizer.
-    const prepared = normalized.replace(
+    // Core sanitizer historically redacts every long number and every explicit contact field.
+    // Protect non-phone numeric values and the contact label first so invalid phone attempts,
+    // prices, dates and codes remain visible to Sale/AI. Valid phones are removed up front.
+    const preparedNumbers = normalized.replace(
         new RegExp(PHONE_CANDIDATE_SOURCE, 'g'),
         (candidate) => {
             const phone = normalizeVietnamesePhoneCandidate(candidate);
             if (phone && validPhones.has(phone)) {
                 return '[số điện thoại đã ẩn]';
             }
-            const token = `INVALIDNUMBERTOKEN${String.fromCharCode(65 + (protectedValues.length % 26))}${'Q'.repeat(Math.floor(protectedValues.length / 26) + 1)}`;
+            const token = numberToken(protectedValues.length);
             protectedValues.push(candidate);
             return token;
         },
     );
+
+    const prepared = preparedNumbers.replace(PHONE_INTENT_GLOBAL_REGEX, (label) => {
+        const token = labelToken(protectedLabels.length);
+        protectedLabels.push(label);
+        return token;
+    });
 
     const safe = sanitize(prepared);
     if (safe.status !== 'SUCCEEDED' || safe.content === null) return safe;
 
     let restored = safe.content;
     protectedValues.forEach((value, index) => {
-        const token = `INVALIDNUMBERTOKEN${String.fromCharCode(65 + (index % 26))}${'Q'.repeat(Math.floor(index / 26) + 1)}`;
-        restored = restored.replace(token, value);
+        restored = restored.replace(numberToken(index), value);
+    });
+    protectedLabels.forEach((value, index) => {
+        restored = restored.replace(labelToken(index), value);
     });
 
     return { content: restored, status: 'SUCCEEDED' };
