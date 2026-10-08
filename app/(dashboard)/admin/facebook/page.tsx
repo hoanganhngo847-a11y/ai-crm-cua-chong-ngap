@@ -2,7 +2,8 @@ import Link from 'next/link';
 
 import { getActorContext } from '@/lib/auth/context';
 import {
-  getConfiguredFacebookConnection,
+  configuredFacebookPageIds,
+  getConfiguredFacebookConnections,
   readFacebookConnectSession,
 } from '@/features/omnichannel/facebook/connect';
 
@@ -18,10 +19,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   FACEBOOK_CONNECT_SESSION_EXPIRED: 'Phiên chọn Page đã hết hạn. Vui lòng kết nối lại.',
   FACEBOOK_PAGE_NOT_MANAGED: 'Tài khoản Facebook này không quản lý Page đã chọn.',
   FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE:
-    'Page đã chọn chưa được cấu hình cho workspace CRM hiện tại.',
+    'Có Page đã chọn chưa được cấu hình cho workspace CRM hiện tại.',
   FACEBOOK_SUBSCRIBE_FAILED: 'Không thể đăng ký Page với webhook Messenger.',
   FACEBOOK_CONNECT_SELECT_FAILED: 'Không thể hoàn tất kết nối Page.',
   FACEBOOK_CONNECT_START_FAILED: 'Không thể bắt đầu đăng nhập Facebook.',
+  INVALID_PAGE: 'Vui lòng chọn ít nhất một Page hợp lệ.',
 };
 
 function textParam(value: string | string[] | undefined) {
@@ -36,16 +38,18 @@ export default async function FacebookConnectionPage({
   const params = await searchParams;
   const errorCode = textParam(params.error);
   const connected = textParam(params.connected) === '1';
-  const connectedPageName = textParam(params.page);
+  const connectedPages = textParam(params.pages);
+  const connectedCount = Number(textParam(params.count) || 0);
   const actor = await getActorContext();
   const companyId = actor?.companyId || '';
 
-  const [connection, session] = await Promise.all([
-    getConfiguredFacebookConnection(companyId),
+  const [connections, session] = await Promise.all([
+    getConfiguredFacebookConnections(companyId),
     readFacebookConnectSession(),
   ]);
-
-  const configuredPageId = connection.pageId;
+  const configuredPageIds = configuredFacebookPageIds(companyId);
+  const fullyConnected =
+    connections.length > 0 && connections.every((connection) => connection.subscribed);
 
   return (
     <div className="space-y-6">
@@ -58,8 +62,9 @@ export default async function FacebookConnectionPage({
             Kết nối Facebook Page
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-            Boss Admin đăng nhập Facebook, xem các Page mình đang quản lý, chọn Page
-            được phép của workspace và đăng ký Page đó với webhook Messenger của CRM.
+            Boss Admin đăng nhập Facebook một lần để xác minh các Page mình quản lý. CRM
+            hỗ trợ nhiều Page cùng lúc; mỗi hội thoại luôn giữ Page nguồn để Sale biết khách
+            đang nhắn vào Page nào và trả lời đúng Page đó.
           </p>
         </div>
         <Link
@@ -83,41 +88,35 @@ export default async function FacebookConnectionPage({
         <div className="rounded-xl border border-emerald-700/60 bg-emerald-950/30 p-4 text-sm text-emerald-200">
           <div className="font-semibold">Kết nối thành công</div>
           <div className="mt-1 text-emerald-300">
-            Page {connectedPageName ? `“${connectedPageName}”` : 'đã chọn'} đã được
-            đăng ký với webhook Messenger của ứng dụng.
+            Đã đăng ký webhook Messenger cho {connectedCount || 1} Page
+            {connectedPages ? `: ${connectedPages}` : '.'}
           </div>
         </div>
       )}
 
       <section className="grid gap-4 lg:grid-cols-3">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Bước 1
-          </div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 1</div>
           <h2 className="mt-2 text-lg font-semibold text-white">Đăng nhập Facebook</h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            Chỉ Boss Admin có AAL2 mới được bắt đầu luồng kết nối. CRM yêu cầu đúng các
-            quyền pages_show_list, pages_manage_metadata và pages_messaging.
+            Boss Admin có AAL2 đăng nhập và cấp pages_show_list, pages_manage_metadata,
+            pages_messaging.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Bước 2
-          </div>
-          <h2 className="mt-2 text-lg font-semibold text-white">Chọn Page quản lý</h2>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 2</div>
+          <h2 className="mt-2 text-lg font-semibold text-white">Xác minh các Page</h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            CRM lấy danh sách Page từ Meta và chỉ cho phép chọn một Page thực sự nằm
-            trong danh sách mà tài khoản Facebook đang quản lý.
+            Nếu workspace chỉ có một Page, Page đó được chọn sẵn. Khi có nhiều Page, Boss
+            có thể kết nối nhiều Page trong cùng một lần.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Bước 3
-          </div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 3</div>
           <h2 className="mt-2 text-lg font-semibold text-white">Đăng ký webhook</h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            CRM gọi Meta Graph API để subscribe trường messages cho Page đã chọn, sau
-            đó Messenger có thể chuyển tin nhắn khách vào Hộp thư CRM.
+            CRM subscribe trường messages cho từng Page đã chọn. Tin nhắn sau đó được định
+            tuyến theo Page ID riêng, không trộn giữa các Page.
           </p>
         </div>
       </section>
@@ -125,41 +124,62 @@ export default async function FacebookConnectionPage({
       <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-white">Trạng thái Page hiện tại</h2>
+            <h2 className="text-xl font-semibold text-white">Các Page của workspace</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Thông tin này được kiểm tra trực tiếp từ cấu hình server và Meta Graph API.
+              Runtime có thể nhận và gửi song song trên tất cả Page đã cấu hình.
             </p>
           </div>
           <div
             className={`inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold ${
-              connection.configured && connection.subscribed
+              fullyConnected
                 ? 'bg-emerald-500/15 text-emerald-300'
-                : connection.configured
+                : connections.length > 0
                   ? 'bg-amber-500/15 text-amber-300'
                   : 'bg-slate-800 text-slate-400'
             }`}
           >
-            {connection.configured && connection.subscribed
-              ? 'Đã kết nối webhook'
-              : connection.configured
-                ? 'Đã cấu hình · cần kiểm tra subscription'
-                : 'Chưa cấu hình'}
+            {fullyConnected
+              ? `${connections.length} Page đã kết nối webhook`
+              : connections.length > 0
+                ? `${connections.length} Page đã cấu hình · cần kiểm tra subscription`
+                : 'Chưa cấu hình Page'}
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
-          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-slate-500">Tên Page</div>
-            <div className="mt-1 font-medium text-slate-100">
-              {connection.pageName || 'Chưa lấy được tên Page'}
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          {connections.length === 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400 md:col-span-2">
+              Chưa có Facebook Page nào được cấu hình cho workspace.
             </div>
-          </div>
-          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-slate-500">Page ID được phép</div>
-            <div className="mt-1 break-all font-mono text-slate-100">
-              {configuredPageId || 'Chưa cấu hình'}
-            </div>
-          </div>
+          ) : (
+            connections.map((connection) => (
+              <div
+                key={connection.pageId || 'unknown'}
+                className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Facebook Page</div>
+                    <div className="mt-1 font-medium text-slate-100">
+                      {connection.pageName || 'Chưa lấy được tên Page'}
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs text-slate-500">
+                      {connection.pageId}
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                      connection.subscribed
+                        ? 'bg-emerald-500/15 text-emerald-300'
+                        : 'bg-amber-500/15 text-amber-300'
+                    }`}
+                  >
+                    {connection.subscribed ? 'Webhook OK' : 'Cần xác minh'}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         <div className="mt-5">
@@ -167,11 +187,11 @@ export default async function FacebookConnectionPage({
             href="/api/facebook/connect/start"
             className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500"
           >
-            Kết nối / xác minh lại bằng Facebook
+            Kết nối / xác minh các Facebook Page
           </a>
           <p className="mt-2 text-xs text-slate-500">
-            Access token dùng trong bước onboarding chỉ được giữ trong cookie HttpOnly mã
-            hóa tối đa 10 phút và không được trả về trình duyệt dưới dạng dữ liệu hiển thị.
+            Access token onboarding chỉ tồn tại trong cookie HttpOnly mã hóa tối đa 10 phút.
+            Token runtime của từng Page vẫn nằm trong cấu hình secret phía server.
           </p>
         </div>
       </section>
@@ -180,12 +200,11 @@ export default async function FacebookConnectionPage({
         <section className="rounded-2xl border border-blue-800/60 bg-blue-950/20 p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-semibold text-white">
-                Chọn Facebook Page để kết nối
-              </h2>
+              <h2 className="text-xl font-semibold text-white">Các Facebook Page tìm thấy</h2>
               <p className="mt-1 text-sm text-slate-400">
-                Meta trả về {session.pages.length} Page mà tài khoản vừa đăng nhập đang
-                quản lý. Page có nhãn “Được phép” là Page của workspace hiện tại.
+                Meta trả về {session.pages.length} Page mà tài khoản vừa đăng nhập đang quản
+                lý. Page thuộc workspace được chọn sẵn; khi có nhiều Page bạn có thể kết nối
+                nhiều Page cùng một lúc.
               </p>
             </div>
             <span className="rounded-full bg-blue-500/15 px-3 py-1 text-xs font-semibold text-blue-300">
@@ -199,39 +218,55 @@ export default async function FacebookConnectionPage({
               quản lý Page hay không.
             </div>
           ) : (
-            <div className="mt-5 grid gap-3">
-              {session.pages.map((page) => {
-                const allowed = page.id === configuredPageId;
-                return (
-                  <div
-                    key={page.id}
-                    className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-slate-100">{page.name}</span>
-                        {allowed && (
-                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                            Được phép cho workspace
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1 font-mono text-xs text-slate-500">{page.id}</div>
-                    </div>
-                    <form action="/api/facebook/connect/select" method="post">
-                      <input type="hidden" name="page_id" value={page.id} />
-                      <button
-                        type="submit"
+            <form action="/api/facebook/connect/select" method="post" className="mt-5 space-y-4">
+              <div className="grid gap-3">
+                {session.pages.map((page) => {
+                  const allowed = configuredPageIds.has(page.id);
+                  return (
+                    <label
+                      key={page.id}
+                      className={`flex items-center gap-3 rounded-xl border p-4 ${
+                        allowed
+                          ? 'cursor-pointer border-slate-700 bg-slate-950/60'
+                          : 'cursor-not-allowed border-slate-800 bg-slate-950/30 opacity-60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        name="page_id"
+                        value={page.id}
+                        defaultChecked={allowed}
                         disabled={!allowed}
-                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-                      >
-                        {allowed ? 'Chọn và kết nối' : 'Không thuộc workspace'}
-                      </button>
-                    </form>
-                  </div>
-                );
-              })}
-            </div>
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-slate-100">{page.name}</span>
+                          {allowed ? (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                              Thuộc workspace
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-500">
+                              Chưa cấu hình runtime
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 font-mono text-xs text-slate-500">{page.id}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <button
+                type="submit"
+                disabled={!session.pages.some((page) => configuredPageIds.has(page.id))}
+                className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+              >
+                Kết nối các Page đã chọn
+              </button>
+            </form>
           )}
         </section>
       )}
@@ -239,10 +274,9 @@ export default async function FacebookConnectionPage({
       <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 text-sm text-slate-400">
         <div className="font-semibold text-slate-200">Dùng cho Meta App Review</div>
         <p className="mt-2 leading-6">
-          Khi quay screencast, bắt đầu tại trang này → bấm “Kết nối / xác minh lại bằng
-          Facebook” → hoàn tất Facebook Login → quay lại danh sách Page → chọn Page “Cửa
-          chống ngập” → cho reviewer thấy trạng thái kết nối thành công → mở Hộp thư để
-          chứng minh Messenger hoạt động hai chiều.
+          Khi quay screencast: mở trang này → bấm “Kết nối / xác minh các Facebook Page” →
+          hoàn tất Facebook Login → cho reviewer thấy danh sách Page từ Meta → Page của
+          workspace được chọn → bấm kết nối → mở Hộp thư và chứng minh Messenger hai chiều.
         </p>
       </section>
     </div>
