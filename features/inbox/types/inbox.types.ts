@@ -44,6 +44,9 @@ export interface Conversation {
   customer_stage?: string;
   customer_source?: string;
   channel: InboxChannel;
+  /** Facebook Page that owns this conversation. Present for Facebook conversations. */
+  channel_page_id?: string;
+  channel_page_name?: string;
   last_message: string;
   last_message_at?: string;
   unread_count: number;

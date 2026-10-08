@@ -104,9 +104,13 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
         setAiError(null);
         setAiSuggestionMeta(null);
 
-        // Cập nhật lại unread count trên UI
+        // Cập nhật lại unread count và metadata Page trên UI.
         setConversations((prev) =>
-          prev.map((c) => (c.id === convId ? { ...c, unread_count: 0 } : c))
+          prev.map((c) =>
+            c.id === convId
+              ? { ...c, ...(json.data.conversation || {}), unread_count: 0 }
+              : c
+          )
         );
       }
     } catch (err) {
@@ -408,12 +412,20 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                       {conv.last_message}
                     </p>
 
-                    <div className="flex items-center gap-2 mt-1 text-[10px]">
-                      <span className="font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                    <div className="flex items-center gap-2 mt-1 text-[10px] min-w-0">
+                      <span className="font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 shrink-0">
                         {conv.customer_code}
                       </span>
+                      {!isZalo && conv.channel_page_name && (
+                        <span
+                          className="truncate text-blue-300 bg-blue-950/40 px-1.5 py-0.5 rounded border border-blue-800/40"
+                          title={`Khách nhắn vào Page: ${conv.channel_page_name}`}
+                        >
+                          {conv.channel_page_name}
+                        </span>
+                      )}
                       {conv.status === 'AI_HANDLING' && (
-                        <span className="text-purple-400 bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-800/40">
+                        <span className="text-purple-400 bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-800/40 shrink-0">
                           AI hỗ trợ
                         </span>
                       )}
@@ -443,13 +455,20 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                         {selectedConversation.customer_name}
                       </span>
                       <span
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border max-w-[240px] truncate ${
                           selectedConversation.channel === 'zalo'
                             ? 'bg-cyan-950/50 text-cyan-300 border-cyan-800/50'
                             : 'bg-blue-950/50 text-blue-300 border-blue-800/50'
                         }`}
+                        title={
+                          selectedConversation.channel === 'facebook' && selectedConversation.channel_page_name
+                            ? `Facebook Page: ${selectedConversation.channel_page_name}`
+                            : undefined
+                        }
                       >
-                        {selectedConversation.channel === 'zalo' ? 'Zalo OA' : 'Facebook'}
+                        {selectedConversation.channel === 'zalo'
+                          ? 'Zalo OA'
+                          : `Facebook · ${selectedConversation.channel_page_name || 'Messenger'}`}
                       </span>
                     </div>
                     <span className="text-xs text-slate-400 font-mono">
@@ -770,6 +789,20 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                       {selectedConversation.channel === 'zalo' ? 'Zalo OA' : 'Facebook Messenger'}
                     </span>
                   </div>
+
+                  {selectedConversation.channel === 'facebook' && (
+                    <div className="flex justify-between gap-3 py-1 border-b border-slate-800/60">
+                      <span className="text-slate-500 shrink-0">Khách nhắn vào Page:</span>
+                      <span
+                        className="font-medium text-blue-300 text-right break-words"
+                        title={selectedConversation.channel_page_id || undefined}
+                      >
+                        {selectedConversation.channel_page_name ||
+                          selectedConversation.channel_page_id ||
+                          'Chưa xác định'}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex justify-between py-1 border-b border-slate-800/60">
                     <span className="text-slate-500">Nguồn ban đầu:</span>
