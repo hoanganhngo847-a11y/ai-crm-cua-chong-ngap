@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '../../../lib/supabase/server';
+import { createAdminClient } from '../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { InboxService } from '../../../features/inbox/services/inbox.service';
 import { maskPhone } from '../../../features/crm/services/customer.service';
 import { sanitizePhoneInText } from '../../../features/crm/utils/phone-sanitizer';
 import { sendMessage as sendFacebookMessage } from '../../../features/omnichannel/facebook/server';
+import { getConfiguredFacebookPageLabels } from '../../../features/omnichannel/facebook/connect';
 import { ChannelError } from '../../../features/omnichannel/facebook/core';
 import type { InboxChannel } from '../../../features/inbox/types/inbox.types';
 import type { ActorContext } from '../../../shared/contracts/auth';
@@ -22,6 +24,62 @@ interface ResolvedInboxActor {
   userId: string;
   companyId: string;
   role: string;
+}
+
+interface PageAwareConversation {
+  id: string;
+  channel: InboxChannel;
+  channel_page_id?: string;
+  channel_page_name?: string;
+  [key: string]: unknown;
+}
+
+async function attachFacebookPageInfo<T extends PageAwareConversation>(
+  companyId: string,
+  conversations: T[],
+  client?: SupabaseClient
+): Promise<T[]> {
+  const facebookConversations = conversations.filter((item) => item.channel === 'facebook');
+  if (facebookConversations.length === 0) return conversations;
+
+  const db = client || createAdminClient();
+  const { data, error } = await db
+    .from('conversations')
+    .select('id, external_conversation_id')
+    .eq('company_id', companyId)
+    .in(
+      'id',
+      facebookConversations.map((item) => item.id)
+    );
+
+  if (error || !data) return conversations;
+
+  let labels: Record<string, string> = {};
+  try {
+    labels = await getConfiguredFacebookPageLabels(companyId);
+  } catch {
+    // Page provenance remains useful even if Meta name lookup is temporarily unavailable.
+  }
+
+  const pageByConversation = new Map<string, string>();
+  for (const row of data as Array<{ id: string; external_conversation_id?: string | null }>) {
+    const externalId = row.external_conversation_id || '';
+    const separator = externalId.indexOf(':');
+    const pageId = separator > 0 ? externalId.slice(0, separator) : '';
+    if (/^\d+$/.test(pageId)) pageByConversation.set(row.id, pageId);
+  }
+
+  return conversations.map((conversation) => {
+    if (conversation.channel !== 'facebook') return conversation;
+    const pageId = pageByConversation.get(conversation.id);
+    if (!pageId) return conversation;
+
+    return {
+      ...conversation,
+      channel_page_id: pageId,
+      channel_page_name: labels[pageId] || `Facebook Page ${pageId}`,
+    };
+  });
 }
 
 async function resolveInboxActor(
@@ -211,10 +269,15 @@ export async function GET(request: NextRequest, context?: unknown) {
             ? sanitizePhoneInText(conversation.last_message)
             : conversation.last_message,
       };
+      const [pageAwareConversation] = await attachFacebookPageInfo(
+        companyId,
+        [sanitizedConv],
+        typedContext?.supabaseClient
+      );
 
       return NextResponse.json({
         success: true,
-        data: { conversation: sanitizedConv, messages },
+        data: { conversation: pageAwareConversation, messages },
       });
     }
 
@@ -235,8 +298,13 @@ export async function GET(request: NextRequest, context?: unknown) {
           ? sanitizePhoneInText(conversation.last_message)
           : conversation.last_message,
     }));
+    const pageAwareConversations = await attachFacebookPageInfo(
+      companyId,
+      sanitizedConversations,
+      typedContext?.supabaseClient
+    );
 
-    return NextResponse.json({ success: true, data: sanitizedConversations });
+    return NextResponse.json({ success: true, data: pageAwareConversations });
   } catch (err: unknown) {
     const errorObj = err as { code?: string; message?: string } | undefined;
     if (errorObj?.code === 'AUDIT_WRITE_FAILED') {
