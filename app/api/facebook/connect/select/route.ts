@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getActorContext, requireBossAdmin } from '@/lib/auth/context';
 import {
   clearFacebookConnectSession,
+  configuredFacebookPageIds,
   readFacebookConnectSession,
   subscribeManagedPage,
 } from '@/features/omnichannel/facebook/connect';
@@ -31,22 +32,53 @@ export async function POST(request: Request) {
     }
 
     const form = await request.formData();
-    const pageId = String(form.get('page_id') || '').trim();
-    if (!/^\d+$/.test(pageId)) return back(request, 'INVALID_PAGE');
-    if (!session.pages.some((page) => page.id === pageId)) {
+    const requestedPageIds = Array.from(
+      new Set(
+        form
+          .getAll('page_id')
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (
+      requestedPageIds.length === 0 ||
+      requestedPageIds.length > 100 ||
+      requestedPageIds.some((pageId) => !/^\d+$/.test(pageId))
+    ) {
+      return back(request, 'INVALID_PAGE');
+    }
+
+    const managedPageIds = new Set(session.pages.map((page) => page.id));
+    if (requestedPageIds.some((pageId) => !managedPageIds.has(pageId))) {
       return back(request, 'FACEBOOK_PAGE_NOT_MANAGED');
     }
 
-    const page = await subscribeManagedPage(
-      session.userAccessToken,
-      pageId,
-      actor.companyId,
-    );
+    const allowedPageIds = configuredFacebookPageIds(actor.companyId);
+    if (requestedPageIds.some((pageId) => !allowedPageIds.has(pageId))) {
+      return back(request, 'FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
+    }
+
+    const connectedPages = [];
+    for (const pageId of requestedPageIds) {
+      connectedPages.push(
+        await subscribeManagedPage(
+          session.userAccessToken,
+          pageId,
+          actor.companyId,
+        ),
+      );
+    }
+
     await clearFacebookConnectSession();
 
     const url = new URL('/admin/facebook', request.url);
     url.searchParams.set('connected', '1');
-    url.searchParams.set('page', page.name);
+    url.searchParams.set('count', String(connectedPages.length));
+    url.searchParams.set(
+      'pages',
+      connectedPages.map((page) => page.name).join(', ').slice(0, 500),
+    );
     return NextResponse.redirect(url);
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
