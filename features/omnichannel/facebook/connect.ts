@@ -9,11 +9,14 @@ import {
 } from 'node:crypto';
 import { cookies } from 'next/headers';
 
-import { pageBindings } from './binding';
+import { bindingsForCompany, pageBindings, type PageBinding } from './binding';
 
 const STATE_COOKIE = 'fb_connect_state';
 const SESSION_COOKIE = 'fb_connect_session';
 const COOKIE_MAX_AGE_SECONDS = 10 * 60;
+const PAGE_NAME_CACHE_MS = 5 * 60 * 1000;
+
+const pageNameCache = new Map<string, { name: string; expiresAt: number }>();
 
 export type ManagedFacebookPage = {
   id: string;
@@ -33,6 +36,7 @@ export type ConfiguredFacebookConnection = {
   pageId: string | null;
   pageName: string | null;
   subscribed: boolean;
+  tokenConfigured?: boolean;
 };
 
 function requiredEnv(name: string) {
@@ -122,10 +126,6 @@ function cookieOptions() {
     path: '/',
     maxAge: COOKIE_MAX_AGE_SECONDS,
   };
-}
-
-function firstBindingForCompany(companyId: string) {
-  return pageBindings().find((item) => item.company === companyId) || null;
 }
 
 export function facebookOAuthConfig() {
@@ -244,6 +244,10 @@ export async function listManagedFacebookPages(userAccessToken: string) {
   return pages.map(({ id, name }) => ({ id, name }));
 }
 
+export function configuredFacebookPageIds(companyId: string) {
+  return new Set(bindingsForCompany(companyId).map((item) => item.page));
+}
+
 export async function subscribeManagedPage(
   userAccessToken: string,
   pageId: string,
@@ -282,85 +286,147 @@ export async function subscribeManagedPage(
   const payload = (await response.json()) as { success?: unknown };
   if (payload.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
 
+  pageNameCache.set(page.id, {
+    name: page.name,
+    expiresAt: Date.now() + PAGE_NAME_CACHE_MS,
+  });
+
   return { id: page.id, name: page.name };
 }
 
-export async function getConfiguredFacebookConnection(
-  companyId: string,
-): Promise<ConfiguredFacebookConnection> {
-  let configured;
+async function resolveConfiguredPageName(binding: PageBinding): Promise<string | null> {
+  if (binding.name) return binding.name;
+
+  const cached = pageNameCache.get(binding.page);
+  if (cached && cached.expiresAt > Date.now()) return cached.name;
+
+  const token = process.env[binding.tokenEnv]?.trim();
+  if (!token) return null;
+
   try {
-    configured = firstBindingForCompany(companyId);
+    const version = graphVersion();
+    const url = new URL(
+      `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}`,
+    );
+    url.searchParams.set('fields', 'id,name');
+    url.searchParams.set('access_token', token);
+
+    const response = await fetch(url, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as { name?: unknown };
+    if (typeof payload.name !== 'string' || !payload.name.trim()) return null;
+
+    const name = payload.name.trim().slice(0, 120);
+    pageNameCache.set(binding.page, {
+      name,
+      expiresAt: Date.now() + PAGE_NAME_CACHE_MS,
+    });
+    return name;
   } catch {
-    configured = null;
+    return null;
   }
+}
 
-  const appId = process.env.META_APP_ID?.trim() || null;
-  if (!configured || !appId) {
-    return {
-      configured: false,
-      pageId: configured?.page || null,
-      pageName: null,
-      subscribed: false,
-    };
-  }
+async function configuredConnectionForBinding(
+  binding: PageBinding,
+  appId: string | null,
+): Promise<ConfiguredFacebookConnection> {
+  const token = process.env[binding.tokenEnv]?.trim() || null;
+  const pageName = await resolveConfiguredPageName(binding);
 
-  const token = process.env[configured.tokenEnv]?.trim() || null;
-  if (!token) {
+  if (!token || !appId) {
     return {
       configured: true,
-      pageId: configured.page,
-      pageName: null,
+      pageId: binding.page,
+      pageName,
       subscribed: false,
+      tokenConfigured: Boolean(token),
     };
   }
 
   try {
     const version = graphVersion();
-    const pageUrl = new URL(
-      `https://graph.facebook.com/${version}/${encodeURIComponent(configured.page)}`,
-    );
-    pageUrl.searchParams.set('fields', 'id,name');
-    pageUrl.searchParams.set('access_token', token);
-
-    const [pageResponse, subscriptionResponse] = await Promise.all([
-      fetch(pageUrl, {
+    const response = await fetch(
+      `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
+      {
         cache: 'no-store',
         signal: AbortSignal.timeout(8_000),
-      }),
-      fetch(
-        `https://graph.facebook.com/${version}/${encodeURIComponent(configured.page)}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
-        {
-          cache: 'no-store',
-          signal: AbortSignal.timeout(8_000),
-        },
-      ),
-    ]);
-
-    const pagePayload = pageResponse.ok
-      ? ((await pageResponse.json()) as { name?: unknown })
-      : {};
-    const subscriptionPayload = subscriptionResponse.ok
-      ? ((await subscriptionResponse.json()) as {
-          data?: Array<{ id?: unknown }>;
-        })
+      },
+    );
+    const payload = response.ok
+      ? ((await response.json()) as { data?: Array<{ id?: unknown }> })
       : {};
 
     return {
       configured: true,
-      pageId: configured.page,
-      pageName:
-        typeof pagePayload.name === 'string' ? pagePayload.name : null,
-      subscribed: (subscriptionPayload.data || []).some(
+      pageId: binding.page,
+      pageName,
+      subscribed: (payload.data || []).some(
         (app) => String(app.id || '') === appId,
       ),
+      tokenConfigured: true,
     };
   } catch {
     return {
       configured: true,
-      pageId: configured.page,
-      pageName: null,
+      pageId: binding.page,
+      pageName,
       subscribed: false,
+      tokenConfigured: true,
     };
   }
+}
+
+export async function getConfiguredFacebookConnections(
+  companyId: string,
+): Promise<ConfiguredFacebookConnection[]> {
+  let bindings: PageBinding[] = [];
+  try {
+    bindings = bindingsForCompany(companyId);
+  } catch {
+    bindings = [];
+  }
+
+  if (bindings.length === 0) return [];
+  const appId = process.env.META_APP_ID?.trim() || null;
+  return Promise.all(
+    bindings.map((binding) => configuredConnectionForBinding(binding, appId)),
+  );
+}
+
+export async function getConfiguredFacebookConnection(
+  companyId: string,
+): Promise<ConfiguredFacebookConnection> {
+  const connections = await getConfiguredFacebookConnections(companyId);
+  return connections[0] || {
+    configured: false,
+    pageId: null,
+    pageName: null,
+    subscribed: false,
+    tokenConfigured: false,
+  };
+}
+
+export async function getConfiguredFacebookPageLabels(
+  companyId: string,
+): Promise<Record<string, string>> {
+  let bindings: PageBinding[] = [];
+  try {
+    bindings = bindingsForCompany(companyId);
+  } catch {
+    bindings = [];
+  }
+
+  const entries = await Promise.all(
+    bindings.map(async (binding) => [
+      binding.page,
+      (await resolveConfiguredPageName(binding)) || `Facebook Page ${binding.page}`,
+    ] as const),
+  );
+
+  return Object.fromEntries(entries);
 }
