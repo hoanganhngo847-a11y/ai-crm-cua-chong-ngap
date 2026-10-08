@@ -153,7 +153,7 @@ export default function PrivacyPolicyPage() {
                         <p>
                             Customers may request access, correction or deletion of personal
                             data associated with their conversation by contacting the business
-                            through the same connected Facebook Page or through the business's
+                            through the same connected Facebook Page or through the business&apos;s
                             authorized CRM administrator. Requests will be reviewed and handled
                             subject to applicable legal and record-keeping requirements.
                         </p>
