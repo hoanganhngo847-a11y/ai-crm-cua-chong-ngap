@@ -9,6 +9,8 @@ import {
 } from 'node:crypto';
 import { cookies } from 'next/headers';
 
+import { pageBindings } from './binding';
+
 const STATE_COOKIE = 'fb_connect_state';
 const SESSION_COOKIE = 'fb_connect_session';
 const COOKIE_MAX_AGE_SECONDS = 10 * 60;
@@ -120,6 +122,10 @@ function cookieOptions() {
     path: '/',
     maxAge: COOKIE_MAX_AGE_SECONDS,
   };
+}
+
+function firstBindingForCompany(companyId: string) {
+  return pageBindings().find((item) => item.company === companyId) || null;
 }
 
 export function facebookOAuthConfig() {
@@ -241,9 +247,12 @@ export async function listManagedFacebookPages(userAccessToken: string) {
 export async function subscribeManagedPage(
   userAccessToken: string,
   pageId: string,
+  companyId: string,
 ) {
-  const configuredPageId = requiredEnv('META_PAGE_ID');
-  if (pageId !== configuredPageId) {
+  const configured = pageBindings().find(
+    (item) => item.company === companyId && item.page === pageId,
+  );
+  if (!configured) {
     throw new Error('FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
   }
 
@@ -276,19 +285,40 @@ export async function subscribeManagedPage(
   return { id: page.id, name: page.name };
 }
 
-export async function getConfiguredFacebookConnection(): Promise<ConfiguredFacebookConnection> {
-  const pageId = process.env.META_PAGE_ID?.trim() || null;
-  const token = process.env.META_PAGE_ACCESS_TOKEN?.trim() || null;
-  const appId = process.env.META_APP_ID?.trim() || null;
+export async function getConfiguredFacebookConnection(
+  companyId: string,
+): Promise<ConfiguredFacebookConnection> {
+  let configured;
+  try {
+    configured = firstBindingForCompany(companyId);
+  } catch {
+    configured = null;
+  }
 
-  if (!pageId || !token || !appId) {
-    return { configured: false, pageId, pageName: null, subscribed: false };
+  const appId = process.env.META_APP_ID?.trim() || null;
+  if (!configured || !appId) {
+    return {
+      configured: false,
+      pageId: configured?.page || null,
+      pageName: null,
+      subscribed: false,
+    };
+  }
+
+  const token = process.env[configured.tokenEnv]?.trim() || null;
+  if (!token) {
+    return {
+      configured: true,
+      pageId: configured.page,
+      pageName: null,
+      subscribed: false,
+    };
   }
 
   try {
     const version = graphVersion();
     const pageUrl = new URL(
-      `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}`,
+      `https://graph.facebook.com/${version}/${encodeURIComponent(configured.page)}`,
     );
     pageUrl.searchParams.set('fields', 'id,name');
     pageUrl.searchParams.set('access_token', token);
@@ -299,7 +329,7 @@ export async function getConfiguredFacebookConnection(): Promise<ConfiguredFaceb
         signal: AbortSignal.timeout(8_000),
       }),
       fetch(
-        `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
+        `https://graph.facebook.com/${version}/${encodeURIComponent(configured.page)}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
         {
           cache: 'no-store',
           signal: AbortSignal.timeout(8_000),
@@ -318,7 +348,7 @@ export async function getConfiguredFacebookConnection(): Promise<ConfiguredFaceb
 
     return {
       configured: true,
-      pageId,
+      pageId: configured.page,
       pageName:
         typeof pagePayload.name === 'string' ? pagePayload.name : null,
       subscribed: (subscriptionPayload.data || []).some(
@@ -326,6 +356,11 @@ export async function getConfiguredFacebookConnection(): Promise<ConfiguredFaceb
       ),
     };
   } catch {
-    return { configured: true, pageId, pageName: null, subscribed: false };
+    return {
+      configured: true,
+      pageId: configured.page,
+      pageName: null,
+      subscribed: false,
+    };
   }
 }
