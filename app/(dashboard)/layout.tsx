@@ -83,9 +83,14 @@ export default async function DashboardLayout({
               </Link>
             )}
             {actor.role === 'BOSS_ADMIN' && (
-              <Link href="/admin" className="text-slate-300 hover:text-white transition">
-                Quản trị hệ thống
-              </Link>
+              <>
+                <Link href="/admin" className="text-slate-300 hover:text-white transition">
+                  Quản trị hệ thống
+                </Link>
+                <Link href="/admin/facebook" className="text-slate-300 hover:text-white transition">
+                  Kết nối Facebook
+                </Link>
+              </>
             )}
             <Link href="/account" className="text-slate-300 hover:text-white transition">
               Tài khoản
