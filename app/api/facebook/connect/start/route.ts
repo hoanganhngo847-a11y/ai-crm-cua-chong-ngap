@@ -9,8 +9,30 @@ import {
 
 export const runtime = 'nodejs';
 
+function publicAdminUrl(request: Request) {
+  const configuredOrigin = process.env.WEBSITE_ORIGIN?.trim();
+  if (configuredOrigin) {
+    return new URL('/admin/facebook', configuredOrigin);
+  }
+
+  const forwardedHost = request.headers
+    .get('x-forwarded-host')
+    ?.split(',')[0]
+    ?.trim();
+  const host = forwardedHost || request.headers.get('host');
+  const forwardedProto = request.headers
+    .get('x-forwarded-proto')
+    ?.split(',')[0]
+    ?.trim();
+  const protocol = forwardedProto || 'https';
+
+  return host
+    ? new URL('/admin/facebook', `${protocol}://${host}`)
+    : new URL('/admin/facebook', request.url);
+}
+
 function back(request: Request, code: string) {
-  const url = new URL('/admin/facebook', request.url);
+  const url = publicAdminUrl(request);
   url.searchParams.set('error', code);
   return NextResponse.redirect(url);
 }
