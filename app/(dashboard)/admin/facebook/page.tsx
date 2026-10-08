@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { getActorContext } from '@/lib/auth/context';
 import {
   getConfiguredFacebookConnection,
   readFacebookConnectSession,
@@ -36,9 +37,11 @@ export default async function FacebookConnectionPage({
   const errorCode = textParam(params.error);
   const connected = textParam(params.connected) === '1';
   const connectedPageName = textParam(params.page);
+  const actor = await getActorContext();
+  const companyId = actor?.companyId || '';
 
   const [connection, session] = await Promise.all([
-    getConfiguredFacebookConnection(),
+    getConfiguredFacebookConnection(companyId),
     readFacebookConnectSession(),
   ]);
 
@@ -173,7 +176,7 @@ export default async function FacebookConnectionPage({
         </div>
       </section>
 
-      {session && (
+      {session && session.companyId === companyId && (
         <section className="rounded-2xl border border-blue-800/60 bg-blue-950/20 p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
