@@ -37,7 +37,11 @@ export async function POST(request: Request) {
       return back(request, 'FACEBOOK_PAGE_NOT_MANAGED');
     }
 
-    const page = await subscribeManagedPage(session.userAccessToken, pageId);
+    const page = await subscribeManagedPage(
+      session.userAccessToken,
+      pageId,
+      actor.companyId,
+    );
     await clearFacebookConnectSession();
 
     const url = new URL('/admin/facebook', request.url);
