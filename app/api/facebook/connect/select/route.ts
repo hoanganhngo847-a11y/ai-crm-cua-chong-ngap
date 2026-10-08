@@ -59,7 +59,7 @@ export async function POST(request: Request) {
       return back(request, 'FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
     }
 
-    const connectedPages = [];
+    const connectedPages: Array<{ id: string; name: string }> = [];
     for (const pageId of requestedPageIds) {
       connectedPages.push(
         await subscribeManagedPage(
