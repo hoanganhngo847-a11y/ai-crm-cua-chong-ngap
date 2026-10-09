@@ -34,20 +34,29 @@ export default async function AdminLayout({
     );
   }
 
-  // 2. Check current path to allow MFA setup and verification pages.
+  // 2. Resolve current route for normal MFA setup/verification handling.
   const headersList = await headers();
   const currentPath = headersList.get('x-pathname') || '';
   const isMfaRoute = currentPath.startsWith('/admin/mfa');
-  const isFacebookConnectionRoute =
-    currentPath === '/admin/facebook' || currentPath.startsWith('/admin/facebook/');
-  const isMetaReviewFacebookExemption =
-    isFacebookConnectionRoute && isMetaReviewerMfaExempt(actor.userId);
 
-  // 3. BOSS_ADMIN still requires AAL2 everywhere except the narrowly scoped
-  // Facebook connection page for an explicitly configured Meta reviewer user.
+  // Dedicated Meta App Review accounts are explicitly allowlisted server-side.
+  // Their temporary exemption is user-scoped rather than path-scoped here because
+  // the pathname header is not guaranteed to survive every production render hop.
+  // The Facebook connect API routes still independently enforce the same exact
+  // reviewer allowlist, BOSS_ADMIN role, and company membership.
+  const isMetaReviewMfaExemption = isMetaReviewerMfaExempt(actor.userId);
+
+  // If an allowlisted reviewer lands on an MFA screen from an older redirect,
+  // send them to the intended review surface instead of enrolling a TOTP factor.
+  if (isMetaReviewMfaExemption && isMfaRoute) {
+    redirect('/admin/facebook');
+  }
+
+  // 3. Normal BOSS_ADMIN users still require AAL2. Only the exact temporary
+  // Meta reviewer account configured by server-side UUID is exempt.
   if (
     !isMfaRoute &&
-    !isMetaReviewFacebookExemption &&
+    !isMetaReviewMfaExemption &&
     actor.role === APPLICATION_ROLES.BOSS_ADMIN &&
     actor.aal !== 'aal2'
   ) {
