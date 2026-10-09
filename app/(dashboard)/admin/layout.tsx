@@ -2,6 +2,7 @@ import React from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getActorContext, requireBossAdmin } from '../../../lib/auth/context';
+import { isMetaReviewerMfaExempt } from '../../../lib/auth/meta-review';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 
 export default async function AdminLayout({
@@ -19,7 +20,8 @@ export default async function AdminLayout({
     );
   }
 
-  // 1. First enforce that the user is BOSS_ADMIN
+  // 1. First enforce that the user is BOSS_ADMIN.
+  // The Meta reviewer exception never bypasses role/company authorization.
   try {
     await requireBossAdmin(actor.companyId, { requireAal2: false });
   } catch (err: unknown) {
@@ -32,13 +34,23 @@ export default async function AdminLayout({
     );
   }
 
-  // 2. Check current path to allow MFA setup and verification pages
+  // 2. Check current path to allow MFA setup and verification pages.
   const headersList = await headers();
   const currentPath = headersList.get('x-pathname') || '';
   const isMfaRoute = currentPath.startsWith('/admin/mfa');
+  const isFacebookConnectionRoute =
+    currentPath === '/admin/facebook' || currentPath.startsWith('/admin/facebook/');
+  const isMetaReviewFacebookExemption =
+    isFacebookConnectionRoute && isMetaReviewerMfaExempt(actor.userId);
 
-  // 3. If accessing protected admin resources without AAL2, route to real MFA flow
-  if (!isMfaRoute && actor.role === APPLICATION_ROLES.BOSS_ADMIN && actor.aal !== 'aal2') {
+  // 3. BOSS_ADMIN still requires AAL2 everywhere except the narrowly scoped
+  // Facebook connection page for an explicitly configured Meta reviewer user.
+  if (
+    !isMfaRoute &&
+    !isMetaReviewFacebookExemption &&
+    actor.role === APPLICATION_ROLES.BOSS_ADMIN &&
+    actor.aal !== 'aal2'
+  ) {
     if (!actor.isMfaEnrolled) {
       redirect('/admin/mfa/enroll');
     } else {
