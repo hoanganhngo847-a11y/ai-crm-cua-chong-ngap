@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { getActorContext, requireBossAdmin } from '@/lib/auth/context';
+import { isMetaReviewerMfaExempt } from '@/lib/auth/meta-review';
 import {
   exchangeCodeForUserAccessToken,
   listManagedFacebookPages,
@@ -42,7 +43,9 @@ export async function GET(request: Request) {
   try {
     const actor = await getActorContext();
     if (!actor?.companyId) return back(request, 'NO_COMPANY');
-    await requireBossAdmin(actor.companyId, { requireAal2: true });
+    await requireBossAdmin(actor.companyId, {
+      requireAal2: !isMetaReviewerMfaExempt(actor.userId),
+    });
 
     const query = new URL(request.url).searchParams;
     const providerError = query.get('error');
