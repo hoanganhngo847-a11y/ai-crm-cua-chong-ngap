@@ -1,0 +1,62 @@
+# ==============================================================================
+# Render Infrastructure Blueprint - Dual-Service Architecture
+# Service 1: CRM Next.js Web App (Existing - Untouched)
+# Service 2: fb-inbox-worker (Independent Playwright Web Service with Persistent Disk)
+# ==============================================================================
+services:
+  - type: web
+    name: ai-crm-fb-inbox-worker
+    runtime: docker
+    dockerfilePath: ./fb-inbox-worker/Dockerfile
+    dockerContext: ./fb-inbox-worker
+    
+    # Requirement 10: Start on Standard (1 vCPU, 2 GB RAM) for login & stress testing.
+    # After measuring actual production RAM, scale down to Starter (0.5 vCPU, 512 MB) if peak is verified low.
+    plan: standard
+
+    # Requirement 11: Auto Deploy disabled in initial phase
+    autoDeploy: false
+
+    # Requirement 7: Health check endpoint operating on Node Gateway
+    healthCheckPath: /health
+
+    # Requirement 2 & 3: Persistent Disk preserving Chromium profile
+    disk:
+      name: fb-worker-profile
+      mountPath: /var/data/fb-user-data
+      sizeGB: 1
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3099"
+      - key: FB_PROFILE_DIR
+        value: /var/data/fb-user-data
+      - key: HEADLESS
+        value: "true"
+      
+      # Requirement 6: Setup UI toggle (Set to "true" temporarily for first-time login, then set to "false" for 24/7 headless)
+      - key: ENABLE_SETUP_UI
+        value: "false"
+
+      # Requirement 5: One-time setup secret protecting /setup login (change to random 32+ char secret in Render Dashboard)
+      - key: SETUP_MODE_SECRET
+        generateValue: true
+
+      # Requirement 1: Exact Inbound Endpoint on existing CRM service
+      - key: CRM_SYNC_ENDPOINT
+        value: https://ai-crm-cua-chong-ngap.onrender.com/api/inbox/browser-sync
+
+      # Shared worker secret for authenticating sync and outbox queue operations
+      - key: FB_WORKER_SECRET
+        sync: false
+
+      - key: FB_PAGE_ID
+        value: "1389294167596309"
+
+      - key: CRM_COMPANY_ID
+        sync: false
+
+      - key: POLL_INTERVAL_MS
+        value: "5000"

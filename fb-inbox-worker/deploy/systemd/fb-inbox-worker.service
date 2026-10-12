@@ -1,0 +1,37 @@
+[Unit]
+Description=Meta Business Suite Playwright Worker (AI CRM Facebook Inbox 24/7)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fbworker
+Group=fbworker
+WorkingDirectory=/opt/ai-crm/fb-inbox-worker
+
+# Environment configuration
+EnvironmentFile=/etc/fb-inbox-worker/worker.env
+Environment=NODE_ENV=production
+Environment=USER_DATA_DIR=/var/lib/fb-inbox-worker/user_data
+
+# Execute via Node.js
+ExecStart=/usr/bin/node src/index.js
+
+# Process Lifecycle & Resiliency
+Restart=always
+# Delay between restarts to prevent crash loops
+RestartSec=10s
+RestartPreventExitStatus=137
+
+# Resource limits & hygiene
+LimitNOFILE=65535
+TimeoutStopSec=30
+KillMode=mixed
+SendSIGKILL=yes
+
+# Logging to dedicated log directory
+StandardOutput=append:/var/log/fb-inbox-worker/worker.log
+StandardError=append:/var/log/fb-inbox-worker/worker.err
+
+[Install]
+WantedBy=multi-user.target

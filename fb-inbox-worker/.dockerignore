@@ -1,0 +1,9 @@
+node_modules
+user_data
+.env
+.env.*
+*.log
+.git
+.DS_Store
+poc_*.js
+benchmark_*.js

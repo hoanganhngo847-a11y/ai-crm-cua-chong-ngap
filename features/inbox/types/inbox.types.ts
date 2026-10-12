@@ -51,6 +51,7 @@ export interface Conversation {
   last_message_at?: string;
   unread_count: number;
   status: ConversationStatus;
+  metadata?: Record<string, unknown>;
   updated_at: string;
   created_at?: string;
 }
@@ -58,7 +59,16 @@ export interface Conversation {
 /**
  * Trạng thái chuyển phát tin nhắn Outbound (Delivery Lifecycle)
  */
-export type MessageDeliveryStatus = 'PENDING_DISPATCH' | 'QUEUED' | 'SENT' | 'DELIVERED' | 'FAILED';
+export type MessageDeliveryStatus =
+  | 'PENDING_DISPATCH'
+  | 'QUEUED'
+  | 'SENT'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'RETRY'
+  | 'RECONCILE_REQUIRED';
 
 /**
  * Hợp đồng chuyển phát tin nhắn Outbound (Outbound Dispatcher Port - Member 3 Zalo & Member 4 Facebook)
@@ -70,6 +80,10 @@ export interface OutboundDispatchResult {
   error?: string;
 }
 
+export type OutboxJobStatus = 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'RETRY' | 'RECONCILE_REQUIRED';
+
+export type ReconciliationStatus = 'NONE' | 'RECONCILE_REQUIRED' | 'RECONCILED_SENT' | 'RECONCILED_NOT_SENT';
+
 /**
  * Bản ghi Outbound Delivery phục vụ Transactional Outbox Worker
  */
@@ -79,15 +93,59 @@ export interface OutboundDeliveryRecord {
   conversation_id: string;
   interaction_id: string;
   channel: string;
+  provider?: string | null;
+  content?: string | null;
   delivery_status: MessageDeliveryStatus;
+  status?: OutboxJobStatus;
   client_command_id?: string | null;
   provider_message_id?: string | null;
   retry_count: number;
+  attempt_count?: number;
+  next_retry_at?: string | null;
   locked_at?: string | null;
   locked_by?: string | null;
+  processing_started_at?: string | null;
+  lease_expires_at?: string | null;
+  reconciliation_status?: ReconciliationStatus;
   error_message?: string | null;
+  last_error?: string | null;
+  sent_at?: string | null;
+  idempotency_key?: string | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Outbox Job cho Facebook Browser Worker (Phase 2B & 2B.1)
+ */
+export interface FacebookBrowserOutboxJob {
+  id: string;
+  company_id: string;
+  conversation_id: string;
+  channel: string;
+  provider: string;
+  content: string;
+  status: OutboxJobStatus;
+  attempt_count: number;
+  next_retry_at?: string | null;
+  processing_started_at?: string | null;
+  lease_expires_at?: string | null;
+  reconciliation_status?: ReconciliationStatus;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  sent_at?: string | null;
+  idempotency_key?: string | null;
+  metadata?: {
+    page_id?: string;
+    page_name?: string;
+    customer_fb_id?: string | null;
+    external_conversation_id?: string | null;
+    customer_name?: string;
+    [key: string]: unknown;
+  };
 }
 
 /**
