@@ -36,6 +36,7 @@ interface InteractionRow {
   actor_type: string;
   actor_user_id?: string;
   created_at: string;
+  delivery_status?: MessageDeliveryStatus;
 }
 
 interface ConversationCustomerJoin {
@@ -677,8 +678,6 @@ export async function getMessagesByConversationId(
                   : outboxJob.status === 'PROCESSING'
                     ? 'PROCESSING'
                     : 'PENDING_DISPATCH';
-          } else if (!deliveryStatus) {
-            deliveryStatus = 'SENT';
           }
         }
         return {
@@ -713,8 +712,6 @@ export async function getMessagesByConversationId(
                 : outboxJob.status === 'PROCESSING'
                   ? 'PROCESSING'
                   : 'PENDING_DISPATCH';
-        } else if (!deliveryStatus) {
-          deliveryStatus = 'SENT';
         }
       }
       return {
@@ -783,10 +780,12 @@ export async function getMessagesByConversationId(
         .eq('company_id', companyId)
         .in('interaction_id', outboundInteractionIds);
 
-      if (!deliveryErr && deliveries && Array.isArray(deliveries)) {
+      if (deliveryErr) {
+        console.warn(`[InboxService] Warning: Failed to batch query outbound deliveries for company ${companyId}: ${deliveryErr.message || 'DATABASE_ERROR'}`);
+      } else if (deliveries && Array.isArray(deliveries)) {
         for (const d of deliveries) {
           if (!d.interaction_id) continue;
-          let resolvedStatus: MessageDeliveryStatus = 'PENDING_DISPATCH';
+          let resolvedStatus: MessageDeliveryStatus | undefined = undefined;
           if (d.reconciliation_status === 'RECONCILE_REQUIRED') {
             resolvedStatus = 'RECONCILE_REQUIRED';
           } else if (d.delivery_status === 'FAILED' || d.status === 'FAILED') {
@@ -799,14 +798,17 @@ export async function getMessagesByConversationId(
             resolvedStatus = 'RETRY';
           } else if (d.delivery_status === 'PENDING_DISPATCH' || d.status === 'PENDING') {
             resolvedStatus = 'PENDING_DISPATCH';
-          } else {
-            resolvedStatus = (d.delivery_status as MessageDeliveryStatus) || 'PENDING_DISPATCH';
+          } else if (d.delivery_status) {
+            resolvedStatus = d.delivery_status as MessageDeliveryStatus;
           }
-          deliveryStatusMap.set(d.interaction_id, resolvedStatus);
+          if (resolvedStatus) {
+            deliveryStatusMap.set(d.interaction_id, resolvedStatus);
+          }
         }
       }
     } catch {
-      // Defensive fallback for unit test mocks that do not model outbound_deliveries
+      console.warn(`[InboxService] Warning: Exception during outbound deliveries batch query for company ${companyId}`);
+      // Defensive fallback: Do not fail-open to SENT, keep deliveryStatusMap empty
     }
   }
 
@@ -906,7 +908,7 @@ export async function getMessagesByConversationId(
         raw_content: raw,
         created_at: m.created_at,
         direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
-        delivery_status: isOutbound ? (deliveryStatusMap.get(m.id) || 'SENT') : undefined,
+        delivery_status: isOutbound ? (deliveryStatusMap.get(m.id) ?? m.delivery_status ?? undefined) : undefined,
       };
     });
   }
@@ -930,7 +932,7 @@ export async function getMessagesByConversationId(
       sanitization_status: (() => { const s = m.sanitization_status || 'SUCCEEDED'; return (s === 'CLEAN' || s === 'SANITIZED') ? 'SUCCEEDED' : s; })() as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
       created_at: m.created_at,
       direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
-      delivery_status: isOutbound ? (deliveryStatusMap.get(m.id) || 'SENT') : undefined,
+      delivery_status: isOutbound ? (deliveryStatusMap.get(m.id) ?? m.delivery_status ?? undefined) : undefined,
     };
   });
 }
@@ -978,6 +980,12 @@ export async function sendMessage(
     const _sanitizationStatus: 'CLEAN' | 'SANITIZED' =
       sanitizedContent !== rawContent ? 'SANITIZED' : 'CLEAN';
 
+    const isBrowserProvider = (conv.metadata as Record<string, unknown>)?.provider === 'facebook_browser';
+    const isOutbound = sender_type !== 'customer';
+    const initialDeliveryStatus: MessageDeliveryStatus | undefined = isOutbound
+      ? (isBrowserProvider ? 'PENDING_DISPATCH' : undefined)
+      : undefined;
+
     const newMessage: InboxMessage = {
       id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       company_id: companyId,
@@ -991,7 +999,7 @@ export async function sendMessage(
       sanitization_status: 'SUCCEEDED',
       created_at: new Date().toISOString(),
       direction: sender_type === 'customer' ? 'inbound' : 'outbound',
-      delivery_status: 'PENDING_DISPATCH',
+      delivery_status: initialDeliveryStatus,
       client_command_id: clientCommandId,
       is_duplicate: false,
     };
@@ -1006,7 +1014,7 @@ export async function sendMessage(
     conv.last_message_at = newMessage.created_at;
 
     // Enqueue outbox job for Facebook Browser Worker if provider is facebook_browser
-    if ((conv.metadata as Record<string, unknown>)?.provider === 'facebook_browser') {
+    if (isBrowserProvider) {
       const outboxJob: FacebookBrowserOutboxJob = {
         id: `job-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         company_id: companyId,

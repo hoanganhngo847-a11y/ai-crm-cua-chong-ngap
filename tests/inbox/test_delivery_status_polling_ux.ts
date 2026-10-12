@@ -283,9 +283,8 @@ async function runDeliveryStatusPollingUxTests() {
   );
 
   // --------------------------------------------------------------------------
-  // Check 10: Zalo và Graph API flow không regression
+  // Check 10: Zalo outbound không có browser outbox row -> delivery_status === undefined (KHÔNG tự thành SENT)
   // --------------------------------------------------------------------------
-  // Thêm một hội thoại Zalo
   const zaloInbound = await InboxService.addInboundMessage({
     channel: 'zalo',
     company_id: DEFAULT_INBOX_COMPANY_ID,
@@ -307,12 +306,173 @@ async function runDeliveryStatusPollingUxTests() {
     'sale'
   );
 
+  const zaloOutbound = zaloHistory.find((m) => m.id === zaloReply.id);
+  assert.ok(zaloOutbound, 'Zalo outbound message must exist in history');
+
   recordTest(
-    '10. Zalo flow không regression',
-    'zalo messages returned cleanly',
-    `count: ${zaloHistory.length}, reply delivery_status: ${zaloHistory.find((m) => m.id === zaloReply.id)?.delivery_status || 'OK'}`,
-    zaloHistory.length >= 2
+    '10. Zalo outbound không có browser outbox row -> delivery_status === undefined (KHÔNG tự thành SENT)',
+    'delivery_status: undefined',
+    `delivery_status: ${zaloOutbound.delivery_status}`,
+    zaloOutbound.delivery_status === undefined
   );
+
+  // --------------------------------------------------------------------------
+  // Check 11: Graph API / non-browser outbound -> delivery_status === undefined (KHÔNG tự thành SENT)
+  // --------------------------------------------------------------------------
+  const graphInbound = await InboxService.addInboundMessage({
+    channel: 'facebook',
+    company_id: DEFAULT_INBOX_COMPANY_ID,
+    senderName: 'Khách Graph API',
+    externalUserId: 'fb-graph-user-456',
+    externalConversationId: 'graph-conv-456',
+    content: 'Hỏi giá qua Graph API',
+    metadata: {
+      provider: 'facebook_graph', // Non-browser provider
+    },
+  });
+
+  const graphReply = await InboxService.sendMessage({
+    conversation_id: graphInbound.conversationId,
+    company_id: DEFAULT_INBOX_COMPANY_ID,
+    content: 'Chào anh qua Facebook Graph API',
+    sender_type: 'sale',
+  });
+
+  const graphHistory = await InboxService.getMessagesByConversationId(
+    DEFAULT_INBOX_COMPANY_ID,
+    graphInbound.conversationId,
+    'sale'
+  );
+
+  const graphOutbound = graphHistory.find((m) => m.id === graphReply.id);
+  assert.ok(graphOutbound, 'Graph API outbound message must exist in history');
+
+  recordTest(
+    '11. Graph API/non-browser outbound -> delivery_status === undefined (KHÔNG tự thành SENT)',
+    'delivery_status: undefined',
+    `delivery_status: ${graphOutbound.delivery_status}`,
+    graphOutbound.delivery_status === undefined
+  );
+
+  // --------------------------------------------------------------------------
+  // Check 12: DB canonical: Outbound interaction có row SENT -> trả lại SENT
+  // --------------------------------------------------------------------------
+  const convDbId = 'conv-db-0000-0000-0000-000000000001';
+  const outboundIntId = 'int-db-outbound-0000-0000-0001';
+
+  function createMockDbClient(options: {
+    deliveries?: Array<{ interaction_id: string; delivery_status?: string; status?: string; reconciliation_status?: string }>;
+    deliveryError?: { message: string };
+  }) {
+    const createChain = () => {
+      const chain: any = {
+        eq: () => chain,
+        in: async () => {
+          if (options.deliveryError) {
+            return { data: null, error: options.deliveryError };
+          }
+          return { data: options.deliveries || [], error: null };
+        },
+        order: async () => ({
+          data: [
+            {
+              id: outboundIntId,
+              company_id: DEFAULT_INBOX_COMPANY_ID,
+              customer_id: 'cust-db-01',
+              conversation_id: convDbId,
+              channel: 'facebook',
+              type: 'MESSAGE',
+              direction: 'OUTBOUND',
+              sanitized_content: 'Tin nhắn canonical DB outbound test',
+              sanitization_status: 'SUCCEEDED',
+              actor_type: 'SALE',
+              created_at: new Date().toISOString(),
+            },
+          ],
+          error: null,
+        }),
+        maybeSingle: async () => ({
+          data: {
+            id: convDbId,
+            company_id: DEFAULT_INBOX_COMPANY_ID,
+            customer_id: 'cust-db-01',
+            channel: 'facebook',
+            unread_count: 0,
+          },
+          error: null,
+        }),
+      };
+      return chain;
+    };
+
+    return {
+      from: (_table: string) => ({
+        select: (_cols?: string) => createChain(),
+        update: () => createChain(),
+      }),
+    } as any;
+  }
+
+  process.env.DEMO_MODE = 'false';
+
+  const dbClientSent = createMockDbClient({
+    deliveries: [{ interaction_id: outboundIntId, delivery_status: 'SENT', status: 'SENT' }],
+  });
+  const msgsSent = await InboxService.getMessagesByConversationId(
+    DEFAULT_INBOX_COMPANY_ID,
+    convDbId,
+    'sale',
+    dbClientSent
+  );
+  const msgSent = msgsSent.find((m) => m.id === outboundIntId);
+
+  recordTest(
+    '12. DB canonical: Outbound interaction có row SENT -> trả lại SENT',
+    'delivery_status: SENT',
+    `delivery_status: ${msgSent?.delivery_status}`,
+    msgSent?.delivery_status === 'SENT'
+  );
+
+  // --------------------------------------------------------------------------
+  // Check 13: DB canonical: Outbound interaction KHÔNG có delivery row -> delivery_status === undefined
+  // --------------------------------------------------------------------------
+  const dbClientEmpty = createMockDbClient({ deliveries: [] });
+  const msgsEmpty = await InboxService.getMessagesByConversationId(
+    DEFAULT_INBOX_COMPANY_ID,
+    convDbId,
+    'sale',
+    dbClientEmpty
+  );
+  const msgEmpty = msgsEmpty.find((m) => m.id === outboundIntId);
+
+  recordTest(
+    '13. DB canonical: Outbound interaction KHÔNG có delivery row -> delivery_status === undefined (KHÔNG fail-open thành SENT)',
+    'delivery_status: undefined',
+    `delivery_status: ${msgEmpty?.delivery_status}`,
+    msgEmpty?.delivery_status === undefined
+  );
+
+  // --------------------------------------------------------------------------
+  // Check 14: DB canonical: Lỗi batch query outbound_deliveries -> không trả SENT giả
+  // --------------------------------------------------------------------------
+  const dbClientErr = createMockDbClient({ deliveryError: { message: 'Database connection failed' } });
+  const msgsErr = await InboxService.getMessagesByConversationId(
+    DEFAULT_INBOX_COMPANY_ID,
+    convDbId,
+    'sale',
+    dbClientErr
+  );
+  const msgErr = msgsErr.find((m) => m.id === outboundIntId);
+
+  recordTest(
+    '14. DB canonical: Lỗi batch query outbound_deliveries -> không trả SENT giả (delivery_status === undefined)',
+    'delivery_status: undefined',
+    `delivery_status: ${msgErr?.delivery_status}`,
+    msgErr?.delivery_status === undefined
+  );
+
+  // Khôi phục DEMO_MODE
+  process.env.DEMO_MODE = 'true';
 
   console.log('\n========================================================================================');
   console.log('ACCEPTANCE MATRIX: DELIVERY STATUS REFRESH & SMART POLLING UX');
@@ -321,7 +481,7 @@ async function runDeliveryStatusPollingUxTests() {
 
   const allPassed = resultsTable.every((r) => r.status === 'PASS');
   assert.ok(allPassed, 'All delivery status UX tests must PASS');
-  console.log('\nOVERALL STATUS: ALL 10 TESTS PASSED (100%)\n');
+  console.log(`\nOVERALL STATUS: ALL ${resultsTable.length} TESTS PASSED (100%)\n`);
 }
 
 runDeliveryStatusPollingUxTests().catch((err) => {
