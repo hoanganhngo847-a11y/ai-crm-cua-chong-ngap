@@ -42,7 +42,12 @@ async function attachFacebookPageInfo<T extends PageAwareConversation>(
   const facebookConversations = conversations.filter((item) => item.channel === 'facebook');
   if (facebookConversations.length === 0) return conversations;
 
-  const db = client || createAdminClient();
+  let db: SupabaseClient;
+  try {
+    db = client || createAdminClient();
+  } catch {
+    return conversations;
+  }
   const { data, error } = await db
     .from('conversations')
     .select('id, external_conversation_id')
@@ -443,12 +448,15 @@ export async function POST(request: NextRequest, context?: unknown) {
       );
     }
 
-    // Production Facebook conversations must use the canonical provider sender.
-    // Injected route contexts are a test seam and keep using the mockable inbox service.
+    // Production Facebook conversations must use the canonical provider sender (Graph API),
+    // UNLESS the conversation is managed by the Facebook Browser Worker (provider === 'facebook_browser').
     const hasInjectedTestContext =
       typedContext?.actor !== undefined || typedContext?.supabaseClient !== undefined;
 
-    if (conversation.channel === 'facebook' && !hasInjectedTestContext) {
+    const isFacebookBrowser =
+      (conversation.metadata as Record<string, unknown>)?.provider === 'facebook_browser';
+
+    if (conversation.channel === 'facebook' && !isFacebookBrowser && !hasInjectedTestContext) {
       try {
         const delivery = await sendFacebookMessage(conversation_id, {
           content: content.trim(),

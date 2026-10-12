@@ -553,6 +553,7 @@ export async function getConversationById(
       assigned_to,
       created_at,
       updated_at,
+      metadata,
       customers (
         id,
         name,
@@ -599,6 +600,7 @@ export async function getConversationById(
     last_message_at: lastMsgAt,
     unread_count: row.unread_count || 0,
     status: row.status,
+    metadata: (row.metadata as Record<string, unknown>) || {},
     updated_at: row.updated_at,
     created_at: row.created_at,
   };

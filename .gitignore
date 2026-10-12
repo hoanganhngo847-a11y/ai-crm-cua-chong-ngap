@@ -49,6 +49,8 @@ next-env.d.ts
 fb-inbox-worker/user_data/
 fb-inbox-worker/node_modules/
 fb-inbox-worker/.env
+fb-inbox-worker/.worker.pid
+fb-inbox-worker/*.log
 
 scratch/
 

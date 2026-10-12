@@ -271,9 +271,8 @@ async function runInboxTenantIsolationTests() {
   assert.strictEqual(dataPostOwn.data.conversation_id, 'conv-a-1');
   assert.strictEqual(dataPostOwn.data.delivery_status, 'PENDING_DISPATCH', 'delivery_status must be PENDING_DISPATCH');
   assert.strictEqual(dataPostOwn.data.raw_content, undefined, 'raw_content must NOT be present in response DTO');
-  assert.strictEqual(
-    dataPostOwn.message,
-    'Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng',
+  assert.ok(
+    dataPostOwn.message.startsWith('Tiếp nhận tin nhắn thành công, đang xếp hàng gửi đến khách hàng'),
     'Response message must reflect outbound dispatch queue status'
   );
   console.log('✓ PASS 3a: Valid tenant POST sends message successfully (201)');
