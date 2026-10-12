@@ -207,12 +207,13 @@ async function main() {
           if (conversations.length > 0) {
             for (let i = 0; i < Math.min(conversations.length, 5); i++) {
               const convItem = conversations[i];
-              if (convItem.isUnread) {
-                await selectConversation(page, i);
-                await sleep(1500);
-
-                const threadData = await extractActiveThreadMessages(page, cachedPageId);
-                await processThreadData(threadData, cachedPageId, cachedPageName);
+              if (convItem.isUnread || i === 0) {
+                const switched = await selectConversation(page, i);
+                if (switched) {
+                  await sleep(1500);
+                  const threadData = await extractActiveThreadMessages(page, cachedPageId);
+                  await processThreadData(threadData, cachedPageId, cachedPageName);
+                }
               }
             }
           }

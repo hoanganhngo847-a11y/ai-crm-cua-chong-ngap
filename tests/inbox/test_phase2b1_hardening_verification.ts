@@ -52,6 +52,7 @@ function recordTest(
 }
 
 async function runHardeningTests() {
+  (process.env as Record<string, string | undefined>).NODE_ENV = 'test';
   process.env.DEMO_MODE = 'true';
   const crmEnv = fs.readFileSync('.env.local', 'utf8');
   const secretCrm = (crmEnv.match(/FB_WORKER_SECRET=([^\r\n]+)/) || [])[1]?.trim();

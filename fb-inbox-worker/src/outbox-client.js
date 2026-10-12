@@ -3,53 +3,24 @@ import https from 'https';
 import { CONFIG } from './config.js';
 import { log } from './logger.js';
 
-function postJson(urlStr, data, headers = {}) {
-  return new Promise((resolve, reject) => {
-    try {
-      const url = new URL(urlStr);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
+async function postJson(urlStr, data, headers = {}) {
+  try {
+    const res = await fetch(urlStr, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-worker-secret': CONFIG.FB_WORKER_SECRET,
+        ...headers,
+      },
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(15000),
+    });
 
-      const payload = JSON.stringify(data);
-      const options = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname + url.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-          'x-worker-secret': CONFIG.FB_WORKER_SECRET,
-          ...headers,
-        },
-        timeout: 10000,
-      };
-
-      const req = lib.request(options, (res) => {
-        let body = '';
-        res.on('data', (chunk) => (body += chunk));
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(body);
-            resolve({ statusCode: res.statusCode, body: json });
-          } catch (_) {
-            resolve({ statusCode: res.statusCode, rawBody: body });
-          }
-        });
-      });
-
-      req.on('error', (err) => reject(err));
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timeout'));
-      });
-
-      req.write(payload);
-      req.end();
-    } catch (err) {
-      reject(err);
-    }
-  });
+    const json = await res.json().catch(() => ({}));
+    return { statusCode: res.status, body: json };
+  } catch (err) {
+    throw err;
+  }
 }
 
 function getBaseApiUrl() {

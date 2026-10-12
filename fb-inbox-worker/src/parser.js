@@ -339,7 +339,8 @@ export async function extractActiveThreadMessages(page, pageId) {
 export async function selectConversation(page, index = 0) {
   try {
     return await page.evaluate((idx) => {
-      const row = document.querySelector(`[data-surface*="thread_row${idx}"]`);
+      const rows = Array.from(document.querySelectorAll('[data-surface*="thread_row"]'));
+      const row = rows[idx];
       if (row) {
         const clickable = row.querySelector('a, div[role="row"], div[role="button"]') || row;
         clickable.click();
