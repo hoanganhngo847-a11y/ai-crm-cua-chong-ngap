@@ -100,6 +100,7 @@ class HealthServer {
           res.end(JSON.stringify({
             ready: isReady,
             state: this.state.meta_inbox_state,
+            meta_inbox_state: this.state.meta_inbox_state,
             status: this.state.status,
             worker_running: this.state.worker_running
           }));

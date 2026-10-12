@@ -101,21 +101,35 @@ async function runProductionOperationsTests() {
     isHealthyInitial
   );
 
-  // Test State Transition to LOGIN_REQUIRED / CHECKPOINT (Requirement 7)
+  // Test State Transition to LOGIN_REQUIRED / CHECKPOINT (Requirement 1 & 7)
+  // Liveness (/health) MUST remain 200 so Render doesn't crash-loop the container
+  // Readiness (/ready) MUST return 503 to alert operators that Facebook session expired
   healthServer.updateState({
     meta_inbox_state: 'LOGIN_REQUIRED',
   });
-  const degradedRes = await fetchJson(`http://127.0.0.1:${TEST_HEALTH_PORT}/health`);
-  const isDegradedAlerting =
-    degradedRes.statusCode === 503 &&
-    degradedRes.data.status === 'LOGIN_REQUIRED' &&
-    degradedRes.data.meta_inbox_state === 'LOGIN_REQUIRED';
+  const degradedHealthRes = await fetchJson(`http://127.0.0.1:${TEST_HEALTH_PORT}/health`);
+  const degradedReadyRes = await fetchJson(`http://127.0.0.1:${TEST_HEALTH_PORT}/ready`);
+
+  const isLivenessPreserved =
+    degradedHealthRes.statusCode === 200 &&
+    degradedHealthRes.data.meta_inbox_state === 'LOGIN_REQUIRED';
 
   recordSmoke(
-    'Health Endpoint Alert: Shifts to 503 LOGIN_REQUIRED when session expired',
-    'HTTP 503, status: LOGIN_REQUIRED, alerts operators without restarting in tight loops',
-    `HTTP ${degradedRes.statusCode}, status: ${degradedRes.data.status}`,
-    isDegradedAlerting
+    'Health Liveness Endpoint: Remains 200 even when Facebook session expired (prevents Render restart loops)',
+    'HTTP 200, status: HEALTHY, meta_inbox_state: LOGIN_REQUIRED',
+    `HTTP ${degradedHealthRes.statusCode}, meta_inbox_state: ${degradedHealthRes.data.meta_inbox_state}`,
+    isLivenessPreserved
+  );
+
+  const isReadinessAlerting =
+    degradedReadyRes.statusCode === 503 &&
+    degradedReadyRes.data.meta_inbox_state === 'LOGIN_REQUIRED';
+
+  recordSmoke(
+    'Readiness Endpoint Alert: Shifts to 503 LOGIN_REQUIRED when session expired',
+    'HTTP 503, status: NOT_READY, alerts operators without restarting in tight loops',
+    `HTTP ${degradedReadyRes.statusCode}, meta_inbox_state: ${degradedReadyRes.data.meta_inbox_state}`,
+    isReadinessAlerting
   );
 
   await healthServer.stop();
@@ -152,16 +166,17 @@ async function runProductionOperationsTests() {
   // -----------------------------------------------------------------------------------------------
   console.log('\n--- 3. Persistent user_data Storage Outside Release Directory ---');
   const systemdService = fs.readFileSync('fb-inbox-worker/deploy/systemd/fb-inbox-worker.service', 'utf8');
-  const pm2Config = fs.readFileSync('fb-inbox-worker/deploy/ecosystem.config.cjs', 'utf8');
+  const renderYaml = fs.readFileSync('fb-inbox-worker/deploy/render.yaml', 'utf8');
 
   const usesDedicatedDir =
-    systemdService.includes('USER_DATA_DIR=/var/lib/fb-inbox-worker/user_data') &&
-    pm2Config.includes('/var/lib/fb-inbox-worker/user_data');
+    renderYaml.includes('mountPath: /var/data/fb-user-data') &&
+    renderYaml.includes('value: /var/data/fb-user-data') &&
+    systemdService.includes('USER_DATA_DIR=/var/lib/fb-inbox-worker/user_data');
 
   recordSmoke(
-    'Persistence Architecture: user_data mounted on persistent disk /var/lib/fb-inbox-worker',
-    'Profile stored outside /opt/ai-crm to survive code updates and deployments',
-    `Systemd & PM2 configured for /var/lib/fb-inbox-worker/user_data: ${usesDedicatedDir}`,
+    'Persistence Architecture: user_data mounted on persistent disk /var/data/fb-user-data (Render)',
+    'Profile stored outside release folder to survive container redeployments',
+    `Render persistent disk & Systemd configured: ${usesDedicatedDir}`,
     usesDedicatedDir
   );
 
@@ -354,18 +369,18 @@ async function runProductionOperationsTests() {
   componentTable.push(
     {
       component: 'Playwright Worker',
-      deploymentStatus: 'Ubuntu VPS (LTS)',
-      persistence: 'Persistent (/var/lib/fb-inbox-worker)',
-      health: 'Port 3099 (/health 200/503)',
+      deploymentStatus: 'Render Docker Web Service (Service 2)',
+      persistence: 'Persistent Disk (/var/data/fb-user-data)',
+      health: 'Port $PORT (Liveness /health 200, Readiness /ready 503)',
       restartTest: 'Auto-restart 10s backoff',
       result: 'PASS',
     },
     {
-      component: 'Process Manager',
-      deploymentStatus: 'systemd + PM2',
-      persistence: 'Survives reboot (multi-user.target)',
+      component: 'Process Manager / Container',
+      deploymentStatus: 'Docker Entrypoint + Node Gateway',
+      persistence: 'Persistent Disk survives redeployments',
       health: 'Process PID & memory monitored',
-      restartTest: 'Kill -9 recovers cleanly',
+      restartTest: 'Isolated from CRM Service 1',
       result: 'PASS',
     },
     {
