@@ -44,3 +44,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# fb-inbox-worker
+fb-inbox-worker/user_data/
+fb-inbox-worker/node_modules/
+fb-inbox-worker/.env
+
+scratch/
+

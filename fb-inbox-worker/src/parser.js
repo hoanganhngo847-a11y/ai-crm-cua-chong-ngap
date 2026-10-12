@@ -1,0 +1,353 @@
+import crypto from 'crypto';
+import { log } from './logger.js';
+import { threadStore } from './thread-store.js';
+
+/**
+ * Robust DOM Parser for Meta Business Suite Inbox
+ * Conforms strictly to Phase 2A requirements:
+ * 1. Strict INBOUND vs OUTBOUND classification via computed style, color, alignment.
+ * 2. Stable thread identifier priority: direct UI threadId -> customer FB profile ID -> persistent worker mapping.
+ * 3. Stable message idempotency fingerprinting.
+ */
+
+export async function extractPageName(page) {
+  try {
+    return await page.evaluate(() => {
+      // 1. Check account picker / brand in top header or sidebar
+      const selectors = [
+        '[data-surface*="asset_selector"]',
+        '[data-surface*="page_picker"]',
+        '[data-testid*="business-asset"]',
+        '[data-testid*="page_selector"]',
+        '[aria-label*="Tài khoản"][aria-haspopup="menu"]',
+        '[aria-label*="Trang"][aria-haspopup="menu"]',
+        '[aria-label*="Business account"][aria-haspopup="menu"]',
+        '[aria-label*="Account"][aria-haspopup="menu"]',
+        'div[role="banner"] [role="button"] span[dir="auto"]'
+      ];
+
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el) {
+          const text = (el.innerText || el.getAttribute('aria-label') || '').trim();
+          if (text && text.length > 1 && text.length < 80 && !/^(Tạo|Create|Home|Notifications|Inbox|Hộp thư|All tools|Settings)/i.test(text)) {
+            return text.replace(/^(Trang|Tài khoản|Chuyển sang|Đổi tài khoản):\s*/i, '');
+          }
+        }
+      }
+
+      // 2. Check top banner profile / asset button
+      const navButtons = Array.from(document.querySelectorAll('div[role="banner"] button, nav button, header button, div[role="navigation"] button'));
+      const excluded = /^(Home|Notifications|Inbox|Ads|Content|Planner|Tools|All tools|Settings|Help|Create|Search|Links|Billing|Audiences|Events|Leads Center)/i;
+      for (const btn of navButtons) {
+        const t = (btn.innerText || '').trim();
+        if (t.length >= 2 && t.length <= 50 && !excluded.test(t)) {
+          return t;
+        }
+      }
+
+      // 3. Fallback to asset_id in URL
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const assetId = urlParams.get('asset_id');
+        if (assetId) {
+          return `Page #${assetId}`;
+        }
+      } catch (_) {}
+
+      return 'Trang Meta Business';
+    });
+  } catch (error) {
+    return 'Trang Meta Business';
+  }
+}
+
+export async function extractConversationsList(page) {
+  try {
+    return await page.evaluate(() => {
+      const results = [];
+      const seenRowIds = new Set();
+
+      const rowElements = Array.from(document.querySelectorAll('[data-surface*="thread_row"]'));
+      
+      for (const el of rowElements) {
+        const surface = el.getAttribute('data-surface') || '';
+        const match = surface.match(/thread_row(\d+)/);
+        if (!match) continue;
+
+        const rowKey = match[0];
+        if (seenRowIds.has(rowKey)) continue;
+        seenRowIds.add(rowKey);
+
+        const titleEl = el.querySelector('[data-surface*="lib:thread_title"]') ||
+                        document.querySelector(`[data-surface*="${rowKey}/lib:thread_title"]`);
+        let customerName = titleEl ? (titleEl.innerText || '').trim() : '';
+
+        const timeEl = el.querySelector('abbr.timestamp, abbr[data-utime]');
+        const time = timeEl ? (timeEl.getAttribute('title') || timeEl.innerText || '').trim() : '';
+        const utime = timeEl ? timeEl.getAttribute('data-utime') : null;
+
+        const allLines = (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+
+        if (!customerName && allLines.length > 0) {
+          customerName = allLines[0];
+        }
+
+        let snippet = '';
+        if (allLines.length >= 2) {
+          snippet = allLines.find(l => l !== customerName && l !== time && !l.includes('Move to done') && !l.includes('Mark as follow up')) || allLines[1];
+        }
+
+        // Unread check
+        let isUnread = false;
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        if (/chưa đọc|unread/i.test(ariaLabel) || /chưa đọc|unread/i.test(el.innerText || '')) {
+          isUnread = true;
+        }
+
+        const dotOrBadge = el.querySelector('[aria-label*="unread" i], [aria-label*="chưa đọc" i], svg[aria-label*="unread" i]');
+        if (dotOrBadge) {
+          isUnread = true;
+        }
+
+        const colorMatches = el.innerHTML.includes('0, 132, 255') || el.innerHTML.includes('24, 119, 242');
+        if (colorMatches && !snippet.startsWith('You:')) {
+          isUnread = true;
+        }
+
+        const isSnippetOutbound = snippet.startsWith('You:');
+
+        results.push({
+          rowId: rowKey,
+          index: results.length,
+          customerName: customerName || 'Khách hàng',
+          snippet: snippet || '',
+          time: time || 'Vừa xong',
+          utime,
+          isUnread,
+          isSnippetOutbound,
+          ariaLabel
+        });
+      }
+
+      return results;
+    });
+  } catch (error) {
+    log.warn(`Lỗi khi đọc danh sách hội thoại: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * Extracts all message bubbles from the active conversation thread
+ * Implements strict INBOUND vs OUTBOUND classification and stable ID resolution.
+ */
+export async function extractActiveThreadMessages(page, pageId) {
+  try {
+    const rawData = await page.evaluate(() => {
+      // 1. Identify Customer Profile Link in right sidebar or thread header
+      const profileLinks = Array.from(
+        document.querySelectorAll('a[href*="facebook.com/profile.php"], a[href*="facebook.com/"]')
+      ).filter(a => {
+        const href = a.getAttribute('href') || '';
+        return !href.includes('business.facebook.com') && !href.includes('/help/') && !href.includes('/pages/');
+      });
+
+      let customerFbId = null;
+      let profileHref = null;
+
+      for (const link of profileLinks) {
+        const href = link.getAttribute('href') || '';
+        const idMatch = href.match(/id=(\d+)/);
+        if (idMatch) {
+          customerFbId = idMatch[1];
+          profileHref = href;
+          break;
+        }
+      }
+
+      // Customer display name in thread header
+      let customerName = '';
+      const headerEls = document.querySelectorAll(
+        '[data-surface*="thread_header"] h1, [data-surface*="thread_header"] h2, [role="main"] h2, div[role="main"] span[dir="auto"]'
+      );
+      for (const h of headerEls) {
+        const text = (h.innerText || '').trim();
+        if (text && text.length > 1 && text.length < 50 &&
+            !/^(Hộp thư|Inbox|Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Ghi chú|Chi tiết|Assign)/i.test(text)) {
+          customerName = text;
+          break;
+        }
+      }
+
+      // 2. Scan Message list container
+      const msgContainer = document.querySelector(
+        '[aria-label="Message list container with messages, suggestions, and typing indicators"], [role="region"][aria-label*="Message"], [role="main"]'
+      );
+
+      if (!msgContainer) {
+        return { error: 'Message container not found' };
+      }
+
+      const rawNodes = Array.from(msgContainer.querySelectorAll('*'));
+      let currentTimestampText = 'Vừa xong';
+      let currentUtime = null;
+
+      const parsedMessages = [];
+      const seenKeys = new Set();
+
+      for (const el of rawNodes) {
+        const text = (el.innerText || '').trim();
+        if (!text) continue;
+
+        // Check if element is a timestamp header
+        if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|\d{1,2} thg|\d{1,2}:\d{2})/i.test(text) && text.length < 30) {
+          currentTimestampText = text;
+          const abbr = el.querySelector('abbr[data-utime]') || (el.tagName === 'ABBR' ? el : null);
+          if (abbr) {
+            currentUtime = abbr.getAttribute('data-utime');
+          }
+          continue;
+        }
+
+        // Must be leaf or near-leaf message bubble text
+        const isLeaf = el.children.length === 0 || (el.children.length === 1 && el.children[0].tagName === 'SPAN');
+        if (!isLeaf) continue;
+
+        // Skip non-message UI actions
+        if (/^(Reply in Messenger|Enter|Đính kèm|Assign this conversation|View profile|More items|Send|Gửi|Preview)/i.test(text)) {
+          continue;
+        }
+
+        // Strict Direction Classification
+        let bgColor = '';
+        let alignItems = '';
+        let curr = el;
+        for (let i = 0; i < 7 && curr && curr !== msgContainer; i++) {
+          const style = window.getComputedStyle(curr);
+          if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
+            bgColor = style.backgroundColor;
+          }
+          if (!alignItems && style.alignItems && style.alignItems !== 'normal') {
+            alignItems = style.alignItems;
+          }
+          curr = curr.parentElement;
+        }
+
+        const rect = el.getBoundingClientRect();
+        const containerRect = msgContainer.getBoundingClientRect();
+        const relativeX = (rect.left - containerRect.left) / containerRect.width;
+
+        // Outbound signals:
+        // - Text starts with "You:"
+        // - Parent alignItems === 'flex-end'
+        // - Background color is blue: rgb(10, 124, 255), rgb(0, 132, 255), rgb(24, 119, 242)
+        // - Geometric position relativeX >= 0.40 (aligned to right half)
+        const isBlueBg = bgColor.includes('10, 124, 255') || bgColor.includes('0, 132, 255') || bgColor.includes('24, 119, 242');
+        const isRightAligned = alignItems === 'flex-end' || relativeX >= 0.40;
+        const startsWithYou = text.startsWith('You:');
+        const isOutbound = startsWithYou || isBlueBg || isRightAligned;
+
+        // Inbound signals:
+        // - Text does NOT start with "You:"
+        // - Parent alignItems === 'flex-start'
+        // - Background color is gray: rgb(239, 239, 239), rgb(240, 242, 245), rgb(242, 243, 245)
+        // - Geometric position relativeX < 0.35 (aligned to left half)
+        const isGrayBg = bgColor.includes('239, 239, 239') || bgColor.includes('240, 242, 245') || bgColor.includes('242, 243, 245');
+        const isLeftAligned = alignItems === 'flex-start' || (relativeX < 0.35 && relativeX >= 0);
+        const isInbound = !startsWithYou && !isBlueBg && (isLeftAligned || isGrayBg);
+
+        let direction;
+        if (isOutbound && !isInbound) {
+          direction = 'OUTBOUND';
+        } else if (isInbound && !isOutbound) {
+          direction = 'INBOUND';
+        } else if (isOutbound && isInbound) {
+          // If signals conflict, prioritize definitive outbound markers if present
+          if (startsWithYou || isBlueBg || alignItems === 'flex-end') {
+            direction = 'OUTBOUND';
+          } else {
+            direction = 'AMBIGUOUS_DIRECTION';
+          }
+        } else {
+          // Neither indicator clearly present -> Must NOT default to inbound (Requirement 14)
+          direction = 'AMBIGUOUS_DIRECTION';
+        }
+
+        const cleanContent = text.replace(/^You:\s*/i, '').trim();
+
+        const dedupeKey = `${direction}::${cleanContent}::${currentTimestampText}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        parsedMessages.push({
+          content: cleanContent,
+          direction,
+          timestamp: currentTimestampText,
+          utime: currentUtime,
+          relativeX: Math.round(relativeX * 1000) / 1000
+        });
+      }
+
+      return {
+        customerFbId,
+        profileHref,
+        customerName,
+        parsedMessages
+      };
+    });
+
+    if (rawData.error || !rawData.parsedMessages) {
+      return { customerFbId: null, stableThreadId: null, messages: [] };
+    }
+
+    // Resolve stable thread ID following Priority Order (Rule 3)
+    const stableThreadId = threadStore.resolveStableThreadId(
+      pageId,
+      rawData.customerFbId,
+      null, // direct thread ID if available
+      rawData.customerName
+    );
+
+    // Compute deterministic fingerprint for each message (Rule 4)
+    const messages = rawData.parsedMessages.map(m => {
+      const fingerprint = crypto
+        .createHash('sha256')
+        .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}`)
+        .digest('hex');
+
+      return {
+        ...m,
+        fingerprint,
+        stableThreadId
+      };
+    });
+
+    return {
+      customerFbId: rawData.customerFbId,
+      profileHref: rawData.profileHref,
+      customerName: rawData.customerName || 'Khách hàng',
+      stableThreadId,
+      messages
+    };
+  } catch (error) {
+    log.warn(`Lỗi khi trích xuất tin nhắn active thread: ${error.message}`);
+    return { customerFbId: null, stableThreadId: null, messages: [] };
+  }
+}
+
+export async function selectConversation(page, index = 0) {
+  try {
+    return await page.evaluate((idx) => {
+      const row = document.querySelector(`[data-surface*="thread_row${idx}"]`);
+      if (row) {
+        const clickable = row.querySelector('a, div[role="row"], div[role="button"]') || row;
+        clickable.click();
+        return true;
+      }
+      return false;
+    }, index);
+  } catch (error) {
+    return false;
+  }
+}

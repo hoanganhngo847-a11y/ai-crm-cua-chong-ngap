@@ -1,0 +1,12 @@
+/var/log/fb-inbox-worker/*.log
+/var/log/fb-inbox-worker/*.err {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    maxsize 50M
+    copytruncate
+    create 0640 fbworker fbworker
+}

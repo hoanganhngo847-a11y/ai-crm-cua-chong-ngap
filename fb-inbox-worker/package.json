@@ -1,0 +1,15 @@
+{
+  "name": "fb-inbox-worker",
+  "version": "1.0.0",
+  "description": "Meta Business Suite Inbox Reader using Playwright (MVP)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "inspect": "node src/index.js --inspect",
+    "debug": "DEBUG=worker* node src/index.js"
+  },
+  "dependencies": {
+    "playwright": "1.64.0"
+  }
+}

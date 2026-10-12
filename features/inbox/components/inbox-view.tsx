@@ -390,6 +390,14 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                         <span className="font-semibold text-white text-xs truncate max-w-[120px]">
                           {conv.customer_name || 'Khách hàng'}
                         </span>
+                        {conv.metadata?.provider === 'facebook_browser' && (
+                          <span
+                            className="px-1 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
+                            title="Đồng bộ từ Meta Business Suite"
+                          >
+                            Browser
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-1.5">
@@ -488,7 +496,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                           isSaleMsg ? 'items-end' : 'items-start'
                         }`}
                       >
-                        {/* Sender Label */}
+                        {/* Sender Label & Delivery Status */}
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mb-1 px-1">
                           {isAiMsg && (
                             <span className="px-1.5 py-0.2 rounded bg-purple-900/60 border border-purple-700/50 text-purple-300 font-semibold flex items-center gap-1">
@@ -508,13 +516,47 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                           <span>
                             {formatMessageTime(msg.created_at)}
                           </span>
+
+                          {/* Outbound Delivery Status (Phase 2B.1 Hardening) */}
+                          {isSaleMsg && (
+                            <>
+                              <span>•</span>
+                              {msg.delivery_status === 'SENT' || msg.delivery_status === 'DELIVERED' ? (
+                                <span className="text-emerald-400 font-medium flex items-center gap-0.5" title="Đã gửi tới khách hàng">
+                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                  Đã gửi
+                                </span>
+                              ) : msg.delivery_status === 'FAILED' ? (
+                                <span className="text-rose-400 font-semibold flex items-center gap-0.5" title="Gửi thất bại - Khách chưa nhận được">
+                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                  Gửi thất bại
+                                </span>
+                              ) : msg.delivery_status === 'RECONCILE_REQUIRED' ? (
+                                <span className="text-amber-400 font-medium flex items-center gap-0.5" title="Đang đối soát phiên gửi">
+                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                  Cần đối soát
+                                </span>
+                              ) : (
+                                <span className="text-amber-300 font-medium flex items-center gap-0.5" title="Tin nhắn đang trong hàng đợi xử lý">
+                                  <svg className="w-3 h-3 inline animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                  Đang gửi
+                                </span>
+                              )}
+                            </>
+                          )}
                         </div>
 
                         {/* Message Bubble */}
                         <div
                           className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed ${
                             isSaleMsg
-                              ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/10'
+                              ? msg.delivery_status === 'FAILED'
+                                ? 'bg-rose-950/70 border border-rose-500/80 text-rose-100 rounded-tr-none shadow-md shadow-rose-900/20'
+                                : msg.delivery_status === 'RECONCILE_REQUIRED'
+                                  ? 'bg-amber-950/70 border border-amber-500/80 text-amber-100 rounded-tr-none'
+                                  : msg.delivery_status === 'SENT' || msg.delivery_status === 'DELIVERED'
+                                    ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/10'
+                                    : 'bg-blue-700/80 border border-blue-400/50 text-white rounded-tr-none'
                               : isAiMsg
                                 ? 'bg-purple-950/40 border border-purple-700/40 text-purple-100 rounded-tl-none'
                                 : 'bg-slate-800 text-slate-100 border border-slate-700/60 rounded-tl-none'
@@ -522,6 +564,10 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                         >
                           {msg.content}
                         </div>
+
+                        {isSaleMsg && msg.delivery_status === 'FAILED' && (
+                          <span className="text-[10px] text-rose-400 mt-0.5 font-medium">⚠️ Khách chưa nhận được tin nhắn. Có thể thử lại.</span>
+                        )}
                       </div>
                     );
                   })

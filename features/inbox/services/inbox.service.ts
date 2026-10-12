@@ -5,10 +5,12 @@ import type {
   ConversationFilter,
   ConversationStatus,
   CustomerTimelineEvent,
+  FacebookBrowserOutboxJob,
   InboxChannel,
   InboxMessage,
   MessageDeliveryStatus,
   OutboundDeliveryRecord,
+  OutboxJobStatus,
   SendMessageInput,
   SenderType,
 } from '../types/inbox.types';
@@ -83,6 +85,8 @@ function isDemoMode(): boolean {
 // ============================================================================
 
 export const DEFAULT_INBOX_COMPANY_ID = '00000000-0000-0000-0000-000000000001';
+
+let facebookBrowserOutboxStore: FacebookBrowserOutboxJob[] = [];
 
 const INITIAL_CONVERSATIONS: Conversation[] = [
   {
@@ -404,6 +408,7 @@ export async function getConversations(
       unread_count,
       status,
       assigned_to,
+      metadata,
       created_at,
       updated_at,
       customers (
@@ -482,6 +487,7 @@ export async function getConversations(
       last_message_at: lastMsgAt,
       unread_count: row.unread_count || 0,
       status: row.status,
+      metadata: (row.metadata as Record<string, unknown>) || {},
       updated_at: row.updated_at,
       created_at: row.created_at,
     };
@@ -910,6 +916,36 @@ export async function sendMessage(
     conv.updated_at = newMessage.created_at;
     conv.last_message_at = newMessage.created_at;
 
+    // Enqueue outbox job for Facebook Browser Worker if provider is facebook_browser
+    if ((conv.metadata as Record<string, unknown>)?.provider === 'facebook_browser') {
+      const outboxJob: FacebookBrowserOutboxJob = {
+        id: `job-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        company_id: companyId,
+        conversation_id,
+        channel: 'FACEBOOK',
+        provider: 'facebook_browser',
+        content: rawContent,
+        status: 'PENDING',
+        attempt_count: 0,
+        next_retry_at: null,
+        processing_started_at: null,
+        lease_expires_at: null,
+        reconciliation_status: 'NONE',
+        last_error: null,
+        created_at: newMessage.created_at,
+        sent_at: null,
+        idempotency_key: clientCommandId || `cmd-${Date.now()}`,
+        metadata: {
+          page_id: (conv.metadata as Record<string, unknown>)?.page_id as string,
+          page_name: (conv.metadata as Record<string, unknown>)?.page_name as string,
+          customer_fb_id: (conv.metadata as Record<string, unknown>)?.customer_fb_id as string,
+          external_conversation_id: (conv.metadata as Record<string, unknown>)?.external_conversation_id as string,
+          customer_name: conv.customer_name,
+        },
+      };
+      facebookBrowserOutboxStore.push(outboxJob);
+    }
+
     return newMessage;
   }
 
@@ -1313,6 +1349,8 @@ export async function addInboundMessage(params: {
         c.channel === params.channel &&
         (c.customer_id === params.customerId ||
           c.customer_id === params.senderId ||
+          (params.externalUserId && (c.customer_id === params.externalUserId || (c.metadata as Record<string, unknown>)?.customer_fb_id === params.externalUserId)) ||
+          (params.externalConversationId && (c.metadata as Record<string, unknown>)?.external_conversation_id === params.externalConversationId) ||
           (params.senderPhone && c.customer_phone === params.senderPhone))
     );
 
@@ -1336,6 +1374,10 @@ export async function addInboundMessage(params: {
         last_message_at: timestamp,
         unread_count: 1,
         status: 'PENDING_SALE',
+        metadata: {
+          ...(params.metadata || {}),
+          ...(params.externalConversationId ? { external_conversation_id: params.externalConversationId } : {}),
+        },
         updated_at: timestamp,
         created_at: timestamp,
       };
@@ -1347,7 +1389,30 @@ export async function addInboundMessage(params: {
       conversation.last_message_at = timestamp;
       conversation.unread_count = (conversation.unread_count || 0) + 1;
       conversation.status = 'PENDING_SALE';
+      conversation.metadata = {
+        ...(conversation.metadata || {}),
+        ...(params.metadata || {}),
+        ...(params.externalConversationId ? { external_conversation_id: params.externalConversationId } : {}),
+      };
       conversation.updated_at = timestamp;
+    }
+
+    const externalRef = params.externalRef || params.externalMessageId;
+    if (externalRef && messagesStore[conversation.id]) {
+      const existingMsg = messagesStore[conversation.id].find(
+        (m) => m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef
+      );
+      if (existingMsg) {
+        return {
+          conversation,
+          message: existingMsg,
+          isNewConversation: false,
+          conversationId: conversation.id,
+          interactionId: existingMsg.id,
+          customerId: conversation.customer_id,
+          isDuplicate: true,
+        };
+      }
     }
 
     const rawContent = params.content || '';
@@ -1370,6 +1435,7 @@ export async function addInboundMessage(params: {
       created_at: timestamp,
       direction: 'inbound',
     };
+    (newMessage as unknown as { external_ref?: string }).external_ref = externalRef;
 
     if (!messagesStore[conversation.id]) {
       messagesStore[conversation.id] = [];
@@ -1528,6 +1594,7 @@ export function resetInboxStore(
     }
     Object.assign(messagesStore, INITIAL_MESSAGES);
   }
+  facebookBrowserOutboxStore = [];
 }
 
 /**
@@ -1565,6 +1632,343 @@ export async function claimPendingDeliveries(
   return (data as OutboundDeliveryRecord[]) || [];
 }
 
+/**
+ * 8. Claim pending outbox jobs for Facebook Browser Worker (Atomic / FOR UPDATE SKIP LOCKED)
+ */
+export async function claimFacebookBrowserOutboxJobs(
+  workerId: string,
+  limit = 5,
+  companyId?: string,
+  client?: SupabaseClient
+): Promise<FacebookBrowserOutboxJob[]> {
+  if (isDemoMode()) {
+    const now = Date.now();
+    const candidateJobs = facebookBrowserOutboxStore.filter((j) => {
+      if (j.channel !== 'FACEBOOK' || j.provider !== 'facebook_browser') return false;
+      if (companyId && j.company_id !== companyId) return false;
+
+      if (j.status === 'PENDING') return true;
+      if (j.status === 'RETRY') {
+        return !j.next_retry_at || new Date(j.next_retry_at).getTime() <= now;
+      }
+      return false;
+    }).slice(0, limit);
+
+    for (const job of candidateJobs) {
+      job.status = 'PROCESSING';
+      job.attempt_count += 1;
+      job.processing_started_at = new Date(now).toISOString();
+      job.lease_expires_at = new Date(now + 120000).toISOString();
+      job.reconciliation_status = 'NONE';
+      job.locked_by = workerId;
+      job.locked_at = new Date(now).toISOString();
+    }
+    return candidateJobs;
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data, error } = await adminClient.rpc('claim_facebook_browser_outbox_jobs', {
+    p_worker_id: workerId,
+    p_limit: limit,
+    p_company_id: companyId || null,
+  });
+
+  if (error) {
+    throw new Error(`claimFacebookBrowserOutboxJobs failed: ${error.message}`);
+  }
+
+  return (data as FacebookBrowserOutboxJob[]) || [];
+}
+
+/**
+ * 9. Complete outbox job after confirming message appeared in Facebook Messenger
+ */
+export async function completeFacebookBrowserOutboxJob(
+  jobId: string,
+  providerMessageId?: string,
+  client?: SupabaseClient
+): Promise<{ success: boolean; jobId: string; status: OutboxJobStatus }> {
+  if (isDemoMode()) {
+    const job = facebookBrowserOutboxStore.find((j) => j.id === jobId);
+    if (!job) {
+      return { success: false, jobId, status: 'FAILED' };
+    }
+    job.status = 'SENT';
+    job.sent_at = new Date().toISOString();
+    job.last_error = null;
+
+    if (messagesStore[job.conversation_id]) {
+      const msg = messagesStore[job.conversation_id].find(
+        (m) => m.client_command_id === job.idempotency_key || m.content === job.content
+      );
+      if (msg) {
+        msg.delivery_status = 'SENT';
+      }
+    }
+    return { success: true, jobId, status: 'SENT' };
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data: _data, error } = await adminClient.rpc('complete_facebook_browser_outbox_job', {
+    p_job_id: jobId,
+    p_provider_message_id: providerMessageId || null,
+  });
+
+  if (error) {
+    throw new Error(`completeFacebookBrowserOutboxJob failed: ${error.message}`);
+  }
+
+  return { success: true, jobId, status: 'SENT' };
+}
+
+/**
+ * 10. Fail or retry outbox job with exponential backoff
+ */
+export async function failFacebookBrowserOutboxJob(
+  jobId: string,
+  errorMessage: string,
+  isTransient = true,
+  maxRetries = 3,
+  client?: SupabaseClient
+): Promise<{ success: boolean; jobId: string; status: OutboxJobStatus; attempt_count: number; next_retry_at?: string | null }> {
+  if (isDemoMode()) {
+    const job = facebookBrowserOutboxStore.find((j) => j.id === jobId);
+    if (!job) {
+      return { success: false, jobId, status: 'FAILED', attempt_count: 0 };
+    }
+
+    let newStatus: OutboxJobStatus;
+    let nextRetry: string | null = null;
+
+    if (isTransient && job.attempt_count < maxRetries) {
+      newStatus = 'RETRY';
+      nextRetry = new Date(Date.now() + Math.pow(2, job.attempt_count) * 10000).toISOString();
+    } else {
+      newStatus = 'FAILED';
+    }
+
+    job.status = newStatus;
+    job.last_error = errorMessage;
+    job.next_retry_at = nextRetry;
+
+    if (newStatus === 'FAILED' && messagesStore[job.conversation_id]) {
+      const msg = messagesStore[job.conversation_id].find(
+        (m) => m.client_command_id === job.idempotency_key || m.content === job.content
+      );
+      if (msg) {
+        msg.delivery_status = 'FAILED';
+      }
+    }
+
+    return {
+      success: true,
+      jobId,
+      status: newStatus,
+      attempt_count: job.attempt_count,
+      next_retry_at: nextRetry,
+    };
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data, error } = await adminClient.rpc('fail_facebook_browser_outbox_job', {
+    p_job_id: jobId,
+    p_error_message: errorMessage,
+    p_is_transient: isTransient,
+    p_max_retries: maxRetries,
+  });
+
+  if (error) {
+    throw new Error(`failFacebookBrowserOutboxJob failed: ${error.message}`);
+  }
+
+  return data as { success: boolean; jobId: string; status: OutboxJobStatus; attempt_count: number; next_retry_at?: string | null };
+}
+
+/**
+ * 11. Manually retry a FAILED outbox job
+ */
+export async function retryFacebookBrowserOutboxJobManual(
+  jobId: string,
+  client?: SupabaseClient
+): Promise<{ success: boolean; jobId: string; status: OutboxJobStatus }> {
+  if (isDemoMode()) {
+    const job = facebookBrowserOutboxStore.find((j) => j.id === jobId);
+    if (!job) {
+      return { success: false, jobId, status: 'FAILED' };
+    }
+    job.status = 'RETRY';
+    job.attempt_count = 0;
+    job.next_retry_at = new Date().toISOString();
+    return { success: true, jobId, status: 'RETRY' };
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data: _data, error } = await adminClient.rpc('retry_facebook_browser_outbox_job_manual', {
+    p_job_id: jobId,
+  });
+
+  if (error) {
+    throw new Error(`retryFacebookBrowserOutboxJobManual failed: ${error.message}`);
+  }
+
+  return { success: true, jobId, status: 'RETRY' };
+}
+
+/**
+ * 11b. Claim orphan PROCESSING outbox jobs whose lease has expired (Phase 2B.1 Reconciliation)
+ */
+export async function claimOrphanFacebookBrowserJobs(
+  workerId: string,
+  limit = 5,
+  companyId?: string,
+  client?: SupabaseClient
+): Promise<FacebookBrowserOutboxJob[]> {
+  if (isDemoMode()) {
+    const now = Date.now();
+    const orphanJobs = facebookBrowserOutboxStore.filter((j) => {
+      if (j.channel !== 'FACEBOOK' || j.provider !== 'facebook_browser') return false;
+      if (companyId && j.company_id !== companyId) return false;
+      if (j.status !== 'PROCESSING') return false;
+      return !j.lease_expires_at || new Date(j.lease_expires_at).getTime() <= now;
+    }).slice(0, limit);
+
+    for (const job of orphanJobs) {
+      job.reconciliation_status = 'RECONCILE_REQUIRED';
+      job.lease_expires_at = new Date(now + 180000).toISOString();
+      job.locked_by = workerId;
+      job.locked_at = new Date(now).toISOString();
+    }
+    return orphanJobs;
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data, error } = await adminClient.rpc('claim_orphan_facebook_browser_jobs', {
+    p_worker_id: workerId,
+    p_limit: limit,
+    p_company_id: companyId || null,
+  });
+
+  if (error) {
+    throw new Error(`claimOrphanFacebookBrowserJobs failed: ${error.message}`);
+  }
+
+  return (data as FacebookBrowserOutboxJob[]) || [];
+}
+
+/**
+ * 11c. Resolve reconciled outbox job after thread inspection (Phase 2B.1)
+ */
+export async function resolveReconciledFacebookBrowserJob(
+  jobId: string,
+  resolution: 'SENT' | 'RETRY' | 'RECONCILE_REQUIRED',
+  providerMessageId?: string,
+  error?: string,
+  client?: SupabaseClient
+): Promise<{ success: boolean; jobId: string; status: OutboxJobStatus }> {
+  if (isDemoMode()) {
+    const job = facebookBrowserOutboxStore.find((j) => j.id === jobId);
+    if (!job) {
+      return { success: false, jobId, status: 'FAILED' };
+    }
+
+    const nowIso = new Date().toISOString();
+    if (resolution === 'SENT') {
+      job.status = 'SENT';
+      job.reconciliation_status = 'RECONCILED_SENT';
+      job.sent_at = nowIso;
+      job.last_error = null;
+      job.locked_by = null;
+      job.locked_at = null;
+      job.lease_expires_at = null;
+
+      if (messagesStore[job.conversation_id]) {
+        const msg = messagesStore[job.conversation_id].find(
+          (m) => m.client_command_id === job.idempotency_key || m.content === job.content
+        );
+        if (msg) msg.delivery_status = 'SENT';
+      }
+      return { success: true, jobId, status: 'SENT' };
+    } else if (resolution === 'RETRY') {
+      job.status = 'RETRY';
+      job.reconciliation_status = 'RECONCILED_NOT_SENT';
+      job.next_retry_at = new Date(Date.now() + 10000).toISOString();
+      job.last_error = error || 'RECONCILED_NOT_SENT: Worker crash trước khi gửi, xếp lịch gửi lại an toàn.';
+      job.locked_by = null;
+      job.locked_at = null;
+      job.lease_expires_at = null;
+
+      if (messagesStore[job.conversation_id]) {
+        const msg = messagesStore[job.conversation_id].find(
+          (m) => m.client_command_id === job.idempotency_key || m.content === job.content
+        );
+        if (msg) msg.delivery_status = 'RETRY';
+      }
+      return { success: true, jobId, status: 'RETRY' };
+    } else {
+      job.status = 'RECONCILE_REQUIRED';
+      job.reconciliation_status = 'RECONCILE_REQUIRED';
+      job.last_error = error || 'RECONCILE_UNCERTAIN: Cần can thiệp đối soát.';
+      job.locked_by = null;
+      job.locked_at = null;
+      job.lease_expires_at = null;
+
+      if (messagesStore[job.conversation_id]) {
+        const msg = messagesStore[job.conversation_id].find(
+          (m) => m.client_command_id === job.idempotency_key || m.content === job.content
+        );
+        if (msg) msg.delivery_status = 'RECONCILE_REQUIRED';
+      }
+      return { success: true, jobId, status: 'RECONCILE_REQUIRED' };
+    }
+  }
+
+  const adminClient = client || createAdminClient();
+  const { data: _data, error: rpcError } = await adminClient.rpc('resolve_reconciled_facebook_browser_job', {
+    p_job_id: jobId,
+    p_resolution: resolution,
+    p_provider_message_id: providerMessageId || null,
+    p_error: error || null,
+  });
+
+  if (rpcError) {
+    throw new Error(`resolveReconciledFacebookBrowserJob failed: ${rpcError.message}`);
+  }
+
+  return { success: true, jobId, status: resolution === 'SENT' ? 'SENT' : resolution === 'RETRY' ? 'RETRY' : 'RECONCILE_REQUIRED' };
+}
+
+/**
+ * 12. Get Facebook Browser outbox jobs for monitoring / test assertions
+ */
+export async function getFacebookBrowserOutboxJobs(
+  companyId?: string,
+  status?: OutboxJobStatus,
+  client?: SupabaseClient
+): Promise<FacebookBrowserOutboxJob[]> {
+  if (isDemoMode()) {
+    return facebookBrowserOutboxStore.filter((j) => {
+      if (companyId && j.company_id !== companyId) return false;
+      if (status && j.status !== status) return false;
+      return true;
+    });
+  }
+
+  const adminClient = client || createAdminClient();
+  let query = adminClient
+    .from('outbound_deliveries')
+    .select('*')
+    .eq('channel', 'FACEBOOK')
+    .eq('provider', 'facebook_browser')
+    .order('created_at', { ascending: false });
+
+  if (companyId) query = query.eq('company_id', companyId);
+  if (status) query = query.eq('status', status);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`getFacebookBrowserOutboxJobs failed: ${error.message}`);
+  return (data as FacebookBrowserOutboxJob[]) || [];
+}
+
 export const InboxService = {
   isDemoModeActive,
   getConversations,
@@ -1576,6 +1980,13 @@ export const InboxService = {
   updateConversationCustomerStage,
   resetInboxStore,
   claimPendingDeliveries,
+  claimFacebookBrowserOutboxJobs,
+  completeFacebookBrowserOutboxJob,
+  failFacebookBrowserOutboxJob,
+  retryFacebookBrowserOutboxJobManual,
+  claimOrphanFacebookBrowserJobs,
+  resolveReconciledFacebookBrowserJob,
+  getFacebookBrowserOutboxJobs,
   sanitizePhoneInText,
   DEFAULT_INBOX_COMPANY_ID,
 };
