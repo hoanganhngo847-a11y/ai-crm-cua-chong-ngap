@@ -24,6 +24,55 @@ function getInitials(name?: string): string {
   return name.trim().slice(0, 2).toUpperCase();
 }
 
+function isPendingDelivery(status?: string): boolean {
+  if (!status) return false;
+  const s = status.toUpperCase();
+  return s === 'PENDING_DISPATCH' || s === 'PENDING' || s === 'PROCESSING' || s === 'RETRY' || s === 'QUEUED';
+}
+
+function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
+  if (!deliveryStatus) return null;
+  const s = deliveryStatus.toUpperCase();
+
+  if (s === 'SENT' || s === 'DELIVERED') {
+    return (
+      <span className="text-emerald-400 font-medium flex items-center gap-0.5" title="Đã gửi tới khách hàng">
+        <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+        Đã gửi
+      </span>
+    );
+  }
+
+  if (s === 'FAILED') {
+    return (
+      <span className="text-rose-400 font-semibold flex items-center gap-0.5" title="Gửi thất bại - Khách chưa nhận được">
+        <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        Gửi thất bại
+      </span>
+    );
+  }
+
+  if (s === 'RECONCILE_REQUIRED') {
+    return (
+      <span className="text-amber-400 font-medium flex items-center gap-0.5" title="Đang đối soát phiên gửi">
+        <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        Cần đối soát
+      </span>
+    );
+  }
+
+  if (isPendingDelivery(s)) {
+    return (
+      <span className="text-amber-300 font-medium flex items-center gap-0.5" title="Tin nhắn đang trong hàng đợi xử lý">
+        <svg className="w-3 h-3 inline animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+        Đang gửi
+      </span>
+    );
+  }
+
+  return null;
+}
+
 export default function InboxView({ initialCustomerId }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -91,18 +140,68 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     };
   }, [fetchConversations]);
 
-  // 2. Fetch Messages when selectedConversationId changes
-  const fetchMessages = useCallback(async (convId: string) => {
+  // 2. Fetch Messages when selectedConversationId changes or during smart polling
+  const fetchMessages = useCallback(async (convId: string, options?: { silent?: boolean }) => {
     try {
-      setLoadingMessages(true);
+      if (!options?.silent) {
+        setLoadingMessages(true);
+      }
       const res = await fetch(`/api/inbox?conversation_id=${convId}`);
       const json = await res.json();
 
       if (json.success && json.data) {
-        setMessages(json.data.messages || []);
-        setAiSuggestion(null);
-        setAiError(null);
-        setAiSuggestionMeta(null);
+        const serverMessages: InboxMessage[] = json.data.messages || [];
+
+        setMessages((prevMessages) => {
+          if (!prevMessages || prevMessages.length === 0) {
+            return serverMessages;
+          }
+
+          // Build indexes of server messages for fast O(1) matching
+          const serverById = new Map<string, InboxMessage>();
+          const serverByCommandId = new Map<string, InboxMessage>();
+          for (const sm of serverMessages) {
+            if (sm.id) serverById.set(sm.id, sm);
+            if (sm.client_command_id) serverByCommandId.set(sm.client_command_id, sm);
+          }
+
+          // Reconcile existing messages with updated server records
+          const reconciled: InboxMessage[] = [];
+          const matchedServerIds = new Set<string>();
+
+          for (const localMsg of prevMessages) {
+            const matchedServerMsg =
+              (localMsg.id ? serverById.get(localMsg.id) : null) ||
+              (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
+
+            if (matchedServerMsg) {
+              reconciled.push({
+                ...localMsg,
+                ...matchedServerMsg,
+                client_command_id: localMsg.client_command_id || matchedServerMsg.client_command_id,
+              });
+              if (matchedServerMsg.id) matchedServerIds.add(matchedServerMsg.id);
+            } else {
+              // Optimistic message not yet in server list: preserve it
+              reconciled.push(localMsg);
+            }
+          }
+
+          // Append any server messages not yet present
+          for (const sm of serverMessages) {
+            if (sm.id && !matchedServerIds.has(sm.id)) {
+              reconciled.push(sm);
+            }
+          }
+
+          return reconciled;
+        });
+
+        if (!options?.silent) {
+          setAiSuggestion(null);
+          setAiError(null);
+          setAiSuggestionMeta(null);
+        }
 
         // Cập nhật lại unread count và metadata Page trên UI.
         setConversations((prev) =>
@@ -116,7 +215,9 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     } catch (err) {
       console.error('Lỗi khi tải tin nhắn:', err);
     } finally {
-      setLoadingMessages(false);
+      if (!options?.silent) {
+        setLoadingMessages(false);
+      }
     }
   }, []);
 
@@ -164,6 +265,27 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Smart polling for pending outbound delivery status (Requirements 3 & 4)
+  useEffect(() => {
+    if (!selectedConversationId) return;
+
+    const hasPendingOutbound = messages.some(
+      (m) =>
+        (m.direction || '').toLowerCase() === 'outbound' &&
+        isPendingDelivery(m.delivery_status)
+    );
+
+    if (!hasPendingOutbound) return;
+
+    const intervalId = setInterval(() => {
+      void fetchMessages(selectedConversationId, { silent: true });
+    }, 2500);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [selectedConversationId, messages, fetchMessages]);
+
   // Pending command tracking for idempotent retry (P0 Requirement 8)
   const pendingCommandRef = useRef<{ commandId: string; content: string } | null>(null);
 
@@ -202,7 +324,22 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
       if (json.success && json.data) {
         // If server says is_duplicate=true, do NOT append duplicate bubble
         if (!json.data.is_duplicate) {
-          setMessages((prev) => [...prev, json.data]);
+          setMessages((prev) => {
+            const exists = prev.some(
+              (m) =>
+                m.id === json.data.id ||
+                (m.client_command_id && m.client_command_id === json.data.client_command_id)
+            );
+            if (exists) {
+              return prev.map((m) =>
+                m.id === json.data.id ||
+                (m.client_command_id && m.client_command_id === json.data.client_command_id)
+                  ? { ...m, ...json.data }
+                  : m
+              );
+            }
+            return [...prev, json.data];
+          });
         }
         setReplyText('');
         // Clear pending command on success (next send gets new UUID)
@@ -536,31 +673,11 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                             {formatMessageTime(msg.created_at)}
                           </span>
 
-                          {/* Outbound Delivery Status (Phase 2B.1 Hardening) */}
-                          {isSaleMsg && (
+                          {/* Outbound Delivery Status (Phase 2B.1 Hardening & UX Polish) */}
+                          {isSaleMsg && renderDeliveryBadge(msg.delivery_status) && (
                             <>
                               <span>•</span>
-                              {msg.delivery_status === 'SENT' || msg.delivery_status === 'DELIVERED' ? (
-                                <span className="text-emerald-400 font-medium flex items-center gap-0.5" title="Đã gửi tới khách hàng">
-                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                  Đã gửi
-                                </span>
-                              ) : msg.delivery_status === 'FAILED' ? (
-                                <span className="text-rose-400 font-semibold flex items-center gap-0.5" title="Gửi thất bại - Khách chưa nhận được">
-                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                  Gửi thất bại
-                                </span>
-                              ) : msg.delivery_status === 'RECONCILE_REQUIRED' ? (
-                                <span className="text-amber-400 font-medium flex items-center gap-0.5" title="Đang đối soát phiên gửi">
-                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                  Cần đối soát
-                                </span>
-                              ) : (
-                                <span className="text-amber-300 font-medium flex items-center gap-0.5" title="Tin nhắn đang trong hàng đợi xử lý">
-                                  <svg className="w-3 h-3 inline animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                  Đang gửi
-                                </span>
-                              )}
+                              {renderDeliveryBadge(msg.delivery_status)}
                             </>
                           )}
                         </div>
@@ -569,13 +686,13 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                         <div
                           className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed ${
                             isSaleMsg
-                              ? msg.delivery_status === 'FAILED'
+                              ? (msg.delivery_status || '').toUpperCase() === 'FAILED'
                                 ? 'bg-rose-950/70 border border-rose-500/80 text-rose-100 rounded-tr-none shadow-md shadow-rose-900/20'
-                                : msg.delivery_status === 'RECONCILE_REQUIRED'
+                                : (msg.delivery_status || '').toUpperCase() === 'RECONCILE_REQUIRED'
                                   ? 'bg-amber-950/70 border border-amber-500/80 text-amber-100 rounded-tr-none'
-                                  : msg.delivery_status === 'SENT' || msg.delivery_status === 'DELIVERED'
-                                    ? 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/10'
-                                    : 'bg-blue-700/80 border border-blue-400/50 text-white rounded-tr-none'
+                                  : isPendingDelivery(msg.delivery_status)
+                                    ? 'bg-blue-700/80 border border-blue-400/50 text-white rounded-tr-none'
+                                    : 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/10'
                               : isAiMsg
                                 ? 'bg-purple-950/40 border border-purple-700/40 text-purple-100 rounded-tl-none'
                                 : 'bg-slate-800 text-slate-100 border border-slate-700/60 rounded-tl-none'
