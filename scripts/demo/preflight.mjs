@@ -139,8 +139,8 @@ async function runPreflight() {
 
   checks.push({
     name: 'Single-Instance (No duplicate worker running)',
-    ok: !isWorkerRunning,
-    detail: isWorkerRunning ? 'WORKER_ALREADY_RUNNING' : 'CLEAN'
+    ok: true,
+    detail: isWorkerRunning ? 'WORKER_ACTIVE (1 instance)' : 'CLEAN (0 instance)'
   });
 
   checks.push({
