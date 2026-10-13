@@ -36,7 +36,6 @@ export function isValidCustomerDisplayName(text) {
 export async function extractPageName(page) {
   try {
     return await page.evaluate(() => {
-      var __name = typeof __name === 'function' ? __name : (t) => t;
       // 1. Check account picker / brand in top header or sidebar
       const selectors = [
         '[data-surface*="asset_selector"]',
@@ -89,7 +88,6 @@ export async function extractPageName(page) {
 export async function extractConversationsList(page) {
   try {
     return await page.evaluate(() => {
-      var __name = typeof __name === 'function' ? __name : (t) => t;
       const results = [];
       const seenRowIds = new Set();
 
@@ -178,7 +176,6 @@ export async function extractActiveThreadMessages(page, pageId) {
   try {
     const startTime = Date.now();
     const rawData = await page.evaluate(() => {
-      var __name = typeof __name === 'function' ? __name : (t) => t;
       // 1. Identify Customer Profile Link in right sidebar or thread header
       const profileLinks = Array.from(
         document.querySelectorAll('a[href*="facebook.com/profile.php"], a[href*="facebook.com/"]')
@@ -215,16 +212,18 @@ export async function extractActiveThreadMessages(page, pageId) {
         /^You:/i
       ];
 
-      function isValidName(text) {
-        if (!text || typeof text !== 'string') return false;
-        const clean = text.trim();
-        if (clean.length < 2 || clean.length > 60) return false;
-        for (const pattern of UI_PATTERNS) {
-          if (pattern.test(clean)) return false;
+      const validator = {
+        isValid(text) {
+          if (!text || typeof text !== 'string') return false;
+          const clean = text.trim();
+          if (clean.length < 2 || clean.length > 60) return false;
+          for (const pattern of UI_PATTERNS) {
+            if (pattern.test(clean)) return false;
+          }
+          if (clean.includes('\n')) return false;
+          return true;
         }
-        if (clean.includes('\n')) return false;
-        return true;
-      }
+      };
 
       // Customer display name resolution with strict priority:
       // 1. Thread header
@@ -251,7 +250,7 @@ export async function extractActiveThreadMessages(page, pageId) {
           const headingEls = headerEl.querySelectorAll('h1, h2, h3, [role="heading"], div[dir="auto"], span[dir="auto"]');
           for (const h of headingEls) {
             const t = (h.innerText || '').trim();
-            if (isValidName(t)) {
+            if (validator.isValid(t)) {
               customerName = t;
               customerNameSource = `thread_header (${sel} > ${h.tagName})`;
               break;
@@ -262,7 +261,7 @@ export async function extractActiveThreadMessages(page, pageId) {
           // Check lines in headerEl innerText
           const lines = (headerEl.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
           for (const line of lines) {
-            if (isValidName(line)) {
+            if (validator.isValid(line)) {
               customerName = line;
               customerNameSource = `thread_header_text_line (${sel})`;
               break;
@@ -279,7 +278,7 @@ export async function extractActiveThreadMessages(page, pageId) {
           for (const child of parent.children) {
             if (child === targetProfileLink) continue;
             const t = (child.innerText || '').trim();
-            if (isValidName(t)) {
+            if (validator.isValid(t)) {
               customerName = t;
               customerNameSource = 'right_customer_detail_panel (profile_link_sibling)';
               break;
@@ -292,7 +291,7 @@ export async function extractActiveThreadMessages(page, pageId) {
           const candidateEls = grandParent.querySelectorAll('h1, h2, h3, div, span');
           for (const el of candidateEls) {
             const t = (el.innerText || '').trim();
-            if (isValidName(t)) {
+            if (validator.isValid(t)) {
               customerName = t;
               customerNameSource = 'right_customer_detail_panel (ancestor_element)';
               break;
@@ -307,13 +306,13 @@ export async function extractActiveThreadMessages(page, pageId) {
         const titleAttr = (targetProfileLink.getAttribute('title') || '').trim();
         const linkText = (targetProfileLink.innerText || '').trim();
 
-        if (isValidName(ariaLabel)) {
+        if (validator.isValid(ariaLabel)) {
           customerName = ariaLabel;
           customerNameSource = 'profile_link_aria_label';
-        } else if (isValidName(titleAttr)) {
+        } else if (validator.isValid(titleAttr)) {
           customerName = titleAttr;
           customerNameSource = 'profile_link_title';
-        } else if (isValidName(linkText)) {
+        } else if (validator.isValid(linkText)) {
           customerName = linkText;
           customerNameSource = 'profile_link_text';
         }
@@ -325,12 +324,12 @@ export async function extractActiveThreadMessages(page, pageId) {
         if (activeRow) {
           const titleEl = activeRow.querySelector('[data-surface*="lib:thread_title"]');
           const t = (titleEl?.innerText || '').trim();
-          if (isValidName(t)) {
+          if (validator.isValid(t)) {
             customerName = t;
             customerNameSource = 'thread_row_title';
           } else {
             const firstLine = (activeRow.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)[0];
-            if (isValidName(firstLine)) {
+            if (validator.isValid(firstLine)) {
               customerName = firstLine;
               customerNameSource = 'thread_row_first_line';
             }
@@ -381,16 +380,6 @@ export async function extractActiveThreadMessages(page, pageId) {
       const styleCache = new Map();
       const containerRect = msgContainer.getBoundingClientRect();
 
-      function getCachedStyle(node) {
-        if (!node) return null;
-        let s = styleCache.get(node);
-        if (!s) {
-          s = window.getComputedStyle(node);
-          styleCache.set(node, s);
-        }
-        return s;
-      }
-
       for (const el of candidateNodes) {
         const text = (el.innerText || '').trim();
         if (!text) continue;
@@ -429,7 +418,11 @@ export async function extractActiveThreadMessages(page, pageId) {
           }
 
           if (!bgColor || !alignItems) {
-            const style = getCachedStyle(curr);
+            let style = styleCache.get(curr);
+            if (!style) {
+              style = window.getComputedStyle(curr);
+              styleCache.set(curr, style);
+            }
             if (style) {
               if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
                 bgColor = style.backgroundColor;
@@ -572,7 +565,6 @@ export async function extractActiveThreadMessages(page, pageId) {
 export async function extractCustomerDisplayName(page) {
   try {
     const result = await page.evaluate(() => {
-      var __name = typeof __name === 'function' ? __name : (t) => t;
       const UI_PATTERNS = [
         /^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Online|Offline)$/i,
         /^(Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Search|Filter|Manage|Quản lý)$/i,
@@ -585,16 +577,18 @@ export async function extractCustomerDisplayName(page) {
         /^You:/i
       ];
 
-      function isValid(text) {
-        if (!text || typeof text !== 'string') return false;
-        const clean = text.trim();
-        if (clean.length < 2 || clean.length > 60) return false;
-        for (const pattern of UI_PATTERNS) {
-          if (pattern.test(clean)) return false;
+      const validator = {
+        isValid(text) {
+          if (!text || typeof text !== 'string') return false;
+          const clean = text.trim();
+          if (clean.length < 2 || clean.length > 60) return false;
+          for (const pattern of UI_PATTERNS) {
+            if (pattern.test(clean)) return false;
+          }
+          if (clean.includes('\n')) return false;
+          return true;
         }
-        if (clean.includes('\n')) return false;
-        return true;
-      }
+      };
 
       // 1. Thread header
       const headerSelectors = [
@@ -612,14 +606,14 @@ export async function extractCustomerDisplayName(page) {
           const headingEls = headerEl.querySelectorAll('h1, h2, h3, [role="heading"], div[dir="auto"], span[dir="auto"]');
           for (const h of headingEls) {
             const t = (h.innerText || '').trim();
-            if (isValid(t)) {
+            if (validator.isValid(t)) {
               return { name: t, source: `thread_header (${sel} > ${h.tagName})` };
             }
           }
 
           const lines = (headerEl.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
           for (const line of lines) {
-            if (isValid(line)) {
+            if (validator.isValid(line)) {
               return { name: line, source: `thread_header_text_line (${sel})` };
             }
           }
@@ -641,7 +635,7 @@ export async function extractCustomerDisplayName(page) {
           for (const child of parent.children) {
             if (child === link) continue;
             const t = (child.innerText || '').trim();
-            if (isValid(t)) {
+            if (validator.isValid(t)) {
               return { name: t, source: 'right_customer_detail_panel (profile_link_sibling)' };
             }
           }
@@ -652,7 +646,7 @@ export async function extractCustomerDisplayName(page) {
           const candidateEls = grandParent.querySelectorAll('h1, h2, h3, div, span');
           for (const el of candidateEls) {
             const t = (el.innerText || '').trim();
-            if (isValid(t)) {
+            if (validator.isValid(t)) {
               return { name: t, source: 'right_customer_detail_panel (ancestor_element)' };
             }
           }
@@ -663,13 +657,13 @@ export async function extractCustomerDisplayName(page) {
         const titleAttr = (link.getAttribute('title') || '').trim();
         const linkText = (link.innerText || '').trim();
 
-        if (isValid(ariaLabel)) {
+        if (validator.isValid(ariaLabel)) {
           return { name: ariaLabel, source: 'profile_link_aria_label' };
         }
-        if (isValid(titleAttr)) {
+        if (validator.isValid(titleAttr)) {
           return { name: titleAttr, source: 'profile_link_title' };
         }
-        if (isValid(linkText)) {
+        if (validator.isValid(linkText)) {
           return { name: linkText, source: 'profile_link_text' };
         }
       }
@@ -679,11 +673,11 @@ export async function extractCustomerDisplayName(page) {
       if (activeRow) {
         const titleEl = activeRow.querySelector('[data-surface*="lib:thread_title"]');
         const t = (titleEl?.innerText || '').trim();
-        if (isValid(t)) {
+        if (validator.isValid(t)) {
           return { name: t, source: 'thread_row_title' };
         }
         const firstLine = (activeRow.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)[0];
-        if (isValid(firstLine)) {
+        if (validator.isValid(firstLine)) {
           return { name: firstLine, source: 'thread_row_first_line' };
         }
       }
@@ -707,7 +701,6 @@ export async function extractCustomerDisplayName(page) {
 export async function selectConversation(page, index = 0) {
   try {
     return await page.evaluate((idx) => {
-      var __name = typeof __name === 'function' ? __name : (t) => t;
       const row = document.querySelector(`[data-surface*="thread_row${idx}"]`);
       if (row) {
         const clickable = row.querySelector('a, div[role="row"], div[role="button"]') || row;

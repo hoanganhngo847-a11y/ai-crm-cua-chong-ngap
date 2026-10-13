@@ -89,9 +89,13 @@ async function runDisplayNameSyncTests() {
   // --------------------------------------------------------------------------------------
   console.log('\n--- SECTION 2: LIVE AUDIT OF REAL META BUSINESS SUITE DOM ---');
 
+  const isLiveRequired = process.env.DISPLAY_NAME_LIVE_REQUIRED === '1';
+  console.log(`  • Mode: ${isLiveRequired ? 'LIVE REQUIRED MODE (DISPLAY_NAME_LIVE_REQUIRED=1)' : 'UNIT/CI MODE'}`);
+
   let liveCustomerFbId: string | null = null;
   let liveExtractedName: string | null = null;
   let liveDomSource: string | null = null;
+  let liveMetaTestPassed = false;
 
   try {
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
@@ -100,10 +104,10 @@ async function runDisplayNameSyncTests() {
     });
 
     const page = context.pages()[0] || await context.newPage();
-    await page.addInitScript(() => {
-      (window as any).__name = (t: any) => t;
-      (globalThis as any).__name = (t: any) => t;
-    });
+
+    // STRICT PRODUCTION REQUIREMENT:
+    // KHÔNG inject window.__name hoặc globalThis.__name.
+    // Production parser chạy hoàn toàn tự nhiên (native evaluation).
 
     await page.goto('https://business.facebook.com/latest/inbox/all/?asset_id=1389294167596309', {
       waitUntil: 'domcontentloaded',
@@ -121,7 +125,7 @@ async function runDisplayNameSyncTests() {
 
     await page.waitForTimeout(2000);
 
-    // Call extractActiveThreadMessages & extractCustomerDisplayName
+    // Call extractActiveThreadMessages & extractCustomerDisplayName without any global shims
     const threadData = await extractActiveThreadMessages(page, '1389294167596309');
     liveExtractedName = await extractCustomerDisplayName(page);
     liveCustomerFbId = threadData.customerFbId;
@@ -135,18 +139,25 @@ async function runDisplayNameSyncTests() {
     assert.ok(liveExtractedName, 'Must extract real name from Business Suite');
     assert.notStrictEqual(liveExtractedName, 'Khách hàng', 'Must NOT fallback to generic "Khách hàng" when real name exists');
     assert.strictEqual(liveExtractedName, 'HoàngAnh Ngô', 'Real name in Business Suite active thread must be "HoàngAnh Ngô"');
-    assert.ok(liveCustomerFbId, 'Must extract customer Facebook ID');
+    assert.strictEqual(liveCustomerFbId, '61592309996204', 'Customer Facebook ID must match exact expected profile "61592309996204"');
 
-    console.log('✓ PASS 2.1: Worker extracted real Facebook display name ("HoàngAnh Ngô") from live DOM');
+    liveMetaTestPassed = true;
+    console.log('✓ LIVE_META_TEST = PASS (Production parser extracted "HoàngAnh Ngô" / FB ID 61592309996204 natively without __name shim)');
 
     await context.close();
   } catch (browserErr: unknown) {
     const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
-    console.warn('⚠️ Warning: Browser test skipped or had error:', msg);
-    // Use fallback simulated values for CI if browser profile unavailable
-    liveCustomerFbId = liveCustomerFbId || '61592309996204';
-    liveExtractedName = liveExtractedName || 'HoàngAnh Ngô';
-    liveDomSource = liveDomSource || 'thread_header ([data-surface*="detail_view_header"])';
+
+    if (isLiveRequired) {
+      console.error(`\n❌ LIVE_META_TEST = FAILED: Live browser test failed in LIVE REQUIRED mode:`, msg);
+      throw browserErr;
+    }
+
+    console.log(`\n⚠️ LIVE_META_TEST = SKIPPED (Browser unavailable in UNIT/CI mode: ${msg})`);
+    // In UNIT/CI mode only, populate synthetic baseline so Section 3 unit tests can execute
+    liveCustomerFbId = '61592309996204';
+    liveExtractedName = 'HoàngAnh Ngô';
+    liveDomSource = 'thread_header ([data-surface*="detail_view_header"])';
   }
 
   // --------------------------------------------------------------------------------------
@@ -346,10 +357,12 @@ async function runDisplayNameSyncTests() {
   console.log('  • Main Title:    customer_name (primary text in list & chat header)');
   console.log('  • Secondary:     customer_code (small font-mono badge)');
   console.log('  • Database:      customer_code strictly preserved and never deleted');
-  console.log('✓ PASS 4.1: UI contract confirmed');
-
   console.log('\n========================================================================================');
-  console.log('ALL DISPLAY NAME & CRM UPDATE SEMANTICS TESTS PASSED (100%)');
+  if (liveMetaTestPassed) {
+    console.log('ALL DISPLAY NAME & CRM UPDATE SEMANTICS TESTS PASSED (INCLUDING LIVE META AUDIT: PASS) (100%)');
+  } else {
+    console.log('ALL UNIT & CRM UPDATE SEMANTICS TESTS PASSED (LIVE_META_TEST = SKIPPED)');
+  }
   console.log('========================================================================================');
 }
 

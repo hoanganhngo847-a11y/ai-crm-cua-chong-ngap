@@ -1631,40 +1631,22 @@ export async function addInboundMessage(params: {
   const customerId = String(result.customer_id);
   const isDuplicate = Boolean(result.is_duplicate);
 
-  // Requirement 4: CRM update semantics trong DB mode
-  let finalCustName = params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
-  let finalCustCode = 'KH-000001';
+  // Single source of truth: Atomic RPC (ingest_provider_message_atomic) handles customer name resolution.
+  // In DB-mode, fetch the resolved customer directly from DB without duplicate writes in Node service.
+  const { data: resolvedCustomer, error: custFetchErr } = await adminClient
+    .from('customers')
+    .select('name, customer_code')
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .maybeSingle();
 
-  try {
-    const { data: existingCust } = await adminClient
-      .from('customers')
-      .select('name, customer_code')
-      .eq('id', customerId)
-      .eq('company_id', companyId)
-      .maybeSingle();
+  if (custFetchErr) {
+    console.error(`[INBOX_DB] Failed to query resolved customer ${customerId} post-RPC:`, custFetchErr);
+    throw new Error(`Inbound customer post-resolution fetch failed: ${custFetchErr.message}`);
+  }
 
-    if (existingCust) {
-      if (existingCust.customer_code) {
-        finalCustCode = existingCust.customer_code;
-      }
-      if (params.senderName && !isGenericCustomerName(params.senderName)) {
-        if (isGenericCustomerName(existingCust.name)) {
-          // Cập nhật customer name thành tên Facebook thật nếu hiện tại là tên generic
-          await adminClient
-            .from('customers')
-            .update({ name: params.senderName.trim(), updated_at: timestamp })
-            .eq('id', customerId)
-            .eq('company_id', companyId);
-          finalCustName = params.senderName.trim();
-        } else {
-          // Giữ nguyên tên đã được Sale tuỳ chỉnh thủ công
-          finalCustName = existingCust.name;
-        }
-      } else {
-        finalCustName = existingCust.name || finalCustName;
-      }
-    }
-  } catch (_) {}
+  const finalCustName = resolvedCustomer?.name || params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
+  const finalCustCode = resolvedCustomer?.customer_code || 'KH-000001';
 
   const conversation: Conversation = {
     id: conversationId,
