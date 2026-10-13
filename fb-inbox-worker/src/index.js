@@ -14,9 +14,10 @@ import { claimOutboxJobs, completeOutboxJob, failOutboxJob, claimOrphanJobs, res
 import { executeSendOutboxJob, reconcileOrphanOutboxJob } from './outbox-sender.js';
 import { healthServer } from './health-server.js';
 import { setupDomMutationSignal, CycleWaker, installMetaInboxDomObserver } from './observer.js';
+import { messageReconciler } from './message-reconciler.js';
 
-// Cache processed message fingerprints locally in memory
-export const syncedFingerprints = new Set();
+// Cache processed message fingerprints locally and restore from persistent reconciler
+export const syncedFingerprints = new Set(messageReconciler.getAllSyncedFingerprints());
 
 export const SCAN_CONFIG = {
   MAX_HEAVY_THREADS_PER_CYCLE: 3,
@@ -42,6 +43,7 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
     if (msg.direction === 'OUTBOUND') {
       if (!syncedFingerprints.has(msg.fingerprint)) {
         syncedFingerprints.add(msg.fingerprint);
+        messageReconciler.markFingerprintSynced(threadData.stableThreadId, msg.fingerprint);
         log.info(`[OUTBOUND] Nhận diện tin nhắn từ Page/Doanh nghiệp: "${msg.content}" -> Bỏ qua, tuyệt đối không gửi về CRM.`);
       }
       continue;
@@ -88,6 +90,7 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
         // (Bao gồm cả isDuplicate === true vì DB đã xác nhận message tồn tại)
         if (syncResult && syncResult.success) {
           syncedFingerprints.add(fingerprint);
+          messageReconciler.markFingerprintSynced(threadData.stableThreadId, fingerprint);
           healthServer.recordScanSuccess();
           healthServer.recordInboundDetected();
 

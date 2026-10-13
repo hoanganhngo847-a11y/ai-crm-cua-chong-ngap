@@ -1,7 +1,10 @@
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { extractActiveThreadMessages, isPureTimestampText } from '../../fb-inbox-worker/src/parser.js';
 import { ThreadMessageReconciler, messageReconciler } from '../../fb-inbox-worker/src/message-reconciler.js';
+import { evaluateSkeletonCorrelation } from '../../features/inbox/utils/skeleton-helper';
 import type { InboxMessage, Conversation } from '../../features/inbox/types/inbox.types';
 
 const require = createRequire(process.cwd() + '/package.json');
@@ -475,23 +478,25 @@ https://namethatui.com/</div></div>
         if (updatedConv.id !== this.activeConversationId) return;
 
         const convId = updatedConv.id;
-        const prevLastAtMs = this.activeConversationLastMessageAt ? new Date(this.activeConversationLastMessageAt).getTime() : 0;
-        const newLastAtMs = new Date(updatedConv.last_message_at).getTime();
+        const prevLastAt = this.activeConversationLastMessageAt;
+        const newLastAt = updatedConv.last_message_at;
+        const latestRenderedMs = this.latestRenderedInteractionTimeByConv[convId] || 0;
 
-        const advanced = newLastAtMs > prevLastAtMs;
-        if (!advanced) return;
+        const decision = evaluateSkeletonCorrelation({
+          conversationLastMessageAt: newLastAt,
+          previousConversationLastMessageAt: prevLastAt,
+          latestRenderedInteractionAtMs: latestRenderedMs,
+        });
+
+        if (!decision.advanced) return;
 
         this.activeConversationLastMessageAt = updatedConv.last_message_at;
 
-        // Correlation check: check if interaction for this last_message_at or newer was ALREADY rendered
-        const latestRenderedMs = this.latestRenderedInteractionTimeByConv[convId] || 0;
-        const isAlreadyRendered = latestRenderedMs >= newLastAtMs;
-
-        if (!isAlreadyRendered) {
+        if (decision.shouldScheduleSkeleton) {
           if (this.syncingDelayTimer) clearTimeout(this.syncingDelayTimer);
           this.syncingDelayTimer = setTimeout(() => {
             const currentRenderedMs = this.latestRenderedInteractionTimeByConv[convId] || 0;
-            if (currentRenderedMs >= newLastAtMs) return; // Arrived during anti-flicker delay
+            if (currentRenderedMs >= decision.newLastAtMs) return; // Arrived during anti-flicker delay
             this.isSyncingNewMessage = true;
             if (this.syncingTimeoutTimer) clearTimeout(this.syncingTimeoutTimer);
             this.syncingTimeoutTimer = setTimeout(() => {
@@ -663,6 +668,212 @@ https://namethatui.com/</div></div>
       `skeletonVisibleAt200ms: ${skeletonVisibleOrder4}, clearedOnTimeout: ${!simOrder4.isSyncingNewMessage}`,
       skeletonVisibleOrder4 && !simOrder4.isSyncingNewMessage
     );
+
+    // ===============================================================================================
+    // PART 5: ADVANCED P0 MESSAGE IDENTITY AUDIT (DOM RE-CREATION, RESTART, EVICTION)
+    // ===============================================================================================
+    console.log('\n--- PART 5: Advanced P0 Message Identity Audit (Re-creation, Restart, Eviction) ---');
+
+    // Test 21: Full DOM node destruction & re-creation with identical messages + virtualization (P0-1)
+    const thread21 = `${PAGE_ID}:61592309996221`;
+    messageReconciler.resetThread(thread21);
+
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details">
+        <a href="https://facebook.com/61592309996221" aria-label="HoàngAnh Ngô">HoàngAnh Ngô</a>
+      </div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div id="dom_msg_0" data-message-id="mid.$recreate_0" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+        <div class="row-inbound"><div id="dom_msg_1" data-message-id="mid.$recreate_1" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+      </div>
+    `);
+
+    const scan1T21 = await extractActiveThreadMessages(page, PAGE_ID);
+    assert.strictEqual(scan1T21.messages.length, 2, 'Scan 1 must have 2 messages');
+    const t21F0 = scan1T21.messages[0].fingerprint;
+    const t21F1 = scan1T21.messages[1].fingerprint;
+    assert.notStrictEqual(t21F0, t21F1, 'Identical messages must have distinct fingerprints');
+
+    // Scan 2: FULL DOM DESTRUCTION & RE-CREATION! No DOM nodes or data-crm-msg-uid are preserved!
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details">
+        <a href="https://facebook.com/61592309996221" aria-label="HoàngAnh Ngô">HoàngAnh Ngô</a>
+      </div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div id="dom_fresh_1" data-message-id="mid.$recreate_1" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+        <div class="row-inbound"><div id="dom_fresh_2" data-message-id="mid.$recreate_2" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+      </div>
+    `);
+
+    const scan2T21 = await extractActiveThreadMessages(page, PAGE_ID);
+    assert.strictEqual(scan2T21.messages.length, 2, 'Scan 2 must have 2 messages');
+    const t21Post0Fp = scan2T21.messages[0].fingerprint;
+    const t21Post1Fp = scan2T21.messages[1].fingerprint;
+
+    const t21Passed = t21Post0Fp === t21F1 && t21Post1Fp !== t21F0 && t21Post1Fp !== t21F1;
+    recordResult(
+      21,
+      'P0-1: Full DOM re-creation + virtualization: old hello retains F1 and new hello gets brand new F2',
+      `msg0===F1 && msg1!==F0 && msg1!==F1`,
+      `msg0===F1: ${t21Post0Fp === t21F1}, msg1IsNew: ${t21Post1Fp !== t21F0 && t21Post1Fp !== t21F1}`,
+      t21Passed
+    );
+
+    // Test 22: Paired Tests (Case R1 pure re-render vs Case R2 sliding window + new message)
+    const thread22R1 = `${PAGE_ID}:61592309996222_r1`;
+    messageReconciler.resetThread(thread22R1);
+
+    // R1 Scan 1
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996222_r1">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.r1_a" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello A</div></div>
+        <div class="row-inbound"><div data-message-id="mid.r1_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello B</div></div>
+      </div>
+    `);
+    const r1Scan1 = await extractActiveThreadMessages(page, PAGE_ID);
+    const r1F0 = r1Scan1.messages[0].fingerprint;
+    const r1F1 = r1Scan1.messages[1].fingerprint;
+
+    // R1 Scan 2: Full DOM re-creation, NO new messages
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996222_r1">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.r1_a" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello A</div></div>
+        <div class="row-inbound"><div data-message-id="mid.r1_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello B</div></div>
+      </div>
+    `);
+    const r1Scan2 = await extractActiveThreadMessages(page, PAGE_ID);
+    const r1Stable = r1Scan2.messages[0].fingerprint === r1F0 && r1Scan2.messages[1].fingerprint === r1F1;
+
+    // R2 Scan 1 & Scan 2: Sliding window + new message
+    const thread22R2 = `${PAGE_ID}:61592309996222_r2`;
+    messageReconciler.resetThread(thread22R2);
+
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996222_r2">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.r2_a" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello A</div></div>
+        <div class="row-inbound"><div data-message-id="mid.r2_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello B</div></div>
+      </div>
+    `);
+    const r2Scan1 = await extractActiveThreadMessages(page, PAGE_ID);
+    const r2F1 = r2Scan1.messages[1].fingerprint;
+
+    // R2 Scan 2: Full DOM re-creation, A virtualized, C added
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996222_r2">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.r2_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello B</div></div>
+        <div class="row-inbound"><div data-message-id="mid.r2_c" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello C</div></div>
+      </div>
+    `);
+    const r2Scan2 = await extractActiveThreadMessages(page, PAGE_ID);
+    const r2Distinct = r2Scan2.messages[0].fingerprint === r2F1 &&
+      r2Scan2.messages[1].fingerprint !== r2Scan1.messages[0].fingerprint &&
+      r2Scan2.messages[1].fingerprint !== r2F1;
+
+    recordResult(
+      22,
+      'Paired Test: Case R1 preserves [F0, F1] without extra fingerprints; Case R2 preserves B->F1 and generates C->F2',
+      'R1Stable: true && R2Distinct: true',
+      `R1Stable: ${r1Stable}, R2Distinct: ${r2Distinct}`,
+      r1Stable && r2Distinct
+    );
+
+    // Test 23: P0-2 Worker Process Restart
+    const testStoragePath = path.resolve(process.cwd(), 'tests/inbox/test_restart_checkpoint.json');
+    try { if (fs.existsSync(testStoragePath)) fs.unlinkSync(testStoragePath); } catch (_) {}
+
+    const thread23 = `${PAGE_ID}:61592309996223`;
+    let restartReconciler = new ThreadMessageReconciler({ storagePath: testStoragePath });
+
+    const scanPreRestart = restartReconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: thread23,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$rst_0' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$rst_1' },
+      ],
+    });
+    const preF0 = scanPreRestart[0].fingerprint;
+    const preF1 = scanPreRestart[1].fingerprint;
+    restartReconciler.markFingerprintSynced(thread23, preF0);
+    restartReconciler.markFingerprintSynced(thread23, preF1);
+
+    // SIMULATE WORKER CRASH & PROCESS RESTART: Fresh instance initialized from disk
+    restartReconciler = new ThreadMessageReconciler({ storagePath: testStoragePath });
+    const crmSyncedFingerprints = new Set(restartReconciler.getAllSyncedFingerprints());
+
+    // Post restart: DOM contains hello cũ (mid.$rst_1) and hello mới (mid.$rst_2)
+    const scanPostRestart = restartReconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: thread23,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$rst_1' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$rst_2' },
+      ],
+    });
+
+    const post0Fp = scanPostRestart[0].fingerprint;
+    const post1Fp = scanPostRestart[1].fingerprint;
+    const t23Passed = post0Fp === preF1 && post1Fp !== preF0 && post1Fp !== preF1 && !crmSyncedFingerprints.has(post1Fp);
+
+    recordResult(
+      23,
+      'P0-2: Worker restart: new message does not receive F0/F1 and is ingested exactly once without colliding with CRM',
+      'post0===preF1 && post1!==preF0 && post1!==preF1 && !synced.has(post1)',
+      `post0===preF1: ${post0Fp === preF1}, post1IsNew: ${post1Fp !== preF0 && post1Fp !== preF1}, notInCrm: ${!crmSyncedFingerprints.has(post1Fp)}`,
+      t23Passed
+    );
+
+    // Test 24: P0-3 Thread State Eviction (LRU with persistent checkpoints)
+    const thread24 = `${PAGE_ID}:61592309996224`;
+    const evictionReconciler = new ThreadMessageReconciler({ maxThreads: 10, storagePath: testStoragePath });
+
+    const scanPreEvict = evictionReconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: thread24,
+      rawMessages: [
+        { content: 'repeat', direction: 'INBOUND', timestamp: '10:00 PM' },
+        { content: 'repeat', direction: 'INBOUND', timestamp: '10:00 PM' },
+      ],
+    });
+    const evictF0 = scanPreEvict[0].fingerprint;
+    const evictF1 = scanPreEvict[1].fingerprint;
+    evictionReconciler.markFingerprintSynced(thread24, evictF0);
+    evictionReconciler.markFingerprintSynced(thread24, evictF1);
+
+    // Evict thread24 from active memory by creating 15 other threads
+    for (let i = 0; i < 15; i++) {
+      evictionReconciler.reconcile({
+        pageId: PAGE_ID,
+        stableThreadId: `${PAGE_ID}:evict_${i}`,
+        rawMessages: [{ content: `msg_${i}`, direction: 'INBOUND', timestamp: '10:00 PM' }],
+      });
+    }
+
+    // Return to thread24: user sends 3rd repeated message
+    const scanReturnEvict = evictionReconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: thread24,
+      rawMessages: [
+        { content: 'repeat', direction: 'INBOUND', timestamp: '10:00 PM' },
+      ],
+    });
+
+    const returnFp = scanReturnEvict[0].fingerprint;
+    const t24Passed = returnFp !== evictF0 && returnFp !== evictF1 && !evictionReconciler.isFingerprintSynced(thread24, returnFp);
+
+    recordResult(
+      24,
+      'P0-3: Thread eviction: returning to evicted thread preserves monotonic ordinals and avoids collision with synced fingerprints',
+      'returnFp !== F0 && returnFp !== F1 && !synced.has(returnFp)',
+      `returnFp: ${returnFp.slice(0, 8)}, F0: ${evictF0.slice(0, 8)}, F1: ${evictF1.slice(0, 8)}, collides: ${returnFp === evictF0 || returnFp === evictF1}`,
+      t24Passed
+    );
+
+    try { if (fs.existsSync(testStoragePath)) fs.unlinkSync(testStoragePath); } catch (_) {}
 
   } finally {
     await browser.close();

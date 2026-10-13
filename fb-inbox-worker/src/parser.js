@@ -642,6 +642,16 @@ export async function extractActiveThreadMessages(page, pageId) {
           direction_reason = 'ambiguous-direction';
         }
 
+        // Extract native stable message identifier from Meta DOM if present
+        const messageId = el.getAttribute('data-message-id') ||
+          el.closest('[data-message-id]')?.getAttribute('data-message-id') ||
+          el.querySelector('[data-message-id]')?.getAttribute('data-message-id') ||
+          el.getAttribute('data-mid') ||
+          el.closest('[data-mid]')?.getAttribute('data-mid') ||
+          el.getAttribute('data-id') ||
+          el.closest('[data-id]')?.getAttribute('data-id') ||
+          null;
+
         // Tag element with stable DOM session identifier for virtualization tracking
         let domNodeUid = el.getAttribute('data-crm-msg-uid');
         if (!domNodeUid) {
@@ -657,7 +667,8 @@ export async function extractActiveThreadMessages(page, pageId) {
           timestamp: currentTimestampText,
           utime: currentUtime,
           relativeX: Math.round(relativeX * 1000) / 1000,
-          domNodeUid
+          domNodeUid,
+          messageId
         });
       }
 

@@ -13,6 +13,7 @@ import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
 import { createClient } from '@/lib/supabase/client';
 import MessageContent from './message-content';
+import { evaluateSkeletonCorrelation } from '../utils/skeleton-helper';
 
 export { mergeDeliveryStatus };
 
@@ -639,27 +640,25 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
             if (updatedConv.id && updatedConv.id === activeConversationRef.current) {
               const convId = updatedConv.id;
               const prevLastAt = activeConversationLastMessageAtRef.current;
-              const newLastAt = updatedConv.last_message_at;
-              const newLastAtMs = newLastAt ? new Date(newLastAt).getTime() : 0;
-              const prevLastAtMs = prevLastAt ? new Date(prevLastAt).getTime() : 0;
+              const newLastAt = updatedConv.last_message_at || null;
+              const latestRenderedMs = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
 
-              const advanced = Boolean(
-                newLastAtMs && (!prevLastAtMs || newLastAtMs > prevLastAtMs)
-              );
-              if (advanced) {
-                activeConversationLastMessageAtRef.current = newLastAt || null;
+              const decision = evaluateSkeletonCorrelation({
+                conversationLastMessageAt: newLastAt,
+                previousConversationLastMessageAt: prevLastAt,
+                latestRenderedInteractionAtMs: latestRenderedMs,
+              });
 
-                // Correlate event timing: check if interaction for this last_message_at or newer has ALREADY been rendered
-                const latestRenderedMs = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
-                const isAlreadyRendered = latestRenderedMs >= newLastAtMs;
+              if (decision.advanced) {
+                activeConversationLastMessageAtRef.current = newLastAt;
 
-                if (!isAlreadyRendered) {
+                if (decision.shouldScheduleSkeleton) {
                   // Anti-flicker delay 180ms
                   if (syncingDelayRef.current) clearTimeout(syncingDelayRef.current);
                   syncingDelayRef.current = setTimeout(() => {
                     // Double check right before showing skeleton: did interaction arrive during the 180ms window?
                     const currentRenderedMs = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
-                    if (currentRenderedMs >= newLastAtMs) {
+                    if (currentRenderedMs >= decision.newLastAtMs) {
                       return; // Arrived! Do not show skeleton
                     }
                     setIsSyncingNewMessage(true);
