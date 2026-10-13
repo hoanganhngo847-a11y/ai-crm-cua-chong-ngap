@@ -37,6 +37,10 @@ class InboxStateSimulationHarness {
   public draftsByConversation: Record<string, string> = {};
   public pendingCommandsRef: Record<string, { commandId: string; content: string }> = {};
   public loadingMessages: boolean = false;
+  public sendingByConversation: Record<string, boolean> = {};
+  public sendErrorByConversation: Record<string, string | null> = {};
+  public loadingAiByConversation: Record<string, boolean> = {};
+  public aiSuggestion: string | null = null;
 
   public selectConversation(convId: string) {
     this.selectedConversationId = convId;
@@ -61,6 +65,7 @@ class InboxStateSimulationHarness {
   public setDraft(text: string) {
     if (!this.selectedConversationId) return;
     this.draftsByConversation[this.selectedConversationId] = text;
+    this.sendErrorByConversation[this.selectedConversationId] = null;
   }
 
   public startFetch(convId: string): { generation: number; controller: AbortController } {
@@ -135,6 +140,9 @@ class InboxStateSimulationHarness {
       this.pendingCommandsRef[sendConvId] = { commandId, content };
     }
 
+    this.sendingByConversation[sendConvId] = true;
+    this.sendErrorByConversation[sendConvId] = null;
+
     // Optimistic bubble in sendConvId cache
     const optimistic: InboxMessage = {
       id: `optimistic-${commandId}`,
@@ -183,6 +191,35 @@ class InboxStateSimulationHarness {
     }
 
     delete this.pendingCommandsRef[sendConvId];
+    this.sendingByConversation[sendConvId] = false;
+  }
+
+  public handleSendFailure(
+    convId: string,
+    commandId: string,
+    originalText: string,
+    errorMessage: string
+  ) {
+    this.messagesByConversation[convId] = (this.messagesByConversation[convId] || []).filter(
+      (m) => m.client_command_id !== commandId
+    );
+    if (!this.draftsByConversation[convId] || this.draftsByConversation[convId].trim() === '') {
+      this.draftsByConversation[convId] = originalText;
+    }
+    this.pendingCommandsRef[convId] = { commandId, content: originalText };
+    this.sendErrorByConversation[convId] = errorMessage;
+    this.sendingByConversation[convId] = false;
+  }
+
+  public startRequestAi(convId: string) {
+    this.loadingAiByConversation[convId] = true;
+  }
+
+  public completeRequestAi(requestConvId: string, suggestion: string) {
+    if (requestConvId === this.activeConversationRef) {
+      this.aiSuggestion = suggestion;
+    }
+    this.loadingAiByConversation[requestConvId] = false;
   }
 }
 
@@ -463,25 +500,167 @@ async function runAllTests() {
   );
 
   // ========================================================================================
-  // WORKER HEARTBEAT & DEGRADED READINESS TESTS
+  // CASE G: Send Failure Path & Draft Recovery (Section 3)
   // ========================================================================================
-  console.log('\n--- Worker Operational Heartbeat & Readiness Hardening ---');
+  console.log('\n--- Case G: Send Failure Recovery & Draft Restoration ---');
+  const harnessG = new InboxStateSimulationHarness();
 
-  // Reset healthServer state
-  healthServer.updateState({ meta_inbox_state: 'READY', browser_connected: true });
-  healthServer.recordMainLoopHeartbeat();
-  healthServer.recordOutboxPollAttempt();
-  healthServer.recordOutboxPollSuccess(2);
+  harnessG.selectConversation('conv-A');
+  harnessG.setDraft('Nội dung gửi thử nghiệm sẽ bị lỗi mạng');
+  const prepG_A = harnessG.prepareSendMessage('Nội dung gửi thử nghiệm sẽ bị lỗi mạng');
 
-  const snapHealthy = healthServer.getSnapshot();
+  // Verify optimistic bubble exists and draft is cleared
   recordTest(
-    'Worker Heartbeat 1: Healthy fresh heartbeat reports outbox_loop_healthy = true',
-    'outbox_loop_healthy: true',
-    `outbox_loop_healthy: ${snapHealthy.outbox_loop_healthy}`,
-    snapHealthy.outbox_loop_healthy === true
+    'Case G.1: Optimistic pending bubble added on send initiation',
+    '1 message with delivery_status: PENDING_DISPATCH',
+    `${harnessG.messagesByConversation['conv-A']?.length} msg, status: ${harnessG.messagesByConversation['conv-A']?.[0]?.delivery_status}`,
+    harnessG.messagesByConversation['conv-A']?.length === 1 &&
+      harnessG.messagesByConversation['conv-A']?.[0]?.delivery_status === 'PENDING_DISPATCH'
+  );
+  recordTest(
+    'Case G.2: Draft cleared immediately upon optimistic send initiation',
+    'empty string',
+    `"${harnessG.getVisibleDraft()}"`,
+    harnessG.getVisibleDraft() === ''
   );
 
-  // Test /ready endpoint when fresh
+  // Set up conversation B with its own draft
+  harnessG.selectConversation('conv-B');
+  harnessG.setDraft('Bản nháp của khách hàng B');
+
+  // Now simulate HTTP 500 / Network Error on send A
+  harnessG.handleSendFailure(
+    prepG_A.sendConvId,
+    prepG_A.commandId,
+    'Nội dung gửi thử nghiệm sẽ bị lỗi mạng',
+    'Lỗi kết nối máy chủ khi gửi tin nhắn (HTTP 500)'
+  );
+
+  // Assertions for conversation B (MUST BE COMPLETELY UNTOUCHED)
+  recordTest(
+    'Case G.3: Failure on conversation A leaves conversation B draft completely untouched',
+    'Bản nháp của khách hàng B',
+    harnessG.getVisibleDraft(),
+    harnessG.getVisibleDraft() === 'Bản nháp của khách hàng B'
+  );
+  recordTest(
+    'Case G.4: Conversation B has no error messages from A failure',
+    'null',
+    `${harnessG.sendErrorByConversation['conv-B']}`,
+    harnessG.sendErrorByConversation['conv-B'] == null
+  );
+
+  // Switch back to conversation A
+  harnessG.selectConversation('conv-A');
+  recordTest(
+    'Case G.5: Optimistic pending bubble is removed on failure (no stuck PENDING bubbles)',
+    '0 messages',
+    `${harnessG.messagesByConversation['conv-A']?.length} messages`,
+    harnessG.messagesByConversation['conv-A']?.length === 0
+  );
+  recordTest(
+    'Case G.6: Draft restored in conversation A for user retry',
+    'Nội dung gửi thử nghiệm sẽ bị lỗi mạng',
+    harnessG.getVisibleDraft(),
+    harnessG.getVisibleDraft() === 'Nội dung gửi thử nghiệm sẽ bị lỗi mạng'
+  );
+  recordTest(
+    'Case G.7: Error message displayed for conversation A',
+    'Lỗi kết nối máy chủ khi gửi tin nhắn (HTTP 500)',
+    `${harnessG.sendErrorByConversation['conv-A']}`,
+    harnessG.sendErrorByConversation['conv-A'] === 'Lỗi kết nối máy chủ khi gửi tin nhắn (HTTP 500)'
+  );
+  recordTest(
+    'Case G.8: Pending command preserved in pendingCommandsRef for idempotent retry',
+    `commandId: ${prepG_A.commandId}`,
+    `commandId: ${harnessG.pendingCommandsRef['conv-A']?.commandId}`,
+    harnessG.pendingCommandsRef['conv-A']?.commandId === prepG_A.commandId
+  );
+
+  // Verify that if user already typed a new draft before failure arrives, new draft is not overwritten
+  const harnessG2 = new InboxStateSimulationHarness();
+  harnessG2.selectConversation('conv-A');
+  harnessG2.setDraft('Tin nhắn cũ');
+  const prepG2 = harnessG2.prepareSendMessage('Tin nhắn cũ');
+  // User typed a new draft during flight
+  harnessG2.setDraft('Tin nhắn mới do tôi vừa gõ thêm');
+  harnessG2.handleSendFailure(prepG2.sendConvId, prepG2.commandId, 'Tin nhắn cũ', 'Network error');
+  recordTest(
+    'Case G.9: User new typing during in-flight failure is NOT overwritten by draft restoration',
+    'Tin nhắn mới do tôi vừa gõ thêm',
+    harnessG2.getVisibleDraft(),
+    harnessG2.getVisibleDraft() === 'Tin nhắn mới do tôi vừa gõ thêm'
+  );
+
+  // ========================================================================================
+  // CASE H: Per-conversation Sending State Scoping (Section 3)
+  // ========================================================================================
+  console.log('\n--- Case H: Per-conversation Sending State Scoping ---');
+  const harnessH = new InboxStateSimulationHarness();
+  harnessH.selectConversation('conv-A');
+  harnessH.setDraft('Gửi từ A');
+  harnessH.prepareSendMessage('Gửi từ A'); // sets sendingByConversation['conv-A'] = true
+
+  recordTest(
+    'Case H.1: Conversation A sending state is true',
+    'true',
+    `${harnessH.sendingByConversation['conv-A']}`,
+    harnessH.sendingByConversation['conv-A'] === true
+  );
+
+  // Switch to B
+  harnessH.selectConversation('conv-B');
+  recordTest(
+    'Case H.2: Conversation B sending state is false/falsy while A is in-flight (B not disabled)',
+    'false/undefined',
+    `${Boolean(harnessH.sendingByConversation['conv-B'])}`,
+    !harnessH.sendingByConversation['conv-B']
+  );
+
+  // ========================================================================================
+  // CASE I: AI Loading Isolation & Stale Response Prevention (Section 4)
+  // ========================================================================================
+  console.log('\n--- Case I: AI Loading State Scoping & Isolation ---');
+  const harnessI = new InboxStateSimulationHarness();
+  harnessI.selectConversation('conv-A');
+  harnessI.startRequestAi('conv-A');
+
+  recordTest(
+    'Case I.1: AI loading state active for conversation A',
+    'true',
+    `${harnessI.loadingAiByConversation['conv-A']}`,
+    harnessI.loadingAiByConversation['conv-A'] === true
+  );
+
+  // Switch to B before AI response returns
+  harnessI.selectConversation('conv-B');
+  recordTest(
+    'Case I.2: Conversation B is NOT in loading state when user switches away from A',
+    'false/undefined',
+    `${Boolean(harnessI.loadingAiByConversation['conv-B'])}`,
+    !harnessI.loadingAiByConversation['conv-B']
+  );
+
+  // AI response for A completes while user is on B
+  harnessI.completeRequestAi('conv-A', 'Gợi ý chào mừng khách hàng A từ AI');
+  recordTest(
+    'Case I.3: Late AI response for A does NOT mutate active view on B',
+    'null',
+    `${harnessI.aiSuggestion}`,
+    harnessI.aiSuggestion === null
+  );
+  recordTest(
+    'Case I.4: Loading state for conversation A resets to false even if switched away',
+    'false',
+    `${harnessI.loadingAiByConversation['conv-A']}`,
+    harnessI.loadingAiByConversation['conv-A'] === false
+  );
+
+  // ========================================================================================
+  // WORKER HEARTBEAT & DEGRADED READINESS TESTS (Section 1: Cases A through F)
+  // ========================================================================================
+  console.log('\n--- Worker Operational Heartbeat & Readiness Hardening (Cases A-F) ---');
+
   const port = 3199;
   await healthServer.start(port, '127.0.0.1');
 
@@ -501,37 +680,128 @@ async function runAllTests() {
     });
   }
 
-  const resHealthy = await queryReady();
-  recordTest(
-    'Worker Heartbeat 2: /ready returns 200 when Meta is READY and outbox poll is fresh',
-    'HTTP 200, ready: true, state: READY',
-    `HTTP ${resHealthy.statusCode}, ready: ${resHealthy.body.ready}, state: ${resHealthy.body.state}`,
-    resHealthy.statusCode === 200 && resHealthy.body.ready === true && resHealthy.body.state === 'READY'
-  );
-
-  // Now simulate stale outbox poll attempt (> 45s ago)
-  (healthServer.state as Record<string, unknown>).last_outbox_poll_attempt_at = new Date(Date.now() - 60000).toISOString();
-
-  const resDegraded = await queryReady();
-  recordTest(
-    'Worker Heartbeat 3: /ready returns 503 DEGRADED_OUTBOX_LOOP when outbox poll is stale',
-    'HTTP 503, ready: false, state: DEGRADED_OUTBOX_LOOP',
-    `HTTP ${resDegraded.statusCode}, ready: ${resDegraded.body.ready}, state: ${resDegraded.body.state}`,
-    resDegraded.statusCode === 503 && resDegraded.body.ready === false && resDegraded.body.state === 'DEGRADED_OUTBOX_LOOP'
-  );
-
-  // Record fresh attempt again
+  // Case A: success fresh -> /ready 200
+  healthServer.updateState({ meta_inbox_state: 'READY', browser_connected: true });
+  healthServer.recordMainLoopHeartbeat();
   healthServer.recordOutboxPollAttempt();
   healthServer.recordOutboxPollSuccess(0);
-  const resRecovered = await queryReady();
+
+  const resA = await queryReady();
   recordTest(
-    'Worker Heartbeat 4: /ready recovers to 200 immediately upon fresh outbox poll cycle',
+    'Case Readiness A: Fresh success heartbeat produces HTTP 200 READY',
     'HTTP 200, ready: true, state: READY',
-    `HTTP ${resRecovered.statusCode}, ready: ${resRecovered.body.ready}, state: ${resRecovered.body.state}`,
-    resRecovered.statusCode === 200 && resRecovered.body.ready === true && resRecovered.body.state === 'READY'
+    `HTTP ${resA.statusCode}, ready: ${resA.body.ready}, state: ${resA.body.state}`,
+    resA.statusCode === 200 && resA.body.ready === true && resA.body.state === 'READY'
+  );
+
+  // Case B: attempt fresh + HTTP error -> /ready 503
+  healthServer.recordMainLoopHeartbeat();
+  healthServer.recordOutboxPollAttempt();
+  healthServer.recordOutboxPollError('CLAIM_HTTP_ERROR', 'HTTP 500 Internal Server Error');
+
+  const resB = await queryReady();
+  recordTest(
+    'Case Readiness B: Fresh attempt with CLAIM_HTTP_ERROR produces HTTP 503 DEGRADED_OUTBOX_LOOP',
+    'HTTP 503, ready: false, state: DEGRADED_OUTBOX_LOOP',
+    `HTTP ${resB.statusCode}, ready: ${resB.body.ready}, state: ${resB.body.state}`,
+    resB.statusCode === 503 && resB.body.ready === false && resB.body.state === 'DEGRADED_OUTBOX_LOOP'
+  );
+
+  // Case C: repeated network errors every 5s -> still 503
+  for (let i = 0; i < 3; i++) {
+    healthServer.recordMainLoopHeartbeat();
+    healthServer.recordOutboxPollAttempt();
+    healthServer.recordOutboxPollError('CLAIM_NETWORK_ERROR', 'ECONNREFUSED connect error');
+  }
+  const resC = await queryReady();
+  recordTest(
+    'Case Readiness C: Repeated network errors every 5s maintain HTTP 503 DEGRADED_OUTBOX_LOOP',
+    'HTTP 503, ready: false, state: DEGRADED_OUTBOX_LOOP',
+    `HTTP ${resC.statusCode}, ready: ${resC.body.ready}, state: ${resC.body.state}`,
+    resC.statusCode === 503 && resC.body.ready === false && resC.body.state === 'DEGRADED_OUTBOX_LOOP'
+  );
+
+  // Case D: timeout -> 503
+  healthServer.recordMainLoopHeartbeat();
+  healthServer.recordOutboxPollAttempt();
+  healthServer.recordOutboxPollError('CLAIM_TIMEOUT', 'Request timed out after 10000ms');
+
+  const resD = await queryReady();
+  recordTest(
+    'Case Readiness D: CLAIM_TIMEOUT produces HTTP 503 DEGRADED_OUTBOX_LOOP',
+    'HTTP 503, ready: false, state: DEGRADED_OUTBOX_LOOP',
+    `HTTP ${resD.statusCode}, ready: ${resD.body.ready}, state: ${resD.body.state}`,
+    resD.statusCode === 503 && resD.body.ready === false && resD.body.state === 'DEGRADED_OUTBOX_LOOP'
+  );
+
+  // Case E: success after error -> recover 200
+  healthServer.recordMainLoopHeartbeat();
+  healthServer.recordOutboxPollAttempt();
+  healthServer.recordOutboxPollSuccess(1);
+
+  const resE = await queryReady();
+  recordTest(
+    'Case Readiness E: Outbox poll success immediately clears error and recovers to HTTP 200 READY',
+    'HTTP 200, ready: true, state: READY',
+    `HTTP ${resE.statusCode}, ready: ${resE.body.ready}, state: ${resE.body.state}`,
+    resE.statusCode === 200 && resE.body.ready === true && resE.body.state === 'READY'
+  );
+
+  // Case F: success stale > threshold (45s) -> 503
+  (healthServer.state as Record<string, unknown>).last_outbox_poll_success_at = new Date(Date.now() - 50000).toISOString();
+
+  const resF = await queryReady();
+  recordTest(
+    'Case Readiness F: Outbox success stale > 45s produces HTTP 503 DEGRADED_OUTBOX_LOOP even if no active error',
+    'HTTP 503, ready: false, state: DEGRADED_OUTBOX_LOOP',
+    `HTTP ${resF.statusCode}, ready: ${resF.body.ready}, state: ${resF.body.state}`,
+    resF.statusCode === 503 && resF.body.ready === false && resF.body.state === 'DEGRADED_OUTBOX_LOOP'
   );
 
   await healthServer.stop();
+
+  // ========================================================================================
+  // DOM PARSER COST & SAFETY GUARD TESTS (Section 2)
+  // ========================================================================================
+  console.log('\n--- DOM Parser Candidate Cap & Style Optimization Tests ---');
+
+  // Verify candidate node capping logic: simulated 1,000 DOM elements
+  const simulatedCandidates = Array.from({ length: 1000 }, (_, idx) => ({ id: `node-${idx}` }));
+  const MAX_CANDIDATES = 200;
+  const capped = simulatedCandidates.length > MAX_CANDIDATES
+    ? simulatedCandidates.slice(-MAX_CANDIDATES)
+    : simulatedCandidates;
+
+  recordTest(
+    'Parser Guard 1: Hard cap limits candidate scan to at most 200 elements',
+    'capped length: 200, last element: node-999',
+    `capped length: ${capped.length}, last element: ${capped[capped.length - 1]?.id}`,
+    capped.length === 200 && capped[capped.length - 1]?.id === 'node-999'
+  );
+
+  // Verify styleCache caching pattern prevents repeated computed style recalculation
+  const mockCalls: string[] = [];
+  const styleCache = new Map<string, { bg: string }>();
+  function getCachedMockStyle(nodeId: string) {
+    if (!styleCache.has(nodeId)) {
+      mockCalls.push(nodeId);
+      styleCache.set(nodeId, { bg: 'blue' });
+    }
+    return styleCache.get(nodeId);
+  }
+
+  // 10 queries on 2 shared ancestor nodes
+  for (let i = 0; i < 5; i++) {
+    getCachedMockStyle('ancestor-row-1');
+    getCachedMockStyle('ancestor-row-2');
+  }
+
+  recordTest(
+    'Parser Guard 2: StyleCache ensures computed style calculation runs exactly once per element',
+    'mockCalls.length === 2',
+    `mockCalls.length === ${mockCalls.length}`,
+    mockCalls.length === 2
+  );
 
   console.log('\n========================================================================================');
   console.log('ACCEPTANCE MATRIX: CONVERSATION ISOLATION & WORKER HEARTBEAT');

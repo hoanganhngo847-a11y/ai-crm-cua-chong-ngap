@@ -85,7 +85,8 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
 
   const [loadingConversations, setLoadingConversations] = useState<boolean>(true);
   const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
-  const [sending, setSending] = useState<boolean>(false);
+  const [sendingByConversation, setSendingByConversation] = useState<Record<string, boolean>>({});
+  const [sendErrorByConversation, setSendErrorByConversation] = useState<Record<string, string | null>>({});
 
   // P0-A: Monotonic request generation and active conversation reference for race condition elimination
   const activeConversationRef = useRef<string | null>(null);
@@ -100,9 +101,9 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     activeConversationRef.current = selectedConversationId;
   }, [selectedConversationId]);
 
-  // AI Suggestion states
+  // AI Suggestion states (scoped & isolated)
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
-  const [loadingAiSuggestion, setLoadingAiSuggestion] = useState<boolean>(false);
+  const [loadingAiByConversation, setLoadingAiByConversation] = useState<Record<string, boolean>>({});
   const [aiSuggestionMeta, setAiSuggestionMeta] = useState<{
     isNeutralDefault?: boolean;
     styleProfileId?: string | null;
@@ -304,9 +305,11 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   }, [selectedConversationId, fetchMessages]);
 
   const handleRequestAiSuggestion = async () => {
-    if (!selectedConversationId || loadingAiSuggestion) return;
+    if (!selectedConversationId) return;
+    if (loadingAiByConversation[selectedConversationId]) return;
+
     const requestConvId = selectedConversationId;
-    setLoadingAiSuggestion(true);
+    setLoadingAiByConversation((prev) => ({ ...prev, [requestConvId]: true }));
     setAiError(null);
     try {
       const res = await generateAiDraftSuggestionAction({
@@ -331,9 +334,8 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
       const message = err instanceof Error ? err.message : 'Lỗi khi tạo gợi ý AI';
       setAiError(message);
     } finally {
-      if (requestConvId === activeConversationRef.current) {
-        setLoadingAiSuggestion(false);
-      }
+      // Scoped reset: always reset for requestConvId regardless of active conversation
+      setLoadingAiByConversation((prev) => ({ ...prev, [requestConvId]: false }));
     }
   };
 
@@ -379,12 +381,54 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
       ...prev,
       [selectedConversationId]: newText,
     }));
+    // Clear send error for this conversation upon new typing
+    if (sendErrorByConversation[selectedConversationId]) {
+      setSendErrorByConversation((prev) => ({
+        ...prev,
+        [selectedConversationId]: null,
+      }));
+    }
   };
 
-  // 3. Send Message Action with strict conversation and command isolation (P0-B)
+  const handleSendFailure = (
+    convId: string,
+    commandId: string,
+    originalText: string,
+    errorMessage: string
+  ) => {
+    // 1. Remove optimistic pending bubble so it never hangs in PENDING
+    setMessagesByConversation((prev) => ({
+      ...prev,
+      [convId]: (prev[convId] || []).filter((m) => m.client_command_id !== commandId),
+    }));
+
+    // 2. Restore draft ONLY IF user has not typed a new draft in this conversation
+    setDraftsByConversation((prev) => {
+      const current = prev[convId];
+      if (!current || current.trim() === '') {
+        return {
+          ...prev,
+          [convId]: originalText,
+        };
+      }
+      return prev;
+    });
+
+    // 3. Keep pending command for idempotent retry with exact content
+    pendingCommandsRef.current[convId] = { commandId, content: originalText };
+
+    // 4. Set error notice for this conversation
+    setSendErrorByConversation((prev) => ({
+      ...prev,
+      [convId]: errorMessage,
+    }));
+  };
+
+  // 3. Send Message Action with strict conversation and command isolation (P0-B) & robust failure path
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedConversationId || sending) return;
+    if (!selectedConversationId) return;
+    if (sendingByConversation[selectedConversationId]) return;
 
     // Capture immutable sendConversationId
     const sendConversationId = selectedConversationId;
@@ -403,7 +447,8 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
       pendingCommandsRef.current[sendConversationId] = { commandId, content: text };
     }
 
-    setSending(true);
+    setSendingByConversation((prev) => ({ ...prev, [sendConversationId]: true }));
+    setSendErrorByConversation((prev) => ({ ...prev, [sendConversationId]: null }));
 
     const currentConv = conversations.find((c) => c.id === sendConversationId);
 
@@ -444,8 +489,9 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
         }),
       });
 
-      const json = await res.json();
-      if (json.success && json.data) {
+      const json = await res.json().catch(() => null);
+
+      if (res.ok && json?.success && json?.data) {
         // Success: update cache for sendConversationId
         setMessagesByConversation((prev) => {
           const convMsgs = prev[sendConversationId] || [];
@@ -487,14 +533,22 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               : c
           )
         );
+      } else {
+        const errorMsg = json?.error || `Gửi tin nhắn thất bại (HTTP ${res.status})`;
+        handleSendFailure(sendConversationId, commandId, text, errorMsg);
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Lỗi khi gửi tin nhắn:', err);
-      // Keep pendingCommandsRef[sendConversationId] intact for retry
+      const errorMsg = err instanceof Error ? err.message : 'Lỗi kết nối khi gửi tin nhắn';
+      handleSendFailure(sendConversationId, commandId, text, errorMsg);
     } finally {
-      setSending(false);
+      setSendingByConversation((prev) => ({ ...prev, [sendConversationId]: false }));
     }
   };
+
+  const isSendingCurrent = Boolean(selectedConversationId && sendingByConversation[selectedConversationId]);
+  const isLoadingAiCurrent = Boolean(selectedConversationId && loadingAiByConversation[selectedConversationId]);
+  const currentSendError = selectedConversationId ? sendErrorByConversation[selectedConversationId] : null;
 
   const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
 
@@ -901,6 +955,28 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                     </div>
                   )}
 
+                  {currentSendError && (
+                    <div className="mb-2 p-2 bg-rose-950/60 border border-rose-800/60 rounded-xl flex items-center justify-between text-xs text-rose-300 animate-fadeIn">
+                      <div className="flex items-center gap-1.5">
+                        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{currentSendError}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedConversationId) {
+                            setSendErrorByConversation((prev) => ({ ...prev, [selectedConversationId]: null }));
+                          }
+                        }}
+                        className="text-rose-400 hover:text-white px-1 text-xs"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
                   <div className="flex items-end gap-2">
                     <textarea
                       rows={2}
@@ -918,12 +994,12 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
 
                     <button
                       type="button"
-                      disabled={loadingAiSuggestion || sending}
+                      disabled={isLoadingAiCurrent || isSendingCurrent}
                       onClick={handleRequestAiSuggestion}
                       className="px-3 py-3 rounded-xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-700/60 text-purple-300 hover:text-white font-medium text-xs flex items-center gap-1 transition disabled:opacity-40"
                       title="Tạo bản nháp gợi ý từ AI dựa trên phong cách Sale và phân tích khách hàng"
                     >
-                      {loadingAiSuggestion ? (
+                      {isLoadingAiCurrent ? (
                         <span>Đang tạo...</span>
                       ) : (
                         <>
@@ -937,10 +1013,10 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
 
                     <button
                       type="submit"
-                      disabled={sending || !currentDraft.trim()}
+                      disabled={isSendingCurrent || !currentDraft.trim()}
                       className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-lg shadow-blue-600/20"
                     >
-                      {sending ? (
+                      {isSendingCurrent ? (
                         <span>Gửi...</span>
                       ) : (
                         <>
