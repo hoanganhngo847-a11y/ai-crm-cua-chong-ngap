@@ -71,6 +71,88 @@ export type MessageDeliveryStatus =
   | 'RECONCILE_REQUIRED';
 
 /**
+ * Checks if a delivery status is non-terminal / in-flight
+ */
+export function isPendingDelivery(status?: string): boolean {
+  if (!status) return false;
+  const s = status.toUpperCase();
+  return (
+    s === 'PENDING_DISPATCH' ||
+    s === 'PENDING' ||
+    s === 'PROCESSING' ||
+    s === 'RETRY' ||
+    s === 'QUEUED'
+  );
+}
+
+/**
+ * Monotonic Delivery Status Reconciliation Helper
+ * Prevents stale responses from downgrading terminal statuses (SENT, DELIVERED, etc.)
+ */
+export function mergeDeliveryStatus(
+  localStatus?: MessageDeliveryStatus | string,
+  incomingStatus?: MessageDeliveryStatus | string
+): MessageDeliveryStatus | undefined {
+  if (!localStatus && !incomingStatus) return undefined;
+  if (!incomingStatus) return (localStatus as MessageDeliveryStatus) || undefined;
+  if (!localStatus) return (incomingStatus as MessageDeliveryStatus) || undefined;
+
+  const normLocal = localStatus.toUpperCase();
+  const normIncoming = incomingStatus.toUpperCase();
+
+  if (normLocal === normIncoming) {
+    return incomingStatus as MessageDeliveryStatus;
+  }
+
+  // Once DELIVERED, never downgrade to SENT or any non-terminal state
+  if (normLocal === 'DELIVERED') {
+    if (normIncoming === 'SENT' || isPendingDelivery(normIncoming)) {
+      return 'DELIVERED';
+    }
+  }
+
+  // If incoming is DELIVERED, upgrade from SENT or non-terminal
+  if (normIncoming === 'DELIVERED') {
+    return 'DELIVERED';
+  }
+
+  // Once SENT, never downgrade to any non-terminal state
+  if (normLocal === 'SENT') {
+    if (isPendingDelivery(normIncoming)) {
+      return 'SENT';
+    }
+  }
+
+  // If local is non-terminal, incoming SENT upgrades it
+  if (isPendingDelivery(normLocal)) {
+    if (normIncoming === 'SENT') {
+      return 'SENT';
+    }
+  }
+
+  // Terminal error states: do not downgrade FAILED or RECONCILE_REQUIRED to non-terminal
+  if (
+    (normLocal === 'FAILED' || normLocal === 'RECONCILE_REQUIRED') &&
+    isPendingDelivery(normIncoming)
+  ) {
+    return localStatus as MessageDeliveryStatus;
+  }
+
+  // Do not downgrade terminal state to non-terminal
+  if (
+    (normLocal === 'SENT' ||
+      normLocal === 'DELIVERED' ||
+      normLocal === 'FAILED' ||
+      normLocal === 'RECONCILE_REQUIRED') &&
+    isPendingDelivery(normIncoming)
+  ) {
+    return localStatus as MessageDeliveryStatus;
+  }
+
+  return incomingStatus as MessageDeliveryStatus;
+}
+
+/**
  * Hợp đồng chuyển phát tin nhắn Outbound (Outbound Dispatcher Port - Member 3 Zalo & Member 4 Facebook)
  */
 export interface OutboundDispatchResult {

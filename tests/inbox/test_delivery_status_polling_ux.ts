@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { InboxService, DEFAULT_INBOX_COMPANY_ID } from '../../features/inbox/services/inbox.service';
 import type { InboxMessage } from '../../features/inbox/types/inbox.types';
+import { mergeDeliveryStatus, isPendingDelivery } from '../../features/inbox/types/inbox.types';
 
 interface TestResult {
   test: string;
@@ -56,6 +57,7 @@ function reconcileMessages(
         ...localMsg,
         ...matchedServerMsg,
         client_command_id: localMsg.client_command_id || matchedServerMsg.client_command_id,
+        delivery_status: mergeDeliveryStatus(localMsg.delivery_status, matchedServerMsg.delivery_status),
       });
       if (matchedServerMsg.id) matchedServerIds.add(matchedServerMsg.id);
     } else {
@@ -70,12 +72,6 @@ function reconcileMessages(
   }
 
   return reconciled;
-}
-
-function isPendingDelivery(status?: string): boolean {
-  if (!status) return false;
-  const s = status.toUpperCase();
-  return s === 'PENDING_DISPATCH' || s === 'PENDING' || s === 'PROCESSING' || s === 'RETRY' || s === 'QUEUED';
 }
 
 async function runDeliveryStatusPollingUxTests() {
@@ -469,6 +465,97 @@ async function runDeliveryStatusPollingUxTests() {
     'delivery_status: undefined',
     `delivery_status: ${msgErr?.delivery_status}`,
     msgErr?.delivery_status === undefined
+  );
+
+  // --------------------------------------------------------------------------
+  // Check 15: Monotonic Delivery Status Reconciliation Under Foreground/Poll Race
+  // --------------------------------------------------------------------------
+  const raceMsgId = 'msg-race-monotonic-001';
+  const raceCmdId = 'cmd-race-monotonic-001';
+  const initialRaceMsg: InboxMessage = {
+    id: raceMsgId,
+    conversation_id: convDbId,
+    customer_id: 'cust-db-01',
+    channel: 'facebook',
+    sender_type: 'sale',
+    content: 'Tin nhắn race monotonic delivery status',
+    created_at: new Date().toISOString(),
+    direction: 'outbound',
+    delivery_status: 'PENDING_DISPATCH',
+    client_command_id: raceCmdId,
+  };
+
+  // Poll finishes first: updates to SENT
+  const pollSentResult = reconcileMessages([initialRaceMsg], [
+    {
+      ...initialRaceMsg,
+      delivery_status: 'SENT',
+    },
+  ]);
+
+  recordTest(
+    '15.1. Poll finishes first -> state becomes SENT',
+    'delivery_status: SENT',
+    `delivery_status: ${pollSentResult[0]?.delivery_status}`,
+    pollSentResult[0]?.delivery_status === 'SENT'
+  );
+
+  // Stale foreground arrives later with PENDING_DISPATCH
+  const staleForegroundResult = reconcileMessages(pollSentResult, [
+    {
+      ...initialRaceMsg,
+      delivery_status: 'PENDING_DISPATCH',
+    },
+  ]);
+
+  recordTest(
+    '15.2. Stale foreground arrives later -> delivery_status remains SENT (never downgraded)',
+    'delivery_status: SENT',
+    `delivery_status: ${staleForegroundResult[0]?.delivery_status}`,
+    staleForegroundResult[0]?.delivery_status === 'SENT'
+  );
+
+  recordTest(
+    '15.3. Monotonic race message count strictly remains 1 (no duplicates)',
+    'count: 1',
+    `count: ${staleForegroundResult.length}`,
+    staleForegroundResult.length === 1
+  );
+
+  // Asserts for mergeDeliveryStatus
+  recordTest(
+    '15.4. mergeDeliveryStatus: SENT + undefined -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', undefined)}`,
+    mergeDeliveryStatus('SENT', undefined) === 'SENT'
+  );
+
+  recordTest(
+    '15.5. mergeDeliveryStatus: SENT + PROCESSING -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'PROCESSING')}`,
+    mergeDeliveryStatus('SENT', 'PROCESSING') === 'SENT'
+  );
+
+  recordTest(
+    '15.6. mergeDeliveryStatus: SENT + DELIVERED -> DELIVERED',
+    'DELIVERED',
+    `${mergeDeliveryStatus('SENT', 'DELIVERED')}`,
+    mergeDeliveryStatus('SENT', 'DELIVERED') === 'DELIVERED'
+  );
+
+  recordTest(
+    '15.7. mergeDeliveryStatus: DELIVERED + SENT -> DELIVERED',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'SENT')}`,
+    mergeDeliveryStatus('DELIVERED', 'SENT') === 'DELIVERED'
+  );
+
+  recordTest(
+    '15.8. mergeDeliveryStatus: PENDING + SENT -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('PENDING', 'SENT')}`,
+    mergeDeliveryStatus('PENDING', 'SENT') === 'SENT'
   );
 
   // Khôi phục DEMO_MODE

@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import type { InboxMessage } from '../../features/inbox/types/inbox.types';
+import { mergeDeliveryStatus } from '../../features/inbox/types/inbox.types';
 import { healthServer } from '../../fb-inbox-worker/src/health-server.js';
 import http from 'node:http';
 
@@ -131,10 +132,12 @@ class InboxStateSimulationHarness {
         (localMsg.id ? serverById.get(localMsg.id) : null) ||
         (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
       if (matched) {
+        const mergedStatus = mergeDeliveryStatus(localMsg.delivery_status, matched.delivery_status);
         reconciled.push({
           ...localMsg,
           ...matched,
           client_command_id: localMsg.client_command_id || matched.client_command_id,
+          delivery_status: mergedStatus,
         });
         if (matched.id) matchedServerIds.add(matched.id);
       } else {
@@ -231,13 +234,32 @@ class InboxStateSimulationHarness {
       this.messagesByConversation[sendConvId] = convMsgs.map((m) =>
         m.id === serverMsg.id ||
         (m.client_command_id && m.client_command_id === serverMsg.client_command_id)
-          ? { ...m, ...serverMsg }
+          ? {
+              ...m,
+              ...serverMsg,
+              client_command_id: m.client_command_id || serverMsg.client_command_id,
+              delivery_status: mergeDeliveryStatus(m.delivery_status, serverMsg.delivery_status),
+            }
           : m
       );
     } else {
+      const optimisticMatch = convMsgs.find(
+        (m) => m.client_command_id && m.client_command_id === serverMsg.client_command_id
+      );
+      const serverDataWithMergedStatus = optimisticMatch
+        ? {
+            ...serverMsg,
+            client_command_id: optimisticMatch.client_command_id || serverMsg.client_command_id,
+            delivery_status: mergeDeliveryStatus(
+              optimisticMatch.delivery_status,
+              serverMsg.delivery_status
+            ),
+          }
+        : serverMsg;
+
       this.messagesByConversation[sendConvId] = convMsgs
         .filter((m) => m.client_command_id !== serverMsg.client_command_id)
-        .concat(serverMsg);
+        .concat(serverDataWithMergedStatus);
     }
 
     delete this.pendingCommandsRef[sendConvId];
@@ -867,6 +889,105 @@ async function runAllTests() {
     'appliedB: true, loadingMessages: false, B messages count: 1',
     `appliedB: ${appliedB_J}, loadingMessages: ${harnessJ2.loadingMessages}, B count: ${harnessJ2.getVisibleMessages().length}`,
     appliedB_J === true && harnessJ2.loadingMessages === false && harnessJ2.getVisibleMessages().length === 1
+  );
+
+  // ========================================================================================
+  // CASE K: Monotonic Delivery Status Reconciliation Under Foreground / Poll Race
+  // ========================================================================================
+  console.log('\n--- Case K: Monotonic Delivery Status Reconciliation Under Race ---');
+  const harnessK = new InboxStateSimulationHarness();
+
+  // 1. Initial State: Conversation A has an outbound message
+  harnessK.selectConversation('conv-A');
+  const initialOutboundK: InboxMessage = {
+    id: 'msg-race-1',
+    conversation_id: 'conv-A',
+    customer_id: 'cust-a',
+    channel: 'facebook',
+    sender_type: 'sale',
+    content: 'Tin nhắn kiểm tra race monotonic',
+    created_at: new Date().toISOString(),
+    direction: 'outbound',
+    delivery_status: 'PENDING_DISPATCH',
+    client_command_id: 'cmd-race-1',
+  };
+  harnessK.messagesByConversation['conv-A'] = [initialOutboundK];
+
+  // 2. Foreground starts first (fetches with snapshot at t0: PENDING_DISPATCH)
+  const fgReqK = harnessK.startForegroundFetch('conv-A');
+  const fgStaleSnapshotK: InboxMessage[] = [
+    {
+      ...initialOutboundK,
+      delivery_status: 'PENDING_DISPATCH',
+    },
+  ];
+
+  // 3. Poll starts later and finishes FIRST with SENT
+  const pollReqK = harnessK.startPollFetch('conv-A');
+  const pollSentSnapshotK: InboxMessage[] = [
+    {
+      ...initialOutboundK,
+      delivery_status: 'SENT',
+    },
+  ];
+  const pollAppliedK = harnessK.completePollFetch('conv-A', pollReqK.generation, pollSentSnapshotK);
+  recordTest(
+    'Case K.1: Poll finishes first and state becomes SENT',
+    'applied: true, delivery_status: SENT',
+    `applied: ${pollAppliedK}, delivery_status: ${harnessK.messagesByConversation['conv-A']?.[0]?.delivery_status}`,
+    pollAppliedK === true && harnessK.messagesByConversation['conv-A']?.[0]?.delivery_status === 'SENT'
+  );
+
+  // 4. Foreground stale response finishes LATER with PENDING_DISPATCH
+  const fgAppliedK = harnessK.completeForegroundFetch('conv-A', fgReqK.generation, fgStaleSnapshotK);
+  recordTest(
+    'Case K.2: Stale foreground response finishes later but does NOT downgrade SENT to PENDING_DISPATCH',
+    'applied: true, delivery_status: SENT',
+    `applied: ${fgAppliedK}, delivery_status: ${harnessK.messagesByConversation['conv-A']?.[0]?.delivery_status}`,
+    fgAppliedK === true && harnessK.messagesByConversation['conv-A']?.[0]?.delivery_status === 'SENT'
+  );
+
+  recordTest(
+    'Case K.3: Message count strictly remains 1 (no duplicate)',
+    '1 message',
+    `${harnessK.messagesByConversation['conv-A']?.length} message(s)`,
+    harnessK.messagesByConversation['conv-A']?.length === 1
+  );
+
+  // 5. Monotonic unit asserts
+  recordTest(
+    'Case K.4: mergeDeliveryStatus("SENT", undefined) -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', undefined)}`,
+    mergeDeliveryStatus('SENT', undefined) === 'SENT'
+  );
+
+  recordTest(
+    'Case K.5: mergeDeliveryStatus("SENT", "PROCESSING") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'PROCESSING')}`,
+    mergeDeliveryStatus('SENT', 'PROCESSING') === 'SENT'
+  );
+
+  recordTest(
+    'Case K.6: mergeDeliveryStatus("SENT", "DELIVERED") -> "DELIVERED"',
+    'DELIVERED',
+    `${mergeDeliveryStatus('SENT', 'DELIVERED')}`,
+    mergeDeliveryStatus('SENT', 'DELIVERED') === 'DELIVERED'
+  );
+
+  recordTest(
+    'Case K.7: mergeDeliveryStatus("DELIVERED", "SENT") -> "DELIVERED"',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'SENT')}`,
+    mergeDeliveryStatus('DELIVERED', 'SENT') === 'DELIVERED'
+  );
+
+  recordTest(
+    'Case K.8: mergeDeliveryStatus("PENDING", "SENT") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('PENDING', 'SENT')}`,
+    mergeDeliveryStatus('PENDING', 'SENT') === 'SENT'
   );
 
   // ========================================================================================

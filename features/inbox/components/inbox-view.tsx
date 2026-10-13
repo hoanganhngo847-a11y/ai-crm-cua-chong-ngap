@@ -2,8 +2,16 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import type { Conversation, InboxMessage, InboxChannel } from '../types/inbox.types';
+import type {
+  Conversation,
+  InboxMessage,
+  InboxChannel,
+  MessageDeliveryStatus,
+} from '../types/inbox.types';
+import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
+
+export { mergeDeliveryStatus };
 
 interface InboxViewProps {
   userRole?: string | null;
@@ -22,12 +30,6 @@ function formatMessageTime(dateStr?: string): string {
 function getInitials(name?: string): string {
   if (!name || !name.trim()) return 'KH';
   return name.trim().slice(0, 2).toUpperCase();
-}
-
-function isPendingDelivery(status?: string): boolean {
-  if (!status) return false;
-  const s = status.toUpperCase();
-  return s === 'PENDING_DISPATCH' || s === 'PENDING' || s === 'PROCESSING' || s === 'RETRY' || s === 'QUEUED';
 }
 
 function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
@@ -242,10 +244,16 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
 
             if (matchedServerMsg) {
+              const mergedStatus = mergeDeliveryStatus(
+                localMsg.delivery_status,
+                matchedServerMsg.delivery_status
+              );
+
               reconciled.push({
                 ...localMsg,
                 ...matchedServerMsg,
                 client_command_id: localMsg.client_command_id || matchedServerMsg.client_command_id,
+                delivery_status: mergedStatus,
               });
               if (matchedServerMsg.id) matchedServerIds.add(matchedServerMsg.id);
             } else {
@@ -535,18 +543,40 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               [sendConversationId]: convMsgs.map((m) =>
                 m.id === json.data.id ||
                 (m.client_command_id && m.client_command_id === json.data.client_command_id)
-                  ? { ...m, ...json.data }
+                  ? {
+                      ...m,
+                      ...json.data,
+                      client_command_id: m.client_command_id || json.data.client_command_id,
+                      delivery_status: mergeDeliveryStatus(
+                        m.delivery_status,
+                        json.data.delivery_status
+                      ),
+                    }
                   : m
               ),
             };
           }
 
-          // If not duplicate, replace optimistic message
+          // If not duplicate, replace optimistic message preserving any updated delivery status
+          const optimisticMatch = convMsgs.find(
+            (m) => m.client_command_id && m.client_command_id === commandId
+          );
+          const serverDataWithMergedStatus = optimisticMatch
+            ? {
+                ...json.data,
+                client_command_id: optimisticMatch.client_command_id || json.data.client_command_id,
+                delivery_status: mergeDeliveryStatus(
+                  optimisticMatch.delivery_status,
+                  json.data.delivery_status
+                ),
+              }
+            : json.data;
+
           return {
             ...prev,
             [sendConversationId]: convMsgs
               .filter((m) => m.client_command_id !== commandId)
-              .concat(json.data),
+              .concat(serverDataWithMergedStatus),
           };
         });
 
