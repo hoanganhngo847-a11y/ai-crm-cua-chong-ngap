@@ -459,27 +459,21 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
             id?: string;
             conversation_id?: string;
             created_at?: string;
-            source_metadata?: Record<string, unknown>;
           };
 
           const convId = newInteraction?.conversation_id;
-          const metaDomSignalAt = Number(newInteraction?.source_metadata?.meta_dom_signal_at) || null;
           const createdAt = newInteraction?.created_at ? new Date(newInteraction.created_at).getTime() : null;
-
           const dbToFrontendMs = createdAt ? frontendRealtimeEventAt - createdAt : null;
-          const domToFrontendMs = metaDomSignalAt ? frontendRealtimeEventAt - metaDomSignalAt : null;
           console.log(
-            `[REALTIME LATENCY] Inbound interaction INSERT | DB -> Frontend: ${dbToFrontendMs}ms | Meta DOM -> Frontend: ${domToFrontendMs}ms`
+            `[REALTIME LATENCY] Inbound interaction INSERT | DB -> Frontend: ${dbToFrontendMs}ms`
           );
 
           // If event belongs to currently active conversation: fetch messages immediately & silently
           if (convId && convId === activeConversationRef.current) {
             void fetchMessages(convId, { silent: true }).then(() => {
               const uiMessageVisibleAt = Date.now();
-              if (metaDomSignalAt) {
-                const totalE2eMs = uiMessageVisibleAt - metaDomSignalAt;
-                console.log(`[REALTIME LATENCY] End-to-end visible latency: ${totalE2eMs}ms (Meta DOM -> UI message visible)`);
-              }
+              const dbToUiMs = createdAt ? uiMessageVisibleAt - createdAt : null;
+              console.log(`[REALTIME LATENCY] DB -> UI message visible: ${dbToUiMs}ms`);
             });
           }
 

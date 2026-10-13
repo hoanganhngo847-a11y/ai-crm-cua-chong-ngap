@@ -1,11 +1,13 @@
 import assert from 'node:assert';
-import { CycleWaker } from '../../fb-inbox-worker/src/observer.js';
+import { CycleWaker, installMetaInboxDomObserver, setupDomMutationSignal } from '../../fb-inbox-worker/src/observer.js';
 import type { InboxMessage, Conversation } from '../../features/inbox/types/inbox.types';
 import { mergeDeliveryStatus, isPendingDelivery } from '../../features/inbox/types/inbox.types';
 
+// Playwright is dynamically loaded inside async runTests()
+
 interface TestResult {
-  test: string;
   requirement: string;
+  test: string;
   expected: string;
   actual: string;
   status: 'PASS' | 'FAIL';
@@ -77,188 +79,372 @@ function reconcileMessages(
 
 async function runTests() {
   console.log('================================================================');
-  console.log('EVENT-DRIVEN REALTIME INBOX TEST SUITE (Requirements A - H)');
+  console.log('EVENT-DRIVEN REALTIME INBOX SAFETY GATE SUITE (PR #44)');
   console.log('================================================================\n');
 
   // ==========================================================================
-  // REQUIREMENT A: DOM mutation signal => worker wakes before POLL_INTERVAL_MS
+  // SECTION 1 & 2: REGRESSION TESTS FOR CycleWaker (Cases A, B, C, D, E)
   // ==========================================================================
+  console.log('--- SECTION 1 & 2: CycleWaker Latched Semantics & Wake-Before-Wait ---');
+
+  // Case A: Wait first -> wake => immediate SIGNAL
   {
     const waker = new CycleWaker();
     const startTime = Date.now();
     const signalTimestamp = startTime + 10;
 
-    // Schedule signal after 30ms (simulating MutationObserver debounce fire)
     setTimeout(() => {
       waker.wake({ domSignalAt: signalTimestamp });
-    }, 30);
+    }, 25);
 
-    // Main loop waits for 5000ms fallback timeout
     const event = await waker.waitForNextCycle(5000);
     const elapsed = Date.now() - startTime;
 
     recordTest(
-      'A',
-      'Worker wakes immediately on DOM mutation signal without waiting for 5000ms poll interval',
-      `event.type === 'SIGNAL' and elapsed < 500ms`,
+      '2.A',
+      'Wait first -> wake => returns immediate SIGNAL without waiting 5000ms',
+      `event.type === 'SIGNAL' and elapsed < 100ms`,
       `event.type === '${event.type}' and elapsed === ${elapsed}ms`,
-      event.type === 'SIGNAL' && elapsed < 500 && (event as any).domSignalAt === signalTimestamp
-    );
-
-    // Verify timeout fallback works when no signal is sent
-    const fallbackWaker = new CycleWaker();
-    const timeoutStart = Date.now();
-    const timeoutEvent = await fallbackWaker.waitForNextCycle(60);
-    const timeoutElapsed = Date.now() - timeoutStart;
-
-    recordTest(
-      'A',
-      'Worker falls back to POLL_INTERVAL_MS timeout when no DOM mutation occurs',
-      `event.type === 'TIMEOUT' and elapsed >= 50ms`,
-      `event.type === '${timeoutEvent.type}' and elapsed === ${timeoutElapsed}ms`,
-      timeoutEvent.type === 'TIMEOUT' && timeoutElapsed >= 50
+      event.type === 'SIGNAL' && elapsed < 100 && (event as any).domSignalAt === signalTimestamp
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT B: Multiple rapid DOM mutations => debounce => no concurrent duplicate scans
-  // ==========================================================================
+  // Case B: Wake first -> wait => immediate SIGNAL (MANDATORY)
   {
-    // Part 1: Debounce simulation (150ms)
-    let debouncedCallCount = 0;
-    let timer: NodeJS.Timeout | null = null;
-    const debounceMs = 150;
+    const waker = new CycleWaker();
+    const fixedSignalTimestamp = 1791899999000;
 
-    const onRawMutation = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        debouncedCallCount++;
-      }, debounceMs);
-    };
+    // Wake happens BEFORE waitForNextCycle()
+    waker.wake({ domSignalAt: fixedSignalTimestamp, customKey: 'latched_test' });
 
-    // Fire 10 rapid mutations within 80ms
-    for (let i = 0; i < 10; i++) {
-      onRawMutation();
-      await new Promise(r => setTimeout(r, 8));
-    }
-
-    // Wait 250ms for debounce timer to fire
-    await new Promise(r => setTimeout(r, 250));
+    const startTime = Date.now();
+    const result = await waker.waitForNextCycle(5000);
+    const elapsed = Date.now() - startTime;
 
     recordTest(
-      'B.1',
-      'Multiple rapid DOM mutations are debounced into exactly 1 urgent signal',
-      'debouncedCallCount === 1',
-      `debouncedCallCount === ${debouncedCallCount}`,
-      debouncedCallCount === 1
+      '2.B',
+      'Wake first -> wait => latched signal returns IMMEDIATELY (lost-wake race eliminated)',
+      `result.type === 'SIGNAL', domSignalAt === ${fixedSignalTimestamp}, elapsed < 50ms`,
+      `result.type === '${result.type}', domSignalAt === ${(result as any).domSignalAt}, elapsed === ${elapsed}ms`,
+      result.type === 'SIGNAL' &&
+      (result as any).domSignalAt === fixedSignalTimestamp &&
+      (result as any).customKey === 'latched_test' &&
+      elapsed < 50
     );
+  }
 
-    // Part 2: Mutex / Concurrency Guard
+  // Case C: 10 wakes before wait => no lost signal, coalesced event, preserves earliest domSignalAt
+  {
+    const waker = new CycleWaker();
+    const earliestTimestamp = 1791800000000;
+
+    // Trigger 10 rapid wakes before wait
+    for (let i = 0; i < 10; i++) {
+      waker.wake({ domSignalAt: earliestTimestamp + i * 50 });
+    }
+
+    const startTime = Date.now();
+    const result = await waker.waitForNextCycle(5000);
+    const elapsed = Date.now() - startTime;
+
+    recordTest(
+      '2.C',
+      '10 wakes before wait => coalesced into single event, preserves earliest domSignalAt',
+      `coalescedCount >= 10, domSignalAt === ${earliestTimestamp}, elapsed < 50ms`,
+      `coalescedCount === ${(result as any).coalescedCount}, domSignalAt === ${(result as any).domSignalAt}, elapsed === ${elapsed}ms`,
+      result.type === 'SIGNAL' &&
+      (result as any).domSignalAt === earliestTimestamp &&
+      ((result as any).coalescedCount || 0) >= 10 &&
+      elapsed < 50
+    );
+  }
+
+  // Case D: Wake during active scan => pending urgent follow-up without duplicate concurrent scan
+  {
+    const waker = new CycleWaker();
     let isInboundScanRunning = true;
     let pendingUrgentScan: boolean = false;
     let duplicateScanStarted: boolean = false;
     let nextScanIsUrgent: boolean = false;
+    let pendingDomSignalAt: number | null = null;
 
-    const handleSignal = () => {
+    const handleSignal = (event: { domSignalAt: number }) => {
+      const now = event.domSignalAt;
       if (isInboundScanRunning) {
         pendingUrgentScan = true;
+        if (!pendingDomSignalAt || now < pendingDomSignalAt) {
+          pendingDomSignalAt = now;
+        }
       } else {
         duplicateScanStarted = true;
+        waker.wake({ domSignalAt: now });
       }
     };
 
     // Incoming signal while scan is running
-    handleSignal();
+    handleSignal({ domSignalAt: 1791811111000 });
+    handleSignal({ domSignalAt: 1791811112000 });
 
     recordTest(
-      'B.2',
-      'Signal arriving during active inbound scan does not start concurrent scan, sets pendingUrgentScan',
-      'pendingUrgentScan === true && duplicateScanStarted === false',
-      `pendingUrgentScan === ${pendingUrgentScan} && duplicateScanStarted === ${duplicateScanStarted}`,
-      Boolean(pendingUrgentScan) === true && !duplicateScanStarted
+      '2.D.1',
+      'Signals during active scan set pendingUrgentScan without duplicate scan',
+      'pendingUrgentScan === true && !duplicateScanStarted',
+      `pending === ${pendingUrgentScan}, dup === ${duplicateScanStarted}`,
+      Boolean(pendingUrgentScan) === true && !duplicateScanStarted && pendingDomSignalAt === 1791811111000
     );
 
-    // When previous scan finishes, pending scan triggers immediate follow-up
+    // Scan finishes, immediately dispatches pending scan and clears waker
     isInboundScanRunning = false;
     if (pendingUrgentScan) {
       nextScanIsUrgent = true;
       pendingUrgentScan = false;
+      waker.clear();
     }
 
     recordTest(
-      'B.3',
-      'Queued urgent signal executes immediately after active scan completes',
-      'nextScanIsUrgent === true && pendingUrgentScan === false',
-      `nextScanIsUrgent === ${nextScanIsUrgent} && pendingUrgentScan === ${pendingUrgentScan}`,
-      nextScanIsUrgent === true && pendingUrgentScan === false
+      '2.D.2',
+      'Queued urgent signal executes immediately after scan finishes',
+      'nextScanIsUrgent === true && pendingUrgentScan === false && !waker.hasPendingSignal()',
+      `nextUrgent === ${nextScanIsUrgent}, pending === ${pendingUrgentScan}, hasPending === ${waker.hasPendingSignal()}`,
+      Boolean(nextScanIsUrgent) === true && !pendingUrgentScan && !waker.hasPendingSignal()
+    );
+  }
+
+  // Case E: No wake => timeout fallback
+  {
+    const waker = new CycleWaker();
+    const start = Date.now();
+    const result = await waker.waitForNextCycle(60);
+    const elapsed = Date.now() - start;
+
+    recordTest(
+      '2.E',
+      'No wake => fallback timeout returns TIMEOUT',
+      'result.type === "TIMEOUT" && elapsed >= 50ms',
+      `result.type === "${result.type}" && elapsed === ${elapsed}ms`,
+      result.type === 'TIMEOUT' && elapsed >= 50
     );
   }
 
   // ==========================================================================
-  // REQUIREMENT C: Message parsed => browser-sync once
+  // SECTION 8: ACTUAL PLAYWRIGHT OBSERVER TESTS (Live headless DOM)
   // ==========================================================================
+  console.log('\n--- SECTION 8: Actual Playwright Observer Tests (Headless DOM) ---');
+
+  // @ts-ignore
+  const { chromium } = await import('../../fb-inbox-worker/node_modules/playwright/index.mjs');
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    // Setup simulated Meta Business Suite DOM structure
+    await page.setContent(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Meta Business Suite Test</title></head>
+        <body>
+          <div id="unrelated-header">
+            <span id="title">Meta Business Suite</span>
+            <input id="search-input" type="text" placeholder="Search..." />
+          </div>
+
+          <div role="grid" data-surface="thread_list">
+            <div role="row" data-surface="thread_row" id="row-01">
+              <span data-surface="thread_title">HoàngAnh Ngô</span>
+              <div data-surface="snippet">Tin nhắn cũ</div>
+            </div>
+          </div>
+
+          <div role="main" aria-label="Message list container with messages">
+            <div class="message-stream">
+              <div data-surface="message" dir="auto">Tin nhắn cũ trong thread</div>
+            </div>
+          </div>
+
+          <div id="unrelated-sidebar">
+            <div class="ad-card">Quảng cáo</div>
+          </div>
+        </body>
+      </html>
+    `);
+
+    let capturedSignals: Array<{ domSignalAt: number; mutationsCount: number }> = [];
+    const observerCallback = (data: { domSignalAt: number; mutationsCount: number }) => {
+      capturedSignals.push(data);
+    };
+
+    // Install observer with fast test timings (debounce=80ms, maxWait=250ms)
+    await setupDomMutationSignal(page, observerCallback, { debounceMs: 80, maxWaitMs: 250 });
+
+    // Test 8.1: Relevant message bubble addition triggers signal
+    {
+      capturedSignals = [];
+      await page.evaluate(() => {
+        const stream = document.querySelector('.message-stream');
+        if (stream) {
+          const newBubble = document.createElement('div');
+          newBubble.setAttribute('data-surface', 'message');
+          newBubble.setAttribute('dir', 'auto');
+          newBubble.textContent = 'Chào shop, cửa chống ngập báo giá bao nhiêu?';
+          stream.appendChild(newBubble);
+        }
+      });
+
+      // Wait 120ms for debounce (80ms)
+      await new Promise((r) => setTimeout(r, 120));
+
+      recordTest(
+        '8.1',
+        'Playwright DOM: Message bubble addition triggers callback signal',
+        'capturedSignals.length === 1 && mutationsCount >= 1',
+        `signals === ${capturedSignals.length}, count === ${capturedSignals[0]?.mutationsCount}`,
+        capturedSignals.length === 1 && capturedSignals[0].mutationsCount >= 1
+      );
+    }
+
+    // Test 8.2: Burst of 100 mutations inside message container is debounced / coalesced
+    {
+      capturedSignals = [];
+      await page.evaluate(() => {
+        const stream = document.querySelector('.message-stream');
+        if (stream) {
+          for (let i = 0; i < 100; i++) {
+            const span = document.createElement('span');
+            span.setAttribute('dir', 'auto');
+            span.textContent = `bubble-part-${i}`;
+            stream.appendChild(span);
+          }
+        }
+      });
+
+      // Wait 150ms for debounce
+      await new Promise((r) => setTimeout(r, 150));
+
+      recordTest(
+        '8.2',
+        'Playwright DOM: Burst of 100 mutations coalesced into 1 urgent signal (no scan storm)',
+        'capturedSignals.length === 1 && mutationsCount === 100',
+        `signals === ${capturedSignals.length}, count === ${capturedSignals[0]?.mutationsCount}`,
+        capturedSignals.length === 1 && capturedSignals[0].mutationsCount === 100
+      );
+    }
+
+    // Test 8.3: Sustained mutation stream fires at maxWait without infinite debounce resets
+    {
+      capturedSignals = [];
+      const startTime = Date.now();
+
+      // Mutate every 30ms for 350ms (longer than debounce=80ms, so pure debounce would never fire)
+      const interval = setInterval(async () => {
+        await page.evaluate(() => {
+          const stream = document.querySelector('.message-stream');
+          if (stream) {
+            const span = document.createElement('span');
+            span.setAttribute('dir', 'auto');
+            span.textContent = 'stream-chunk';
+            stream.appendChild(span);
+          }
+        }).catch(() => {});
+      }, 30);
+
+      // Wait 280ms (exceeds maxWait=250ms)
+      await new Promise((r) => setTimeout(r, 280));
+      clearInterval(interval);
+
+      // Wait a short moment to inspect
+      await new Promise((r) => setTimeout(r, 50));
+
+      recordTest(
+        '8.3',
+        'Playwright DOM: maxWait throttle fires during continuous sustained mutations',
+        'capturedSignals.length >= 1',
+        `signals === ${capturedSignals.length}`,
+        capturedSignals.length >= 1
+      );
+    }
+
+    // Test 8.4: Unrelated DOM mutation outside message/conversation list is filtered out
+    {
+      // Wait for any trailing timer from 8.3 to settle
+      await new Promise((r) => setTimeout(r, 150));
+      capturedSignals = [];
+
+      await page.evaluate(() => {
+        // Mutate unrelated ad card and search input
+        const adCard = document.querySelector('.ad-card');
+        if (adCard) {
+          adCard.textContent = 'Banner đổi nội dung';
+        }
+        const searchInput = document.querySelector('#search-input') as HTMLInputElement;
+        if (searchInput) {
+          searchInput.value = 'Tìm kiếm';
+          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      });
+
+      // Wait 120ms
+      await new Promise((r) => setTimeout(r, 120));
+
+      recordTest(
+        '8.4',
+        'Playwright DOM: Unrelated mutations (ads, input typing) are filtered (zero unnecessary signal)',
+        'capturedSignals.length === 0',
+        `signals === ${capturedSignals.length}`,
+        capturedSignals.length === 0
+      );
+    }
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+
+  // ==========================================================================
+  // SECTION 3, 5, 7: SUPABASE REALTIME & CRM INGEST INTEGRATION
+  // ==========================================================================
+  console.log('\n--- SECTION 3 - 7: Realtime & Telemetry Decoupling Verification ---');
+
+  // Requirement C: Parsed message synced to CRM once with deduplication
   {
     const syncedFingerprints = new Set<string>();
     let crmSyncCallCount = 0;
-    const capturedMetadataList: any[] = [];
 
-    const mockSyncToCRM = async (payload: { fingerprint: string; metadata?: any }) => {
+    const mockSyncToCRM = async (_payload: { fingerprint: string }) => {
       crmSyncCallCount++;
-      capturedMetadataList.push(payload.metadata);
-      return { success: true, isDuplicate: false, interactionId: 'int_mock_123' };
+      return { success: true, isDuplicate: false, interactionId: 'int_123' };
     };
 
-    const processMessage = async (msg: { fingerprint: string; content: string; domSignalAt: number }) => {
+    const processMessage = async (msg: { fingerprint: string }) => {
       if (!syncedFingerprints.has(msg.fingerprint)) {
-        const workerDetectedAt = Date.now();
-        const result = await mockSyncToCRM({
-          fingerprint: msg.fingerprint,
-          metadata: {
-            meta_dom_signal_at: msg.domSignalAt,
-            worker_inbound_detected_at: workerDetectedAt,
-          }
-        });
-        if (result.success) {
+        const res = await mockSyncToCRM(msg);
+        if (res.success) {
           syncedFingerprints.add(msg.fingerprint);
         }
       }
     };
 
-    const testFingerprint = 'fp_c2f11b49478137083c4d42c0677a7aaf9';
-    const domSignalAt = Date.now() - 50;
-
-    // Scan cycle 1: parses message
-    await processMessage({ fingerprint: testFingerprint, content: 'Chào shop', domSignalAt });
-
-    // Scan cycle 2: sees same message in DOM
-    await processMessage({ fingerprint: testFingerprint, content: 'Chào shop', domSignalAt });
-
-    // Scan cycle 3: sees same message in DOM
-    await processMessage({ fingerprint: testFingerprint, content: 'Chào shop', domSignalAt });
+    const fp = 'fp_c2f11b49478137083c4d42c0677a7aaf9';
+    await processMessage({ fingerprint: fp });
+    await processMessage({ fingerprint: fp }); // repeat
+    await processMessage({ fingerprint: fp }); // repeat
 
     recordTest(
       'C',
-      'Parsed message is synced to CRM exactly once with metadata; duplicate DOM detections are ignored',
+      'Parsed message is synced to CRM once; duplicate DOM detections are ignored',
       'crmSyncCallCount === 1 && syncedFingerprints.has(fp)',
-      `crmSyncCallCount === ${crmSyncCallCount} && hasFP === ${syncedFingerprints.has(testFingerprint)}`,
-      crmSyncCallCount === 1 &&
-      syncedFingerprints.has(testFingerprint) &&
-      capturedMetadataList[0]?.meta_dom_signal_at === domSignalAt &&
-      typeof capturedMetadataList[0]?.worker_inbound_detected_at === 'number'
+      `callCount === ${crmSyncCallCount}, has === ${syncedFingerprints.has(fp)}`,
+      crmSyncCallCount === 1 && syncedFingerprints.has(fp)
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT D: Supabase realtime INSERT => active conversation silently refreshes
-  // ==========================================================================
+  // Requirement D & 5: Realtime INSERT without source_metadata dependency
   {
     const activeConversationId = 'conv_kh000004';
     let silentFetchTriggered: boolean = false;
     let loadingStateChanged: boolean = false;
-    let draftReset: boolean = false;
     let userDraft = 'Dạ em chào anh HoàngAnh';
 
-    const mockFetchMessages = async (convId: string, options?: { silent?: boolean }) => {
+    const mockFetchMessages = async (_convId: string, options?: { silent?: boolean }) => {
       if (options?.silent) {
         silentFetchTriggered = true;
       } else {
@@ -266,41 +452,34 @@ async function runTests() {
       }
     };
 
-    // Simulate Realtime event payload
+    // Realistic Supabase Realtime payload for public.interactions (NO source_metadata)
     const realtimePayload = {
       new: {
         id: 'int_inbound_001',
         conversation_id: 'conv_kh000004',
         created_at: new Date().toISOString(),
-        source_metadata: {
-          meta_dom_signal_at: Date.now() - 150,
-          worker_inbound_detected_at: Date.now() - 50,
-        }
       }
     };
 
-    // Frontend handler logic
+    // Frontend handler logic (Requirement 5: zero dependency on source_metadata)
     if (realtimePayload.new.conversation_id === activeConversationId) {
       await mockFetchMessages(realtimePayload.new.conversation_id, { silent: true });
     }
 
     recordTest(
-      'D',
-      'Realtime INSERT for active conversation triggers silent refresh without spinner or draft reset',
-      'silentFetchTriggered === true && loadingStateChanged === false && draftReset === false',
+      'D & 5',
+      'Realtime INSERT handles payload with NO source_metadata, triggers silent fetch without spinner',
+      'silentFetchTriggered === true && !loadingStateChanged && userDraft intact',
       `silent === ${silentFetchTriggered}, loading === ${loadingStateChanged}, draft === "${userDraft}"`,
       Boolean(silentFetchTriggered) === true && !loadingStateChanged && userDraft === 'Dạ em chào anh HoàngAnh'
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT E: Same message realtime + fallback poll => one bubble only
-  // ==========================================================================
+  // Requirement E: Same message realtime + 15s fallback poll => 1 bubble only
   {
     const testMsgId = 'msg_realtime_001';
     const initialLocalMessages: InboxMessage[] = [];
 
-    // Realtime fetch arrives with the new message
     const realtimeServerMessages: InboxMessage[] = [
       {
         id: testMsgId,
@@ -317,7 +496,6 @@ async function runTests() {
 
     const stateAfterRealtime = reconcileMessages(initialLocalMessages, realtimeServerMessages);
 
-    // Later, 15s fallback poll returns the exact same message
     const fallbackServerMessages: InboxMessage[] = [
       {
         id: testMsgId,
@@ -343,13 +521,11 @@ async function runTests() {
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT F: Other conversation event => unread/list updates => active conversation unchanged
-  // ==========================================================================
+  // Requirement F: Inbound to other conversation updates list without switching active conversation
   {
-    let activeConversationId: string | null = 'conv_active_kh000004';
-    let activeMessagesFetched = false;
-    let conversationListRefreshed = false;
+    const activeConversationId = 'conv_active_kh000004';
+    let activeMessagesFetched: boolean = false;
+    let conversationListRefreshed: boolean = false;
 
     const mockConversations: Conversation[] = [
       {
@@ -378,76 +554,56 @@ async function runTests() {
       }
     ];
 
-    // Inbound arrives for DIFFERENT conversation (conv_other_kh000009)
-    const realtimePayloadOther = {
-      new: {
-        id: 'int_inbound_other_999',
-        conversation_id: 'conv_other_kh000009',
-        created_at: '2026-10-13T10:05:00.000Z',
-      }
-    };
+    const targetConvId: string = 'conv_other_kh000009';
 
-    const targetConvId = realtimePayloadOther.new.conversation_id;
-
-    // Frontend handler logic
     if (targetConvId === activeConversationId) {
       activeMessagesFetched = true;
     }
-    // List is always silently refreshed
     conversationListRefreshed = true;
 
-    // Simulate list update: conv_other gets new last_message and unread_count
-    const updatedConversations = mockConversations.map(c =>
+    const updatedConversations = mockConversations.map((c) =>
       c.id === targetConvId
-        ? { ...c, last_message: 'Báo giá giúp tôi', unread_count: c.unread_count + 1, updated_at: realtimePayloadOther.new.created_at }
+        ? { ...c, last_message: 'Báo giá giúp tôi', unread_count: c.unread_count + 1, updated_at: '2026-10-13T10:05:00.000Z' }
         : c
     ).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
     recordTest(
       'F',
-      'Inbound to other conversation updates unread count and moves it to top WITHOUT altering active conversation',
-      'activeConversationId === "conv_active_kh000004" && !activeMessagesFetched && updatedConversations[0].id === "conv_other_kh000009"',
+      'Inbound to other conversation updates unread count and moves to top without switching active conversation',
+      'activeId unchanged && !activeMessagesFetched && updatedConversations[0].id === targetConvId',
       `activeId === "${activeConversationId}", fetched === ${activeMessagesFetched}, top === "${updatedConversations[0]?.id}", unread === ${updatedConversations[0]?.unread_count}`,
-      activeConversationId === 'conv_active_kh000004' &&
       !activeMessagesFetched &&
-      conversationListRefreshed &&
+      Boolean(conversationListRefreshed) === true &&
       updatedConversations[0]?.id === 'conv_other_kh000009' &&
       updatedConversations[0]?.unread_count === 1
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT G: Realtime disconnect => fallback polling still works
-  // ==========================================================================
+  // Requirement G: Fallback 15s timer operates reliably when realtime is disconnected
   {
     let fallbackTickCount = 0;
-    let activeConversationSilentFetched = false;
-    let listSilentFetched = false;
+    let activeConversationSilentFetched: boolean = false;
+    let listSilentFetched: boolean = false;
 
-    // Simulate fallback interval runner at 15s (simulated in test with instant tick)
     const runFallbackCycle = () => {
       fallbackTickCount++;
       activeConversationSilentFetched = true;
       listSilentFetched = true;
     };
 
-    // Even if realtime subscription drops/disconnects:
     runFallbackCycle();
 
     recordTest(
       'G',
-      'Fallback 15s reconciliation timer operates reliably when realtime is unavailable or disconnected',
+      'Fallback 15s timer operates reliably when realtime is unavailable or disconnected',
       'fallbackTickCount === 1 && activeConversationSilentFetched && listSilentFetched',
       `ticks === ${fallbackTickCount}, activeFetched === ${activeConversationSilentFetched}, listFetched === ${listSilentFetched}`,
-      fallbackTickCount === 1 && activeConversationSilentFetched && listSilentFetched
+      fallbackTickCount === 1 && Boolean(activeConversationSilentFetched) === true && Boolean(listSilentFetched) === true
     );
   }
 
-  // ==========================================================================
-  // REQUIREMENT H: Existing outbound delivery polling unchanged
-  // ==========================================================================
+  // Requirement H: Existing outbound delivery polling (2500ms) activates strictly for pending outbound and deactivates on SENT
   {
-    // Test that isPendingDelivery accurately identifies pending outbound messages for the 2500ms interval
     const pendingMsg: InboxMessage = {
       id: 'out_msg_001',
       conversation_id: 'conv_01',

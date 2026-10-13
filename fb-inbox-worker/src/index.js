@@ -341,7 +341,7 @@ async function main() {
       const now = (event && event.domSignalAt) || Date.now();
       if (isInboundScanRunning) {
         pendingUrgentScan = true;
-        if (!pendingDomSignalAt) {
+        if (!pendingDomSignalAt || now < pendingDomSignalAt) {
           pendingDomSignalAt = now;
         }
         log.info(`[MUTEX GUARD] DOM Mutation Signal nhận khi đang chạy scan -> Đã đánh dấu pendingUrgentScan (signalAt: ${now})`);
@@ -443,14 +443,14 @@ async function main() {
 
           if (!observerSetupDone) {
             try {
-              await setupDomMutationSignal(page, handleDomMutationSignal, 150);
+              await setupDomMutationSignal(page, handleDomMutationSignal, { debounceMs: 150, maxWaitMs: 350 });
               observerSetupDone = true;
-              log.success('[FAST PATH] Đã cài đặt MutationObserver thành công trên Meta Inbox (debounce=150ms)!');
+              log.success('[FAST PATH] Đã cài đặt MutationObserver thành công trên Meta Inbox (debounce=150ms, maxWait=350ms)!');
             } catch (obsErr) {
               log.warn(`[FAST PATH] Lỗi cài đặt MutationObserver: ${obsErr.message}`);
             }
           } else {
-            await installMetaInboxDomObserver(page, 150).catch(() => {});
+            await installMetaInboxDomObserver(page, { debounceMs: 150, maxWaitMs: 350 }).catch(() => {});
           }
 
           // Extract Page Name (safe, non-blocking)
@@ -549,6 +549,7 @@ async function main() {
             nextDomSignalAt = pendingDomSignalAt;
             pendingUrgentScan = false;
             pendingDomSignalAt = null;
+            cycleWaker.clear();
             log.info('[FAST PATH] Phát hiện pending urgent scan trong khi scan cũ đang chạy -> Thực hiện ngay lượt quét bổ sung.');
             continue;
           }
