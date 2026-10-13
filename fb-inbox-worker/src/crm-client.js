@@ -11,7 +11,8 @@ export async function syncInboundMessageToCRM({
   externalConversationId,
   externalMessageId,
   content,
-  timestamp
+  timestamp,
+  metadata
 } = {}) {
   // 1. Secret validation
   if (!CONFIG.FB_WORKER_SECRET) {
@@ -44,7 +45,8 @@ export async function syncInboundMessageToCRM({
     content: content.trim(),
     timestamp,
     direction: 'inbound',
-    company_id: CONFIG.CRM_COMPANY_ID
+    company_id: CONFIG.CRM_COMPANY_ID,
+    metadata: (metadata && typeof metadata === 'object') ? metadata : {}
   };
 
   // 3. Network call with bounded AbortController timeout (Section 2)
