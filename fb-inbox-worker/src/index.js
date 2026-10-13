@@ -90,6 +90,10 @@ async function withTimeout(promise, ms, desc) {
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${desc} timed out after ${ms}ms`)), ms);
   });
+  // Prevent unhandled rejection if timeoutPromise rejects first
+  if (promise && typeof promise.catch === 'function') {
+    promise.catch(() => {});
+  }
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
@@ -322,8 +326,13 @@ async function main() {
           await sleep(CONFIG.STATE_CHECK_INTERVAL_MS);
         }
       } catch (loopError) {
-        if (loopError.message && loopError.message.includes('Target closed')) {
-          log.warn('Trình duyệt đã bị đóng bởi người dùng.');
+        if (
+          loopError.message &&
+          (loopError.message.includes('Target closed') ||
+            loopError.message.includes('browser has been closed') ||
+            loopError.message.includes('Target page, context or browser has been closed'))
+        ) {
+          log.warn('Trình duyệt đã bị đóng bởi người dùng hoặc hệ điều hành. Kết thúc tiến trình worker một cách an toàn.');
           break;
         }
         log.warn(`Lỗi trong chu kỳ quét: ${loopError.message}. Sẽ thử lại...`);
