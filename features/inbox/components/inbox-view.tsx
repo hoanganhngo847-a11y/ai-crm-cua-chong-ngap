@@ -6,11 +6,13 @@ import type {
   Conversation,
   InboxMessage,
   InboxChannel,
+  SenderType,
   MessageDeliveryStatus,
 } from '../types/inbox.types';
 import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
 import { createClient } from '@/lib/supabase/client';
+import MessageContent from './message-content';
 
 export { mergeDeliveryStatus };
 
@@ -105,6 +107,29 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   useEffect(() => {
     activeConversationRef.current = selectedConversationId;
   }, [selectedConversationId]);
+
+  // Phase 9: Syncing New Message Skeleton (NameThatUI pattern)
+  const [isSyncingNewMessage, setIsSyncingNewMessage] = useState<boolean>(false);
+  const syncingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const syncingDelayRef = useRef<NodeJS.Timeout | null>(null);
+  const activeConversationLastMessageAtRef = useRef<string | null>(null);
+  const selectedConversationRef = useRef<Conversation | undefined>(undefined);
+
+  const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
+
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversation;
+    if (selectedConversation?.last_message_at) {
+      activeConversationLastMessageAtRef.current = selectedConversation.last_message_at;
+    }
+  }, [selectedConversation]);
+
+  useEffect(() => {
+    return () => {
+      if (syncingDelayRef.current) clearTimeout(syncingDelayRef.current);
+      if (syncingTimeoutRef.current) clearTimeout(syncingTimeoutRef.current);
+    };
+  }, []);
 
   // AI Suggestion states (scoped & isolated)
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -339,6 +364,17 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     activeConversationRef.current = convId;
     setSelectedConversationId(convId);
 
+    // Clear syncing skeleton
+    if (syncingDelayRef.current) {
+      clearTimeout(syncingDelayRef.current);
+      syncingDelayRef.current = null;
+    }
+    if (syncingTimeoutRef.current) {
+      clearTimeout(syncingTimeoutRef.current);
+      syncingTimeoutRef.current = null;
+    }
+    setIsSyncingNewMessage(false);
+
     // Abort both in-flight foreground and poll requests for previous conversation
     if (foregroundAbortControllerRef.current) {
       foregroundAbortControllerRef.current.abort();
@@ -457,8 +493,16 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
           const frontendRealtimeEventAt = Date.now();
           const newInteraction = payload.new as {
             id?: string;
+            company_id?: string;
+            customer_id?: string;
             conversation_id?: string;
+            channel?: string;
+            direction?: string;
+            sanitized_content?: string;
+            actor_type?: string;
+            actor_user_id?: string;
             created_at?: string;
+            delivery_status?: string;
           };
 
           const convId = newInteraction?.conversation_id;
@@ -468,12 +512,80 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
             `[REALTIME LATENCY] Inbound interaction INSERT | DB -> Frontend: ${dbToFrontendMs}ms`
           );
 
-          // If event belongs to currently active conversation: fetch messages immediately & silently
+          // If event belongs to currently active conversation:
           if (convId && convId === activeConversationRef.current) {
+            // Dismiss syncing skeleton immediately upon interaction arrival
+            if (syncingDelayRef.current) {
+              clearTimeout(syncingDelayRef.current);
+              syncingDelayRef.current = null;
+            }
+            if (syncingTimeoutRef.current) {
+              clearTimeout(syncingTimeoutRef.current);
+              syncingTimeoutRef.current = null;
+            }
+            setIsSyncingNewMessage(false);
+
+            // Fast Path: Map directly into safe InboxMessage if required fields exist
+            const hasRequiredFields =
+              Boolean(newInteraction.id) &&
+              Boolean(newInteraction.conversation_id) &&
+              typeof newInteraction.sanitized_content === 'string' &&
+              Boolean(newInteraction.created_at);
+
+            if (hasRequiredFields) {
+              const isOutbound = (newInteraction.direction || '').toUpperCase() === 'OUTBOUND';
+              const senderType: SenderType =
+                newInteraction.actor_type === 'CUSTOMER'
+                  ? 'customer'
+                  : newInteraction.actor_type === 'AI'
+                    ? 'ai'
+                    : isOutbound
+                      ? 'sale'
+                      : 'customer';
+
+              const activeConv = selectedConversationRef.current;
+              let senderName = '';
+              if (senderType === 'customer') {
+                senderName = activeConv?.customer_name || 'Khách hàng';
+              } else if (senderType === 'sale') {
+                senderName = userFullName || 'Bạn (Sale)';
+              } else if (senderType === 'ai') {
+                senderName = 'AI Trợ lý';
+              }
+
+              const safeMessage: InboxMessage = {
+                id: newInteraction.id!,
+                company_id: newInteraction.company_id || activeConv?.company_id,
+                conversation_id: convId,
+                customer_id: newInteraction.customer_id || activeConv?.customer_id || '',
+                channel: (newInteraction.channel || activeConv?.channel || 'facebook').toLowerCase() as InboxChannel,
+                sender_type: senderType,
+                sender_name: senderName,
+                content: newInteraction.sanitized_content!,
+                sanitized_content: newInteraction.sanitized_content!,
+                created_at: newInteraction.created_at!,
+                direction: isOutbound ? 'outbound' : 'inbound',
+                delivery_status: isOutbound ? (newInteraction.delivery_status as MessageDeliveryStatus) : undefined,
+              };
+
+              // Merge directly and immediately into state keyed by conversation (deduped on interaction.id)
+              setMessagesByConversation((prev) => {
+                const existing = prev[convId] || [];
+                if (existing.some((m) => m.id === safeMessage.id)) {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  [convId]: [...existing, safeMessage],
+                };
+              });
+            }
+
+            // In all cases, call silent background reconciliation without blocking the bubble
             void fetchMessages(convId, { silent: true }).then(() => {
               const uiMessageVisibleAt = Date.now();
               const dbToUiMs = createdAt ? uiMessageVisibleAt - createdAt : null;
-              console.log(`[REALTIME LATENCY] DB -> UI message visible: ${dbToUiMs}ms`);
+              console.log(`[REALTIME LATENCY] DB -> UI message reconciled: ${dbToUiMs}ms`);
             });
           }
 
@@ -489,7 +601,33 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
           schema: 'public',
           table: 'conversations',
         },
-        () => {
+        (payload) => {
+          if (payload.eventType === 'UPDATE' && payload.new) {
+            const updatedConv = payload.new as {
+              id?: string;
+              last_message_at?: string;
+              [key: string]: unknown;
+            };
+            if (updatedConv.id && updatedConv.id === activeConversationRef.current) {
+              const prevLastAt = activeConversationLastMessageAtRef.current;
+              const newLastAt = updatedConv.last_message_at;
+              const advanced = Boolean(
+                newLastAt && (!prevLastAt || new Date(newLastAt).getTime() > new Date(prevLastAt).getTime())
+              );
+              if (advanced) {
+                activeConversationLastMessageAtRef.current = newLastAt || null;
+                // Anti-flicker delay 180ms
+                if (syncingDelayRef.current) clearTimeout(syncingDelayRef.current);
+                syncingDelayRef.current = setTimeout(() => {
+                  setIsSyncingNewMessage(true);
+                  if (syncingTimeoutRef.current) clearTimeout(syncingTimeoutRef.current);
+                  syncingTimeoutRef.current = setTimeout(() => {
+                    setIsSyncingNewMessage(false);
+                  }, 4000);
+                }, 180);
+              }
+            }
+          }
           void fetchConversations({ silent: true });
         }
       )
@@ -744,8 +882,6 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   const isSendingCurrent = Boolean(selectedConversationId && sendingByConversation[selectedConversationId]);
   const isLoadingAiCurrent = Boolean(selectedConversationId && loadingAiByConversation[selectedConversationId]);
   const currentSendError = selectedConversationId ? sendErrorByConversation[selectedConversationId] : null;
-
-  const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
 
   return (
     <div className="h-[calc(100vh-8.5rem)] flex flex-col bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
@@ -1094,7 +1230,7 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                                 : 'bg-slate-800 text-slate-100 border border-slate-700/60 rounded-tl-none'
                           }`}
                         >
-                          {msg.content}
+                          <MessageContent content={msg.content} isOutbound={isSaleMsg} />
                         </div>
 
                         {isSaleMsg && msg.delivery_status === 'FAILED' && (
@@ -1103,6 +1239,22 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                       </div>
                     );
                   })
+                )}
+                {isSyncingNewMessage && (
+                  <div
+                    role="status"
+                    aria-label="Đang đồng bộ tin nhắn mới"
+                    className="flex flex-col items-start space-y-1 animate-pulse"
+                  >
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-0.5 px-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                      <span>Đang đồng bộ tin nhắn mới…</span>
+                    </div>
+                    <div className="h-9 w-44 rounded-2xl rounded-tl-none bg-slate-800/60 border border-slate-700/40 flex items-center px-3.5 gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-slate-700 animate-pulse" />
+                      <div className="h-2 w-28 bg-slate-700/70 rounded" />
+                    </div>
+                  </div>
                 )}
                 <div ref={messagesEndRef} />
                 </div>

@@ -49,6 +49,7 @@
     "test:display-name": "tsx --conditions=react-server tests/inbox/test_customer_display_name_sync.ts",
     "test:inbox:db": "tsx --conditions=react-server tests/inbox/database.test.ts",
     "test:realtime-inbox": "tsx --conditions=react-server tests/inbox/test_event_driven_realtime_inbox.ts",
+    "test:short-messages-and-links": "tsx --conditions=react-server tests/inbox/test_short_message_and_link_realtime.ts",
     "test:commercial": "tsx --conditions=react-server tests/commercial/pricing.test.ts && tsx --conditions=react-server tests/commercial/payment.test.ts && tsx --conditions=react-server tests/commercial/contract.test.ts",
     "test:commercial:db": "tsx --conditions=react-server tests/commercial/commercial-db.integration.test.ts",
     "test:round3-product-runtime": "tsx --conditions=react-server tests/e2e/round3-product-runtime.test.ts",

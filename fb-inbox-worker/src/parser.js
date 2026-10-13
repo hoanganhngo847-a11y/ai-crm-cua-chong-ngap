@@ -361,147 +361,254 @@ export async function extractActiveThreadMessages(page, pageId) {
         return { error: 'Message container not found' };
       }
 
-      // Target candidate bubbles, text containers, and timestamps directly (avoid scanning all DOM descendants)
-      const candidateSelector = [
-        '[role="row"]',
-        'div[dir="auto"]',
-        'span[dir="auto"]',
-        'p[dir="auto"]',
-        'div[style*="border-radius"]',
-        'div[style*="background"]',
-        'abbr[data-utime]',
-      ].join(', ');
+      const containerRect = msgContainer.getBoundingClientRect();
+      const styleCache = new Map();
 
-      let candidateNodes = Array.from(msgContainer.querySelectorAll(candidateSelector));
+      const getCachedStyle = (node) => {
+        if (!node) return null;
+        let s = styleCache.get(node);
+        if (!s) {
+          s = window.getComputedStyle(node);
+          styleCache.set(node, s);
+        }
+        return s;
+      };
 
-      // Fallback only if specific selectors found nothing
-      if (candidateNodes.length === 0) {
-        candidateNodes = Array.from(msgContainer.querySelectorAll('div, span, p'));
+      // Check if element is a timestamp header
+      const timePattern = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|Today|Yesterday|\d{1,2}\s*(thg|\/|-)\s*\d{1,2}|\d{1,2}:\d{2}(\s*(AM|PM))?)/i;
+      const excludedUI = /^(Reply in Messenger|Enter|Đính kèm|Assign this conversation|View profile|More items|Send|Gửi|Preview|Chỉ định|Xem trang cá nhân)/i;
+
+      // Select candidate nodes:
+      // We look for elements that represent message bubble containers or timestamp indicators
+      const rawDivs = Array.from(msgContainer.querySelectorAll('div, span, p, abbr[data-utime]'));
+
+      const bubbleCandidates = [];
+      const timestampNodes = [];
+
+      for (const el of rawDivs) {
+        const text = (el.innerText || '').trim();
+        if (!text) {
+          const hasEmoji = el.querySelector('img[alt], [aria-label]');
+          if (!hasEmoji) continue;
+        }
+
+        // Check if timestamp element
+        if (timePattern.test(text) && text.length < 35 && el.children.length === 0) {
+          timestampNodes.push(el);
+          continue;
+        }
+
+        // Skip non-message UI actions
+        if (excludedUI.test(text)) {
+          continue;
+        }
+
+        const tag = el.tagName.toLowerCase();
+        if (['button', 'input', 'textarea', 'script', 'style', 'nav', 'header'].includes(tag)) {
+          continue;
+        }
+
+        // Check styling for bubble characteristics
+        const style = getCachedStyle(el);
+        const bg = (style ? style.backgroundColor : '') || '';
+        const radius = (style ? style.borderRadius : '') || '';
+
+        const isBlue = bg.includes('10, 124, 255') || bg.includes('0, 132, 255') || bg.includes('24, 119, 242');
+        const isGray = bg.includes('239, 239, 239') || bg.includes('240, 242, 245') || bg.includes('242, 243, 245') || bg.includes('48, 48, 48') || bg.includes('58, 59, 60') || bg.includes('36, 37, 38');
+        const hasRadius = (parseFloat(radius) > 4) || (style && parseFloat(style.borderTopLeftRadius) > 4);
+        const isDirAuto = el.getAttribute('dir') === 'auto';
+
+        if (isBlue || isGray) {
+          bubbleCandidates.push(el);
+        } else if (hasRadius && isDirAuto && tag === 'div') {
+          bubbleCandidates.push(el);
+        } else if (isDirAuto && tag === 'div' && text.length > 0 && hasRadius) {
+          bubbleCandidates.push(el);
+        }
       }
 
-      const totalCandidates = candidateNodes.length;
+      // De-nest: only keep outermost bubble candidates (i.e. discard any candidate that is inside another candidate)
+      const bubbleCandidateSet = new Set(bubbleCandidates);
+      const uniqueBubbles = bubbleCandidates.filter(el => {
+        let p = el.parentElement;
+        while (p && p !== msgContainer) {
+          if (bubbleCandidateSet.has(p)) return false;
+          p = p.parentElement;
+        }
+        return true;
+      });
 
-      // Hard cap to safety limit (max 200 nodes), taking the latest near active conversation area
-      const MAX_CANDIDATES = 200;
-      if (candidateNodes.length > MAX_CANDIDATES) {
-        candidateNodes = candidateNodes.slice(-MAX_CANDIDATES);
+      // Combine timestamps and uniqueBubbles in document order
+      const combinedItems = [];
+      for (const ts of timestampNodes) {
+        combinedItems.push({ type: 'TIMESTAMP', node: ts });
       }
+      for (const b of uniqueBubbles) {
+        combinedItems.push({ type: 'BUBBLE', node: b });
+      }
+
+      combinedItems.sort((a, b) => {
+        const pos = a.node.compareDocumentPosition(b.node);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+
+      const MAX_ITEMS = 120;
+      const processItems = combinedItems.length > MAX_ITEMS ? combinedItems.slice(-MAX_ITEMS) : combinedItems;
 
       let currentTimestampText = 'Vừa xong';
       let currentUtime = null;
 
       const parsedMessages = [];
-      const seenKeys = new Set();
-      const styleCache = new Map();
-      const containerRect = msgContainer.getBoundingClientRect();
+      const occurrenceMap = new Map();
 
-      for (const el of candidateNodes) {
-        const text = (el.innerText || '').trim();
-        if (!text) continue;
-
-        // Check if element is a timestamp header
-        if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|\d{1,2} thg|\d{1,2}:\d{2})/i.test(text) && text.length < 30) {
-          currentTimestampText = text;
-          const abbr = el.querySelector('abbr[data-utime]') || (el.tagName === 'ABBR' ? el : null);
-          if (abbr) {
-            currentUtime = abbr.getAttribute('data-utime');
+      for (const item of processItems) {
+        if (item.type === 'TIMESTAMP') {
+          const tText = (item.node.innerText || '').trim();
+          if (tText) {
+            currentTimestampText = tText;
+            const abbr = item.node.querySelector('abbr[data-utime]') || (item.node.tagName === 'ABBR' ? item.node : null);
+            if (abbr) {
+              currentUtime = abbr.getAttribute('data-utime');
+            }
           }
           continue;
         }
 
-        // Must be leaf or near-leaf message bubble text
-        const isLeaf = el.children.length === 0 || (el.children.length === 1 && el.children[0].tagName === 'SPAN');
-        if (!isLeaf) continue;
+        const el = item.node;
+
+        // Content extraction from bubble container:
+        let content = '';
+        const rawInnerText = (el.innerText || '').trim();
+
+        // If the bubble has a link preview card with extra lines, extract the URL line
+        const urlMatch = rawInnerText.match(/https?:\/\/[^\s]+/i);
+        if (urlMatch && rawInnerText.includes('\n')) {
+          const firstLine = rawInnerText.split('\n')[0].trim();
+          if (firstLine.startsWith('http://') || firstLine.startsWith('https://')) {
+            content = firstLine;
+          } else {
+            content = rawInnerText;
+          }
+        } else {
+          content = rawInnerText;
+        }
+
+        // Fallback for emoji-only bubbles if innerText is empty
+        if (!content) {
+          const emojiImg = el.querySelector('img[alt]');
+          if (emojiImg) {
+            content = emojiImg.getAttribute('alt') || '';
+          }
+        }
+
+        if (!content) continue;
 
         // Skip non-message UI actions
-        if (/^(Reply in Messenger|Enter|Đính kèm|Assign this conversation|View profile|More items|Send|Gửi|Preview)/i.test(text)) {
-          continue;
+        if (excludedUI.test(content)) continue;
+
+        // Clean out "You:" prefix
+        const startsWithYou = content.startsWith('You:');
+        const cleanContent = content.replace(/^You:\s*/i, '').trim();
+        if (!cleanContent) continue;
+
+        // Hierarchical Direction Classification:
+        let foundBg = '';
+        let foundAlignItems = '';
+        let foundJustifyContent = '';
+        let foundFlexDirection = '';
+        let hasAvatar = false;
+
+        // Check el itself
+        const elStyle = getCachedStyle(el);
+        if (elStyle && elStyle.backgroundColor && elStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && elStyle.backgroundColor !== 'transparent') {
+          foundBg = elStyle.backgroundColor;
+        }
+        // Check immediate colored child if wrapper is transparent
+        if (!foundBg) {
+          const coloredChild = el.querySelector('[style*="background"], div[dir="auto"]');
+          if (coloredChild) {
+            const cStyle = getCachedStyle(coloredChild);
+            if (cStyle && cStyle.backgroundColor && cStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && cStyle.backgroundColor !== 'transparent') {
+              foundBg = cStyle.backgroundColor;
+            }
+          }
         }
 
-        // Strict Direction Classification with style cache and limited ancestor depth (max 4)
-        let bgColor = '';
-        let alignItems = '';
         let curr = el;
-        for (let i = 0; i < 4 && curr && curr !== msgContainer; i++) {
-          const inlineBg = curr.style && curr.style.backgroundColor;
-          if (!bgColor && inlineBg && inlineBg !== 'rgba(0, 0, 0, 0)' && inlineBg !== 'transparent') {
-            bgColor = inlineBg;
-          }
-          const inlineAlign = curr.style && curr.style.alignItems;
-          if (!alignItems && inlineAlign && inlineAlign !== 'normal') {
-            alignItems = inlineAlign;
-          }
-
-          if (!bgColor || !alignItems) {
-            let style = styleCache.get(curr);
-            if (!style) {
-              style = window.getComputedStyle(curr);
-              styleCache.set(curr, style);
+        for (let i = 0; i < 8 && curr && curr !== msgContainer; i++) {
+          const style = getCachedStyle(curr);
+          if (style) {
+            if (!foundBg && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
+              foundBg = style.backgroundColor;
             }
-            if (style) {
-              if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
-                bgColor = style.backgroundColor;
-              }
-              if (!alignItems && style.alignItems && style.alignItems !== 'normal') {
-                alignItems = style.alignItems;
-              }
+            if (!foundAlignItems && style.alignItems && style.alignItems !== 'normal') {
+              foundAlignItems = style.alignItems;
+            }
+            if (!foundJustifyContent && style.justifyContent && style.justifyContent !== 'normal') {
+              foundJustifyContent = style.justifyContent;
+            }
+            if (!foundFlexDirection && style.flexDirection && style.flexDirection !== 'row') {
+              foundFlexDirection = style.flexDirection;
             }
           }
 
-          if (bgColor && alignItems) break;
+          if (!hasAvatar && curr.querySelector('img[alt]:not([alt=""]), img[src*="scontent"]:not([height="16"])')) {
+            hasAvatar = true;
+          }
+
           curr = curr.parentElement;
         }
 
         const rect = el.getBoundingClientRect();
         const relativeX = containerRect.width > 0 ? (rect.left - containerRect.left) / containerRect.width : 0;
 
-        // Outbound signals:
-        // - Text starts with "You:"
-        // - Parent alignItems === 'flex-end'
-        // - Background color is blue: rgb(10, 124, 255), rgb(0, 132, 255), rgb(24, 119, 242)
-        // - Geometric position relativeX >= 0.40 (aligned to right half)
-        const isBlueBg = bgColor.includes('10, 124, 255') || bgColor.includes('0, 132, 255') || bgColor.includes('24, 119, 242');
-        const isRightAligned = alignItems === 'flex-end' || relativeX >= 0.40;
-        const startsWithYou = text.startsWith('You:');
-        const isOutbound = startsWithYou || isBlueBg || isRightAligned;
+        const isBlueBg = foundBg.includes('10, 124, 255') || foundBg.includes('0, 132, 255') || foundBg.includes('24, 119, 242');
+        const isGrayBg = foundBg.includes('239, 239, 239') || foundBg.includes('240, 242, 245') || foundBg.includes('242, 243, 245') || foundBg.includes('48, 48, 48') || foundBg.includes('58, 59, 60') || foundBg.includes('36, 37, 38');
+        const isParentFlexEnd = foundAlignItems === 'flex-end' || foundJustifyContent === 'flex-end' || foundFlexDirection === 'row-reverse';
+        const isParentFlexStart = foundAlignItems === 'flex-start' || foundJustifyContent === 'flex-start' || hasAvatar;
 
-        // Inbound signals:
-        // - Text does NOT start with "You:"
-        // - Parent alignItems === 'flex-start'
-        // - Background color is gray: rgb(239, 239, 239), rgb(240, 242, 245), rgb(242, 243, 245)
-        // - Geometric position relativeX < 0.35 (aligned to left half)
-        const isGrayBg = bgColor.includes('239, 239, 239') || bgColor.includes('240, 242, 245') || bgColor.includes('242, 243, 245');
-        const isLeftAligned = alignItems === 'flex-start' || (relativeX < 0.35 && relativeX >= 0);
-        const isInbound = !startsWithYou && !isBlueBg && (isLeftAligned || isGrayBg);
+        let direction = 'AMBIGUOUS_DIRECTION';
+        let direction_reason = 'unknown';
 
-        let direction;
-        if (isOutbound && !isInbound) {
+        if (startsWithYou) {
           direction = 'OUTBOUND';
-        } else if (isInbound && !isOutbound) {
+          direction_reason = 'explicit-you';
+        } else if (isBlueBg) {
+          direction = 'OUTBOUND';
+          direction_reason = 'blue-bubble';
+        } else if (isGrayBg) {
           direction = 'INBOUND';
-        } else if (isOutbound && isInbound) {
-          // If signals conflict, prioritize definitive outbound markers if present
-          if (startsWithYou || isBlueBg || alignItems === 'flex-end') {
-            direction = 'OUTBOUND';
-          } else {
-            direction = 'AMBIGUOUS_DIRECTION';
-          }
+          direction_reason = 'gray-bubble';
+        } else if (isParentFlexEnd && !isParentFlexStart) {
+          direction = 'OUTBOUND';
+          direction_reason = 'parent-flex-end';
+        } else if (isParentFlexStart && !isParentFlexEnd) {
+          direction = 'INBOUND';
+          direction_reason = 'parent-flex-start';
+        } else if (relativeX >= 0.50) {
+          direction = 'OUTBOUND';
+          direction_reason = 'bubble-right';
+        } else if (relativeX < 0.35 && relativeX >= 0) {
+          direction = 'INBOUND';
+          direction_reason = 'bubble-left';
         } else {
-          // Neither indicator clearly present -> Must NOT default to inbound (Requirement 14)
           direction = 'AMBIGUOUS_DIRECTION';
+          direction_reason = 'ambiguous-direction';
         }
 
-        const cleanContent = text.replace(/^You:\s*/i, '').trim();
-
-        const dedupeKey = `${direction}::${cleanContent}::${currentTimestampText}`;
-        if (seenKeys.has(dedupeKey)) continue;
-        seenKeys.add(dedupeKey);
+        const occKey = `${direction}::${cleanContent}::${currentTimestampText}`;
+        const occurrence = occurrenceMap.get(occKey) || 0;
+        occurrenceMap.set(occKey, occurrence + 1);
 
         parsedMessages.push({
           content: cleanContent,
           direction,
+          direction_reason,
           timestamp: currentTimestampText,
           utime: currentUtime,
+          occurrence,
           relativeX: Math.round(relativeX * 1000) / 1000
         });
       }
@@ -511,7 +618,7 @@ export async function extractActiveThreadMessages(page, pageId) {
         profileHref,
         customerName,
         customerNameSource,
-        candidateCount: totalCandidates,
+        candidateCount: uniqueBubbles.length,
         parsedMessages
       };
     });
@@ -541,9 +648,10 @@ export async function extractActiveThreadMessages(page, pageId) {
 
     // Compute deterministic fingerprint for each message (Rule 4)
     const messages = rawData.parsedMessages.map(m => {
+      const occurrenceSuffix = (typeof m.occurrence === 'number' && m.occurrence > 0) ? `:occ:${m.occurrence}` : '';
       const fingerprint = crypto
         .createHash('sha256')
-        .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}`)
+        .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}${occurrenceSuffix}`)
         .digest('hex');
 
       return {
