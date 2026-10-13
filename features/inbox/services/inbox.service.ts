@@ -1424,6 +1424,7 @@ export async function addInboundMessage(params: {
   externalUserId?: string;
   externalConversationId?: string;
   externalRef?: string;
+  legacyExternalRef?: string;
   rawContent?: string;
   metadata?: Record<string, unknown>;
 }, client?: SupabaseClient): Promise<{
@@ -1516,9 +1517,12 @@ export async function addInboundMessage(params: {
     }
 
     const externalRef = params.externalRef || params.externalMessageId;
-    if (externalRef && messagesStore[conversation.id]) {
+    const legacyExternalRef = params.legacyExternalRef;
+    if (messagesStore[conversation.id] && (externalRef || legacyExternalRef)) {
       const existingMsg = messagesStore[conversation.id].find(
-        (m) => m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef
+        (m) =>
+          (externalRef && (m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef)) ||
+          (legacyExternalRef && ((m as { external_ref?: string }).external_ref === legacyExternalRef || m.id === legacyExternalRef))
       );
       if (existingMsg) {
         return {
@@ -1586,13 +1590,69 @@ export async function addInboundMessage(params: {
 
   const externalConversationId = params.externalConversationId || params.senderId || null;
   const externalRef = params.externalRef || params.externalMessageId || null;
+  const legacyExternalRef = params.legacyExternalRef || null;
   const sourceMetadata = params.metadata || {
     channel: params.channel,
     external_message_id: externalRef,
+    legacy_external_ref: legacyExternalRef,
     sender_id: params.senderId,
     sender_name: params.senderName,
     sender_phone: params.senderPhone,
   };
+  if (legacyExternalRef && !sourceMetadata.legacy_external_ref) {
+    sourceMetadata.legacy_external_ref = legacyExternalRef;
+  }
+
+  // Dual-ref idempotency check for legacyExternalRef if provided
+  if (legacyExternalRef && typeof legacyExternalRef === 'string' && legacyExternalRef.trim()) {
+    const { data: legacyInteraction } = await adminClient
+      .from('interactions')
+      .select('id, conversation_id, customer_id')
+      .eq('company_id', companyId)
+      .eq('channel', channel)
+      .eq('external_ref', legacyExternalRef.trim())
+      .maybeSingle();
+
+    if (legacyInteraction) {
+      const { data: convData } = await adminClient
+        .from('conversations')
+        .select('*')
+        .eq('id', legacyInteraction.conversation_id)
+        .maybeSingle();
+
+      return {
+        conversation: (convData || {
+          id: legacyInteraction.conversation_id,
+          company_id: companyId,
+          customer_id: legacyInteraction.customer_id,
+          customer_name: params.senderName || 'Khách hàng Facebook',
+          channel: params.channel,
+          customer_stage: 'LEAD_NEW',
+          status: 'active',
+          unread_count: 0,
+          created_at: timestamp,
+          updated_at: timestamp,
+        }) as Conversation,
+        message: {
+          id: legacyInteraction.id,
+          company_id: companyId,
+          conversation_id: legacyInteraction.conversation_id,
+          customer_id: legacyInteraction.customer_id,
+          channel: params.channel,
+          sender_type: 'customer',
+          sender_name: params.senderName || 'Khách hàng Facebook',
+          content: sanitizedContent,
+          direction: 'inbound',
+          created_at: timestamp,
+        } as InboxMessage,
+        isNewConversation: false,
+        conversationId: legacyInteraction.conversation_id,
+        interactionId: legacyInteraction.id,
+        customerId: legacyInteraction.customer_id,
+        isDuplicate: true,
+      };
+    }
+  }
 
   const { data: rpcData, error: rpcError } = await adminClient.rpc(
     'ingest_provider_message_atomic',
@@ -2103,6 +2163,43 @@ export async function getFacebookBrowserOutboxJobs(
   return (data as FacebookBrowserOutboxJob[]) || [];
 }
 
+/**
+ * Server-to-server Lookup: Trả về danh sách external_ref đã ingest cho migration reconciliation.
+ */
+export async function getSyncedFingerprintsForLookup(
+  externalConversationId?: string | null,
+  lookupRef?: string | null,
+  client?: SupabaseClient
+): Promise<string[]> {
+  if (isDemoMode()) {
+    const refs: string[] = [];
+    for (const convMsgs of Object.values(messagesStore)) {
+      for (const m of convMsgs) {
+        const extRef = (m as { external_ref?: string }).external_ref || m.id;
+        if (extRef) refs.push(extRef);
+      }
+    }
+    if (lookupRef) {
+      return refs.filter((r) => r === lookupRef.trim());
+    }
+    return refs;
+  }
+
+  const adminClient = client || createAdminClient();
+  let query = adminClient
+    .from('interactions')
+    .select('external_ref')
+    .not('external_ref', 'is', null);
+
+  if (lookupRef) {
+    query = query.eq('external_ref', lookupRef.trim());
+  }
+
+  const { data, error } = await query.limit(500);
+  if (error || !data) return [];
+  return data.map((row: { external_ref: string }) => row.external_ref).filter(Boolean);
+}
+
 export const InboxService = {
   isDemoModeActive,
   isGenericCustomerName,
@@ -2112,6 +2209,7 @@ export const InboxService = {
   sendMessage,
   getCustomerTimeline,
   addInboundMessage,
+  getSyncedFingerprintsForLookup,
   updateConversationCustomerStage,
   resetInboxStore,
   claimPendingDeliveries,
@@ -2125,3 +2223,4 @@ export const InboxService = {
   sanitizePhoneInText,
   DEFAULT_INBOX_COMPANY_ID,
 };
+

@@ -642,15 +642,33 @@ export async function extractActiveThreadMessages(page, pageId) {
           direction_reason = 'ambiguous-direction';
         }
 
+        function isValidMessageIdString(val) {
+          if (!val || typeof val !== 'string') return false;
+          const s = val.trim();
+          if (!s || s.length < 3) return false;
+          // Reject generic container/thread/row attributes (Negative Test requirement)
+          if (/^(thread|container|row|list|surface|viewport|crm_b_|panel|wrapper)/i.test(s)) return false;
+          return true;
+        }
+
         // Extract native stable message identifier from Meta DOM if present
-        const messageId = el.getAttribute('data-message-id') ||
+        let messageId = null;
+        const candidateMid = el.getAttribute('data-message-id') ||
           el.closest('[data-message-id]')?.getAttribute('data-message-id') ||
           el.querySelector('[data-message-id]')?.getAttribute('data-message-id') ||
           el.getAttribute('data-mid') ||
-          el.closest('[data-mid]')?.getAttribute('data-mid') ||
-          el.getAttribute('data-id') ||
-          el.closest('[data-id]')?.getAttribute('data-id') ||
-          null;
+          el.closest('[data-mid]')?.getAttribute('data-mid');
+
+        if (candidateMid && isValidMessageIdString(candidateMid)) {
+          messageId = candidateMid.trim();
+        } else {
+          // If fallback to data-id: strictly enforce Meta message ID format (e.g. starts with mid. or mid$)
+          // Reject arbitrary ancestor data-id like "thread-container-1"
+          const rawIdAttr = el.getAttribute('data-id') || el.closest('[data-id]')?.getAttribute('data-id');
+          if (rawIdAttr && /^mid[\.\$]/i.test(rawIdAttr.trim()) && isValidMessageIdString(rawIdAttr)) {
+            messageId = rawIdAttr.trim();
+          }
+        }
 
         // Tag element with stable DOM session identifier for virtualization tracking
         let domNodeUid = el.getAttribute('data-crm-msg-uid');
@@ -893,3 +911,12 @@ export async function selectConversation(page, index = 0) {
     return false;
   }
 }
+
+export function isValidMetaMessageId(val) {
+  if (!val || typeof val !== 'string') return false;
+  const s = val.trim();
+  if (!s || s.length < 3) return false;
+  if (/^(thread|container|row|list|surface|viewport|crm_b_|panel|wrapper)/i.test(s)) return false;
+  return true;
+}
+

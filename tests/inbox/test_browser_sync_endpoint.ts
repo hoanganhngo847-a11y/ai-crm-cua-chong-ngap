@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { NextRequest } from 'next/server';
-import { POST as browserSyncHandler } from '../../app/api/inbox/browser-sync/route';
+import { POST as browserSyncHandler, GET as browserSyncGetHandler } from '../../app/api/inbox/browser-sync/route';
 import { InboxService } from '../../features/inbox/services/inbox.service';
 
 async function runBrowserSyncEndpointTests() {
@@ -183,6 +183,84 @@ async function runBrowserSyncEndpointTests() {
     assert.strictEqual(conv.metadata?.page_id, '1389294167596309');
     assert.strictEqual(conv.metadata?.customer_fb_id, '61578695363056');
     console.log('  -> PASS: Conversation metadata correctly contains provider: facebook_browser & customer_fb_id');
+  }
+
+  // Case 8: Dual-fingerprint migration idempotency check (v1 legacy ref vs v2 new ref)
+  {
+    console.log('[Test 8] Dual-fingerprint deduplication: initial legacy hash, subsequent request with new hash + legacy ref -> Expect is_duplicate === true');
+    const legacyHash = `legacy_hash_${Date.now()}`;
+    const newHash = `new_mid_hash_${Date.now()}`;
+
+    // 1. Initial ingestion with legacy hash
+    const initialReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: '1389294167596309',
+        page_name: 'MD Tech Cửa Chống Ngập',
+        sender_name: 'Khách hàng DualRef',
+        customer_fb_id: '61578695363099',
+        external_conversation_id: 'thread_dual_ref_test',
+        external_message_id: legacyHash,
+        content: 'kiem tra dual ref',
+        direction: 'inbound',
+        timestamp: new Date().toISOString(),
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const initRes = await (await browserSyncHandler(initialReq)).json();
+    assert.strictEqual(initRes.success, true);
+    assert.strictEqual(initRes.is_duplicate, false);
+
+    // 2. Subsequent request with new v2 hash AND legacy_external_message_id
+    const upgradedReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: '1389294167596309',
+        page_name: 'MD Tech Cửa Chống Ngập',
+        sender_name: 'Khách hàng DualRef',
+        customer_fb_id: '61578695363099',
+        external_conversation_id: 'thread_dual_ref_test',
+        external_message_id: newHash,
+        legacy_external_message_id: legacyHash,
+        content: 'kiem tra dual ref',
+        direction: 'inbound',
+        timestamp: new Date().toISOString(),
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const upgradedRes = await (await browserSyncHandler(upgradedReq)).json();
+    assert.strictEqual(upgradedRes.success, true);
+    assert.strictEqual(upgradedRes.is_duplicate, true);
+    assert.strictEqual(upgradedRes.interaction_id, initRes.interaction_id);
+    console.log('  -> PASS: Dual-fingerprint deduplication verified, existing legacy interaction recognized as duplicate without re-inserting');
+  }
+
+  // Case 9: GET /api/inbox/browser-sync lookup endpoint security and functionality
+  {
+    console.log('[Test 9] GET lookup endpoint: unauthorized without secret, authorized returns synced refs');
+    // Unauthorized
+    const unauthReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync');
+    const unauthRes = await browserSyncGetHandler(unauthReq);
+    assert.strictEqual(unauthRes.status, 401);
+
+    // Authorized
+    const authReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      headers: {
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const authRes = await browserSyncGetHandler(authReq);
+    assert.strictEqual(authRes.status, 200);
+    const authBody = await authRes.json();
+    assert.strictEqual(authBody.success, true);
+    assert.ok(Array.isArray(authBody.synced_refs), 'Must return synced_refs array');
+    console.log(`  -> PASS: GET lookup endpoint functional and secured, returned ${authBody.synced_refs.length} refs`);
   }
 
   console.log('======================================================================');

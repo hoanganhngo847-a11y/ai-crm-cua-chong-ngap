@@ -20,7 +20,9 @@ import { CONFIG } from './config.js';
 export class ThreadMessageReconciler {
   constructor(options = {}) {
     this.maxTrackedPerThread = options.maxTrackedPerThread || 200;
+    this.maxSyncedFingerprintsPerThread = options.maxSyncedFingerprintsPerThread || 300;
     this.maxThreads = options.maxThreads || 100;
+    this.maxCheckpointThreads = options.maxCheckpointThreads || 500;
     this.storagePath = options.storagePath !== undefined
       ? options.storagePath
       : (CONFIG?.USER_DATA_DIR ? path.resolve(CONFIG.USER_DATA_DIR, 'reconciliation_state.json') : null);
@@ -29,6 +31,11 @@ export class ThreadMessageReconciler {
     this.threads = new Map();
     // Map: stableThreadId -> PersistentCheckpoint (monotonic ordinals and synced fingerprints)
     this.threadCheckpoints = new Map();
+
+    // Debounced asynchronous flush properties (P1 persistence optimization)
+    this._isDirty = false;
+    this._debounceTimer = null;
+
     this.load();
   }
 
@@ -42,9 +49,10 @@ export class ThreadMessageReconciler {
         // 1. Restore checkpoints first
         if (parsed && parsed.threadCheckpoints && typeof parsed.threadCheckpoints === 'object') {
           for (const [threadId, cp] of Object.entries(parsed.threadCheckpoints)) {
+            const rawSynced = Array.isArray(cp.syncedFingerprints) ? cp.syncedFingerprints : [];
             this.threadCheckpoints.set(threadId, {
               signatureNextOrdinal: new Map(Object.entries(cp.signatureNextOrdinal || {})),
-              syncedFingerprints: new Set(cp.syncedFingerprints || []),
+              syncedFingerprints: new Set(rawSynced.slice(-this.maxSyncedFingerprintsPerThread)),
               lastActiveAt: cp.lastActiveAt || Date.now(),
             });
           }
@@ -54,7 +62,8 @@ export class ThreadMessageReconciler {
         if (parsed && parsed.threads && typeof parsed.threads === 'object') {
           for (const [threadId, rawState] of Object.entries(parsed.threads)) {
             const signatureNextOrdinal = new Map(Object.entries(rawState.signatureNextOrdinal || {}));
-            const syncedFingerprints = new Set(rawState.syncedFingerprints || []);
+            const rawSynced = Array.isArray(rawState.syncedFingerprints) ? rawState.syncedFingerprints : [];
+            const syncedFingerprints = new Set(rawSynced.slice(-this.maxSyncedFingerprintsPerThread));
             const instances = Array.isArray(rawState.instances) ? rawState.instances : [];
             const instanceByMessageId = new Map();
             const instanceByDomUid = new Map();
@@ -78,7 +87,7 @@ export class ThreadMessageReconciler {
           }
         }
       }
-    } catch (err) {
+    } catch (_err) {
       try {
         const corruptPath = `${this.storagePath}.corrupt.${Date.now()}`;
         if (fs.existsSync(this.storagePath)) {
@@ -106,14 +115,41 @@ export class ThreadMessageReconciler {
         synced.add(fp);
       }
     }
+    // Bound synced fingerprints per thread
+    let boundedSynced = synced;
+    if (synced.size > this.maxSyncedFingerprintsPerThread) {
+      const arr = Array.from(synced).slice(-this.maxSyncedFingerprintsPerThread);
+      boundedSynced = new Set(arr);
+    }
+
     this.threadCheckpoints.set(threadId, {
       signatureNextOrdinal: ordinals,
-      syncedFingerprints: synced,
+      syncedFingerprints: boundedSynced,
       lastActiveAt: Math.max(state.lastActiveAt || 0, existing?.lastActiveAt || 0, Date.now()),
     });
   }
 
+  scheduleSave(delayMs = 300) {
+    this._isDirty = true;
+    if (this._debounceTimer) return;
+    this._debounceTimer = setTimeout(() => {
+      this._debounceTimer = null;
+      this.flushSync();
+    }, delayMs);
+    if (typeof this._debounceTimer.unref === 'function') {
+      this._debounceTimer.unref();
+    }
+  }
+
   save() {
+    this.flushSync();
+  }
+
+  flushSync() {
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = null;
+    }
     if (!this.storagePath) return;
     try {
       const dir = path.dirname(this.storagePath);
@@ -132,20 +168,20 @@ export class ThreadMessageReconciler {
         payload.threads[threadId] = {
           instances: state.instances.slice(-this.maxTrackedPerThread),
           signatureNextOrdinal: Object.fromEntries(state.signatureNextOrdinal),
-          syncedFingerprints: Array.from(state.syncedFingerprints || []),
+          syncedFingerprints: Array.from(state.syncedFingerprints || []).slice(-this.maxSyncedFingerprintsPerThread),
           lastActiveAt: state.lastActiveAt || Date.now(),
         };
       }
 
-      // Checkpoints bounded to max 1000 threads
+      // Checkpoints bounded to maxCheckpointThreads with LRU
       const cpEntries = Array.from(this.threadCheckpoints.entries())
         .sort((a, b) => (b[1].lastActiveAt || 0) - (a[1].lastActiveAt || 0))
-        .slice(0, 1000);
+        .slice(0, this.maxCheckpointThreads);
 
       for (const [threadId, cp] of cpEntries) {
         payload.threadCheckpoints[threadId] = {
           signatureNextOrdinal: Object.fromEntries(cp.signatureNextOrdinal),
-          syncedFingerprints: Array.from(cp.syncedFingerprints || []),
+          syncedFingerprints: Array.from(cp.syncedFingerprints || []).slice(-this.maxSyncedFingerprintsPerThread),
           lastActiveAt: cp.lastActiveAt || Date.now(),
         };
       }
@@ -153,6 +189,7 @@ export class ThreadMessageReconciler {
       const tmpPath = `${this.storagePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
       fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
       fs.renameSync(tmpPath, this.storagePath);
+      this._isDirty = false;
     } catch (_) {
       // Fail closed without crashing worker
     }
@@ -177,19 +214,44 @@ export class ThreadMessageReconciler {
     return state;
   }
 
-  markFingerprintSynced(threadId, fingerprint) {
+  markFingerprintSynced(threadId, fingerprint, legacyFingerprint) {
     if (!threadId || !fingerprint) return;
     const state = this.getThreadState(threadId);
     state.syncedFingerprints.add(fingerprint);
+    if (legacyFingerprint) {
+      state.syncedFingerprints.add(legacyFingerprint);
+    }
+    // Bound syncedFingerprints per thread
+    if (state.syncedFingerprints.size > this.maxSyncedFingerprintsPerThread) {
+      const arr = Array.from(state.syncedFingerprints).slice(-this.maxSyncedFingerprintsPerThread);
+      state.syncedFingerprints = new Set(arr);
+    }
     this.updateCheckpoint(threadId, state);
-    this.save();
+    this.scheduleSave(200);
   }
 
   isFingerprintSynced(threadId, fingerprint) {
+    if (!threadId || !fingerprint) return false;
     const state = this.threads.get(threadId);
     if (state && state.syncedFingerprints.has(fingerprint)) return true;
     const cp = this.threadCheckpoints.get(threadId);
-    return cp ? cp.syncedFingerprints.has(fingerprint) : false;
+    if (cp && cp.syncedFingerprints.has(fingerprint)) return true;
+
+    // Multi-version check: check if fingerprint matches an instance whose legacy or canonical fingerprint is synced
+    if (state && state.instances) {
+      for (const inst of state.instances) {
+        if (inst.fingerprint === fingerprint || inst.legacyFingerprint === fingerprint || inst.canonicalFingerprint === fingerprint) {
+          if (
+            (inst.legacyFingerprint && (state.syncedFingerprints.has(inst.legacyFingerprint) || cp?.syncedFingerprints.has(inst.legacyFingerprint))) ||
+            (inst.canonicalFingerprint && (state.syncedFingerprints.has(inst.canonicalFingerprint) || cp?.syncedFingerprints.has(inst.canonicalFingerprint))) ||
+            (inst.fingerprint && (state.syncedFingerprints.has(inst.fingerprint) || cp?.syncedFingerprints.has(inst.fingerprint)))
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   getAllSyncedFingerprints() {
@@ -224,7 +286,7 @@ export class ThreadMessageReconciler {
         this.updateCheckpoint(threadId, threadState);
         this.threads.delete(threadId);
       }
-      this.save();
+      this.scheduleSave(300);
     }
   }
 
@@ -234,7 +296,7 @@ export class ThreadMessageReconciler {
   resetThread(threadId) {
     this.threads.delete(threadId);
     this.threadCheckpoints.delete(threadId);
-    this.save();
+    this.flushSync();
   }
 
   /**
@@ -243,7 +305,7 @@ export class ThreadMessageReconciler {
   clear() {
     this.threads.clear();
     this.threadCheckpoints.clear();
-    this.save();
+    this.flushSync();
   }
 
   /**
@@ -254,20 +316,37 @@ export class ThreadMessageReconciler {
   }
 
   /**
-   * Computes deterministic fingerprint with stable occurrence ordinal or messageId
+   * Computes legacy deterministic fingerprint (legacy_v1)
    */
-  computeFingerprint(pageId, stableThreadId, m, occurrence) {
+  computeLegacyFingerprint(pageId, stableThreadId, m, occurrence) {
+    const occurrenceSuffix = (typeof occurrence === 'number' && occurrence > 0) ? `:occ:${occurrence}` : '';
+    return crypto
+      .createHash('sha256')
+      .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}${occurrenceSuffix}`)
+      .digest('hex');
+  }
+
+  /**
+   * Computes canonical native messageId fingerprint (meta_mid_v2)
+   */
+  computeCanonicalFingerprint(pageId, stableThreadId, m) {
     if (m.messageId) {
       return crypto
         .createHash('sha256')
         .update(`${pageId}:${stableThreadId}:${m.messageId}`)
         .digest('hex');
     }
-    const occurrenceSuffix = (typeof occurrence === 'number' && occurrence > 0) ? `:occ:${occurrence}` : '';
-    return crypto
-      .createHash('sha256')
-      .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}${occurrenceSuffix}`)
-      .digest('hex');
+    return null;
+  }
+
+  /**
+   * Computes deterministic fingerprint with stable occurrence ordinal or messageId
+   */
+  computeFingerprint(pageId, stableThreadId, m, occurrence) {
+    if (m.messageId) {
+      return this.computeCanonicalFingerprint(pageId, stableThreadId, m);
+    }
+    return this.computeLegacyFingerprint(pageId, stableThreadId, m, occurrence);
   }
 
   /**
@@ -457,7 +536,10 @@ export class ThreadMessageReconciler {
           occurrence = currentNext;
         }
 
-        const fingerprint = this.computeFingerprint(pageId, stableThreadId, v, occurrence);
+        const legacyFingerprint = this.computeLegacyFingerprint(pageId, stableThreadId, v, occurrence);
+        const canonicalFingerprint = this.computeCanonicalFingerprint(pageId, stableThreadId, v);
+        const fingerprintVersion = v.messageId ? 'meta_mid_v2' : 'legacy_v1';
+        const fingerprint = canonicalFingerprint || legacyFingerprint;
 
         instance = {
           content: v.content,
@@ -468,6 +550,9 @@ export class ThreadMessageReconciler {
           signature: sig,
           occurrence,
           fingerprint,
+          legacyFingerprint,
+          canonicalFingerprint,
+          fingerprintVersion,
           stableThreadId,
           messageId: v.messageId || null,
           domNodeUid: v.domNodeUid || null,
@@ -484,7 +569,15 @@ export class ThreadMessageReconciler {
         // Update references if new information became available
         if (v.messageId && !instance.messageId) {
           instance.messageId = v.messageId;
+          instance.canonicalFingerprint = this.computeCanonicalFingerprint(pageId, stableThreadId, v);
+          instance.fingerprintVersion = 'meta_mid_v2';
           state.instanceByMessageId.set(v.messageId, instance);
+        }
+        if (!instance.legacyFingerprint) {
+          instance.legacyFingerprint = this.computeLegacyFingerprint(pageId, stableThreadId, v, instance.occurrence || 0);
+        }
+        if (!instance.canonicalFingerprint && instance.messageId) {
+          instance.canonicalFingerprint = this.computeCanonicalFingerprint(pageId, stableThreadId, { messageId: instance.messageId });
         }
         if (v.domNodeUid && !instance.domNodeUid) {
           instance.domNodeUid = v.domNodeUid;
@@ -496,6 +589,9 @@ export class ThreadMessageReconciler {
         ...v,
         occurrence: instance.occurrence,
         fingerprint: instance.fingerprint,
+        legacyFingerprint: instance.legacyFingerprint,
+        canonicalFingerprint: instance.canonicalFingerprint,
+        fingerprintVersion: instance.fingerprintVersion,
         stableThreadId,
         messageId: instance.messageId,
       });
@@ -516,7 +612,7 @@ export class ThreadMessageReconciler {
 
     this.updateCheckpoint(stableThreadId, state);
     this.cleanup();
-    this.save();
+    this.scheduleSave(300);
     return resultMessages;
   }
 }

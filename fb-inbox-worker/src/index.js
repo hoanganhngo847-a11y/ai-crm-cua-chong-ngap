@@ -77,9 +77,13 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
           customerFbId: threadData.customerFbId,
           externalConversationId: threadData.stableThreadId,
           externalMessageId: fingerprint,
+          legacyExternalMessageId: msg.legacyFingerprint || null,
           content: msg.content,
           timestamp: msg.timestamp,
           metadata: {
+            fingerprint_version: msg.fingerprintVersion || (msg.messageId ? 'meta_mid_v2' : 'legacy_v1'),
+            legacy_external_ref: msg.legacyFingerprint || null,
+            canonical_external_ref: msg.canonicalFingerprint || null,
             meta_dom_signal_at: domSignalAt,
             worker_inbound_detected_at: workerDetectedAt,
             crm_sync_attempt_at: Date.now()
@@ -90,7 +94,10 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
         // (Bao gồm cả isDuplicate === true vì DB đã xác nhận message tồn tại)
         if (syncResult && syncResult.success) {
           syncedFingerprints.add(fingerprint);
-          messageReconciler.markFingerprintSynced(threadData.stableThreadId, fingerprint);
+          if (msg.legacyFingerprint) {
+            syncedFingerprints.add(msg.legacyFingerprint);
+          }
+          messageReconciler.markFingerprintSynced(threadData.stableThreadId, fingerprint, msg.legacyFingerprint);
           healthServer.recordScanSuccess();
           healthServer.recordInboundDetected();
 
@@ -297,6 +304,7 @@ async function main() {
     isRunning = false;
     log.info('Đang dừng worker và giải phóng tài nguyên...');
     try {
+      messageReconciler.flushSync();
       await healthServer.stop();
       if (browserHandle && browserHandle.context) {
         await browserHandle.context.close();

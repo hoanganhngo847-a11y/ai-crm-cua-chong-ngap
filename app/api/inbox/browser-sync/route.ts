@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
       customer_fb_id,
       external_conversation_id,
       external_message_id,
+      legacy_external_message_id,
       content,
       timestamp,
       direction,
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
 
     const companyId = process.env.FB_SYNC_COMPANY_ID || clientCompanyId || DEFAULT_INBOX_COMPANY_ID;
 
-    // 4. Ingest via InboxService
+    // 4. Ingest via InboxService with dual-fingerprint backward compatibility
     const result = await InboxService.addInboundMessage({
       channel: 'facebook',
       company_id: companyId,
@@ -118,6 +119,7 @@ export async function POST(request: NextRequest) {
       externalUserId: customer_fb_id || external_conversation_id,
       externalConversationId: external_conversation_id,
       externalRef: external_message_id,
+      legacyExternalRef: typeof legacy_external_message_id === 'string' && legacy_external_message_id.trim() ? legacy_external_message_id.trim() : undefined,
       externalMessageId: external_message_id,
       content: content.trim(),
       rawContent: content.trim(),
@@ -128,6 +130,7 @@ export async function POST(request: NextRequest) {
         page_name: page_name || 'Trang Facebook',
         customer_fb_id: customer_fb_id || null,
         source: 'meta_business_suite_browser',
+        legacy_external_message_id: legacy_external_message_id || null,
         ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {})
       }
     });
@@ -148,3 +151,66 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+/**
+ * GET /api/inbox/browser-sync
+ * Server-to-server migration lookup endpoint.
+ * Cho phép Playwright Worker query danh sách external_ref (v1 hoặc v2) đã tồn tại trong CRM.
+ * Bảo vệ fail-closed bằng FB_WORKER_SECRET; không leak thông tin riêng tư/tin nhắn của khách hàng.
+ */
+export async function GET(request: NextRequest) {
+  try {
+    // 1. Production HTTPS enforcement
+    if (process.env.NODE_ENV === 'production') {
+      const proto = request.headers.get('x-forwarded-proto') || '';
+      if (proto !== 'https' && !request.url.startsWith('https://')) {
+        return NextResponse.json(
+          { success: false, error: 'HTTPS_REQUIRED', message: 'Endpoint yêu cầu kết nối bảo mật HTTPS trong production.' },
+          { status: 403 }
+        );
+      }
+    }
+
+    // 2. Secret Authentication
+    const configuredSecret = process.env.FB_WORKER_SECRET;
+    if (!configuredSecret || !configuredSecret.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'CONFIGURATION_ERROR', message: 'FB_WORKER_SECRET chưa được cấu hình trên máy chủ.' },
+        { status: 500 }
+      );
+    }
+
+    const providedSecret =
+      request.headers.get('x-worker-secret') ||
+      request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
+      '';
+
+    if (!providedSecret || !secureCompare(providedSecret, configuredSecret)) {
+      return NextResponse.json(
+        { success: false, error: 'UNAUTHORIZED', message: 'Xác thực server-to-server thất bại.' },
+        { status: 401 }
+      );
+    }
+
+    const { searchParams } = new URL(request.url);
+    const externalConversationId = searchParams.get('external_conversation_id');
+    const lookupRef = searchParams.get('ref');
+
+    const syncedRefs = await InboxService.getSyncedFingerprintsForLookup(
+      externalConversationId,
+      lookupRef
+    );
+
+    return NextResponse.json({
+      success: true,
+      synced_refs: syncedRefs,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Lỗi nội bộ hệ thống';
+    return NextResponse.json(
+      { success: false, error: 'INTERNAL_ERROR', message },
+      { status: 500 }
+    );
+  }
+}
+

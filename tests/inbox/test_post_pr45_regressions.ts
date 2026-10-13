@@ -1,7 +1,11 @@
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { NextRequest } from 'next/server';
+import { POST as browserSyncHandler } from '../../app/api/inbox/browser-sync/route';
+import { InboxService } from '../../features/inbox/services/inbox.service';
 import { extractActiveThreadMessages, isPureTimestampText } from '../../fb-inbox-worker/src/parser.js';
 import { ThreadMessageReconciler, messageReconciler } from '../../fb-inbox-worker/src/message-reconciler.js';
 import { evaluateSkeletonCorrelation } from '../../features/inbox/utils/skeleton-helper';
@@ -874,6 +878,369 @@ https://namethatui.com/</div></div>
     );
 
     try { if (fs.existsSync(testStoragePath)) fs.unlinkSync(testStoragePath); } catch (_) {}
+
+    // ===============================================================================================
+    // TEST 25 (REPRODUCTION OF P0): Legacy to Meta MID Migration Idempotency Invariant
+    // Existing DB/CRM state: message already exists in CRM with legacy external_ref (OLD_F0).
+    // Worker upgrades, scans DOM with data-message-id="mid.$historical_0", generates NEW_F0.
+    // Invariant: interaction count in CRM MUST remain 1, must NOT insert a duplicate interaction.
+    // ===============================================================================================
+    process.env.DEMO_MODE = 'true';
+    process.env.FB_WORKER_SECRET = 'test_secret_browser_sync_2026';
+    const migrationThreadId = `${PAGE_ID}:61592309996225`;
+    messageReconciler.resetThread(migrationThreadId);
+    const historicalContent = 'Xin chào shop cần tư vấn cửa chống ngập';
+    const historicalTimestamp = '10:00 PM';
+
+    // 1. Calculate legacy fingerprint (OLD_F0) exactly as pre-PR46 worker did:
+    const legacyOldF0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${migrationThreadId}:${historicalTimestamp}:${historicalContent}:INBOUND`)
+      .digest('hex');
+
+    // 2. Existing DB/CRM state: message already exists in CRM with externalRef = OLD_F0
+    const existingIngest = await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: '00000000-0000-0000-0000-000000000001',
+      senderName: 'Khách hàng Migration',
+      externalUserId: '61592309996225',
+      externalConversationId: migrationThreadId,
+      externalRef: legacyOldF0,
+      externalMessageId: legacyOldF0,
+      content: historicalContent,
+      timestamp: historicalTimestamp,
+    });
+    const crmConvId = existingIngest.conversationId;
+    const initialInteractionCount = (await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', crmConvId)).length;
+    assert.strictEqual(initialInteractionCount, 1, 'Initial interaction count must be 1');
+
+    // 3. Worker upgrades and scans the DOM where the SAME physical message now has data-message-id:
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996225">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div role="heading">10:00 PM</div>
+        <div class="row-inbound"><div data-message-id="mid.$historical_0" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">${historicalContent}</div></div>
+      </div>
+    `);
+    const upgradedScan = await extractActiveThreadMessages(page, PAGE_ID);
+    const scannedMsg = upgradedScan.messages[0];
+    const newF0 = scannedMsg.fingerprint;
+
+    // Send scanned message to CRM sync endpoint:
+    const syncReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech Cửa Chống Ngập',
+        sender_name: 'Khách hàng Migration',
+        customer_fb_id: '61592309996225',
+        external_conversation_id: migrationThreadId,
+        external_message_id: newF0,
+        legacy_external_message_id: scannedMsg.legacyFingerprint,
+        content: scannedMsg.content,
+        direction: 'inbound',
+        timestamp: scannedMsg.timestamp,
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const syncRes = await browserSyncHandler(syncReq);
+    const syncBody = await syncRes.json();
+    const finalMessages = await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', crmConvId);
+
+    const reproductionPassed = syncBody.is_duplicate === true && finalMessages.length === 1;
+    recordResult(
+      25,
+      'M1 / P0 Reproduction: Worker upgrade rescans historical message -> recognized as duplicate via dual-fingerprint (count remains 1)',
+      'is_duplicate === true && messages.length === 1',
+      `is_duplicate: ${syncBody.is_duplicate}, messages.length: ${finalMessages.length}`,
+      reproductionPassed
+    );
+
+    // ===============================================================================================
+    // TEST 26 (M2): New Message After Migration Ingested Once, Rescan Produces 0 Duplicates
+    // ===============================================================================================
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996225">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div role="heading">10:00 PM</div>
+        <div class="row-inbound"><div data-message-id="mid.$historical_0" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">${historicalContent}</div></div>
+        <div class="row-inbound"><div data-message-id="mid.new1" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Cửa chống ngập giá bao nhiêu?</div></div>
+      </div>
+    `);
+    const m2Scan = await extractActiveThreadMessages(page, PAGE_ID);
+    assert.strictEqual(m2Scan.messages.length, 2, 'M2 scan should have 2 messages');
+    const newMsg = m2Scan.messages[1];
+
+    // Sync new message to CRM:
+    const m2SyncReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech Cửa Chống Ngập',
+        sender_name: 'Khách hàng Migration',
+        customer_fb_id: '61592309996225',
+        external_conversation_id: migrationThreadId,
+        external_message_id: newMsg.fingerprint,
+        legacy_external_message_id: newMsg.legacyFingerprint,
+        content: newMsg.content,
+        direction: 'inbound',
+        timestamp: newMsg.timestamp,
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const m2SyncRes = await (await browserSyncHandler(m2SyncReq)).json();
+    const countAfterNew = (await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', crmConvId)).length;
+
+    // Rescan identical thread:
+    const m2RescanReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech Cửa Chống Ngập',
+        sender_name: 'Khách hàng Migration',
+        customer_fb_id: '61592309996225',
+        external_conversation_id: migrationThreadId,
+        external_message_id: newMsg.fingerprint,
+        legacy_external_message_id: newMsg.legacyFingerprint,
+        content: newMsg.content,
+        direction: 'inbound',
+        timestamp: newMsg.timestamp,
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-worker-secret': 'test_secret_browser_sync_2026',
+      },
+    });
+    const m2RescanRes = await (await browserSyncHandler(m2RescanReq)).json();
+    const countAfterRescan = (await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', crmConvId)).length;
+
+    const m2Passed = m2SyncRes.is_duplicate === false && countAfterNew === 2 &&
+      m2RescanRes.is_duplicate === true && countAfterRescan === 2;
+    recordResult(
+      26,
+      'M2: New message after migration is ingested exactly once; subsequent rescan yields 0 duplicates',
+      'new: is_dup=false, count=2; rescan: is_dup=true, count=2',
+      `new: is_dup=${m2SyncRes.is_duplicate}, count=${countAfterNew}; rescan: is_dup=${m2RescanRes.is_duplicate}, count=${countAfterRescan}`,
+      m2Passed
+    );
+
+    // ===============================================================================================
+    // TEST 27 (M3): Repeated Identical Text ('hello', 'hello' historical, 'hello' new with 3 MIDs)
+    // ===============================================================================================
+    const threadM3 = `${PAGE_ID}:61592309996227`;
+    messageReconciler.resetThread(threadM3);
+
+    // Setup CRM historical state: 2 messages with identical content 'hello' at '10:00 PM'
+    const legacyRepF0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM3}:10:00 PM:hello:INBOUND`)
+      .digest('hex');
+    const legacyRepF1 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM3}:10:00 PM:hello:INBOUND:occ:1`)
+      .digest('hex');
+
+    const m3Hist0 = await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: '00000000-0000-0000-0000-000000000001',
+      senderName: 'Khách hàng Rep',
+      externalUserId: '61592309996227',
+      externalConversationId: threadM3,
+      externalRef: legacyRepF0,
+      externalMessageId: legacyRepF0,
+      content: 'hello',
+      timestamp: '10:00 PM',
+    });
+    await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: '00000000-0000-0000-0000-000000000001',
+      senderName: 'Khách hàng Rep',
+      externalUserId: '61592309996227',
+      externalConversationId: threadM3,
+      externalRef: legacyRepF1,
+      externalMessageId: legacyRepF1,
+      content: 'hello',
+      timestamp: '10:00 PM',
+    });
+    const m3ConvId = m3Hist0.conversationId;
+    const initialM3Count = (await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', m3ConvId)).length;
+    assert.strictEqual(initialM3Count, 2, 'Initial M3 count must be 2');
+
+    // DOM contains: hello (mid.$rep_0), hello (mid.$rep_1), and new hello (mid.$rep_2)
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996227">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div role="heading">10:00 PM</div>
+        <div class="row-inbound"><div data-message-id="mid.$rep_0" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+        <div class="row-inbound"><div data-message-id="mid.$rep_1" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+        <div class="row-inbound"><div data-message-id="mid.$rep_2" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">hello</div></div>
+      </div>
+    `);
+    const m3Scan = await extractActiveThreadMessages(page, PAGE_ID);
+    assert.strictEqual(m3Scan.messages.length, 3, 'M3 scan should have 3 messages');
+
+    // Sync all 3:
+    const syncResList = [];
+    for (const m of m3Scan.messages) {
+      const r = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+        method: 'POST',
+        body: JSON.stringify({
+          page_id: PAGE_ID,
+          page_name: 'MD Tech Cửa Chống Ngập',
+          sender_name: 'Khách hàng Rep',
+          customer_fb_id: '61592309996227',
+          external_conversation_id: threadM3,
+          external_message_id: m.fingerprint,
+          legacy_external_message_id: m.legacyFingerprint,
+          content: m.content,
+          direction: 'inbound',
+          timestamp: m.timestamp,
+        }),
+        headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+      }))).json();
+      syncResList.push(r);
+    }
+
+    const finalM3Messages = await InboxService.getMessagesByConversationId('00000000-0000-0000-0000-000000000001', m3ConvId);
+    const m3Passed = syncResList[0].is_duplicate === true &&
+      syncResList[1].is_duplicate === true &&
+      syncResList[2].is_duplicate === false &&
+      finalM3Messages.length === 3;
+
+    recordResult(
+      27,
+      'M3: Repeated identical text: historical 2 remain exactly once, new 3rd inserts exactly once (total=3)',
+      'msg0: dup=true, msg1: dup=true, msg2: dup=false, count=3',
+      `msg0: dup=${syncResList[0].is_duplicate}, msg1: dup=${syncResList[1].is_duplicate}, msg2: dup=${syncResList[2].is_duplicate}, count=${finalM3Messages.length}`,
+      m3Passed
+    );
+
+    // ===============================================================================================
+    // TEST 28 (M4): Worker Restart After Cutover (Historical + Existing v2 + New v2)
+    // ===============================================================================================
+    const m4StoragePath = path.resolve(process.cwd(), 'tests/inbox/test_m4_checkpoint.json');
+    try { if (fs.existsSync(m4StoragePath)) fs.unlinkSync(m4StoragePath); } catch (_) {}
+
+    const threadM4 = `${PAGE_ID}:61592309996228`;
+    const m4Reconciler = new ThreadMessageReconciler({ storagePath: m4StoragePath });
+
+    // Initial state: historical message synced with legacy FP, v2 message synced with v2 MID
+    const m4LegacyFp = crypto.createHash('sha256').update(`${PAGE_ID}:${threadM4}:10:00 PM:chao ban:INBOUND`).digest('hex');
+    const m4InitScan = m4Reconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: threadM4,
+      rawMessages: [
+        { content: 'chao ban', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m4_0' },
+        { content: 'tu van gia', direction: 'INBOUND', timestamp: '10:05 PM', messageId: 'mid.$m4_1' },
+      ],
+    });
+    m4Reconciler.markFingerprintSynced(threadM4, m4InitScan[0].fingerprint, m4LegacyFp);
+    m4Reconciler.markFingerprintSynced(threadM4, m4InitScan[1].fingerprint);
+    m4Reconciler.flushSync();
+
+    // SIMULATE WORKER PROCESS CRASH & RESTART:
+    const m4RestartReconciler = new ThreadMessageReconciler({ storagePath: m4StoragePath });
+
+    // Post-restart DOM: historical message + existing v2 message + brand new v2 message
+    const m4PostScan = m4RestartReconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: threadM4,
+      rawMessages: [
+        { content: 'chao ban', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m4_0' },
+        { content: 'tu van gia', direction: 'INBOUND', timestamp: '10:05 PM', messageId: 'mid.$m4_1' },
+        { content: 'kich thuoc 1m5', direction: 'INBOUND', timestamp: '10:10 PM', messageId: 'mid.$m4_2' },
+      ],
+    });
+
+    const m4Msg0Synced = m4RestartReconciler.isFingerprintSynced(threadM4, m4PostScan[0].fingerprint);
+    const m4Msg1Synced = m4RestartReconciler.isFingerprintSynced(threadM4, m4PostScan[1].fingerprint);
+    const m4Msg2Synced = m4RestartReconciler.isFingerprintSynced(threadM4, m4PostScan[2].fingerprint);
+    const m4Passed = m4Msg0Synced === true && m4Msg1Synced === true && m4Msg2Synced === false;
+
+    recordResult(
+      28,
+      'M4: Restart after cutover: historical=no dup, existing v2=no dup, brand new v2=unseen/ingested once',
+      'msg0Synced=true, msg1Synced=true, msg2Synced=false',
+      `msg0Synced=${m4Msg0Synced}, msg1Synced=${m4Msg1Synced}, msg2Synced=${m4Msg2Synced}`,
+      m4Passed
+    );
+    try { if (fs.existsSync(m4StoragePath)) fs.unlinkSync(m4StoragePath); } catch (_) {}
+
+    // ===============================================================================================
+    // TEST 29 (M5): Full DOM Recreation After Cutover (Same Meta MIDs, Brand New DOM Elements)
+    // ===============================================================================================
+    const threadM5 = `${PAGE_ID}:61592309996229`;
+    messageReconciler.resetThread(threadM5);
+
+    // Initial DOM: 2 messages
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996229">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.$m5_a" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Tin A</div></div>
+        <div class="row-inbound"><div data-message-id="mid.$m5_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Tin B</div></div>
+      </div>
+    `);
+    const m5Scan1 = await extractActiveThreadMessages(page, PAGE_ID);
+    const m5FpA1 = m5Scan1.messages[0].fingerprint;
+    const m5FpB1 = m5Scan1.messages[1].fingerprint;
+    messageReconciler.markFingerprintSynced(threadM5, m5FpA1);
+    messageReconciler.markFingerprintSynced(threadM5, m5FpB1);
+
+    // Full DOM recreation: completely new HTML elements and attributes
+    await setSafeHtml(page, `
+      <div role="region" aria-label="Customer details"><a href="https://facebook.com/61592309996229">Customer</a></div>
+      <div role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound"><div data-message-id="mid.$m5_a" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Tin A</div></div>
+        <div class="row-inbound"><div data-message-id="mid.$m5_b" class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Tin B</div></div>
+      </div>
+    `);
+    const m5Scan2 = await extractActiveThreadMessages(page, PAGE_ID);
+    const m5FpA2 = m5Scan2.messages[0].fingerprint;
+    const m5FpB2 = m5Scan2.messages[1].fingerprint;
+
+    const m5Passed = m5FpA1 === m5FpA2 && m5FpB1 === m5FpB2 &&
+      messageReconciler.isFingerprintSynced(threadM5, m5FpA2) &&
+      messageReconciler.isFingerprintSynced(threadM5, m5FpB2);
+
+    recordResult(
+      29,
+      'M5: Full DOM recreation after cutover: identical Meta MIDs retain 100% stable identity and zero duplicate sync',
+      'fpA1===fpA2 && fpB1===fpB2 && both synced',
+      `fpA: ${m5FpA1 === m5FpA2}, fpB: ${m5FpB1 === m5FpB2}`,
+      m5Passed
+    );
+
+    // ===============================================================================================
+    // TEST 30 (NEGATIVE TEST): Ancestor data-id="thread-container-1" is NOT Hijacked as Message ID
+    // ===============================================================================================
+    const threadM30 = `${PAGE_ID}:61592309996230`;
+    messageReconciler.resetThread(threadM30);
+
+    await setSafeHtml(page, `
+      <div data-id="thread-container-1" role="region" aria-label="Customer details">
+        <a href="https://facebook.com/61592309996230">Customer</a>
+      </div>
+      <div data-id="thread-container-messages" role="main" aria-label="Message list container with messages, suggestions, and typing indicators">
+        <div class="row-inbound">
+          <div class="bubble-inbound" dir="auto" style="background-color: rgb(240, 242, 245); border-radius: 18px;">Tin nhắn không có messageId attribute</div>
+        </div>
+      </div>
+    `);
+    const negScan = await extractActiveThreadMessages(page, PAGE_ID);
+    assert.strictEqual(negScan.messages.length, 1, 'Negative test should parse 1 message');
+    const parsedMid = negScan.messages[0].messageId;
+
+    const negPassed = parsedMid === null;
+    recordResult(
+      30,
+      'Negative Test: Ancestor data-id="thread-container-1" is rejected and NOT hijacked as per-message messageId',
+      'messageId === null',
+      `messageId: ${parsedMid}`,
+      negPassed
+    );
 
   } finally {
     await browser.close();
