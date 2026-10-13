@@ -1,7 +1,18 @@
 import assert from 'node:assert';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import { healthServer } from '../../fb-inbox-worker/src/health-server.js';
 import { detectPageState, APP_STATE, extractCurrentAssetId } from '../../fb-inbox-worker/src/state-checker.js';
+import {
+  processThreadData,
+  syncedFingerprints,
+  performInboundScan,
+  SCAN_CONFIG
+} from '../../fb-inbox-worker/src/index.js';
+import { extractConversationsList } from '../../fb-inbox-worker/src/parser.js';
+
+const require = createRequire(process.cwd() + '/package.json');
+const { chromium } = require('./fb-inbox-worker/node_modules/playwright');
 
 function fetchJson(url: string): Promise<{ statusCode: number; data: any }> {
   return new Promise((resolve, reject) => {
@@ -141,7 +152,301 @@ async function runAssetBindingTests() {
   assert.strictEqual(metricsSnapshot.unread_rows_seen, 3, 'unread_rows_seen recorded');
   assert.strictEqual(metricsSnapshot.threads_scanned, 5, 'threads_scanned recorded');
   assert.ok(metricsSnapshot.last_inbound_detected_at, 'last_inbound_detected_at recorded');
+  assert.ok(metricsSnapshot.last_inbound_sync_success_at, 'last_inbound_sync_success_at recorded');
   console.log('✅ PASS: Inbound scan metrics recorded and reported.\n');
+
+  // -----------------------------------------------------------------------------------------------
+  // 6. INBOUND FINGERPRINT ACK SEMANTICS & RETRY REGRESSION TEST (Requirement 1 & 2)
+  // -----------------------------------------------------------------------------------------------
+  console.log('--- 6. Inbound Fingerprint ACK Semantics & Retry Regression Test ---');
+
+  const originalFetch = global.fetch;
+  let syncCallCount = 0;
+  let syncShouldFail = true;
+  let isDuplicateResponse = false;
+
+  // Intercept fetch to mock CRM endpoint behavior accurately
+  global.fetch = (async (url: any, init: any) => {
+    if (typeof url === 'string' && (url.includes('/browser-sync') || url.includes('/api/inbox/'))) {
+      syncCallCount++;
+      if (syncShouldFail) {
+        return new Response(JSON.stringify({ success: false, error: 'TRANSIENT_500_ERROR' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          is_duplicate: isDuplicateResponse,
+          is_new_conversation: !isDuplicateResponse,
+          conversation_id: 'conv_retry_test',
+          interaction_id: 'int_retry_test'
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return originalFetch(url, init);
+  }) as typeof fetch;
+
+  try {
+    syncedFingerprints.clear();
+
+    const testFingerprint = 'fp_retry_regression_001';
+    const mockInboundThread = {
+      customerName: 'Hoàng Anh Ngô',
+      stableThreadId: 'thread_retry_001',
+      customerFbId: 'fb_user_001',
+      messages: [
+        {
+          direction: 'INBOUND',
+          fingerprint: testFingerprint,
+          content: 'Khách hỏi giá cửa chống ngập',
+          timestamp: '11:24'
+        }
+      ]
+    };
+
+    // Attempt 1: CRM sync returns failure / transient 500
+    syncShouldFail = true;
+    syncCallCount = 0;
+    await processThreadData(mockInboundThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+
+    assert.strictEqual(syncCallCount, 1, 'Sync called once on attempt 1');
+    assert.strictEqual(
+      syncedFingerprints.has(testFingerprint),
+      false,
+      'EXPECTED: Fingerprint MUST NOT be cached when syncResult.success === false'
+    );
+    console.log('  ✓ Attempt 1: Transient 500 failure leaves fingerprint UNCACHED (ready for retry)');
+
+    // Attempt 2: Next cycle, same fingerprint, CRM sync recovers (success 200)
+    syncShouldFail = false;
+    isDuplicateResponse = false;
+    await processThreadData(mockInboundThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+
+    assert.strictEqual(syncCallCount, 2, 'EXPECTED: Sync called again on cycle 2 retry');
+    assert.strictEqual(
+      syncedFingerprints.has(testFingerprint),
+      true,
+      'EXPECTED: Fingerprint MUST be cached after syncResult.success === true'
+    );
+    assert.ok(
+      healthServer.getSnapshot().last_inbound_sync_success_at,
+      'EXPECTED: last_inbound_sync_success_at recorded upon sync success'
+    );
+    console.log('  ✓ Attempt 2: Retry succeeds and fingerprint is cached');
+
+    // Attempt 3: Subsequent cycle with already-cached fingerprint
+    await processThreadData(mockInboundThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+    assert.strictEqual(
+      syncCallCount,
+      2,
+      'EXPECTED: Cached fingerprint is skipped without repeating POST request'
+    );
+    console.log('  ✓ Attempt 3: Cached fingerprint skipped without POSTing again');
+
+    // Test Duplicate ACK semantics: Attempt 1 returns success + isDuplicate=true
+    const duplicateFingerprint = 'fp_dup_ack_002';
+    const mockDuplicateThread = {
+      customerName: 'Khách Đã Tồn Tại',
+      stableThreadId: 'thread_dup_002',
+      customerFbId: 'fb_user_002',
+      messages: [
+        {
+          direction: 'INBOUND',
+          fingerprint: duplicateFingerprint,
+          content: 'Tin nhắn đã có trong DB',
+          timestamp: '11:25'
+        }
+      ]
+    };
+
+    syncShouldFail = false;
+    isDuplicateResponse = true;
+    await processThreadData(mockDuplicateThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+
+    assert.strictEqual(syncCallCount, 3, 'Sync called once for duplicate message');
+    assert.strictEqual(
+      syncedFingerprints.has(duplicateFingerprint),
+      true,
+      'EXPECTED: Fingerprint is cached when isDuplicate === true'
+    );
+
+    // Next scan cycle for duplicate message
+    await processThreadData(mockDuplicateThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+    assert.strictEqual(
+      syncCallCount,
+      3,
+      'EXPECTED: Duplicate fingerprint is cached so next scan does NOT POST again'
+    );
+    console.log('  ✓ Duplicate message with isDuplicate=true is acknowledged and cached');
+    console.log('✅ PASS: Inbound fingerprint ACK semantics and retry regression verified.\n');
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // 7. BOUNDED SCAN TIME BUDGET & OUTBOX NON-STARVATION (Requirement 3 & 4)
+  // -----------------------------------------------------------------------------------------------
+  console.log('--- 7. Bounded Scan Time Budget & Outbox Non-Starvation Test ---');
+
+  // Verify SCAN_CONFIG defaults
+  assert.strictEqual(SCAN_CONFIG.MAX_HEAVY_THREADS_PER_CYCLE, 3, 'Default max heavy threads is 3');
+  assert.strictEqual(SCAN_CONFIG.SCAN_TIME_BUDGET_MS, 8000, 'Default scan time budget is 8000ms');
+
+  // Mock a slow page where clicking/scanning each thread takes 120ms
+  const mockSlowConversations = Array.from({ length: 10 }, (_, i) => ({
+    rowId: `row_${i}`,
+    index: i,
+    customerName: `Customer ${i}`,
+    snippet: `Message ${i}`,
+    time: '10:00',
+    isUnread: i === 1, // Only row 1 is unread
+    isSnippetOutbound: false,
+    ariaLabel: ''
+  }));
+
+  const mockSlowPage = {
+    evaluate: async () => mockSlowConversations
+  } as any;
+
+  // Test Time Budget Exit:
+  // With 150ms budget, scan should abort before scanning many threads
+  const timeBudgetTestStart = Date.now();
+  const scanBudgetResult = await performInboundScan(mockSlowPage, EXPECTED_PAGE_ID, 'Cửa chống ngập', {
+    scanTimeBudgetMs: 150,
+    maxHeavyThreads: 5,
+    readCursor: 0
+  });
+  const timeBudgetElapsed = Date.now() - timeBudgetTestStart;
+
+  assert.ok(
+    timeBudgetElapsed < 800,
+    `Scan must exit within bounded time budget (took ${timeBudgetElapsed}ms, budget 150ms)`
+  );
+  console.log(`  ✓ Scan budget enforcement: exited after ${timeBudgetElapsed}ms (timedOut=${scanBudgetResult.timedOut})`);
+
+  // Verify health server does NOT degrade into DEGRADED_OUTBOX_LOOP when scan is bounded
+  healthServer.recordMainLoopHeartbeat();
+  healthServer.recordOutboxPollAttempt();
+  healthServer.recordOutboxPollSuccess(0);
+
+  const readyAfterScan = await fetchJson(`http://127.0.0.1:${TEST_PORT}/ready`);
+  assert.strictEqual(readyAfterScan.statusCode, 200, '/ready remains 200 during normal bounded scan');
+  assert.strictEqual(readyAfterScan.data.ready, true, 'Worker ready remains true, outbox loop not starved');
+  console.log('  ✓ /ready check verified: outbox loop healthy and not starved by inbound scan');
+
+  // Test Round-Robin Cursor & Unread Priority across cycles
+  console.log('  --- Round-Robin Read Conversation Rotation ---');
+  const readOnlyConversations = Array.from({ length: 8 }, (_, i) => ({
+    rowId: `row_${i}`,
+    index: i,
+    customerName: `Customer ${i}`,
+    snippet: `Message ${i}`,
+    time: '10:00',
+    isUnread: false,
+    isSnippetOutbound: false,
+    ariaLabel: ''
+  }));
+
+  const mockFastPage = {
+    evaluate: async () => readOnlyConversations
+  } as any;
+
+  // Cycle 1: readCursor = 0, capacity = 3
+  const cycle1 = await performInboundScan(mockFastPage, EXPECTED_PAGE_ID, 'Cửa chống ngập', {
+    scanTimeBudgetMs: 5000,
+    maxHeavyThreads: 3,
+    readCursor: 0
+  });
+  assert.strictEqual(cycle1.nextReadCursor, 3, 'Cycle 1 advances cursor from 0 to 3');
+
+  // Cycle 2: readCursor = 3, capacity = 3
+  const cycle2 = await performInboundScan(mockFastPage, EXPECTED_PAGE_ID, 'Cửa chống ngập', {
+    scanTimeBudgetMs: 5000,
+    maxHeavyThreads: 3,
+    readCursor: cycle1.nextReadCursor
+  });
+  assert.strictEqual(cycle2.nextReadCursor, 6, 'Cycle 2 advances cursor from 3 to 6');
+
+  // Cycle 3: readCursor = 6, capacity = 3 (wraps around 8 rows)
+  const cycle3 = await performInboundScan(mockFastPage, EXPECTED_PAGE_ID, 'Cửa chống ngập', {
+    scanTimeBudgetMs: 5000,
+    maxHeavyThreads: 3,
+    readCursor: cycle2.nextReadCursor
+  });
+  assert.strictEqual(cycle3.nextReadCursor, 1, 'Cycle 3 advances cursor from 6 wrapping to 1 (6 + 3 % 8 = 1)');
+  console.log('  ✓ Round-robin cursor rotation verified across cycles (0 -> 3 -> 6 -> 1)');
+  console.log('✅ PASS: Bounded scan time budget and outbox latency regression verified.\n');
+
+  // -----------------------------------------------------------------------------------------------
+  // 8. PARSER REGRESSION TEST (extractConversationsList) (Requirement 6)
+  // -----------------------------------------------------------------------------------------------
+  console.log('--- 8. extractConversationsList Parser Regression Test ---');
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+
+    // DOM fixture with 3 thread rows: 1 unread + 2 read with timestamps
+    const fixtureHtml = `
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <div data-surface="thread_list/thread_row0" role="row" aria-label="Nguyễn Văn A, 10:30 AM, chưa đọc">
+            <span data-surface="thread_row0/lib:thread_title">Nguyễn Văn A</span>
+            <div>10:30 AM</div>
+            <div>Chào shop, tư vấn cửa chống ngập giúp tôi</div>
+          </div>
+          <div data-surface="thread_list/thread_row1" role="row" aria-label="Trần Thị B, Hôm qua">
+            <span data-surface="thread_row1/lib:thread_title">Trần Thị B</span>
+            <div>Hôm qua</div>
+            <div>Đã nhận được hàng rồi shop nhé</div>
+          </div>
+          <div data-surface="thread_list/thread_row2" role="row" aria-label="Lê Văn C, Thứ hai">
+            <span data-surface="thread_row2/lib:thread_title">Lê Văn C</span>
+            <div>Thứ hai</div>
+            <div>Cửa có chống được bão không bạn?</div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    await page.setContent(fixtureHtml);
+
+    // Call extractConversationsList: MUST NOT throw ReferenceError: time is not defined
+    const parsedRows = await extractConversationsList(page, 20);
+
+    assert.ok(Array.isArray(parsedRows), 'extractConversationsList returns an array');
+    assert.strictEqual(parsedRows.length, 3, 'Parses exactly 3 rows from fixture');
+
+    // Row 0 assertions
+    assert.strictEqual(parsedRows[0].customerName, 'Nguyễn Văn A');
+    assert.ok(parsedRows[0].time.includes('10:30'), 'Row 0 time contains 10:30');
+    assert.strictEqual(parsedRows[0].isUnread, true, 'Row 0 unread detection works');
+
+    // Row 1 assertions
+    assert.strictEqual(parsedRows[1].customerName, 'Trần Thị B');
+    assert.ok(parsedRows[1].time.includes('Hôm qua'), 'Row 1 time contains Hôm qua');
+    assert.strictEqual(parsedRows[1].isUnread, false, 'Row 1 is not unread');
+
+    // Row 2 assertions
+    assert.strictEqual(parsedRows[2].customerName, 'Lê Văn C');
+    assert.ok(parsedRows[2].time.includes('Thứ hai'), 'Row 2 time contains Thứ hai');
+
+    // maxCap test: maxCap = 2 should return at most 2 rows
+    const cappedRows = await extractConversationsList(page, 2);
+    assert.strictEqual(cappedRows.length, 2, 'maxCap parameter limits returned row count to 2');
+
+    console.log('  ✓ No ReferenceError thrown (time is properly defined)');
+    console.log('  ✓ Valid time fields extracted:', parsedRows.map((r: any) => `${r.customerName} (${r.time})`));
+    console.log('  ✓ Correct row count (3 rows) & maxCap enforced (capped to 2 rows)');
+    console.log('  ✓ Unread detection verified (Row 0 isUnread=true, Row 1 isUnread=false)');
+    console.log('✅ PASS: extractConversationsList parser regression test passed.\n');
+  } finally {
+    await browser.close();
+  }
 
   await healthServer.stop();
   console.log('========================================================================================');

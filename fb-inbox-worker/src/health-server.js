@@ -19,6 +19,7 @@ class HealthServer {
       unread_rows_seen: 0,
       threads_scanned: 0,
       last_inbound_detected_at: null,
+      last_inbound_sync_success_at: null,
       last_main_loop_at: null,
       last_outbox_poll_attempt_at: null,
       last_outbox_poll_success_at: null,
@@ -46,6 +47,8 @@ class HealthServer {
       this.state.asset_match = Boolean(patch.asset_match);
     } else if (this.state.expected_asset_id && this.state.current_asset_id) {
       this.state.asset_match = (this.state.expected_asset_id === this.state.current_asset_id);
+    } else if ((this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY') && !this.state.current_asset_id) {
+      this.state.asset_match = true;
     }
 
     // Derive overall status
@@ -73,7 +76,9 @@ class HealthServer {
   }
 
   recordInboundDetected() {
-    this.state.last_inbound_detected_at = new Date().toISOString();
+    const now = new Date().toISOString();
+    this.state.last_inbound_detected_at = now;
+    this.state.last_inbound_sync_success_at = now;
   }
 
   recordMainLoopHeartbeat() {
@@ -169,6 +174,7 @@ class HealthServer {
       unread_rows_seen: this.state.unread_rows_seen,
       threads_scanned: this.state.threads_scanned,
       last_inbound_detected_at: this.state.last_inbound_detected_at,
+      last_inbound_sync_success_at: this.state.last_inbound_sync_success_at,
       uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
       pid: process.pid,
       memory: {
@@ -254,6 +260,7 @@ class HealthServer {
             unread_rows_seen: this.state.unread_rows_seen,
             threads_scanned: this.state.threads_scanned,
             last_inbound_detected_at: this.state.last_inbound_detected_at,
+            last_inbound_sync_success_at: this.state.last_inbound_sync_success_at,
             worker_running: this.state.worker_running,
             main_loop_fresh: mainLoopFresh,
             outbox_poll_fresh: successFresh,

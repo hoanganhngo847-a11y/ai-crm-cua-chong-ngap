@@ -9,8 +9,11 @@ export async function syncInboundMessageToCRM({
   externalConversationId,
   externalMessageId,
   content,
-  timestamp
-}) {
+  timestamp,
+  text,
+  fingerprint,
+  senderId
+} = {}) {
   if (!CONFIG.FB_WORKER_SECRET) {
     log.error('Chưa cấu hình FB_WORKER_SECRET trong fb-inbox-worker/.env. Không thể gửi dữ liệu về CRM.');
     return { success: false, error: 'MISSING_SECRET' };
@@ -19,11 +22,11 @@ export async function syncInboundMessageToCRM({
   const payload = {
     page_id: pageId,
     page_name: pageName,
-    sender_name: senderName,
-    customer_fb_id: customerFbId,
-    external_conversation_id: externalConversationId,
-    external_message_id: externalMessageId,
-    content,
+    sender_name: senderName || senderId || 'Khách hàng',
+    customer_fb_id: customerFbId || senderId,
+    external_conversation_id: externalConversationId || 'fb_default_thread',
+    external_message_id: externalMessageId || fingerprint,
+    content: content || text,
     timestamp,
     direction: 'inbound',
     company_id: CONFIG.CRM_COMPANY_ID
