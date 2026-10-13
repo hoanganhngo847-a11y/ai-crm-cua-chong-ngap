@@ -80,6 +80,17 @@ function isDemoMode(): boolean {
   return isDemoModeActive();
 }
 
+/**
+ * Kiểm tra xem tên khách hàng có phải là tên generic / mặc định hệ thống hay không.
+ * Các tên generic: "Khách hàng", "Khách hàng Facebook", "Facebook User", "Unknown", "Ẩn danh", "Khách hàng Zalo OA".
+ */
+export function isGenericCustomerName(name?: string | null): boolean {
+  if (!name || typeof name !== 'string') return true;
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return true;
+  return /^(Khách hàng|Facebook User|Unknown|Ẩn danh)($|\s)/i.test(trimmed);
+}
+
 // ============================================================================
 // In-Memory Normalized Mock Store for Phase 2
 // (Ready for Phase 3 integration with Member 3 Zalo OA & Member 4 Facebook Messenger)
@@ -1492,6 +1503,16 @@ export async function addInboundMessage(params: {
         ...(params.externalConversationId ? { external_conversation_id: params.externalConversationId } : {}),
       };
       conversation.updated_at = timestamp;
+
+      // Requirement 4: CRM update semantics
+      // Khi inbound mới có senderName = tên Facebook thật và customer hiện tại đang có generic name
+      // ("Khách hàng", "Facebook User", "Unknown", etc.), cập nhật customer name thành tên Facebook thật.
+      // Không overwrite nếu CRM đã có tên thật do Sale chỉnh thủ công.
+      if (params.senderName && !isGenericCustomerName(params.senderName)) {
+        if (isGenericCustomerName(conversation.customer_name)) {
+          conversation.customer_name = params.senderName.trim();
+        }
+      }
     }
 
     const externalRef = params.externalRef || params.externalMessageId;
@@ -1610,13 +1631,47 @@ export async function addInboundMessage(params: {
   const customerId = String(result.customer_id);
   const isDuplicate = Boolean(result.is_duplicate);
 
-  const customerName = params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
+  // Requirement 4: CRM update semantics trong DB mode
+  let finalCustName = params.senderName || (params.channel === 'zalo' ? 'Khách hàng Zalo OA' : 'Khách hàng Facebook');
+  let finalCustCode = 'KH-000001';
+
+  try {
+    const { data: existingCust } = await adminClient
+      .from('customers')
+      .select('name, customer_code')
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .maybeSingle();
+
+    if (existingCust) {
+      if (existingCust.customer_code) {
+        finalCustCode = existingCust.customer_code;
+      }
+      if (params.senderName && !isGenericCustomerName(params.senderName)) {
+        if (isGenericCustomerName(existingCust.name)) {
+          // Cập nhật customer name thành tên Facebook thật nếu hiện tại là tên generic
+          await adminClient
+            .from('customers')
+            .update({ name: params.senderName.trim(), updated_at: timestamp })
+            .eq('id', customerId)
+            .eq('company_id', companyId);
+          finalCustName = params.senderName.trim();
+        } else {
+          // Giữ nguyên tên đã được Sale tuỳ chỉnh thủ công
+          finalCustName = existingCust.name;
+        }
+      } else {
+        finalCustName = existingCust.name || finalCustName;
+      }
+    }
+  } catch (_) {}
+
   const conversation: Conversation = {
     id: conversationId,
     company_id: companyId,
     customer_id: customerId,
-    customer_name: customerName,
-    customer_code: 'KH-000001',
+    customer_name: finalCustName,
+    customer_code: finalCustCode,
     customer_phone: params.senderPhone,
     customer_stage: 'LEAD_NEW',
     customer_source: channel,
@@ -1636,7 +1691,7 @@ export async function addInboundMessage(params: {
     customer_id: customerId,
     channel: params.channel,
     sender_type: 'customer',
-    sender_name: params.senderName || customerName,
+    sender_name: params.senderName || finalCustName,
     content: sanitizedContent,
     sanitized_content: sanitizedContent,
     sanitization_status: sanitizationStatus,
@@ -2068,6 +2123,7 @@ export async function getFacebookBrowserOutboxJobs(
 
 export const InboxService = {
   isDemoModeActive,
+  isGenericCustomerName,
   getConversations,
   getConversationById,
   getMessagesByConversationId,

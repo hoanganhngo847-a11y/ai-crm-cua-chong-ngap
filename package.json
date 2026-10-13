@@ -45,6 +45,7 @@
     "test:phase2b-outbox": "tsx --conditions=react-server tests/inbox/test_phase2b_outbox_verification.ts",
     "test:phase2b1-hardening": "tsx --conditions=react-server tests/inbox/test_phase2b1_hardening_verification.ts",
     "test:phase3-production": "tsx --conditions=react-server tests/inbox/test_phase3_production_operations.ts",
+    "test:display-name": "tsx --conditions=react-server tests/inbox/test_customer_display_name_sync.ts",
     "test:inbox:db": "tsx --conditions=react-server tests/inbox/database.test.ts",
     "test:commercial": "tsx --conditions=react-server tests/commercial/pricing.test.ts && tsx --conditions=react-server tests/commercial/payment.test.ts && tsx --conditions=react-server tests/commercial/contract.test.ts",
     "test:commercial:db": "tsx --conditions=react-server tests/commercial/commercial-db.integration.test.ts",
