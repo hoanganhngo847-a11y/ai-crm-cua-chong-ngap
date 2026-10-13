@@ -80,9 +80,13 @@ async function runProductionOperationsTests() {
   const TEST_HEALTH_PORT = 3199;
   await healthServer.start(TEST_HEALTH_PORT, '127.0.0.1');
 
+  const TARGET_PAGE_ID = '1389294167596309';
   healthServer.updateState({
     meta_inbox_state: 'READY',
     browser_connected: true,
+    expected_asset_id: TARGET_PAGE_ID,
+    current_asset_id: TARGET_PAGE_ID,
+    asset_match: true
   });
 
   const healthRes = await fetchJson(`http://127.0.0.1:${TEST_HEALTH_PORT}/health`);

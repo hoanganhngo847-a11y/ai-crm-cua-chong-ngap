@@ -10,6 +10,7 @@ import {
   SCAN_CONFIG
 } from '../../fb-inbox-worker/src/index.js';
 import { extractConversationsList } from '../../fb-inbox-worker/src/parser.js';
+import { syncInboundMessageToCRM, CRM_SYNC_TIMEOUT_MS } from '../../fb-inbox-worker/src/crm-client.js';
 
 const require = createRequire(process.cwd() + '/package.json');
 const { chromium } = require('./fb-inbox-worker/node_modules/playwright');
@@ -111,6 +112,37 @@ async function runAssetBindingTests() {
   assert.strictEqual(wrongReadyRes.data.asset_match, false, 'Readiness reports asset_match = false');
   assert.strictEqual(wrongReadyRes.data.state, 'WRONG_ASSET', 'Readiness reports state = WRONG_ASSET');
   console.log('✅ PASS: Section 7 WRONG-ASSET automated test passed.\n');
+
+  // -----------------------------------------------------------------------------------------------
+  // 3B. Regression Test: READY with Missing current_asset_id (Fail-Closed)
+  // -----------------------------------------------------------------------------------------------
+  console.log('--- 3B. Regression Test: READY with Missing current_asset_id (Fail-Closed) ---');
+  healthServer.recordMainLoopHeartbeat();
+  healthServer.recordOutboxPollSuccess(0);
+  healthServer.updateState({
+    meta_inbox_state: 'READY',
+    expected_asset_id: EXPECTED_PAGE_ID,
+    current_asset_id: null,
+    asset_match: false,
+    browser_connected: true
+  });
+
+  const missingAssetHealthRes = await fetchJson(`http://127.0.0.1:${TEST_PORT}/health`);
+  assert.strictEqual(missingAssetHealthRes.statusCode, 200, 'Liveness remains 200');
+  assert.strictEqual(missingAssetHealthRes.data.asset_match, false, 'asset_match MUST be false when current_asset_id is null');
+  assert.strictEqual(missingAssetHealthRes.data.status, 'DEGRADED', 'status MUST be DEGRADED when asset is not matched');
+
+  const missingAssetReadyRes = await fetchJson(`http://127.0.0.1:${TEST_PORT}/ready`);
+  console.log(`READY + null current_asset_id HTTP code: ${missingAssetReadyRes.statusCode}`);
+  console.log(`READY + null current_asset_id response:`, missingAssetReadyRes.data);
+  assert.strictEqual(
+    missingAssetReadyRes.statusCode,
+    503,
+    'Readiness MUST return 503 when current_asset_id is null even if meta_inbox_state is READY'
+  );
+  assert.strictEqual(missingAssetReadyRes.data.ready, false, 'Readiness ready MUST be false');
+  assert.strictEqual(missingAssetReadyRes.data.asset_match, false, 'asset_match MUST be false');
+  console.log('✅ PASS: Test 3B: READY with missing current_asset_id strictly fails closed (503).\n');
 
   // -----------------------------------------------------------------------------------------------
   // 4. Section 8: TEST TARGET-ASSET CASE (/ready and health reporting)
@@ -282,6 +314,165 @@ async function runAssetBindingTests() {
     );
     console.log('  ✓ Duplicate message with isDuplicate=true is acknowledged and cached');
     console.log('✅ PASS: Inbound fingerprint ACK semantics and retry regression verified.\n');
+
+    // ---------------------------------------------------------------------------------------------
+    // 6B. CRM INBOUND SYNC TIMEOUT & RETRY REGRESSION (Requirement 2 & 5B, 5C)
+    // ---------------------------------------------------------------------------------------------
+    console.log('--- 6B. Bounded CRM Inbound Sync Network Time & Timeout Retry Regression ---');
+    assert.strictEqual(CRM_SYNC_TIMEOUT_MS, 4000, 'CRM_SYNC_TIMEOUT_MS must be bounded to 4000ms');
+
+    let syncShouldHang = true;
+    const timeoutFingerprint = 'fp_timeout_regression_003';
+    const mockTimeoutThread = {
+      customerName: 'Khách Hàng Timeout',
+      stableThreadId: 'thread_timeout_003',
+      customerFbId: 'fb_user_timeout_003',
+      messages: [
+        {
+          direction: 'INBOUND',
+          fingerprint: timeoutFingerprint,
+          content: 'Tin nhắn kiểm tra network timeout',
+          timestamp: '11:30'
+        }
+      ]
+    };
+
+    // Override fetch to hang beyond timeout on attempt 1
+    let hangCallCount = 0;
+    global.fetch = (async (url: any, init: any) => {
+      if (typeof url === 'string' && (url.includes('/browser-sync') || url.includes('/api/inbox/'))) {
+        hangCallCount++;
+        if (syncShouldHang) {
+          // Hang until caller abort signal triggers timeout
+          return new Promise((resolve, reject) => {
+            if (init?.signal) {
+              init.signal.addEventListener('abort', () => {
+                const abortErr = new Error('The operation was aborted');
+                abortErr.name = 'AbortError';
+                reject(abortErr);
+              });
+            }
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            is_duplicate: false,
+            is_new_conversation: true,
+            conversation_id: 'conv_timeout_recovered',
+            interaction_id: 'int_timeout_recovered'
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    // Attempt 1: CRM request hangs beyond timeout
+    const timeoutStart = Date.now();
+    await processThreadData(mockTimeoutThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+    const timeoutElapsed = Date.now() - timeoutStart;
+
+    assert.ok(
+      timeoutElapsed >= 3800 && timeoutElapsed < 6000,
+      `CRM sync must timeout within bounded time (~4000ms, actual ${timeoutElapsed}ms)`
+    );
+    assert.strictEqual(hangCallCount, 1, 'Sync was called once on hanging attempt');
+    assert.strictEqual(
+      syncedFingerprints.has(timeoutFingerprint),
+      false,
+      'EXPECTED: Fingerprint MUST NOT be cached when CRM sync times out'
+    );
+    console.log(`  ✓ Attempt 1: CRM hangs -> aborted after ${timeoutElapsed}ms, fingerprint UNCACHED`);
+
+    // Attempt 2: Next polling cycle, same fingerprint, CRM recovers with 200 OK
+    syncShouldHang = false;
+    await processThreadData(mockTimeoutThread, EXPECTED_PAGE_ID, 'Cửa chống ngập');
+
+    assert.strictEqual(hangCallCount, 2, 'EXPECTED: Same fingerprint retried on cycle 2');
+    assert.strictEqual(
+      syncedFingerprints.has(timeoutFingerprint),
+      true,
+      'EXPECTED: Fingerprint cached after recovery'
+    );
+    console.log('  ✓ Attempt 2: Next cycle successfully retries same fingerprint and caches it');
+    console.log('✅ PASS: CRM sync timeout and retry regression verified.\n');
+
+    // ---------------------------------------------------------------------------------------------
+    // 6C. REMOVE DANGEROUS fb_default_thread & FAIL CLOSED ON MISSING IDENTITY (Requirement 3 & 5D)
+    // ---------------------------------------------------------------------------------------------
+    console.log('--- 6C. Strict Inbound Identity Validation Fails Closed (No fb_default_thread) ---');
+    const postCallsBeforeIdentityTest = hangCallCount;
+
+    // A. Missing externalConversationId
+    const resMissingConv = await syncInboundMessageToCRM({
+      pageId: EXPECTED_PAGE_ID,
+      customerFbId: 'cust_valid_123',
+      externalMessageId: 'msg_valid_123',
+      content: 'Tin nhắn hợp lệ',
+      externalConversationId: ''
+    });
+    assert.strictEqual(resMissingConv.success, false, 'Missing externalConversationId must fail');
+    assert.strictEqual(
+      resMissingConv.error,
+      'INVALID_INBOUND_IDENTITY',
+      'EXPECTED: error is INVALID_INBOUND_IDENTITY'
+    );
+
+    // B. Missing customerFbId
+    const resMissingCust = await syncInboundMessageToCRM({
+      pageId: EXPECTED_PAGE_ID,
+      customerFbId: '',
+      externalConversationId: 'conv_valid_123',
+      externalMessageId: 'msg_valid_123',
+      content: 'Tin nhắn hợp lệ'
+    });
+    assert.strictEqual(resMissingCust.success, false, 'Missing customerFbId must fail');
+    assert.strictEqual(resMissingCust.error, 'INVALID_INBOUND_IDENTITY');
+
+    // C. Missing content
+    const resMissingContent = await syncInboundMessageToCRM({
+      pageId: EXPECTED_PAGE_ID,
+      customerFbId: 'cust_valid_123',
+      externalConversationId: 'conv_valid_123',
+      externalMessageId: 'msg_valid_123',
+      content: '   '
+    });
+    assert.strictEqual(resMissingContent.success, false, 'Missing content must fail');
+    assert.strictEqual(resMissingContent.error, 'INVALID_INBOUND_IDENTITY');
+
+    // D. Missing pageId
+    const resMissingPage = await syncInboundMessageToCRM({
+      pageId: '',
+      customerFbId: 'cust_valid_123',
+      externalConversationId: 'conv_valid_123',
+      externalMessageId: 'msg_valid_123',
+      content: 'Tin nhắn hợp lệ'
+    });
+    assert.strictEqual(resMissingPage.success, false, 'Missing pageId must fail');
+    assert.strictEqual(resMissingPage.error, 'INVALID_INBOUND_IDENTITY');
+
+    // E. Missing externalMessageId
+    const resMissingMsgId = await syncInboundMessageToCRM({
+      pageId: EXPECTED_PAGE_ID,
+      customerFbId: 'cust_valid_123',
+      externalConversationId: 'conv_valid_123',
+      externalMessageId: '',
+      content: 'Tin nhắn hợp lệ'
+    });
+    assert.strictEqual(resMissingMsgId.success, false, 'Missing externalMessageId must fail');
+    assert.strictEqual(resMissingMsgId.error, 'INVALID_INBOUND_IDENTITY');
+
+    // Verify ZERO POST requests were made for invalid identity calls
+    assert.strictEqual(
+      hangCallCount,
+      postCallsBeforeIdentityTest,
+      'EXPECTED: Invalid identity requests are blocked before POST (0 network calls)'
+    );
+    console.log('  ✓ Missing externalConversationId rejected with INVALID_INBOUND_IDENTITY (No POST, No fb_default_thread)');
+    console.log('  ✓ Missing customerFbId / content / pageId / externalMessageId strictly fail closed');
+    console.log('  ✓ Zero network calls made for invalid identity inputs');
+    console.log('✅ PASS: Strict inbound identity validation and elimination of fb_default_thread verified.\n');
   } finally {
     global.fetch = originalFetch;
   }

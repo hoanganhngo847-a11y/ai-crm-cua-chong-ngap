@@ -42,13 +42,21 @@ class HealthServer {
   updateState(patch = {}) {
     Object.assign(this.state, patch);
 
-    // Compute asset_match if expected_asset_id or current_asset_id is provided
+    // Semantics bắt buộc: current_asset_id missing => asset_match = false
+    // READY chỉ khi: current_asset_id tồn tại AND current_asset_id === expected_asset_id
     if (patch.asset_match !== undefined) {
-      this.state.asset_match = Boolean(patch.asset_match);
-    } else if (this.state.expected_asset_id && this.state.current_asset_id) {
-      this.state.asset_match = (this.state.expected_asset_id === this.state.current_asset_id);
-    } else if ((this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY') && !this.state.current_asset_id) {
-      this.state.asset_match = true;
+      this.state.asset_match = Boolean(
+        patch.asset_match &&
+        this.state.current_asset_id &&
+        this.state.expected_asset_id &&
+        this.state.current_asset_id === this.state.expected_asset_id
+      );
+    } else {
+      this.state.asset_match = Boolean(
+        this.state.current_asset_id &&
+        this.state.expected_asset_id &&
+        this.state.current_asset_id === this.state.expected_asset_id
+      );
     }
 
     // Derive overall status
@@ -59,11 +67,11 @@ class HealthServer {
       this.state.meta_inbox_state === 'DEGRADED' ||
       this.state.meta_inbox_state === 'DEGRADED_OUTBOX_LOOP' ||
       !this.state.browser_connected ||
-      (this.state.current_asset_id && !this.state.asset_match)
+      !this.state.asset_match
     ) {
       this.state.status = 'DEGRADED';
     } else if (this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY') {
-      this.state.status = (this.state.current_asset_id && !this.state.asset_match) ? 'DEGRADED' : 'HEALTHY';
+      this.state.status = this.state.asset_match ? 'HEALTHY' : 'DEGRADED';
     } else if (this.state.meta_inbox_state === 'NAVIGATING' || this.state.meta_inbox_state === 'STARTING') {
       this.state.status = 'STARTING';
     }
@@ -217,8 +225,14 @@ class HealthServer {
         // Readiness check: 200 ONLY if Meta Inbox is READY/INBOX_READY AND asset matches AND outbox heartbeat is fresh & healthy
         if (pathname === '/ready') {
           const isMetaReady = this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY';
-          const assetMatch = Boolean(this.state.asset_match);
-          const isWrongAsset = this.state.meta_inbox_state === 'WRONG_ASSET' || (this.state.current_asset_id && !assetMatch);
+          // Strict Fail-Closed: asset is only matched if current_asset_id exists and equals expected_asset_id
+          const assetMatch = Boolean(
+            this.state.asset_match &&
+            this.state.current_asset_id &&
+            this.state.expected_asset_id &&
+            this.state.current_asset_id === this.state.expected_asset_id
+          );
+          const isWrongAsset = this.state.meta_inbox_state === 'WRONG_ASSET' || !assetMatch;
           const now = Date.now();
           const STALE_THRESHOLD_MS = 45000;
 
@@ -235,9 +249,9 @@ class HealthServer {
           if (isWrongAsset || this.state.meta_inbox_state === 'WRONG_ASSET') {
             ready = false;
             readyState = 'WRONG_ASSET';
-          } else if (!isMetaReady || !assetMatch) {
+          } else if (!isMetaReady) {
             ready = false;
-            readyState = isMetaReady ? 'WRONG_ASSET' : this.state.meta_inbox_state;
+            readyState = this.state.meta_inbox_state;
           } else if (!mainLoopFresh || !isOutboxHealthy) {
             ready = false;
             readyState = 'DEGRADED_OUTBOX_LOOP';

@@ -1057,7 +1057,14 @@ async function runAllTests() {
   }
 
   // Case A: success fresh -> /ready 200
-  healthServer.updateState({ meta_inbox_state: 'READY', browser_connected: true });
+  const TARGET_PAGE_ID = '1389294167596309';
+  healthServer.updateState({
+    meta_inbox_state: 'READY',
+    browser_connected: true,
+    expected_asset_id: TARGET_PAGE_ID,
+    current_asset_id: TARGET_PAGE_ID,
+    asset_match: true
+  });
   healthServer.recordMainLoopHeartbeat();
   healthServer.recordOutboxPollAttempt();
   healthServer.recordOutboxPollSuccess(0);
