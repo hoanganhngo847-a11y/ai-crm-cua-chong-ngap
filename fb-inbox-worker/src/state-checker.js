@@ -5,15 +5,27 @@ export const APP_STATE = {
   LOGIN_REQUIRED: 'LOGIN_REQUIRED',
   CHECKPOINT: 'CHECKPOINT',
   INBOX_READY: 'INBOX_READY',
+  WRONG_ASSET: 'WRONG_ASSET',
   NAVIGATING: 'NAVIGATING',
   DISCONNECTED: 'DISCONNECTED',
   UNKNOWN: 'UNKNOWN'
 };
 
-export async function detectPageState(page) {
+export function extractCurrentAssetId(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.searchParams.get('asset_id') || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function detectPageDetails(page, expectedAssetId = CONFIG.FB_PAGE_ID) {
   try {
     const rawUrl = page.url();
     let pathname = '';
+    const currentAssetId = extractCurrentAssetId(rawUrl);
+
     try {
       pathname = new URL(rawUrl).pathname;
     } catch (_) {
@@ -22,12 +34,12 @@ export async function detectPageState(page) {
 
     // Check for checkpoint / 2FA / security challenges
     if (CONFIG.PATTERNS.CHECKPOINT_PATH.test(pathname) || /checkpoint|two_step_verification/i.test(rawUrl)) {
-      return APP_STATE.CHECKPOINT;
+      return { state: APP_STATE.CHECKPOINT, currentAssetId, expectedAssetId, assetMatch: false };
     }
 
     // Check for explicit login URLs
     if (CONFIG.PATTERNS.LOGIN_PATH.test(pathname)) {
-      return APP_STATE.LOGIN_REQUIRED;
+      return { state: APP_STATE.LOGIN_REQUIRED, currentAssetId, expectedAssetId, assetMatch: false };
     }
 
     // Check DOM for login form or login buttons
@@ -57,7 +69,7 @@ export async function detectPageState(page) {
     }).catch(() => ({ isLogin: false }));
 
     if (loginStatus.isLogin) {
-      return APP_STATE.LOGIN_REQUIRED;
+      return { state: APP_STATE.LOGIN_REQUIRED, currentAssetId, expectedAssetId, assetMatch: false };
     }
 
     // Check for Inbox UI ready
@@ -70,7 +82,7 @@ export async function detectPageState(page) {
           )
         );
         const hasConversations = Boolean(
-          document.querySelector('[role="listitem"], [role="row"], div[data-virtualized]')
+          document.querySelector('[data-surface*="thread_row"], [role="listitem"], [role="row"], div[data-virtualized]')
         );
         const hasSearch = Boolean(
           document.querySelector('input[placeholder*="Tìm kiếm"], input[placeholder*="Search"]')
@@ -79,16 +91,25 @@ export async function detectPageState(page) {
       }).catch(() => false);
 
       if (isInboxRendered) {
-        return APP_STATE.INBOX_READY;
+        const assetMatch = Boolean(currentAssetId && expectedAssetId && currentAssetId === expectedAssetId);
+        if (!assetMatch) {
+          return { state: APP_STATE.WRONG_ASSET, currentAssetId, expectedAssetId, assetMatch: false };
+        }
+        return { state: APP_STATE.INBOX_READY, currentAssetId, expectedAssetId, assetMatch: true };
       }
-      return APP_STATE.NAVIGATING;
+      return { state: APP_STATE.NAVIGATING, currentAssetId, expectedAssetId, assetMatch: false };
     }
 
-    return APP_STATE.NAVIGATING;
+    return { state: APP_STATE.NAVIGATING, currentAssetId, expectedAssetId, assetMatch: false };
   } catch (error) {
     if (error.message && error.message.includes('Target page, context or browser has been closed')) {
-      return APP_STATE.DISCONNECTED;
+      return { state: APP_STATE.DISCONNECTED, currentAssetId: null, expectedAssetId, assetMatch: false };
     }
-    return APP_STATE.UNKNOWN;
+    return { state: APP_STATE.UNKNOWN, currentAssetId: null, expectedAssetId, assetMatch: false };
   }
+}
+
+export async function detectPageState(page, expectedAssetId = CONFIG.FB_PAGE_ID) {
+  const details = await detectPageDetails(page, expectedAssetId);
+  return details.state;
 }

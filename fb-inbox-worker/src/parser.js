@@ -85,23 +85,28 @@ export async function extractPageName(page) {
   }
 }
 
-export async function extractConversationsList(page) {
+export async function extractConversationsList(page, maxCap = 20) {
   try {
-    return await page.evaluate(() => {
+    return await page.evaluate((cap) => {
       const results = [];
       const seenRowIds = new Set();
+      const timePattern = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|Today|Yesterday|\d{1,2}\s*(thg|\/|-)\s*\d{1,2}|\d{1,2}:\d{2}(\s*(AM|PM))?)/i;
 
-      const rowElements = Array.from(document.querySelectorAll('[data-surface*="thread_row"]'));
-      
+      // Select conversation row containers
+      const rowElements = Array.from(
+        document.querySelectorAll('[data-surface*="thread_list/thread_row"], [data-surface*="thread_row"], div[role="row"]')
+      );
+
       for (const el of rowElements) {
+        if (results.length >= cap) break;
+
         const surface = el.getAttribute('data-surface') || '';
         const match = surface.match(/thread_row(\d+)/);
-        if (!match) continue;
+        const rowKey = match ? match[0] : (el.getAttribute('id') || `row_${results.length}`);
 
-        const rowKey = match[0];
         if (seenRowIds.has(rowKey)) continue;
-        seenRowIds.add(rowKey);
 
+        // 1. Customer Name
         const titleEl = el.querySelector('[data-surface*="lib:thread_title"]') ||
                         document.querySelector(`[data-surface*="${rowKey}/lib:thread_title"]`);
         let customerName = '';
@@ -116,19 +121,29 @@ export async function extractConversationsList(page) {
 
         if (!customerName && allLines.length > 0) {
           for (const line of allLines) {
-            if (line.length >= 2 && line.length <= 60 && !/^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Move to done|Mark as|You:|Thứ|Hôm)/i.test(line)) {
+            if (line.length >= 2 && line.length <= 60 && !/^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Move to done|Mark as|You:|Thứ|Hôm|Today|Yesterday|\d{1,2}:)/i.test(line)) {
               customerName = line;
               break;
             }
           }
         }
 
+        // 2. Time & Date
+        const timeLines = allLines.filter(l => timePattern.test(l));
+        const time = timeLines.join(' ') || 'Vừa xong';
+
+        // 3. Message Snippet
         let snippet = '';
-        if (allLines.length >= 2) {
-          snippet = allLines.find(l => l !== customerName && l !== time && !l.includes('Move to done') && !l.includes('Mark as follow up')) || allLines[1];
+        const nonTimeLines = allLines.filter(
+          l => l !== customerName && !timePattern.test(l) && !/^(Move to done|Mark as follow up|Chưa đọc|Unread)/i.test(l)
+        );
+        if (nonTimeLines.length > 0) {
+          snippet = nonTimeLines[0];
+        } else if (allLines.length >= 2) {
+          snippet = allLines[1];
         }
 
-        // Unread check
+        // 4. Unread Status
         let isUnread = false;
         const ariaLabel = el.getAttribute('aria-label') || '';
         if (/chưa đọc|unread/i.test(ariaLabel) || /chưa đọc|unread/i.test(el.innerText || '')) {
@@ -141,19 +156,19 @@ export async function extractConversationsList(page) {
         }
 
         const colorMatches = el.innerHTML.includes('0, 132, 255') || el.innerHTML.includes('24, 119, 242');
-        if (colorMatches && !snippet.startsWith('You:')) {
+        if (colorMatches && !snippet.startsWith('You:') && !snippet.startsWith('Bạn:')) {
           isUnread = true;
         }
 
-        const isSnippetOutbound = snippet.startsWith('You:');
+        const isSnippetOutbound = snippet.startsWith('You:') || snippet.startsWith('Bạn:');
 
+        seenRowIds.add(rowKey);
         results.push({
           rowId: rowKey,
           index: results.length,
           customerName: customerName || 'Khách hàng',
           snippet: snippet || '',
           time: time || 'Vừa xong',
-          utime,
           isUnread,
           isSnippetOutbound,
           ariaLabel
@@ -161,7 +176,7 @@ export async function extractConversationsList(page) {
       }
 
       return results;
-    });
+    }, maxCap);
   } catch (error) {
     log.warn(`Lỗi khi đọc danh sách hội thoại: ${error.message}`);
     return [];
@@ -704,6 +719,12 @@ export async function selectConversation(page, index = 0) {
       const row = document.querySelector(`[data-surface*="thread_row${idx}"]`);
       if (row) {
         const clickable = row.querySelector('a, div[role="row"], div[role="button"]') || row;
+        clickable.click();
+        return true;
+      }
+      const rows = document.querySelectorAll('[data-surface*="thread_row"], div[role="row"]');
+      if (rows && rows[idx]) {
+        const clickable = rows[idx].querySelector('a, div[role="button"]') || rows[idx];
         clickable.click();
         return true;
       }

@@ -39,6 +39,7 @@ async function processThreadData(threadData, cachedPageId, cachedPageName) {
 
     // Requirement 5 & 6: INBOUND handling
     if (msg.direction === 'INBOUND') {
+      healthServer.recordInboundDetected();
       const fingerprint = msg.fingerprint;
 
       if (!syncedFingerprints.has(fingerprint)) {
@@ -147,13 +148,28 @@ async function main() {
     let hasLoggedLoginPrompt = false;
     let hasLoggedReadyMessage = false;
     let cachedPageName = 'Trang Meta Business';
-    let cachedPageId = CONFIG.FB_PAGE_ID;
+    const expectedPageId = CONFIG.FB_PAGE_ID;
+    const cachedPageId = expectedPageId;
 
     // Main polling loop
     while (isRunning) {
       try {
         healthServer.recordMainLoopHeartbeat();
-        const state = await withTimeout(detectPageState(page), 8000, 'detectPageState').catch((err) => {
+
+        // 1. Check current URL and asset_id binding strictly
+        let actualAssetId = null;
+        try {
+          actualAssetId = new URL(page.url()).searchParams.get('asset_id');
+        } catch (_) {}
+
+        const assetMatch = Boolean(actualAssetId && expectedPageId && actualAssetId === expectedPageId);
+        healthServer.updateState({
+          expected_asset_id: expectedPageId,
+          current_asset_id: actualAssetId,
+          asset_match: assetMatch
+        });
+
+        const state = await withTimeout(detectPageState(page, expectedPageId), 8000, 'detectPageState').catch((err) => {
           log.warn(`detectPageState timeout hoặc lỗi: ${err.message}`);
           return APP_STATE.NAVIGATING;
         });
@@ -185,9 +201,38 @@ async function main() {
           continue;
         }
 
+        // Section 3: Do NOT silently rebind cachedPageId if redirected or wrong asset
+        if (state === APP_STATE.WRONG_ASSET || !assetMatch) {
+          healthServer.updateState({
+            meta_inbox_state: 'WRONG_ASSET',
+            status: 'DEGRADED',
+            current_asset_id: actualAssetId,
+            asset_match: false
+          });
+          hasLoggedReadyMessage = false;
+          log.error(`[WRONG_ASSET] actual asset_id (${actualAssetId}) !== CONFIG.FB_PAGE_ID (${expectedPageId}). Chặn xử lý inbound và outbound!`);
+
+          // Attempt explicit navigation back to CONFIG.INBOX_URL
+          log.info(`[RECOVERY] Đang thử điều hướng lại về URL mục tiêu: ${CONFIG.INBOX_URL}`);
+          try {
+            await page.goto(CONFIG.INBOX_URL, { waitUntil: 'domcontentloaded', timeout: CONFIG.NAVIGATION_TIMEOUT_MS });
+          } catch (navErr) {
+            log.warn(`[RECOVERY] Lỗi khi điều hướng lại: ${navErr.message}`);
+          }
+
+          await sleep(CONFIG.STATE_CHECK_INTERVAL_MS);
+          continue;
+        }
+
         if (state === APP_STATE.INBOX_READY) {
-          healthServer.updateState({ meta_inbox_state: 'READY', status: 'HEALTHY', browser_connected: true });
-          const currentTitle = await page.title().catch(() => '');
+          healthServer.updateState({
+            meta_inbox_state: 'READY',
+            status: 'HEALTHY',
+            browser_connected: true,
+            current_asset_id: actualAssetId,
+            expected_asset_id: expectedPageId,
+            asset_match: true
+          });
 
           if (!hasLoggedReadyMessage) {
             log.success('Đã nhận diện Meta Business Suite Inbox thành công!');
@@ -195,19 +240,12 @@ async function main() {
             hasLoggedReadyMessage = true;
           }
 
-          // Extract Page Name & Page ID
+          // Extract Page Name (safe, non-blocking)
           try {
             const pageName = await withTimeout(extractPageName(page), 5000, 'extractPageName');
             if (pageName && pageName !== 'Trang Meta Business') {
               cachedPageName = pageName;
             }
-          } catch (_) {}
-
-          // Try getting page ID from URL
-          try {
-            const urlParams = new URLSearchParams(new URL(page.url()).search);
-            const assetId = urlParams.get('asset_id');
-            if (assetId) cachedPageId = assetId;
           } catch (_) {}
 
           // 0. Auto-dismiss any blocking promotional modals
@@ -275,45 +313,77 @@ async function main() {
           // ===================================================================
           // 2. INBOUND SCANNING SECOND (Bounded timeout on each Playwright step)
           // ===================================================================
+          let threadsScannedThisCycle = 0;
+
+          // 2a. Inspect active open thread in viewport
           try {
-            // 2a. Inspect active open thread in viewport
             const activeThreadData = await withTimeout(
-              extractActiveThreadMessages(page, cachedPageId),
+              extractActiveThreadMessages(page, expectedPageId),
               8000,
               'extractActiveThreadMessages'
             );
             if (activeThreadData && activeThreadData.messages && activeThreadData.messages.length > 0) {
-              await processThreadData(activeThreadData, cachedPageId, cachedPageName);
+              await processThreadData(activeThreadData, expectedPageId, cachedPageName);
+              threadsScannedThisCycle++;
             }
           } catch (inboundErr) {
             log.warn(`[INBOUND SCAN] Không thể trích xuất active thread: ${inboundErr.message}`);
           }
 
+          // 2b. Scan visible conversation list (prioritize unread first, then recent rows up to 20 cap)
           try {
-            // 2b. Scan conversation list for unread messages
             const conversations = await withTimeout(
-              extractConversationsList(page),
+              extractConversationsList(page, 20),
               8000,
               'extractConversationsList'
             );
 
-            if (conversations && conversations.length > 0) {
-              for (let i = 0; i < Math.min(conversations.length, 5); i++) {
-                const convItem = conversations[i];
-                if (convItem.isUnread) {
-                  await withTimeout(selectConversation(page, i), 5000, `selectConversation(${i})`).catch(() => false);
-                  await sleep(1500);
+            const rowsSeen = conversations ? conversations.length : 0;
+            const unreadRows = conversations ? conversations.filter(c => c.isUnread).length : 0;
 
+            healthServer.recordScanMetrics({
+              rowsSeen,
+              unreadRows,
+              threadsScanned: threadsScannedThisCycle
+            });
+
+            if (conversations && conversations.length > 0) {
+              const unreadConvs = conversations.filter(c => c.isUnread);
+              const readConvs = conversations.filter(c => !c.isUnread);
+              const candidatesToScan = [...unreadConvs, ...readConvs].slice(0, 10);
+
+              for (const convItem of candidatesToScan) {
+                // If thread is index 0 and was already inspected as active thread, skip clicking unless unread
+                if (convItem.index === 0 && !convItem.isUnread && threadsScannedThisCycle > 0) {
+                  continue;
+                }
+
+                const selected = await withTimeout(
+                  selectConversation(page, convItem.index),
+                  4000,
+                  `selectConversation(${convItem.index})`
+                ).catch(() => false);
+
+                if (selected) {
+                  await sleep(1000);
                   const threadData = await withTimeout(
-                    extractActiveThreadMessages(page, cachedPageId),
-                    8000,
+                    extractActiveThreadMessages(page, expectedPageId),
+                    6000,
                     'extractActiveThreadMessages'
                   ).catch(() => null);
-                  if (threadData) {
-                    await processThreadData(threadData, cachedPageId, cachedPageName);
+
+                  if (threadData && threadData.messages && threadData.messages.length > 0) {
+                    await processThreadData(threadData, expectedPageId, cachedPageName);
+                    threadsScannedThisCycle++;
                   }
                 }
               }
+
+              healthServer.recordScanMetrics({
+                rowsSeen,
+                unreadRows,
+                threadsScanned: threadsScannedThisCycle
+              });
             }
           } catch (scanErr) {
             log.warn(`[CONVERSATION SCAN] Lỗi khi quét danh sách hội thoại: ${scanErr.message}`);
