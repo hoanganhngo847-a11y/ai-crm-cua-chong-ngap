@@ -73,14 +73,32 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
   return null;
 }
 
-export default function InboxView({ initialCustomerId }: InboxViewProps) {
+export default function InboxView({ initialCustomerId, userFullName }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<InboxMessage[]>([]);
+
+  // P0-A: Store messages strictly keyed by conversationId
+  const [messagesByConversation, setMessagesByConversation] = useState<Record<string, InboxMessage[]>>({});
+
+  // P0-B: Store drafts strictly keyed by conversationId
+  const [draftsByConversation, setDraftsByConversation] = useState<Record<string, string>>({});
+
   const [loadingConversations, setLoadingConversations] = useState<boolean>(true);
   const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
   const [sending, setSending] = useState<boolean>(false);
-  const [replyText, setReplyText] = useState<string>('');
+
+  // P0-A: Monotonic request generation and active conversation reference for race condition elimination
+  const activeConversationRef = useRef<string | null>(null);
+  const fetchGenerationRef = useRef<number>(0);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+
+  // P0-B: Pending command tracking for idempotent retry strictly scoped by conversation
+  const pendingCommandsRef = useRef<Record<string, { commandId: string; content: string }>>({});
+
+  // Synchronize activeConversationRef
+  useEffect(() => {
+    activeConversationRef.current = selectedConversationId;
+  }, [selectedConversationId]);
 
   // AI Suggestion states
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -112,13 +130,14 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
       if (json.success && Array.isArray(json.data)) {
         setConversations(json.data);
 
-        // Auto-select first conversation or initial customer conversation
+        // Auto-select first conversation or initial customer conversation if none active
         if (json.data.length > 0) {
           if (initialCustomerId) {
             const match = json.data.find((c: Conversation) => c.customer_id === initialCustomerId);
-            setSelectedConversationId(match ? match.id : json.data[0].id);
-          } else if (!selectedConversationId) {
-            setSelectedConversationId(json.data[0].id);
+            const targetId = match ? match.id : json.data[0].id;
+            setSelectedConversationId((current) => current || targetId);
+          } else {
+            setSelectedConversationId((current) => current || json.data[0].id);
           }
         }
       }
@@ -127,7 +146,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     } finally {
       setLoadingConversations(false);
     }
-  }, [channelFilter, search, initialCustomerId, selectedConversationId]);
+  }, [channelFilter, search, initialCustomerId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -140,21 +159,47 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     };
   }, [fetchConversations]);
 
-  // 2. Fetch Messages when selectedConversationId changes or during smart polling
+  // 2. Fetch Messages with strict conversation isolation and stale request invalidation
   const fetchMessages = useCallback(async (convId: string, options?: { silent?: boolean }) => {
+    if (!convId) return;
+
+    if (!options?.silent) {
+      setLoadingMessages(true);
+    }
+
+    // Abort previous in-flight request to prevent network race
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+
+    // Increment request generation token
+    const currentGeneration = ++fetchGenerationRef.current;
+
     try {
-      if (!options?.silent) {
-        setLoadingMessages(true);
-      }
-      const res = await fetch(`/api/inbox?conversation_id=${convId}`);
+      const res = await fetch(`/api/inbox?conversation_id=${encodeURIComponent(convId)}`, {
+        signal: controller.signal,
+      });
       const json = await res.json();
+
+      // P0-A: If user switched conversation in the meantime, IGNORE RESPONSE
+      if (convId !== activeConversationRef.current || currentGeneration !== fetchGenerationRef.current) {
+        return;
+      }
 
       if (json.success && json.data) {
         const serverMessages: InboxMessage[] = json.data.messages || [];
 
-        setMessages((prevMessages) => {
-          if (!prevMessages || prevMessages.length === 0) {
-            return serverMessages;
+        // P0-A: Reconcile ONLY within the SAME conversation!
+        setMessagesByConversation((prev) => {
+          const existingForConv = prev[convId] || [];
+
+          if (existingForConv.length === 0) {
+            return {
+              ...prev,
+              [convId]: serverMessages,
+            };
           }
 
           // Build indexes of server messages for fast O(1) matching
@@ -165,11 +210,10 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
             if (sm.client_command_id) serverByCommandId.set(sm.client_command_id, sm);
           }
 
-          // Reconcile existing messages with updated server records
           const reconciled: InboxMessage[] = [];
           const matchedServerIds = new Set<string>();
 
-          for (const localMsg of prevMessages) {
+          for (const localMsg of existingForConv) {
             const matchedServerMsg =
               (localMsg.id ? serverById.get(localMsg.id) : null) ||
               (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
@@ -182,19 +226,21 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
               });
               if (matchedServerMsg.id) matchedServerIds.add(matchedServerMsg.id);
             } else {
-              // Optimistic message not yet in server list: preserve it
+              // Optimistic message belonging to THIS conversation: preserve it
               reconciled.push(localMsg);
             }
           }
 
-          // Append any server messages not yet present
           for (const sm of serverMessages) {
             if (sm.id && !matchedServerIds.has(sm.id)) {
               reconciled.push(sm);
             }
           }
 
-          return reconciled;
+          return {
+            ...prev,
+            [convId]: reconciled,
+          };
         });
 
         if (!options?.silent) {
@@ -203,7 +249,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
           setAiSuggestionMeta(null);
         }
 
-        // Cập nhật lại unread count và metadata Page trên UI.
+        // Cập nhật lại unread count và metadata Page trên UI
         setConversations((prev) =>
           prev.map((c) =>
             c.id === convId
@@ -212,14 +258,37 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
           )
         );
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Request aborted due to conversation switch or newer fetch - expected
+        return;
+      }
       console.error('Lỗi khi tải tin nhắn:', err);
     } finally {
-      if (!options?.silent) {
+      if (convId === activeConversationRef.current && currentGeneration === fetchGenerationRef.current && !options?.silent) {
         setLoadingMessages(false);
       }
     }
   }, []);
+
+  // Handle switching conversation
+  const handleSelectConversation = (convId: string) => {
+    if (convId === selectedConversationId) return;
+
+    activeConversationRef.current = convId;
+    setSelectedConversationId(convId);
+
+    // Abort pending fetch
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+
+    // Reset AI suggestions on switch
+    setAiSuggestion(null);
+    setAiError(null);
+    setAiSuggestionMeta(null);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -236,12 +305,17 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
 
   const handleRequestAiSuggestion = async () => {
     if (!selectedConversationId || loadingAiSuggestion) return;
+    const requestConvId = selectedConversationId;
     setLoadingAiSuggestion(true);
     setAiError(null);
     try {
       const res = await generateAiDraftSuggestionAction({
-        conversationId: selectedConversationId,
+        conversationId: requestConvId,
       });
+
+      // Ignore if user switched away
+      if (requestConvId !== activeConversationRef.current) return;
+
       if (res.success && res.suggestion) {
         setAiSuggestion(res.suggestion);
         setAiSuggestionMeta({
@@ -253,23 +327,31 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
         setAiError(res.error || 'Không thể tạo gợi ý AI');
       }
     } catch (err: unknown) {
+      if (requestConvId !== activeConversationRef.current) return;
       const message = err instanceof Error ? err.message : 'Lỗi khi tạo gợi ý AI';
       setAiError(message);
     } finally {
-      setLoadingAiSuggestion(false);
+      if (requestConvId === activeConversationRef.current) {
+        setLoadingAiSuggestion(false);
+      }
     }
   };
+
+  // Derive visible messages for active conversation
+  const visibleMessages = selectedConversationId ? (messagesByConversation[selectedConversationId] || []) : [];
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [visibleMessages]);
 
   // Smart polling for pending outbound delivery status (Requirements 3 & 4)
   useEffect(() => {
     if (!selectedConversationId) return;
+    const convId = selectedConversationId;
 
-    const hasPendingOutbound = messages.some(
+    const convMsgs = messagesByConversation[convId] || [];
+    const hasPendingOutbound = convMsgs.some(
       (m) =>
         (m.direction || '').toLowerCase() === 'outbound' &&
         isPendingDelivery(m.delivery_status)
@@ -278,43 +360,85 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
     if (!hasPendingOutbound) return;
 
     const intervalId = setInterval(() => {
-      void fetchMessages(selectedConversationId, { silent: true });
+      if (activeConversationRef.current === convId) {
+        void fetchMessages(convId, { silent: true });
+      }
     }, 2500);
 
     return () => {
       clearInterval(intervalId);
     };
-  }, [selectedConversationId, messages, fetchMessages]);
+  }, [selectedConversationId, messagesByConversation, fetchMessages]);
 
-  // Pending command tracking for idempotent retry (P0 Requirement 8)
-  const pendingCommandRef = useRef<{ commandId: string; content: string } | null>(null);
+  // Current draft for active conversation (P0-B)
+  const currentDraft = selectedConversationId ? (draftsByConversation[selectedConversationId] || '') : '';
 
-  // 3. Send Message Action
+  const handleDraftChange = (newText: string) => {
+    if (!selectedConversationId) return;
+    setDraftsByConversation((prev) => ({
+      ...prev,
+      [selectedConversationId]: newText,
+    }));
+  };
+
+  // 3. Send Message Action with strict conversation and command isolation (P0-B)
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedConversationId || !replyText.trim() || sending) return;
+    if (!selectedConversationId || sending) return;
 
-    const text = replyText.trim();
+    // Capture immutable sendConversationId
+    const sendConversationId = selectedConversationId;
+    const text = (draftsByConversation[sendConversationId] || '').trim();
+    if (!text) return;
 
-    // Determine commandId: reuse if retrying same content, generate new otherwise
+    // Determine commandId strictly scoped to sendConversationId
+    const pendingForConv = pendingCommandsRef.current[sendConversationId];
     let commandId: string;
-    if (pendingCommandRef.current && pendingCommandRef.current.content === text) {
-      // Network retry: REUSE SAME commandId
-      commandId = pendingCommandRef.current.commandId;
+    if (pendingForConv && pendingForConv.content === text) {
+      // Network retry: REUSE SAME commandId for this exact conversation
+      commandId = pendingForConv.commandId;
     } else {
-      // New logical send: NEW commandId
+      // New logical send: generate NEW UUID
       commandId = crypto.randomUUID();
-      pendingCommandRef.current = { commandId, content: text };
+      pendingCommandsRef.current[sendConversationId] = { commandId, content: text };
     }
 
     setSending(true);
+
+    const currentConv = conversations.find((c) => c.id === sendConversationId);
+
+    // Optimistic message in sendConversationId's cache
+    const optimisticMsg: InboxMessage = {
+      id: `optimistic-${commandId}`,
+      conversation_id: sendConversationId,
+      customer_id: currentConv?.customer_id || '',
+      channel: currentConv?.channel || 'facebook',
+      sender_type: 'sale',
+      sender_name: userFullName || 'Bạn (Sale)',
+      content: text,
+      created_at: new Date().toISOString(),
+      direction: 'outbound',
+      delivery_status: 'PENDING_DISPATCH',
+      client_command_id: commandId,
+    };
+
+    setMessagesByConversation((prev) => ({
+      ...prev,
+      [sendConversationId]: [...(prev[sendConversationId] || []), optimisticMsg],
+    }));
+
+    // Clear draft ONLY for sendConversationId
+    setDraftsByConversation((prev) => ({
+      ...prev,
+      [sendConversationId]: '',
+    }));
 
     try {
       const res = await fetch('/api/inbox', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          conversation_id: selectedConversationId,
+          conversation_id: sendConversationId,
           content: text,
           client_command_id: commandId,
         }),
@@ -322,42 +446,51 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
 
       const json = await res.json();
       if (json.success && json.data) {
-        // If server says is_duplicate=true, do NOT append duplicate bubble
-        if (!json.data.is_duplicate) {
-          setMessages((prev) => {
-            const exists = prev.some(
-              (m) =>
-                m.id === json.data.id ||
-                (m.client_command_id && m.client_command_id === json.data.client_command_id)
-            );
-            if (exists) {
-              return prev.map((m) =>
+        // Success: update cache for sendConversationId
+        setMessagesByConversation((prev) => {
+          const convMsgs = prev[sendConversationId] || [];
+          const exists = convMsgs.some(
+            (m) =>
+              m.id === json.data.id ||
+              (m.client_command_id && m.client_command_id === json.data.client_command_id)
+          );
+
+          if (exists) {
+            return {
+              ...prev,
+              [sendConversationId]: convMsgs.map((m) =>
                 m.id === json.data.id ||
                 (m.client_command_id && m.client_command_id === json.data.client_command_id)
                   ? { ...m, ...json.data }
                   : m
-              );
-            }
-            return [...prev, json.data];
-          });
-        }
-        setReplyText('');
-        // Clear pending command on success (next send gets new UUID)
-        pendingCommandRef.current = null;
+              ),
+            };
+          }
 
-        // Cập nhật tin nhắn mới nhất trong danh sách cột trái
+          // If not duplicate, replace optimistic message
+          return {
+            ...prev,
+            [sendConversationId]: convMsgs
+              .filter((m) => m.client_command_id !== commandId)
+              .concat(json.data),
+          };
+        });
+
+        // Clear pending command for this conversation on success
+        delete pendingCommandsRef.current[sendConversationId];
+
+        // Update conversation list preview
         setConversations((prev) =>
           prev.map((c) =>
-            c.id === selectedConversationId
+            c.id === sendConversationId
               ? { ...c, last_message: text, updated_at: json.data.created_at }
               : c
           )
         );
       }
-      // If res.ok but json.success is false, keep pendingCommandRef for retry
     } catch (err) {
       console.error('Lỗi khi gửi tin nhắn:', err);
-      // Keep pendingCommandRef intact so retry reuses same commandId
+      // Keep pendingCommandsRef[sendConversationId] intact for retry
     } finally {
       setSending(false);
     }
@@ -408,13 +541,13 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
       </div>
 
       {/* 3-Column Workspace */}
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-12 overflow-hidden">
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-12 min-h-0 overflow-hidden">
         {/* ================================================================== */}
         {/* CỘT TRÁI (3.5 cols): Danh sách hội thoại & Bộ lọc                  */}
         {/* ================================================================== */}
-        <div className="md:col-span-4 lg:col-span-3 border-r border-slate-800 flex flex-col bg-slate-900/50">
+        <div className="md:col-span-4 lg:col-span-3 border-r border-slate-800 flex flex-col min-h-0 h-full bg-slate-900/50 overflow-hidden">
           {/* Filter Bar */}
-          <div className="p-3 border-b border-slate-800 space-y-2.5">
+          <div className="shrink-0 p-3 border-b border-slate-800 space-y-2.5">
             {/* Search */}
             <div className="relative">
               <input
@@ -472,7 +605,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
           </div>
 
           {/* Conversations List */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-800/50">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/50">
             {loadingConversations ? (
               <div className="p-3 space-y-3">
                 {[...Array(5)].map((_, i) => (
@@ -508,8 +641,17 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                 return (
                   <div
                     key={conv.id}
-                    onClick={() => setSelectedConversationId(conv.id)}
-                    className={`p-3.5 transition cursor-pointer relative flex flex-col gap-1 ${
+                    role="button"
+                    tabIndex={0}
+                    aria-selected={isSelected}
+                    onClick={() => handleSelectConversation(conv.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleSelectConversation(conv.id);
+                      }
+                    }}
+                    className={`p-3.5 transition cursor-pointer relative flex flex-col gap-1 focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${
                       isSelected
                         ? 'bg-slate-800/80 border-l-4 border-blue-500'
                         : 'hover:bg-slate-800/30'
@@ -585,11 +727,11 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
         {/* ================================================================== */}
         {/* CỘT GIỮA (5.5 cols): Khung tin nhắn & Ô nhập trả lời              */}
         {/* ================================================================== */}
-        <div className="md:col-span-8 lg:col-span-6 flex flex-col bg-slate-950 border-r border-slate-800">
+        <div className="md:col-span-8 lg:col-span-6 flex flex-col min-h-0 h-full bg-slate-950 border-r border-slate-800 overflow-hidden">
           {selectedConversation ? (
             <>
               {/* Chat Header */}
-              <div className="p-3.5 px-5 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
+              <div className="shrink-0 p-3.5 px-5 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-white">
                     {getInitials(selectedConversation.customer_name)}
@@ -628,20 +770,20 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                 </div>
               </div>
 
-              {/* Chat Stream */}
-              <div className="flex-1 p-4 overflow-y-auto space-y-3.5 bg-slate-950">
+              {/* Chat Stream (Independent Scroll, Isolated Messages) */}
+              <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5 bg-slate-950">
                 {loadingMessages ? (
                   <div className="space-y-3">
                     {[...Array(4)].map((_, i) => (
                       <div key={i} className="h-12 bg-slate-900 rounded-xl animate-pulse" />
                     ))}
                   </div>
-                ) : messages.length === 0 ? (
+                ) : visibleMessages.length === 0 ? (
                   <div className="text-center py-12 text-xs text-slate-500">
                     Chưa có tin nhắn nào trong cuộc hội thoại này.
                   </div>
                 ) : (
-                  messages.map((msg) => {
+                  visibleMessages.map((msg) => {
                     const isSaleMsg = msg.sender_type === 'sale';
                     const isAiMsg = msg.sender_type === 'ai';
 
@@ -711,8 +853,8 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Message Input Box */}
-              <div className="p-3 border-t border-slate-800 bg-slate-900/80">
+              {/* Message Input Box (Fixed at bottom) */}
+              <div className="shrink-0 p-3 border-t border-slate-800 bg-slate-900/80">
                 <form onSubmit={handleSendMessage} className="space-y-2">
                   {/* AI Draft Suggestion Box */}
                   {aiError && (
@@ -733,7 +875,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                           <button
                             type="button"
                             onClick={() => {
-                              setReplyText(aiSuggestion);
+                              handleDraftChange(aiSuggestion);
                               setAiSuggestion(null);
                             }}
                             className="px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-medium transition"
@@ -762,8 +904,8 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
                   <div className="flex items-end gap-2">
                     <textarea
                       rows={2}
-                      value={replyText}
-                      onChange={(e) => setReplyText(e.target.value)}
+                      value={currentDraft}
+                      onChange={(e) => handleDraftChange(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
@@ -795,7 +937,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
 
                     <button
                       type="submit"
-                      disabled={sending || !replyText.trim()}
+                      disabled={sending || !currentDraft.trim()}
                       className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-lg shadow-blue-600/20"
                     >
                       {sending ? (
@@ -904,7 +1046,7 @@ export default function InboxView({ initialCustomerId }: InboxViewProps) {
         {/* ================================================================== */}
         {/* CỘT PHẢI (3 cols): Thông tin vắn tắt khách hàng                    */}
         {/* ================================================================== */}
-        <div className="hidden lg:block lg:col-span-3 p-4 bg-slate-900/40 overflow-y-auto space-y-4 text-xs">
+        <div className="hidden lg:flex lg:flex-col lg:col-span-3 min-h-0 h-full p-4 bg-slate-900/40 overflow-y-auto space-y-4 text-xs">
           {selectedConversation ? (
             <>
               {/* Profile Card */}

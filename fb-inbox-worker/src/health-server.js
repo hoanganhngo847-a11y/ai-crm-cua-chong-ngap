@@ -9,8 +9,14 @@ class HealthServer {
     this.state = {
       worker_running: true,
       browser_connected: false,
-      meta_inbox_state: 'STARTING', // 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'DEGRADED' | 'STARTING'
+      meta_inbox_state: 'STARTING', // 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'DEGRADED' | 'STARTING' | 'NAVIGATING'
       status: 'STARTING', // 'HEALTHY' | 'DEGRADED' | 'LOGIN_REQUIRED' | 'STARTING'
+      last_main_loop_at: null,
+      last_outbox_poll_attempt_at: null,
+      last_outbox_poll_success_at: null,
+      last_outbox_poll_error_at: null,
+      last_outbox_poll_error_code: null,
+      outbox_loop_healthy: false,
       last_successful_inbox_scan: null,
       last_successful_outbox_delivery: null,
       pending_outbox_count: 0,
@@ -30,10 +36,35 @@ class HealthServer {
     // Derive overall status
     if (this.state.meta_inbox_state === 'LOGIN_REQUIRED' || this.state.meta_inbox_state === 'CHECKPOINT') {
       this.state.status = 'LOGIN_REQUIRED';
-    } else if (this.state.meta_inbox_state === 'DEGRADED' || !this.state.browser_connected) {
+    } else if (this.state.meta_inbox_state === 'DEGRADED' || this.state.meta_inbox_state === 'DEGRADED_OUTBOX_LOOP' || !this.state.browser_connected) {
       this.state.status = 'DEGRADED';
     } else if (this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY') {
       this.state.status = 'HEALTHY';
+    } else if (this.state.meta_inbox_state === 'NAVIGATING' || this.state.meta_inbox_state === 'STARTING') {
+      this.state.status = 'STARTING';
+    }
+  }
+
+  recordMainLoopHeartbeat() {
+    this.state.last_main_loop_at = new Date().toISOString();
+  }
+
+  recordOutboxPollAttempt() {
+    this.state.last_outbox_poll_attempt_at = new Date().toISOString();
+  }
+
+  recordOutboxPollSuccess(count = 0) {
+    this.state.last_outbox_poll_success_at = new Date().toISOString();
+    this.state.last_outbox_poll_error_code = null;
+    this.state.outbox_loop_healthy = true;
+    this.state.pending_outbox_count = typeof count === 'number' ? count : 0;
+  }
+
+  recordOutboxPollError(errorCode = 'CLAIM_ERROR', message = null) {
+    this.state.last_outbox_poll_error_at = new Date().toISOString();
+    this.state.last_outbox_poll_error_code = errorCode;
+    if (message) {
+      this.state.error_message = message;
     }
   }
 
@@ -55,6 +86,14 @@ class HealthServer {
 
   getSnapshot() {
     const mem = process.memoryUsage();
+    const now = Date.now();
+    const STALE_THRESHOLD_MS = 45000;
+    const isOutboxFresh = Boolean(
+      this.state.last_outbox_poll_attempt_at &&
+      (now - new Date(this.state.last_outbox_poll_attempt_at).getTime() < STALE_THRESHOLD_MS)
+    );
+    this.state.outbox_loop_healthy = isOutboxFresh;
+
     return {
       status: this.state.status,
       worker_running: this.state.worker_running,
@@ -66,6 +105,12 @@ class HealthServer {
         rss_mb: Math.round((mem.rss / 1024 / 1024) * 10) / 10,
         heap_used_mb: Math.round((mem.heapUsed / 1024 / 1024) * 10) / 10,
       },
+      last_main_loop_at: this.state.last_main_loop_at,
+      last_outbox_poll_attempt_at: this.state.last_outbox_poll_attempt_at,
+      last_outbox_poll_success_at: this.state.last_outbox_poll_success_at,
+      last_outbox_poll_error_at: this.state.last_outbox_poll_error_at,
+      last_outbox_poll_error_code: this.state.last_outbox_poll_error_code,
+      outbox_loop_healthy: isOutboxFresh,
       last_successful_inbox_scan: this.state.last_successful_inbox_scan,
       last_successful_outbox_delivery: this.state.last_successful_outbox_delivery,
       pending_outbox_count: this.state.pending_outbox_count,
@@ -93,16 +138,50 @@ class HealthServer {
           return;
         }
 
-        // Readiness check: 200 ONLY if Meta Inbox is READY/INBOX_READY; 503 for LOGIN_REQUIRED, CHECKPOINT, etc.
+        // Readiness check: 200 ONLY if Meta Inbox is READY/INBOX_READY AND outbox heartbeat is fresh
         if (pathname === '/ready') {
-          const isReady = this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY';
-          res.writeHead(isReady ? 200 : 503, { 'Content-Type': 'application/json' });
+          const isMetaReady = this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY';
+          const now = Date.now();
+          const STALE_THRESHOLD_MS = 45000;
+
+          const mainLoopFresh = Boolean(
+            this.state.last_main_loop_at &&
+            (now - new Date(this.state.last_main_loop_at).getTime() < STALE_THRESHOLD_MS)
+          );
+
+          const outboxPollFresh = Boolean(
+            this.state.last_outbox_poll_attempt_at &&
+            (now - new Date(this.state.last_outbox_poll_attempt_at).getTime() < STALE_THRESHOLD_MS)
+          );
+
+          let ready = false;
+          let readyState = this.state.meta_inbox_state;
+
+          if (!isMetaReady) {
+            ready = false;
+            readyState = this.state.meta_inbox_state;
+          } else if (!mainLoopFresh || !outboxPollFresh) {
+            ready = false;
+            readyState = 'DEGRADED_OUTBOX_LOOP';
+          } else {
+            ready = true;
+            readyState = 'READY';
+          }
+
+          const statusCode = ready ? 200 : 503;
+          res.writeHead(statusCode, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
-            ready: isReady,
-            state: this.state.meta_inbox_state,
+            ready,
+            state: readyState,
             meta_inbox_state: this.state.meta_inbox_state,
-            status: this.state.status,
-            worker_running: this.state.worker_running
+            status: ready ? 'HEALTHY' : 'DEGRADED',
+            worker_running: this.state.worker_running,
+            main_loop_fresh: mainLoopFresh,
+            outbox_poll_fresh: outboxPollFresh,
+            last_main_loop_at: this.state.last_main_loop_at,
+            last_outbox_poll_attempt_at: this.state.last_outbox_poll_attempt_at,
+            last_outbox_poll_success_at: this.state.last_outbox_poll_success_at,
+            last_outbox_poll_error_code: this.state.last_outbox_poll_error_code
           }));
           return;
         }
