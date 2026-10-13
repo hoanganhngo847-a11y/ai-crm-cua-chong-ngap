@@ -2,6 +2,29 @@ import crypto from 'crypto';
 import { log } from './logger.js';
 import { threadStore } from './thread-store.js';
 
+export const UI_EXCLUDED_PATTERNS = [
+  /^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Online|Offline)$/i,
+  /^(Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Search|Filter|Manage|Quản lý)$/i,
+  /^(Ad replies|Priority|Follow up|Open Dropdown|Chỉ định|Assign this conversation)$/i,
+  /^(View profile|Xem trang cá nhân|Trang cá nhân|Profile|Not now|Connect|Lúc khác|Bỏ qua|Đóng|Close)$/i,
+  /^(Tạo|Create|Home|Notifications|Settings|Help|Cài đặt|Trợ giúp|Learn more|Tìm hiểu thêm)$/i,
+  /^(Reply in Messenger|Enter|Đính kèm|Send|Gửi|Preview|Xem trước)$/i,
+  /^(Khách hàng|Facebook User|Unknown|Ẩn danh)($|\s)/i,
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|\d{1,2} thg|\d{1,2}:\d{2})/i,
+  /^You:/i
+];
+
+export function isValidCustomerDisplayName(text) {
+  if (!text || typeof text !== 'string') return false;
+  const clean = text.trim();
+  if (clean.length < 2 || clean.length > 60) return false;
+  for (const pattern of UI_EXCLUDED_PATTERNS) {
+    if (pattern.test(clean)) return false;
+  }
+  if (clean.includes('\n')) return false;
+  return true;
+}
+
 /**
  * Robust DOM Parser for Meta Business Suite Inbox
  * Conforms strictly to Phase 2A requirements:
@@ -81,16 +104,23 @@ export async function extractConversationsList(page) {
 
         const titleEl = el.querySelector('[data-surface*="lib:thread_title"]') ||
                         document.querySelector(`[data-surface*="${rowKey}/lib:thread_title"]`);
-        let customerName = titleEl ? (titleEl.innerText || '').trim() : '';
-
-        const timeEl = el.querySelector('abbr.timestamp, abbr[data-utime]');
-        const time = timeEl ? (timeEl.getAttribute('title') || timeEl.innerText || '').trim() : '';
-        const utime = timeEl ? timeEl.getAttribute('data-utime') : null;
+        let customerName = '';
+        if (titleEl) {
+          const t = (titleEl.innerText || '').trim();
+          if (t && t.length >= 2 && t.length <= 60 && !/^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Move to done|Mark as)/i.test(t)) {
+            customerName = t;
+          }
+        }
 
         const allLines = (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
 
         if (!customerName && allLines.length > 0) {
-          customerName = allLines[0];
+          for (const line of allLines) {
+            if (line.length >= 2 && line.length <= 60 && !/^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Move to done|Mark as|You:|Thứ|Hôm)/i.test(line)) {
+              customerName = line;
+              break;
+            }
+          }
         }
 
         let snippet = '';
@@ -156,28 +186,154 @@ export async function extractActiveThreadMessages(page, pageId) {
 
       let customerFbId = null;
       let profileHref = null;
+      let targetProfileLink = null;
 
       for (const link of profileLinks) {
         const href = link.getAttribute('href') || '';
-        const idMatch = href.match(/id=(\d+)/);
+        const idMatch = href.match(/id=(\d+)/) || href.match(/facebook\.com\/(\d+)/);
         if (idMatch) {
           customerFbId = idMatch[1];
           profileHref = href;
+          targetProfileLink = link;
           break;
         }
       }
 
-      // Customer display name in thread header
+      // UI Exclusion Patterns
+      const UI_PATTERNS = [
+        /^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Online|Offline)$/i,
+        /^(Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Search|Filter|Manage|Quản lý)$/i,
+        /^(Ad replies|Priority|Follow up|Open Dropdown|Chỉ định|Assign this conversation)$/i,
+        /^(View profile|Xem trang cá nhân|Trang cá nhân|Profile|Not now|Connect|Lúc khác|Bỏ qua|Đóng|Close)$/i,
+        /^(Tạo|Create|Home|Notifications|Settings|Help|Cài đặt|Trợ giúp|Learn more|Tìm hiểu thêm)$/i,
+        /^(Reply in Messenger|Enter|Đính kèm|Send|Gửi|Preview|Xem trước)$/i,
+        /^(Khách hàng|Facebook User|Unknown|Ẩn danh)($|\s)/i,
+        /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|\d{1,2} thg|\d{1,2}:\d{2})/i,
+        /^You:/i
+      ];
+
+      const validator = {
+        isValid(text) {
+          if (!text || typeof text !== 'string') return false;
+          const clean = text.trim();
+          if (clean.length < 2 || clean.length > 60) return false;
+          for (const pattern of UI_PATTERNS) {
+            if (pattern.test(clean)) return false;
+          }
+          if (clean.includes('\n')) return false;
+          return true;
+        }
+      };
+
+      // Customer display name resolution with strict priority:
+      // 1. Thread header
+      // 2. Right customer detail / profile panel
+      // 3. Facebook profile link's accessible name / text
+      // 4. Conversation row title
       let customerName = '';
-      const headerEls = document.querySelectorAll(
-        '[data-surface*="thread_header"] h1, [data-surface*="thread_header"] h2, [role="main"] h2, div[role="main"] span[dir="auto"]'
-      );
-      for (const h of headerEls) {
-        const text = (h.innerText || '').trim();
-        if (text && text.length > 1 && text.length < 50 &&
-            !/^(Hộp thư|Inbox|Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Ghi chú|Chi tiết|Assign)/i.test(text)) {
-          customerName = text;
-          break;
+      let customerNameSource = '';
+
+      // Priority 1: Thread header
+      const headerSelectors = [
+        '[data-surface*="detail_view_header"]',
+        '[data-surface*="thread_header"]',
+        '[data-surface*="inbox:detail_view_header"]',
+        '[data-surface*="lib:inbox:detail_view_header"]',
+        '[role="main"] header',
+        '[role="region"] header'
+      ];
+
+      for (const sel of headerSelectors) {
+        const headerEl = document.querySelector(sel);
+        if (headerEl) {
+          // Check heading / prominent elements first
+          const headingEls = headerEl.querySelectorAll('h1, h2, h3, [role="heading"], div[dir="auto"], span[dir="auto"]');
+          for (const h of headingEls) {
+            const t = (h.innerText || '').trim();
+            if (validator.isValid(t)) {
+              customerName = t;
+              customerNameSource = `thread_header (${sel} > ${h.tagName})`;
+              break;
+            }
+          }
+          if (customerName) break;
+
+          // Check lines in headerEl innerText
+          const lines = (headerEl.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (validator.isValid(line)) {
+              customerName = line;
+              customerNameSource = `thread_header_text_line (${sel})`;
+              break;
+            }
+          }
+          if (customerName) break;
+        }
+      }
+
+      // Priority 2: Right customer detail / profile panel
+      if (!customerName && targetProfileLink) {
+        const parent = targetProfileLink.parentElement;
+        if (parent) {
+          for (const child of parent.children) {
+            if (child === targetProfileLink) continue;
+            const t = (child.innerText || '').trim();
+            if (validator.isValid(t)) {
+              customerName = t;
+              customerNameSource = 'right_customer_detail_panel (profile_link_sibling)';
+              break;
+            }
+          }
+        }
+
+        if (!customerName && parent?.parentElement) {
+          const grandParent = parent.parentElement;
+          const candidateEls = grandParent.querySelectorAll('h1, h2, h3, div, span');
+          for (const el of candidateEls) {
+            const t = (el.innerText || '').trim();
+            if (validator.isValid(t)) {
+              customerName = t;
+              customerNameSource = 'right_customer_detail_panel (ancestor_element)';
+              break;
+            }
+          }
+        }
+      }
+
+      // Priority 3: Facebook Profile link accessible name / text
+      if (!customerName && targetProfileLink) {
+        const ariaLabel = (targetProfileLink.getAttribute('aria-label') || '').trim();
+        const titleAttr = (targetProfileLink.getAttribute('title') || '').trim();
+        const linkText = (targetProfileLink.innerText || '').trim();
+
+        if (validator.isValid(ariaLabel)) {
+          customerName = ariaLabel;
+          customerNameSource = 'profile_link_aria_label';
+        } else if (validator.isValid(titleAttr)) {
+          customerName = titleAttr;
+          customerNameSource = 'profile_link_title';
+        } else if (validator.isValid(linkText)) {
+          customerName = linkText;
+          customerNameSource = 'profile_link_text';
+        }
+      }
+
+      // Priority 4: Active thread row in conversation list
+      if (!customerName) {
+        const activeRow = document.querySelector('[data-surface*="thread_row"][aria-selected="true"], [data-surface*="thread_row0"]');
+        if (activeRow) {
+          const titleEl = activeRow.querySelector('[data-surface*="lib:thread_title"]');
+          const t = (titleEl?.innerText || '').trim();
+          if (validator.isValid(t)) {
+            customerName = t;
+            customerNameSource = 'thread_row_title';
+          } else {
+            const firstLine = (activeRow.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)[0];
+            if (validator.isValid(firstLine)) {
+              customerName = firstLine;
+              customerNameSource = 'thread_row_first_line';
+            }
+          }
         }
       }
 
@@ -224,16 +380,6 @@ export async function extractActiveThreadMessages(page, pageId) {
       const styleCache = new Map();
       const containerRect = msgContainer.getBoundingClientRect();
 
-      function getCachedStyle(node) {
-        if (!node) return null;
-        let s = styleCache.get(node);
-        if (!s) {
-          s = window.getComputedStyle(node);
-          styleCache.set(node, s);
-        }
-        return s;
-      }
-
       for (const el of candidateNodes) {
         const text = (el.innerText || '').trim();
         if (!text) continue;
@@ -272,7 +418,11 @@ export async function extractActiveThreadMessages(page, pageId) {
           }
 
           if (!bgColor || !alignItems) {
-            const style = getCachedStyle(curr);
+            let style = styleCache.get(curr);
+            if (!style) {
+              style = window.getComputedStyle(curr);
+              styleCache.set(curr, style);
+            }
             if (style) {
               if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
                 bgColor = style.backgroundColor;
@@ -345,6 +495,7 @@ export async function extractActiveThreadMessages(page, pageId) {
         customerFbId,
         profileHref,
         customerName,
+        customerNameSource,
         candidateCount: totalCandidates,
         parsedMessages
       };
@@ -354,7 +505,15 @@ export async function extractActiveThreadMessages(page, pageId) {
     log.info(`[INBOUND_PARSE] duration_ms=${durationMs} candidate_count=${rawData?.candidateCount || 0}`);
 
     if (rawData.error || !rawData.parsedMessages) {
-      return { customerFbId: null, stableThreadId: null, messages: [] };
+      return { customerFbId: null, stableThreadId: null, customerName: 'Khách hàng', messages: [] };
+    }
+
+    let finalCustomerName = rawData.customerName;
+    if (finalCustomerName) {
+      log.info(`[CUSTOMER_NAME_RESOLVED] Tên khách hàng: "${finalCustomerName}" (Nguồn: ${rawData.customerNameSource || 'DOM'})`);
+    } else {
+      log.warn('[CUSTOMER_NAME_FALLBACK] Không trích xuất được tên khách hàng từ DOM Meta Business Suite, fallback: Khách hàng');
+      finalCustomerName = 'Khách hàng';
     }
 
     // Resolve stable thread ID following Priority Order (Rule 3)
@@ -362,7 +521,7 @@ export async function extractActiveThreadMessages(page, pageId) {
       pageId,
       rawData.customerFbId,
       null, // direct thread ID if available
-      rawData.customerName
+      finalCustomerName
     );
 
     // Compute deterministic fingerprint for each message (Rule 4)
@@ -382,13 +541,160 @@ export async function extractActiveThreadMessages(page, pageId) {
     return {
       customerFbId: rawData.customerFbId,
       profileHref: rawData.profileHref,
-      customerName: rawData.customerName || 'Khách hàng',
+      customerName: finalCustomerName,
+      customerNameSource: rawData.customerNameSource || 'fallback',
       stableThreadId,
       messages
     };
   } catch (error) {
     log.warn(`Lỗi khi trích xuất tin nhắn active thread: ${error.message}`);
-    return { customerFbId: null, stableThreadId: null, messages: [] };
+    return { customerFbId: null, stableThreadId: null, customerName: 'Khách hàng', messages: [] };
+  }
+}
+
+/**
+ * Helper rõ ràng trích xuất tên hiển thị thật của khách hàng Facebook
+ * Tuân thủ thứ tự ưu tiên:
+ * 1. Thread header ([data-surface*="detail_view_header"], [data-surface*="thread_header"])
+ * 2. Right customer detail/profile panel
+ * 3. Facebook profile link accessible name / text
+ * 4. Active thread row in list
+ * Loại bỏ toàn bộ text UI, không lấy message body làm tên.
+ * Fail safely: Fallback 'Khách hàng', log [CUSTOMER_NAME_FALLBACK].
+ */
+export async function extractCustomerDisplayName(page) {
+  try {
+    const result = await page.evaluate(() => {
+      const UI_PATTERNS = [
+        /^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Online|Offline)$/i,
+        /^(Tất cả|Chưa đọc|Tin nhắn|Tìm kiếm|Bộ lọc|Search|Filter|Manage|Quản lý)$/i,
+        /^(Ad replies|Priority|Follow up|Open Dropdown|Chỉ định|Assign this conversation)$/i,
+        /^(View profile|Xem trang cá nhân|Trang cá nhân|Profile|Not now|Connect|Lúc khác|Bỏ qua|Đóng|Close)$/i,
+        /^(Tạo|Create|Home|Notifications|Settings|Help|Cài đặt|Trợ giúp|Learn more|Tìm hiểu thêm)$/i,
+        /^(Reply in Messenger|Enter|Đính kèm|Send|Gửi|Preview|Xem trước)$/i,
+        /^(Khách hàng|Facebook User|Unknown|Ẩn danh)($|\s)/i,
+        /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|\d{1,2} thg|\d{1,2}:\d{2})/i,
+        /^You:/i
+      ];
+
+      const validator = {
+        isValid(text) {
+          if (!text || typeof text !== 'string') return false;
+          const clean = text.trim();
+          if (clean.length < 2 || clean.length > 60) return false;
+          for (const pattern of UI_PATTERNS) {
+            if (pattern.test(clean)) return false;
+          }
+          if (clean.includes('\n')) return false;
+          return true;
+        }
+      };
+
+      // 1. Thread header
+      const headerSelectors = [
+        '[data-surface*="detail_view_header"]',
+        '[data-surface*="thread_header"]',
+        '[data-surface*="inbox:detail_view_header"]',
+        '[data-surface*="lib:inbox:detail_view_header"]',
+        '[role="main"] header',
+        '[role="region"] header'
+      ];
+
+      for (const sel of headerSelectors) {
+        const headerEl = document.querySelector(sel);
+        if (headerEl) {
+          const headingEls = headerEl.querySelectorAll('h1, h2, h3, [role="heading"], div[dir="auto"], span[dir="auto"]');
+          for (const h of headingEls) {
+            const t = (h.innerText || '').trim();
+            if (validator.isValid(t)) {
+              return { name: t, source: `thread_header (${sel} > ${h.tagName})` };
+            }
+          }
+
+          const lines = (headerEl.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (validator.isValid(line)) {
+              return { name: line, source: `thread_header_text_line (${sel})` };
+            }
+          }
+        }
+      }
+
+      // 2 & 3. Right customer detail panel and profile link
+      const profileLinks = Array.from(
+        document.querySelectorAll('a[href*="facebook.com/profile.php"], a[href*="facebook.com/"]')
+      ).filter(a => {
+        const href = a.getAttribute('href') || '';
+        return !href.includes('business.facebook.com') && !href.includes('/help/') && !href.includes('/pages/');
+      });
+
+      for (const link of profileLinks) {
+        // Priority 2: Siblings in right detail panel
+        const parent = link.parentElement;
+        if (parent) {
+          for (const child of parent.children) {
+            if (child === link) continue;
+            const t = (child.innerText || '').trim();
+            if (validator.isValid(t)) {
+              return { name: t, source: 'right_customer_detail_panel (profile_link_sibling)' };
+            }
+          }
+        }
+
+        if (parent?.parentElement) {
+          const grandParent = parent.parentElement;
+          const candidateEls = grandParent.querySelectorAll('h1, h2, h3, div, span');
+          for (const el of candidateEls) {
+            const t = (el.innerText || '').trim();
+            if (validator.isValid(t)) {
+              return { name: t, source: 'right_customer_detail_panel (ancestor_element)' };
+            }
+          }
+        }
+
+        // Priority 3: Facebook Profile link accessible name / text
+        const ariaLabel = (link.getAttribute('aria-label') || '').trim();
+        const titleAttr = (link.getAttribute('title') || '').trim();
+        const linkText = (link.innerText || '').trim();
+
+        if (validator.isValid(ariaLabel)) {
+          return { name: ariaLabel, source: 'profile_link_aria_label' };
+        }
+        if (validator.isValid(titleAttr)) {
+          return { name: titleAttr, source: 'profile_link_title' };
+        }
+        if (validator.isValid(linkText)) {
+          return { name: linkText, source: 'profile_link_text' };
+        }
+      }
+
+      // Priority 4: Active thread row in list
+      const activeRow = document.querySelector('[data-surface*="thread_row"][aria-selected="true"], [data-surface*="thread_row0"]');
+      if (activeRow) {
+        const titleEl = activeRow.querySelector('[data-surface*="lib:thread_title"]');
+        const t = (titleEl?.innerText || '').trim();
+        if (validator.isValid(t)) {
+          return { name: t, source: 'thread_row_title' };
+        }
+        const firstLine = (activeRow.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)[0];
+        if (validator.isValid(firstLine)) {
+          return { name: firstLine, source: 'thread_row_first_line' };
+        }
+      }
+
+      return null;
+    });
+
+    if (result && result.name) {
+      log.info(`[CUSTOMER_NAME_RESOLVED] extractCustomerDisplayName: "${result.name}" (Nguồn: ${result.source})`);
+      return result.name;
+    }
+
+    log.warn('[CUSTOMER_NAME_FALLBACK] extractCustomerDisplayName không tìm thấy tên, fallback: Khách hàng');
+    return 'Khách hàng';
+  } catch (err) {
+    log.warn(`[CUSTOMER_NAME_FALLBACK] extractCustomerDisplayName gặp lỗi: ${err.message}, fallback: Khách hàng`);
+    return 'Khách hàng';
   }
 }
 
