@@ -58,10 +58,27 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
     typeof resolvedParams?.customer_id === 'string' ? resolvedParams.customer_id : null;
 
   return (
-    <InboxView
-      userRole={actor.role}
-      userFullName={actor.fullName}
-      initialCustomerId={initialCustomerId}
-    />
+    <div className="inbox-page-scroll-scope">
+      <InboxView
+        userRole={actor.role}
+        userFullName={actor.fullName}
+        initialCustomerId={initialCustomerId}
+      />
+      <style>{`
+        /* Prevent scrollIntoView() in the chat stream from moving hidden parent containers. */
+        .inbox-page-scroll-scope > div:first-child {
+          overflow: clip;
+        }
+
+        .inbox-page-scroll-scope > div:first-child > div:nth-child(2) {
+          min-height: 0;
+          overflow: clip;
+        }
+
+        .inbox-page-scroll-scope > div:first-child > div:nth-child(2) > div {
+          min-height: 0;
+        }
+      `}</style>
+    </div>
   );
 }
