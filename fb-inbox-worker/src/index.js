@@ -85,6 +85,18 @@ async function processThreadData(threadData, cachedPageId, cachedPageName) {
   }
 }
 
+async function withTimeout(promise, ms, desc) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${desc} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
   log.banner('META BUSINESS SUITE INBOX WORKER (PHASE 2A - CRM SYNC)');
   log.info('Đang khởi động worker...');
@@ -136,7 +148,11 @@ async function main() {
     // Main polling loop
     while (isRunning) {
       try {
-        const state = await detectPageState(page);
+        healthServer.recordMainLoopHeartbeat();
+        const state = await withTimeout(detectPageState(page), 8000, 'detectPageState').catch((err) => {
+          log.warn(`detectPageState timeout hoặc lỗi: ${err.message}`);
+          return APP_STATE.NAVIGATING;
+        });
 
         if (state === APP_STATE.DISCONNECTED) {
           healthServer.updateState({ browser_connected: false, meta_inbox_state: 'DEGRADED' });
@@ -176,10 +192,12 @@ async function main() {
           }
 
           // Extract Page Name & Page ID
-          const pageName = await extractPageName(page);
-          if (pageName && pageName !== 'Trang Meta Business') {
-            cachedPageName = pageName;
-          }
+          try {
+            const pageName = await withTimeout(extractPageName(page), 5000, 'extractPageName');
+            if (pageName && pageName !== 'Trang Meta Business') {
+              cachedPageName = pageName;
+            }
+          } catch (_) {}
 
           // Try getting page ID from URL
           try {
@@ -189,35 +207,20 @@ async function main() {
           } catch (_) {}
 
           // 0. Auto-dismiss any blocking promotional modals
-          await page.evaluate(() => {
-            const notNowBtn = Array.from(document.querySelectorAll('button, div[role="button"]'))
-              .find(b => /^(Not now|Lúc khác|Bỏ qua|Đóng)$/i.test((b.innerText || '').trim()));
-            if (notNowBtn) notNowBtn.click();
-          }).catch(() => {});
+          await withTimeout(
+            page.evaluate(() => {
+              const notNowBtn = Array.from(document.querySelectorAll('button, div[role="button"]'))
+                .find(b => /^(Not now|Lúc khác|Bỏ qua|Đóng)$/i.test((b.innerText || '').trim()));
+              if (notNowBtn) notNowBtn.click();
+            }),
+            3000,
+            'dismissModal'
+          ).catch(() => {});
 
-          // 1. Always inspect active open thread in viewport
-          const activeThreadData = await extractActiveThreadMessages(page, cachedPageId);
-          if (activeThreadData && activeThreadData.messages && activeThreadData.messages.length > 0) {
-            await processThreadData(activeThreadData, cachedPageId, cachedPageName);
-          }
-
-          // 2. Scan conversation list for unread messages
-          const conversations = await extractConversationsList(page);
-
-          if (conversations.length > 0) {
-            for (let i = 0; i < Math.min(conversations.length, 5); i++) {
-              const convItem = conversations[i];
-              if (convItem.isUnread) {
-                await selectConversation(page, i);
-                await sleep(1500);
-
-                const threadData = await extractActiveThreadMessages(page, cachedPageId);
-                await processThreadData(threadData, cachedPageId, cachedPageName);
-              }
-            }
-          }
-
-          // 3a. Reconcile orphan PROCESSING jobs (Phase 2B.1 Hardening)
+          // ===================================================================
+          // 1. OUTBOX QUEUE DISPATCH FIRST (Section 7: Inbound DOM scan must not block outbound)
+          // ===================================================================
+          // 1a. Reconcile orphan PROCESSING jobs (Phase 2B.1 Hardening)
           try {
             const orphanJobs = await claimOrphanJobs('fb_playwright_worker_01', 5);
             if (orphanJobs && orphanJobs.length > 0) {
@@ -236,10 +239,9 @@ async function main() {
             log.warn(`Lỗi khi đối soát orphan jobs: ${orphanErr.message}`);
           }
 
-          // 3b. Process Outbox Queue (Phase 2B: CRM Reply -> Worker -> Facebook)
+          // 1b. Process Outbox Queue (Phase 2B: CRM Reply -> Worker -> Facebook)
           try {
             const pendingJobs = await claimOutboxJobs('fb_playwright_worker_01', 3);
-            healthServer.setPendingOutboxCount(pendingJobs ? pendingJobs.length : 0);
             if (pendingJobs && pendingJobs.length > 0) {
               log.info(`[OUTBOX QUEUE] Nhận được ${pendingJobs.length} lệnh gửi phản hồi từ CRM...`);
 
@@ -266,9 +268,57 @@ async function main() {
             log.warn(`Lỗi khi xử lý outbox queue: ${outboxErr.message}`);
           }
 
+          // ===================================================================
+          // 2. INBOUND SCANNING SECOND (Bounded timeout on each Playwright step)
+          // ===================================================================
+          try {
+            // 2a. Inspect active open thread in viewport
+            const activeThreadData = await withTimeout(
+              extractActiveThreadMessages(page, cachedPageId),
+              8000,
+              'extractActiveThreadMessages'
+            );
+            if (activeThreadData && activeThreadData.messages && activeThreadData.messages.length > 0) {
+              await processThreadData(activeThreadData, cachedPageId, cachedPageName);
+            }
+          } catch (inboundErr) {
+            log.warn(`[INBOUND SCAN] Không thể trích xuất active thread: ${inboundErr.message}`);
+          }
+
+          try {
+            // 2b. Scan conversation list for unread messages
+            const conversations = await withTimeout(
+              extractConversationsList(page),
+              8000,
+              'extractConversationsList'
+            );
+
+            if (conversations && conversations.length > 0) {
+              for (let i = 0; i < Math.min(conversations.length, 5); i++) {
+                const convItem = conversations[i];
+                if (convItem.isUnread) {
+                  await withTimeout(selectConversation(page, i), 5000, `selectConversation(${i})`).catch(() => false);
+                  await sleep(1500);
+
+                  const threadData = await withTimeout(
+                    extractActiveThreadMessages(page, cachedPageId),
+                    8000,
+                    'extractActiveThreadMessages'
+                  ).catch(() => null);
+                  if (threadData) {
+                    await processThreadData(threadData, cachedPageId, cachedPageName);
+                  }
+                }
+              }
+            }
+          } catch (scanErr) {
+            log.warn(`[CONVERSATION SCAN] Lỗi khi quét danh sách hội thoại: ${scanErr.message}`);
+          }
+
           // Wait before next poll cycle
           await sleep(CONFIG.POLL_INTERVAL_MS);
         } else {
+          healthServer.updateState({ meta_inbox_state: state });
           await sleep(CONFIG.STATE_CHECK_INTERVAL_MS);
         }
       } catch (loopError) {

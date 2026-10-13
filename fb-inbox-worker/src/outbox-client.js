@@ -2,6 +2,7 @@ import http from 'http';
 import https from 'https';
 import { CONFIG } from './config.js';
 import { log } from './logger.js';
+import { healthServer } from './health-server.js';
 
 function postJson(urlStr, data, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -58,7 +59,8 @@ function getBaseApiUrl() {
   return `${url.protocol}//${url.host}`;
 }
 
-export async function claimOutboxJobs(workerId = 'fb_playwright_worker', limit = 5, companyId) {
+export async function claimOutboxJobsDetailed(workerId = 'fb_playwright_worker', limit = 5, companyId) {
+  const start = Date.now();
   try {
     const baseUrl = getBaseApiUrl();
     const endpoint = `${baseUrl}/api/inbox/outbox/claim`;
@@ -67,13 +69,46 @@ export async function claimOutboxJobs(workerId = 'fb_playwright_worker', limit =
       limit,
       company_id: companyId || CONFIG.CRM_COMPANY_ID,
     });
+    const duration = Date.now() - start;
 
     if (res.statusCode === 200 && res.body?.success) {
-      return res.body.jobs || [];
+      const jobs = Array.isArray(res.body.jobs) ? res.body.jobs : [];
+      const status = jobs.length === 0 ? 'CLAIM_OK_ZERO' : 'CLAIM_OK_N';
+      return { status, jobs, duration, httpStatus: 200 };
+    } else {
+      const httpStatus = res.statusCode || 500;
+      const safeError = `HTTP ${httpStatus}: ${res.body?.error || 'Unknown server response'}`;
+      return {
+        status: 'CLAIM_HTTP_ERROR',
+        jobs: [],
+        duration,
+        httpStatus,
+        error: safeError,
+      };
     }
-    return [];
   } catch (error) {
-    log.warn(`Không thể kết nối lấy outbox jobs từ CRM: ${error.message}`);
+    const duration = Date.now() - start;
+    const isTimeout = Boolean(error.message?.includes('timeout') || error.code === 'ETIMEDOUT');
+    const status = isTimeout ? 'CLAIM_TIMEOUT' : 'CLAIM_NETWORK_ERROR';
+    return {
+      status,
+      jobs: [],
+      duration,
+      error: error.message || 'Network error',
+    };
+  }
+}
+
+export async function claimOutboxJobs(workerId = 'fb_playwright_worker', limit = 5, companyId) {
+  healthServer.recordOutboxPollAttempt();
+  const result = await claimOutboxJobsDetailed(workerId, limit, companyId);
+
+  if (result.status === 'CLAIM_OK_ZERO' || result.status === 'CLAIM_OK_N') {
+    healthServer.recordOutboxPollSuccess(result.jobs.length);
+    return result.jobs;
+  } else {
+    healthServer.recordOutboxPollError(result.status, result.error);
+    log.warn(`[OUTBOX CLAIM ${result.status}] (HTTP ${result.httpStatus || 'N/A'}, duration: ${result.duration}ms): ${result.error || 'Failed'}`);
     return [];
   }
 }

@@ -144,6 +144,7 @@ export async function extractConversationsList(page) {
  */
 export async function extractActiveThreadMessages(page, pageId) {
   try {
+    const startTime = Date.now();
     const rawData = await page.evaluate(() => {
       // 1. Identify Customer Profile Link in right sidebar or thread header
       const profileLinks = Array.from(
@@ -189,14 +190,51 @@ export async function extractActiveThreadMessages(page, pageId) {
         return { error: 'Message container not found' };
       }
 
-      const rawNodes = Array.from(msgContainer.querySelectorAll('*'));
+      // Target candidate bubbles, text containers, and timestamps directly (avoid scanning all DOM descendants)
+      const candidateSelector = [
+        '[role="row"]',
+        'div[dir="auto"]',
+        'span[dir="auto"]',
+        'p[dir="auto"]',
+        'div[style*="border-radius"]',
+        'div[style*="background"]',
+        'abbr[data-utime]',
+      ].join(', ');
+
+      let candidateNodes = Array.from(msgContainer.querySelectorAll(candidateSelector));
+
+      // Fallback only if specific selectors found nothing
+      if (candidateNodes.length === 0) {
+        candidateNodes = Array.from(msgContainer.querySelectorAll('div, span, p'));
+      }
+
+      const totalCandidates = candidateNodes.length;
+
+      // Hard cap to safety limit (max 200 nodes), taking the latest near active conversation area
+      const MAX_CANDIDATES = 200;
+      if (candidateNodes.length > MAX_CANDIDATES) {
+        candidateNodes = candidateNodes.slice(-MAX_CANDIDATES);
+      }
+
       let currentTimestampText = 'Vừa xong';
       let currentUtime = null;
 
       const parsedMessages = [];
       const seenKeys = new Set();
+      const styleCache = new Map();
+      const containerRect = msgContainer.getBoundingClientRect();
 
-      for (const el of rawNodes) {
+      function getCachedStyle(node) {
+        if (!node) return null;
+        let s = styleCache.get(node);
+        if (!s) {
+          s = window.getComputedStyle(node);
+          styleCache.set(node, s);
+        }
+        return s;
+      }
+
+      for (const el of candidateNodes) {
         const text = (el.innerText || '').trim();
         if (!text) continue;
 
@@ -219,24 +257,38 @@ export async function extractActiveThreadMessages(page, pageId) {
           continue;
         }
 
-        // Strict Direction Classification
+        // Strict Direction Classification with style cache and limited ancestor depth (max 4)
         let bgColor = '';
         let alignItems = '';
         let curr = el;
-        for (let i = 0; i < 7 && curr && curr !== msgContainer; i++) {
-          const style = window.getComputedStyle(curr);
-          if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
-            bgColor = style.backgroundColor;
+        for (let i = 0; i < 4 && curr && curr !== msgContainer; i++) {
+          const inlineBg = curr.style && curr.style.backgroundColor;
+          if (!bgColor && inlineBg && inlineBg !== 'rgba(0, 0, 0, 0)' && inlineBg !== 'transparent') {
+            bgColor = inlineBg;
           }
-          if (!alignItems && style.alignItems && style.alignItems !== 'normal') {
-            alignItems = style.alignItems;
+          const inlineAlign = curr.style && curr.style.alignItems;
+          if (!alignItems && inlineAlign && inlineAlign !== 'normal') {
+            alignItems = inlineAlign;
           }
+
+          if (!bgColor || !alignItems) {
+            const style = getCachedStyle(curr);
+            if (style) {
+              if (!bgColor && style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') {
+                bgColor = style.backgroundColor;
+              }
+              if (!alignItems && style.alignItems && style.alignItems !== 'normal') {
+                alignItems = style.alignItems;
+              }
+            }
+          }
+
+          if (bgColor && alignItems) break;
           curr = curr.parentElement;
         }
 
         const rect = el.getBoundingClientRect();
-        const containerRect = msgContainer.getBoundingClientRect();
-        const relativeX = (rect.left - containerRect.left) / containerRect.width;
+        const relativeX = containerRect.width > 0 ? (rect.left - containerRect.left) / containerRect.width : 0;
 
         // Outbound signals:
         // - Text starts with "You:"
@@ -293,9 +345,13 @@ export async function extractActiveThreadMessages(page, pageId) {
         customerFbId,
         profileHref,
         customerName,
+        candidateCount: totalCandidates,
         parsedMessages
       };
     });
+
+    const durationMs = Date.now() - startTime;
+    log.info(`[INBOUND_PARSE] duration_ms=${durationMs} candidate_count=${rawData?.candidateCount || 0}`);
 
     if (rawData.error || !rawData.parsedMessages) {
       return { customerFbId: null, stableThreadId: null, messages: [] };

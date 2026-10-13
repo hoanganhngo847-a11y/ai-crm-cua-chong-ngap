@@ -71,6 +71,72 @@ export type MessageDeliveryStatus =
   | 'RECONCILE_REQUIRED';
 
 /**
+ * Checks if a delivery status is non-terminal / in-flight
+ */
+export function isPendingDelivery(status?: string): boolean {
+  if (!status) return false;
+  const s = status.toUpperCase();
+  return (
+    s === 'PENDING_DISPATCH' ||
+    s === 'PENDING' ||
+    s === 'PROCESSING' ||
+    s === 'RETRY' ||
+    s === 'QUEUED'
+  );
+}
+
+/**
+ * Monotonic Delivery Status Reconciliation Helper
+ * Prevents stale responses from downgrading terminal statuses (SENT, DELIVERED, etc.)
+ */
+export function mergeDeliveryStatus(
+  localStatus?: MessageDeliveryStatus | string,
+  incomingStatus?: MessageDeliveryStatus | string
+): MessageDeliveryStatus | undefined {
+  if (!localStatus && !incomingStatus) return undefined;
+  if (!incomingStatus) return (localStatus as MessageDeliveryStatus) || undefined;
+  if (!localStatus) return (incomingStatus as MessageDeliveryStatus) || undefined;
+
+  const normLocal = localStatus.toUpperCase();
+  const normIncoming = incomingStatus.toUpperCase();
+
+  if (normLocal === normIncoming) {
+    return incomingStatus as MessageDeliveryStatus;
+  }
+
+  // Khi local đã là DELIVERED, không trạng thái nào được downgrade nó
+  if (normLocal === 'DELIVERED') {
+    return 'DELIVERED';
+  }
+
+  // Khi local đã là SENT, chỉ cho phép SENT + DELIVERED => DELIVERED, còn lại giữ SENT
+  if (normLocal === 'SENT') {
+    return normIncoming === 'DELIVERED'
+      ? 'DELIVERED'
+      : 'SENT';
+  }
+
+  // Sau đó mới xử lý các trạng thái khác:
+  if (normIncoming === 'DELIVERED') {
+    return 'DELIVERED';
+  }
+
+  if (normIncoming === 'SENT') {
+    return 'SENT';
+  }
+
+  // FAILED hoặc RECONCILE_REQUIRED ở local không bị downgrade về in-flight/non-terminal
+  if (
+    (normLocal === 'FAILED' || normLocal === 'RECONCILE_REQUIRED') &&
+    isPendingDelivery(normIncoming)
+  ) {
+    return localStatus as MessageDeliveryStatus;
+  }
+
+  return incomingStatus as MessageDeliveryStatus;
+}
+
+/**
  * Hợp đồng chuyển phát tin nhắn Outbound (Outbound Dispatcher Port - Member 3 Zalo & Member 4 Facebook)
  */
 export interface OutboundDispatchResult {
