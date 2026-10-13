@@ -33,6 +33,11 @@ class InboxStateSimulationHarness {
   public selectedConversationId: string | null = null;
   public activeConversationRef: string | null = null;
   public fetchGenerationRef: number = 0;
+  public foregroundGenerationRef: number = 0;
+  public foregroundAbortControllerRef: AbortController | null = null;
+  public pollGenerationRef: number = 0;
+  public pollAbortControllerRef: AbortController | null = null;
+
   public messagesByConversation: Record<string, InboxMessage[]> = {};
   public draftsByConversation: Record<string, string> = {};
   public pendingCommandsRef: Record<string, { commandId: string; content: string }> = {};
@@ -43,8 +48,17 @@ class InboxStateSimulationHarness {
   public aiSuggestion: string | null = null;
 
   public selectConversation(convId: string) {
+    if (convId === this.selectedConversationId) return;
     this.selectedConversationId = convId;
     this.activeConversationRef = convId;
+    if (this.foregroundAbortControllerRef) {
+      this.foregroundAbortControllerRef.abort();
+      this.foregroundAbortControllerRef = null;
+    }
+    if (this.pollAbortControllerRef) {
+      this.pollAbortControllerRef.abort();
+      this.pollAbortControllerRef = null;
+    }
     if (!this.messagesByConversation[convId]) {
       this.loadingMessages = true;
     }
@@ -69,57 +83,93 @@ class InboxStateSimulationHarness {
   }
 
   public startFetch(convId: string): { generation: number; controller: AbortController } {
-    const generation = ++this.fetchGenerationRef;
+    return this.startForegroundFetch(convId);
+  }
+
+  public startForegroundFetch(convId: string): { generation: number; controller: AbortController } {
+    this.loadingMessages = true;
+    if (this.foregroundAbortControllerRef) {
+      this.foregroundAbortControllerRef.abort();
+    }
     const controller = new AbortController();
+    this.foregroundAbortControllerRef = controller;
+    const generation = ++this.foregroundGenerationRef;
+    this.fetchGenerationRef = generation;
     return { generation, controller };
   }
 
-  public completeFetch(convId: string, generation: number, serverMessages: InboxMessage[]) {
-    // P0-A guard: ignore response if active conversation changed or newer request started
-    if (convId !== this.activeConversationRef || generation !== this.fetchGenerationRef) {
-      return false; // Ignored
+  public startPollFetch(convId: string): { generation: number; controller: AbortController } {
+    // Background polling: does NOT abort foreground fetch, does NOT touch loadingMessages
+    if (this.pollAbortControllerRef) {
+      this.pollAbortControllerRef.abort();
     }
+    const controller = new AbortController();
+    this.pollAbortControllerRef = controller;
+    const generation = ++this.pollGenerationRef;
+    return { generation, controller };
+  }
 
+  public reconcileMessages(convId: string, serverMessages: InboxMessage[]) {
     const existingForConv = this.messagesByConversation[convId] || [];
     if (existingForConv.length === 0) {
       this.messagesByConversation[convId] = serverMessages;
-    } else {
-      const serverById = new Map<string, InboxMessage>();
-      const serverByCommandId = new Map<string, InboxMessage>();
-      for (const sm of serverMessages) {
-        if (sm.id) serverById.set(sm.id, sm);
-        if (sm.client_command_id) serverByCommandId.set(sm.client_command_id, sm);
-      }
-
-      const reconciled: InboxMessage[] = [];
-      const matchedServerIds = new Set<string>();
-
-      for (const localMsg of existingForConv) {
-        const matched =
-          (localMsg.id ? serverById.get(localMsg.id) : null) ||
-          (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
-        if (matched) {
-          reconciled.push({
-            ...localMsg,
-            ...matched,
-            client_command_id: localMsg.client_command_id || matched.client_command_id,
-          });
-          if (matched.id) matchedServerIds.add(matched.id);
-        } else {
-          reconciled.push(localMsg);
-        }
-      }
-
-      for (const sm of serverMessages) {
-        if (sm.id && !matchedServerIds.has(sm.id)) {
-          reconciled.push(sm);
-        }
-      }
-
-      this.messagesByConversation[convId] = reconciled;
+      return;
     }
 
+    const serverById = new Map<string, InboxMessage>();
+    const serverByCommandId = new Map<string, InboxMessage>();
+    for (const sm of serverMessages) {
+      if (sm.id) serverById.set(sm.id, sm);
+      if (sm.client_command_id) serverByCommandId.set(sm.client_command_id, sm);
+    }
+
+    const reconciled: InboxMessage[] = [];
+    const matchedServerIds = new Set<string>();
+
+    for (const localMsg of existingForConv) {
+      const matched =
+        (localMsg.id ? serverById.get(localMsg.id) : null) ||
+        (localMsg.client_command_id ? serverByCommandId.get(localMsg.client_command_id) : null);
+      if (matched) {
+        reconciled.push({
+          ...localMsg,
+          ...matched,
+          client_command_id: localMsg.client_command_id || matched.client_command_id,
+        });
+        if (matched.id) matchedServerIds.add(matched.id);
+      } else {
+        reconciled.push(localMsg);
+      }
+    }
+
+    for (const sm of serverMessages) {
+      if (sm.id && !matchedServerIds.has(sm.id)) {
+        reconciled.push(sm);
+      }
+    }
+
+    this.messagesByConversation[convId] = reconciled;
+  }
+
+  public completeFetch(convId: string, generation: number, serverMessages: InboxMessage[]) {
+    return this.completeForegroundFetch(convId, generation, serverMessages);
+  }
+
+  public completeForegroundFetch(convId: string, generation: number, serverMessages: InboxMessage[]) {
+    if (convId !== this.activeConversationRef || generation !== this.foregroundGenerationRef) {
+      return false; // Ignored
+    }
+    this.reconcileMessages(convId, serverMessages);
     this.loadingMessages = false;
+    return true; // Applied
+  }
+
+  public completePollFetch(convId: string, generation: number, serverMessages: InboxMessage[]) {
+    if (convId !== this.activeConversationRef || generation !== this.pollGenerationRef) {
+      return false; // Ignored
+    }
+    this.reconcileMessages(convId, serverMessages);
+    // Silent polling NEVER touches loadingMessages
     return true; // Applied
   }
 
@@ -654,6 +704,169 @@ async function runAllTests() {
     'false',
     `${harnessI.loadingAiByConversation['conv-A']}`,
     harnessI.loadingAiByConversation['conv-A'] === false
+  );
+
+  // ========================================================================================
+  // CASE J: Foreground Fetch vs Silent Polling Race Condition (Section 1)
+  // ========================================================================================
+  console.log('\n--- Case J: Foreground Fetch vs Silent Polling Race Isolation ---');
+  const harnessJ = new InboxStateSimulationHarness();
+
+  // 1. User selects A
+  harnessJ.selectConversation('conv-A');
+  // Existing optimistic outbound message with delivery_status: 'PENDING_DISPATCH'
+  harnessJ.messagesByConversation['conv-A'] = [
+    {
+      id: 'optimistic-cmd-1',
+      conversation_id: 'conv-A',
+      customer_id: 'cust-a',
+      channel: 'facebook',
+      sender_type: 'sale',
+      content: 'Tin nhắn đang gửi...',
+      created_at: new Date().toISOString(),
+      direction: 'outbound',
+      delivery_status: 'PENDING_DISPATCH',
+      client_command_id: 'cmd-1',
+    },
+  ];
+
+  // 2. Normal foreground fetch begins (takes 5s)
+  const fgReq = harnessJ.startForegroundFetch('conv-A');
+  recordTest(
+    'Case J.1: Foreground fetch starts with loadingMessages = true',
+    'loadingMessages: true',
+    `loadingMessages: ${harnessJ.loadingMessages}`,
+    harnessJ.loadingMessages === true
+  );
+
+  // 3. Silent poll runs at 2.5s while foreground fetch is still in flight
+  const pollReq = harnessJ.startPollFetch('conv-A');
+  recordTest(
+    'Case J.2: Silent poll does NOT abort in-flight foreground fetch',
+    'fgReq.controller.signal.aborted === false',
+    `aborted: ${fgReq.controller.signal.aborted}`,
+    fgReq.controller.signal.aborted === false
+  );
+  recordTest(
+    'Case J.3: Silent poll does NOT tamper with foreground generation',
+    'fgReq.generation === harnessJ.foregroundGenerationRef',
+    `${fgReq.generation} === ${harnessJ.foregroundGenerationRef}`,
+    fgReq.generation === harnessJ.foregroundGenerationRef
+  );
+
+  // 4. Poll completes first at 3s with updated status SENT
+  const pollServerMsgs: InboxMessage[] = [
+    {
+      id: 'real-msg-1',
+      conversation_id: 'conv-A',
+      customer_id: 'cust-a',
+      channel: 'facebook',
+      sender_type: 'sale',
+      content: 'Tin nhắn đang gửi...',
+      created_at: new Date().toISOString(),
+      direction: 'outbound',
+      delivery_status: 'SENT',
+      client_command_id: 'cmd-1',
+    },
+  ];
+  const pollApplied = harnessJ.completePollFetch('conv-A', pollReq.generation, pollServerMsgs);
+  recordTest(
+    'Case J.4: Poll successfully updates delivery_status from PENDING to SENT',
+    'applied: true, status: SENT',
+    `applied: ${pollApplied}, status: ${harnessJ.messagesByConversation['conv-A']?.[0]?.delivery_status}`,
+    pollApplied === true && harnessJ.messagesByConversation['conv-A']?.[0]?.delivery_status === 'SENT'
+  );
+  recordTest(
+    'Case J.5: Silent poll did NOT prematurely clear foreground loading state',
+    'loadingMessages: true (still loading until foreground completes)',
+    `loadingMessages: ${harnessJ.loadingMessages}`,
+    harnessJ.loadingMessages === true
+  );
+
+  // 5. Normal foreground fetch completes at 5s with full history
+  const fgServerMsgs: InboxMessage[] = [
+    {
+      id: 'history-inbound-1',
+      conversation_id: 'conv-A',
+      customer_id: 'cust-a',
+      channel: 'facebook',
+      sender_type: 'customer',
+      content: 'Chào shop',
+      created_at: new Date(Date.now() - 60000).toISOString(),
+      direction: 'inbound',
+    },
+    {
+      id: 'real-msg-1',
+      conversation_id: 'conv-A',
+      customer_id: 'cust-a',
+      channel: 'facebook',
+      sender_type: 'sale',
+      content: 'Tin nhắn đang gửi...',
+      created_at: new Date().toISOString(),
+      direction: 'outbound',
+      delivery_status: 'SENT',
+      client_command_id: 'cmd-1',
+    },
+  ];
+  const fgApplied = harnessJ.completeForegroundFetch('conv-A', fgReq.generation, fgServerMsgs);
+  recordTest(
+    'Case J.6: Normal fetch completes successfully and resets loadingMessages = false',
+    'applied: true, loadingMessages: false',
+    `applied: ${fgApplied}, loadingMessages: ${harnessJ.loadingMessages}`,
+    fgApplied === true && harnessJ.loadingMessages === false
+  );
+  recordTest(
+    'Case J.7: All messages displayed correctly without duplicates',
+    'total messages: 2, contains inbound and sent outbound',
+    `total: ${harnessJ.messagesByConversation['conv-A']?.length}`,
+    harnessJ.messagesByConversation['conv-A']?.length === 2
+  );
+
+  // 6. Case J.8: Switch A -> B while both normal fetch and poll for A are running
+  const harnessJ2 = new InboxStateSimulationHarness();
+  harnessJ2.selectConversation('conv-A');
+  const fgA = harnessJ2.startForegroundFetch('conv-A');
+  const pollA = harnessJ2.startPollFetch('conv-A');
+
+  // User switches to B
+  harnessJ2.selectConversation('conv-B');
+  recordTest(
+    'Case J.8: Switching conversation aborts both foreground and poll requests for previous conversation',
+    'fgA.aborted === true, pollA.aborted === true',
+    `fgA: ${fgA.controller.signal.aborted}, pollA: ${pollA.controller.signal.aborted}`,
+    fgA.controller.signal.aborted === true && pollA.controller.signal.aborted === true
+  );
+
+  const fgB = harnessJ2.startForegroundFetch('conv-B');
+
+  // Stale A responses arrive LATE
+  const staleFgAApplied = harnessJ2.completeForegroundFetch('conv-A', fgA.generation, fgServerMsgs);
+  const stalePollAApplied = harnessJ2.completePollFetch('conv-A', pollA.generation, pollServerMsgs);
+  recordTest(
+    'Case J.9: Late A responses are both ignored after switching to B',
+    'staleFgA: false, stalePollA: false',
+    `staleFgA: ${staleFgAApplied}, stalePollA: ${stalePollAApplied}`,
+    staleFgAApplied === false && stalePollAApplied === false
+  );
+
+  // B completes normally
+  const msgsB_J: InboxMessage[] = [
+    {
+      id: 'b-msg-1',
+      conversation_id: 'conv-B',
+      customer_id: 'cust-b',
+      channel: 'facebook',
+      sender_type: 'customer',
+      content: 'Tin nhắn B',
+      created_at: new Date().toISOString(),
+    },
+  ];
+  const appliedB_J = harnessJ2.completeForegroundFetch('conv-B', fgB.generation, msgsB_J);
+  recordTest(
+    'Case J.10: Conversation B completes normally with loadingMessages = false and zero A pollution',
+    'appliedB: true, loadingMessages: false, B messages count: 1',
+    `appliedB: ${appliedB_J}, loadingMessages: ${harnessJ2.loadingMessages}, B count: ${harnessJ2.getVisibleMessages().length}`,
+    appliedB_J === true && harnessJ2.loadingMessages === false && harnessJ2.getVisibleMessages().length === 1
   );
 
   // ========================================================================================

@@ -90,8 +90,10 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
 
   // P0-A: Monotonic request generation and active conversation reference for race condition elimination
   const activeConversationRef = useRef<string | null>(null);
-  const fetchGenerationRef = useRef<number>(0);
-  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const foregroundGenerationRef = useRef<number>(0);
+  const foregroundAbortControllerRef = useRef<AbortController | null>(null);
+  const pollGenerationRef = useRef<number>(0);
+  const pollAbortControllerRef = useRef<AbortController | null>(null);
 
   // P0-B: Pending command tracking for idempotent retry strictly scoped by conversation
   const pendingCommandsRef = useRef<Record<string, { commandId: string; content: string }>>({});
@@ -160,23 +162,36 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     };
   }, [fetchConversations]);
 
-  // 2. Fetch Messages with strict conversation isolation and stale request invalidation
+  // 2. Fetch Messages with strict conversation isolation and separated foreground vs silent polling controllers
   const fetchMessages = useCallback(async (convId: string, options?: { silent?: boolean }) => {
     if (!convId) return;
+    const isSilent = Boolean(options?.silent);
 
-    if (!options?.silent) {
+    let controller: AbortController;
+    let currentGeneration: number;
+
+    if (isSilent) {
+      // Background / silent delivery polling:
+      // - Must NOT abort foreground fetch
+      // - Must NOT touch loadingMessages
+      if (pollAbortControllerRef.current) {
+        pollAbortControllerRef.current.abort();
+      }
+      controller = new AbortController();
+      pollAbortControllerRef.current = controller;
+      currentGeneration = ++pollGenerationRef.current;
+    } else {
+      // Foreground conversation load:
+      // - Controls loadingMessages
+      // - Aborts previous foreground fetch if any
       setLoadingMessages(true);
+      if (foregroundAbortControllerRef.current) {
+        foregroundAbortControllerRef.current.abort();
+      }
+      controller = new AbortController();
+      foregroundAbortControllerRef.current = controller;
+      currentGeneration = ++foregroundGenerationRef.current;
     }
-
-    // Abort previous in-flight request to prevent network race
-    if (activeAbortControllerRef.current) {
-      activeAbortControllerRef.current.abort();
-    }
-    const controller = new AbortController();
-    activeAbortControllerRef.current = controller;
-
-    // Increment request generation token
-    const currentGeneration = ++fetchGenerationRef.current;
 
     try {
       const res = await fetch(`/api/inbox?conversation_id=${encodeURIComponent(convId)}`, {
@@ -185,8 +200,15 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
       const json = await res.json();
 
       // P0-A: If user switched conversation in the meantime, IGNORE RESPONSE
-      if (convId !== activeConversationRef.current || currentGeneration !== fetchGenerationRef.current) {
+      if (convId !== activeConversationRef.current) {
         return;
+      }
+
+      // Check generation token for the respective mode
+      if (isSilent) {
+        if (currentGeneration !== pollGenerationRef.current) return;
+      } else {
+        if (currentGeneration !== foregroundGenerationRef.current) return;
       }
 
       if (json.success && json.data) {
@@ -244,7 +266,7 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
           };
         });
 
-        if (!options?.silent) {
+        if (!isSilent) {
           setAiSuggestion(null);
           setAiError(null);
           setAiSuggestionMeta(null);
@@ -266,8 +288,10 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
       }
       console.error('Lỗi khi tải tin nhắn:', err);
     } finally {
-      if (convId === activeConversationRef.current && currentGeneration === fetchGenerationRef.current && !options?.silent) {
-        setLoadingMessages(false);
+      if (!isSilent) {
+        if (convId === activeConversationRef.current && currentGeneration === foregroundGenerationRef.current) {
+          setLoadingMessages(false);
+        }
       }
     }
   }, []);
@@ -279,10 +303,14 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     activeConversationRef.current = convId;
     setSelectedConversationId(convId);
 
-    // Abort pending fetch
-    if (activeAbortControllerRef.current) {
-      activeAbortControllerRef.current.abort();
-      activeAbortControllerRef.current = null;
+    // Abort both in-flight foreground and poll requests for previous conversation
+    if (foregroundAbortControllerRef.current) {
+      foregroundAbortControllerRef.current.abort();
+      foregroundAbortControllerRef.current = null;
+    }
+    if (pollAbortControllerRef.current) {
+      pollAbortControllerRef.current.abort();
+      pollAbortControllerRef.current = null;
     }
 
     // Reset AI suggestions on switch
