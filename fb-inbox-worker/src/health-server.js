@@ -1,6 +1,7 @@
 import http from 'http';
 import { log } from './logger.js';
 import { setupGateway } from './gateway.js';
+import { CONFIG } from './config.js';
 
 class HealthServer {
   constructor() {
@@ -9,8 +10,16 @@ class HealthServer {
     this.state = {
       worker_running: true,
       browser_connected: false,
-      meta_inbox_state: 'STARTING', // 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'DEGRADED' | 'STARTING' | 'NAVIGATING'
+      meta_inbox_state: 'STARTING', // 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'WRONG_ASSET' | 'DEGRADED' | 'STARTING' | 'NAVIGATING'
       status: 'STARTING', // 'HEALTHY' | 'DEGRADED' | 'LOGIN_REQUIRED' | 'STARTING'
+      expected_asset_id: CONFIG.FB_PAGE_ID || '1389294167596309',
+      current_asset_id: null,
+      asset_match: false,
+      conversation_rows_seen: 0,
+      unread_rows_seen: 0,
+      threads_scanned: 0,
+      last_inbound_detected_at: null,
+      last_inbound_sync_success_at: null,
       last_main_loop_at: null,
       last_outbox_poll_attempt_at: null,
       last_outbox_poll_success_at: null,
@@ -33,16 +42,51 @@ class HealthServer {
   updateState(patch = {}) {
     Object.assign(this.state, patch);
 
+    // Semantics bắt buộc: current_asset_id missing => asset_match = false
+    // READY chỉ khi: current_asset_id tồn tại AND current_asset_id === expected_asset_id
+    if (patch.asset_match !== undefined) {
+      this.state.asset_match = Boolean(
+        patch.asset_match &&
+        this.state.current_asset_id &&
+        this.state.expected_asset_id &&
+        this.state.current_asset_id === this.state.expected_asset_id
+      );
+    } else {
+      this.state.asset_match = Boolean(
+        this.state.current_asset_id &&
+        this.state.expected_asset_id &&
+        this.state.current_asset_id === this.state.expected_asset_id
+      );
+    }
+
     // Derive overall status
     if (this.state.meta_inbox_state === 'LOGIN_REQUIRED' || this.state.meta_inbox_state === 'CHECKPOINT') {
       this.state.status = 'LOGIN_REQUIRED';
-    } else if (this.state.meta_inbox_state === 'DEGRADED' || this.state.meta_inbox_state === 'DEGRADED_OUTBOX_LOOP' || !this.state.browser_connected) {
+    } else if (
+      this.state.meta_inbox_state === 'WRONG_ASSET' ||
+      this.state.meta_inbox_state === 'DEGRADED' ||
+      this.state.meta_inbox_state === 'DEGRADED_OUTBOX_LOOP' ||
+      !this.state.browser_connected ||
+      !this.state.asset_match
+    ) {
       this.state.status = 'DEGRADED';
     } else if (this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY') {
-      this.state.status = 'HEALTHY';
+      this.state.status = this.state.asset_match ? 'HEALTHY' : 'DEGRADED';
     } else if (this.state.meta_inbox_state === 'NAVIGATING' || this.state.meta_inbox_state === 'STARTING') {
       this.state.status = 'STARTING';
     }
+  }
+
+  recordScanMetrics({ rowsSeen = 0, unreadRows = 0, threadsScanned = 0 } = {}) {
+    this.state.conversation_rows_seen = typeof rowsSeen === 'number' ? rowsSeen : 0;
+    this.state.unread_rows_seen = typeof unreadRows === 'number' ? unreadRows : 0;
+    this.state.threads_scanned += (typeof threadsScanned === 'number' ? threadsScanned : 0);
+  }
+
+  recordInboundDetected() {
+    const now = new Date().toISOString();
+    this.state.last_inbound_detected_at = now;
+    this.state.last_inbound_sync_success_at = now;
   }
 
   recordMainLoopHeartbeat() {
@@ -131,6 +175,14 @@ class HealthServer {
       worker_running: this.state.worker_running,
       browser_connected: this.state.browser_connected,
       meta_inbox_state: this.state.meta_inbox_state,
+      expected_asset_id: this.state.expected_asset_id,
+      current_asset_id: this.state.current_asset_id,
+      asset_match: Boolean(this.state.asset_match),
+      conversation_rows_seen: this.state.conversation_rows_seen,
+      unread_rows_seen: this.state.unread_rows_seen,
+      threads_scanned: this.state.threads_scanned,
+      last_inbound_detected_at: this.state.last_inbound_detected_at,
+      last_inbound_sync_success_at: this.state.last_inbound_sync_success_at,
       uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
       pid: process.pid,
       memory: {
@@ -170,9 +222,17 @@ class HealthServer {
           return;
         }
 
-        // Readiness check: 200 ONLY if Meta Inbox is READY/INBOX_READY AND outbox heartbeat is fresh & healthy
+        // Readiness check: 200 ONLY if Meta Inbox is READY/INBOX_READY AND asset matches AND outbox heartbeat is fresh & healthy
         if (pathname === '/ready') {
           const isMetaReady = this.state.meta_inbox_state === 'READY' || this.state.meta_inbox_state === 'INBOX_READY';
+          // Strict Fail-Closed: asset is only matched if current_asset_id exists and equals expected_asset_id
+          const assetMatch = Boolean(
+            this.state.asset_match &&
+            this.state.current_asset_id &&
+            this.state.expected_asset_id &&
+            this.state.current_asset_id === this.state.expected_asset_id
+          );
+          const isWrongAsset = this.state.meta_inbox_state === 'WRONG_ASSET' || !assetMatch;
           const now = Date.now();
           const STALE_THRESHOLD_MS = 45000;
 
@@ -186,7 +246,10 @@ class HealthServer {
           let ready = false;
           let readyState = this.state.meta_inbox_state;
 
-          if (!isMetaReady) {
+          if (isWrongAsset || this.state.meta_inbox_state === 'WRONG_ASSET') {
+            ready = false;
+            readyState = 'WRONG_ASSET';
+          } else if (!isMetaReady) {
             ready = false;
             readyState = this.state.meta_inbox_state;
           } else if (!mainLoopFresh || !isOutboxHealthy) {
@@ -204,6 +267,14 @@ class HealthServer {
             state: readyState,
             meta_inbox_state: this.state.meta_inbox_state,
             status: ready ? 'HEALTHY' : 'DEGRADED',
+            expected_asset_id: this.state.expected_asset_id,
+            current_asset_id: this.state.current_asset_id,
+            asset_match: assetMatch,
+            conversation_rows_seen: this.state.conversation_rows_seen,
+            unread_rows_seen: this.state.unread_rows_seen,
+            threads_scanned: this.state.threads_scanned,
+            last_inbound_detected_at: this.state.last_inbound_detected_at,
+            last_inbound_sync_success_at: this.state.last_inbound_sync_success_at,
             worker_running: this.state.worker_running,
             main_loop_fresh: mainLoopFresh,
             outbox_poll_fresh: successFresh,
