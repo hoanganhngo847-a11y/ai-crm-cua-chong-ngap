@@ -10,6 +10,7 @@ import type {
 } from '../types/inbox.types';
 import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
+import { createClient } from '@/lib/supabase/client';
 
 export { mergeDeliveryStatus };
 
@@ -120,11 +121,36 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   const [search, setSearch] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showNewMessagePill, setShowNewMessagePill] = useState<boolean>(false);
+  const isNearBottomRef = useRef<boolean>(true);
+  const prevMessageCountRef = useRef<number>(0);
+  const prevConversationIdRef = useRef<string | null>(null);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isNear = distanceFromBottom <= 100;
+    isNearBottomRef.current = isNear;
+    if (isNear) {
+      setShowNewMessagePill(false);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowNewMessagePill(false);
+    isNearBottomRef.current = true;
+  }, []);
 
   // 1. Fetch Conversations
-  const fetchConversations = useCallback(async () => {
+  const fetchConversations = useCallback(async (options?: { silent?: boolean }) => {
+    const isSilent = Boolean(options?.silent);
     try {
-      setLoadingConversations(true);
+      if (!isSilent) {
+        setLoadingConversations(true);
+      }
       const params = new URLSearchParams();
       if (channelFilter !== 'all') params.set('channel', channelFilter);
       if (search.trim()) params.set('search', search.trim());
@@ -149,7 +175,9 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     } catch (err) {
       console.error('Lỗi khi tải danh sách hội thoại:', err);
     } finally {
-      setLoadingConversations(false);
+      if (!isSilent) {
+        setLoadingConversations(false);
+      }
     }
   }, [channelFilter, search, initialCustomerId]);
 
@@ -378,10 +406,119 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   // Derive visible messages for active conversation
   const visibleMessages = selectedConversationId ? (messagesByConversation[selectedConversationId] || []) : [];
 
-  // Auto-scroll to bottom of messages
+  // Section 9: Auto-scroll behavior
+  // If user is near bottom (<100px): auto-scroll to new bubble.
+  // If user is reading history above: DO NOT force scroll, show floating "Tin nhắn mới" pill instead.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [visibleMessages]);
+    const currentCount = visibleMessages.length;
+    const isSwitchedConversation = selectedConversationId !== prevConversationIdRef.current;
+    prevConversationIdRef.current = selectedConversationId;
+
+    if (isSwitchedConversation) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      setShowNewMessagePill(false);
+      isNearBottomRef.current = true;
+      prevMessageCountRef.current = currentCount;
+      return;
+    }
+
+    if (currentCount > prevMessageCountRef.current) {
+      if (isNearBottomRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        setShowNewMessagePill(false);
+      } else {
+        setShowNewMessagePill(true);
+      }
+    }
+    prevMessageCountRef.current = currentCount;
+  }, [visibleMessages, selectedConversationId]);
+
+  // Section 7, 8 & 12: Supabase Realtime Subscriptions & Latency Instrumentation
+  useEffect(() => {
+    let supabase: ReturnType<typeof createClient> | null = null;
+    try {
+      supabase = createClient();
+    } catch (err) {
+      console.warn('[REALTIME] Supabase client không khả dụng:', err);
+      return;
+    }
+
+    const channel = supabase
+      .channel('crm_inbox_realtime')
+      // 1. Subscribe to public.interactions INSERT
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'interactions',
+        },
+        (payload) => {
+          const frontendRealtimeEventAt = Date.now();
+          const newInteraction = payload.new as {
+            id?: string;
+            conversation_id?: string;
+            created_at?: string;
+          };
+
+          const convId = newInteraction?.conversation_id;
+          const createdAt = newInteraction?.created_at ? new Date(newInteraction.created_at).getTime() : null;
+          const dbToFrontendMs = createdAt ? frontendRealtimeEventAt - createdAt : null;
+          console.log(
+            `[REALTIME LATENCY] Inbound interaction INSERT | DB -> Frontend: ${dbToFrontendMs}ms`
+          );
+
+          // If event belongs to currently active conversation: fetch messages immediately & silently
+          if (convId && convId === activeConversationRef.current) {
+            void fetchMessages(convId, { silent: true }).then(() => {
+              const uiMessageVisibleAt = Date.now();
+              const dbToUiMs = createdAt ? uiMessageVisibleAt - createdAt : null;
+              console.log(`[REALTIME LATENCY] DB -> UI message visible: ${dbToUiMs}ms`);
+            });
+          }
+
+          // In all cases, refresh conversation list silently so unread badges, ordering, and snippets update
+          void fetchConversations({ silent: true });
+        }
+      )
+      // 2. Subscribe to public.conversations INSERT & UPDATE
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'conversations',
+        },
+        () => {
+          void fetchConversations({ silent: true });
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[REALTIME] Subscribed to inbox interactions & conversations successfully.');
+        }
+      });
+
+    return () => {
+      if (supabase && channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, [fetchMessages, fetchConversations]);
+
+  // Section 11: Fallback silent polling (15s reconciliation loop in case realtime event is missed or reconnects)
+  useEffect(() => {
+    const fallbackIntervalId = setInterval(() => {
+      if (activeConversationRef.current) {
+        void fetchMessages(activeConversationRef.current, { silent: true });
+      }
+      void fetchConversations({ silent: true });
+    }, 15000);
+
+    return () => {
+      clearInterval(fallbackIntervalId);
+    };
+  }, [fetchMessages, fetchConversations]);
 
   // Smart polling for pending outbound delivery status (Requirements 3 & 4)
   useEffect(() => {
@@ -883,7 +1020,12 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               </div>
 
               {/* Chat Stream (Independent Scroll, Isolated Messages) */}
-              <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5 bg-slate-950">
+              <div className="flex-1 min-h-0 relative flex flex-col bg-slate-950">
+                <div
+                  ref={scrollContainerRef}
+                  onScroll={handleScroll}
+                  className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5"
+                >
                 {loadingMessages ? (
                   <div className="space-y-3">
                     {[...Array(4)].map((_, i) => (
@@ -963,6 +1105,20 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                   })
                 )}
                 <div ref={messagesEndRef} />
+                </div>
+
+                {showNewMessagePill && (
+                  <button
+                    type="button"
+                    onClick={scrollToBottom}
+                    className="absolute bottom-4 right-6 z-20 px-3.5 py-1.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-xl flex items-center gap-1.5 transition-all duration-200 animate-bounce"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                    <span>Tin nhắn mới</span>
+                  </button>
+                )}
               </div>
 
               {/* Message Input Box (Fixed at bottom) */}

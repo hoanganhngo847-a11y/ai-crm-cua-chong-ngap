@@ -127,7 +127,8 @@ export async function POST(request: NextRequest) {
         page_id: page_id || 'unknown',
         page_name: page_name || 'Trang Facebook',
         customer_fb_id: customer_fb_id || null,
-        source: 'meta_business_suite_browser'
+        source: 'meta_business_suite_browser',
+        ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {})
       }
     });
 

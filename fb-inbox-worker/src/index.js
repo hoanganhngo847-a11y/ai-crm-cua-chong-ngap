@@ -13,6 +13,7 @@ import { syncInboundMessageToCRM } from './crm-client.js';
 import { claimOutboxJobs, completeOutboxJob, failOutboxJob, claimOrphanJobs, resolveReconciledJob } from './outbox-client.js';
 import { executeSendOutboxJob, reconcileOrphanOutboxJob } from './outbox-sender.js';
 import { healthServer } from './health-server.js';
+import { setupDomMutationSignal, CycleWaker, installMetaInboxDomObserver } from './observer.js';
 
 // Cache processed message fingerprints locally in memory
 export const syncedFingerprints = new Set();
@@ -25,8 +26,10 @@ export const SCAN_CONFIG = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-export async function processThreadData(threadData, cachedPageId, cachedPageName) {
+export async function processThreadData(threadData, cachedPageId, cachedPageName, options = {}) {
   if (!threadData || !threadData.messages || threadData.messages.length === 0) return;
+
+  const domSignalAt = options?.domSignalAt || null;
 
   for (const msg of threadData.messages) {
     // Requirement 14: AMBIGUOUS_DIRECTION handling
@@ -50,6 +53,12 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
 
       // A. Nếu fingerprint đã cached: skip.
       if (!syncedFingerprints.has(fingerprint)) {
+        const workerDetectedAt = Date.now();
+        if (domSignalAt) {
+          const domToWorkerMs = workerDetectedAt - domSignalAt;
+          log.info(`[LATENCY] Meta DOM -> Worker detect: ${domToWorkerMs}ms`);
+        }
+
         // B. Nếu chưa cached: gọi syncInboundMessageToCRM trước.
         log.info(`[INBOUND] Phát hiện tin nhắn mới từ khách hàng:`);
         log.info(`  • Page ID: ${cachedPageId}`);
@@ -67,7 +76,12 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
           externalConversationId: threadData.stableThreadId,
           externalMessageId: fingerprint,
           content: msg.content,
-          timestamp: msg.timestamp
+          timestamp: msg.timestamp,
+          metadata: {
+            meta_dom_signal_at: domSignalAt,
+            worker_inbound_detected_at: workerDetectedAt,
+            crm_sync_attempt_at: Date.now()
+          }
         });
 
         // C. Chỉ add fingerprint vào syncedFingerprints khi syncResult.success === true
@@ -76,6 +90,11 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
           syncedFingerprints.add(fingerprint);
           healthServer.recordScanSuccess();
           healthServer.recordInboundDetected();
+
+          const crmSyncSuccessAt = Date.now();
+          const workerToDbMs = crmSyncSuccessAt - workerDetectedAt;
+          const totalMs = crmSyncSuccessAt - (domSignalAt || workerDetectedAt);
+          log.info(`[LATENCY] Worker detect -> CRM DB: ${workerToDbMs}ms | Total DOM -> CRM DB: ${totalMs}ms`);
 
           const statusStr = syncResult.isDuplicate ? 'DUPLICATE_IGNORED (200 OK)' : 'INGESTED_SUCCESS (200 OK)';
           log.info(`  • Trạng thái sync CRM: ${statusStr} (Interaction ID: ${syncResult.interactionId || 'N/A'})`);
@@ -115,9 +134,12 @@ async function withTimeout(promise, ms, desc) {
 }
 
 export async function performInboundScan(page, expectedPageId, cachedPageName, options = {}) {
-  const timeBudgetMs = options.scanTimeBudgetMs ?? SCAN_CONFIG.SCAN_TIME_BUDGET_MS;
-  const maxHeavyThreads = options.maxHeavyThreads ?? SCAN_CONFIG.MAX_HEAVY_THREADS_PER_CYCLE;
+  const isUrgent = Boolean(options.isUrgent);
+  const timeBudgetMs = options.scanTimeBudgetMs ?? (isUrgent ? 2000 : SCAN_CONFIG.SCAN_TIME_BUDGET_MS);
+  const maxHeavyThreads = options.maxHeavyThreads ?? (isUrgent ? 2 : SCAN_CONFIG.MAX_HEAVY_THREADS_PER_CYCLE);
+  const maxVisibleRows = options.maxVisibleRows ?? (isUrgent ? 5 : SCAN_CONFIG.MAX_VISIBLE_ROWS);
   let readCursor = options.readCursor ?? 0;
+  const domSignalAt = options.domSignalAt || null;
   const startTime = Date.now();
 
   let threadsScannedThisCycle = 0;
@@ -132,7 +154,7 @@ export async function performInboundScan(page, expectedPageId, cachedPageName, o
       'extractActiveThreadMessages'
     );
     if (activeThreadData && activeThreadData.messages && activeThreadData.messages.length > 0) {
-      await processThreadData(activeThreadData, expectedPageId, cachedPageName);
+      await processThreadData(activeThreadData, expectedPageId, cachedPageName, { domSignalAt });
       threadsScannedThisCycle++;
     }
   } catch (inboundErr) {
@@ -157,12 +179,12 @@ export async function performInboundScan(page, expectedPageId, cachedPageName, o
     };
   }
 
-  // 2. Scan visible conversation list (up to 20 rows visible)
+  // 2. Scan visible conversation list (up to maxVisibleRows: 5 if urgent, 20 if full)
   let conversations = [];
   try {
     const listBudgetMs = Math.max(1000, Math.min(6000, timeBudgetMs - (Date.now() - startTime)));
     conversations = await withTimeout(
-      extractConversationsList(page, SCAN_CONFIG.MAX_VISIBLE_ROWS),
+      extractConversationsList(page, maxVisibleRows),
       listBudgetMs,
       'extractConversationsList'
     );
@@ -234,7 +256,7 @@ export async function performInboundScan(page, expectedPageId, cachedPageName, o
         ).catch(() => null);
 
         if (threadData && threadData.messages && threadData.messages.length > 0) {
-          await processThreadData(threadData, expectedPageId, cachedPageName);
+          await processThreadData(threadData, expectedPageId, cachedPageName, { domSignalAt });
           threadsScannedThisCycle++;
         }
       }
@@ -306,6 +328,29 @@ async function main() {
     const expectedPageId = CONFIG.FB_PAGE_ID;
     const cachedPageId = expectedPageId;
     let readConversationCursor = 0;
+
+    const cycleWaker = new CycleWaker();
+    let isInboundScanRunning = false;
+    let pendingUrgentScan = false;
+    let nextScanIsUrgent = false;
+    let nextDomSignalAt = null;
+    let pendingDomSignalAt = null;
+    let observerSetupDone = false;
+
+    const handleDomMutationSignal = (event) => {
+      const now = (event && event.domSignalAt) || Date.now();
+      if (isInboundScanRunning) {
+        pendingUrgentScan = true;
+        if (!pendingDomSignalAt || now < pendingDomSignalAt) {
+          pendingDomSignalAt = now;
+        }
+        log.info(`[MUTEX GUARD] DOM Mutation Signal nhận khi đang chạy scan -> Đã đánh dấu pendingUrgentScan (signalAt: ${now})`);
+      } else {
+        nextScanIsUrgent = true;
+        nextDomSignalAt = now;
+        cycleWaker.wake({ domSignalAt: now });
+      }
+    };
 
     // Main polling loop
     while (isRunning) {
@@ -396,6 +441,18 @@ async function main() {
             hasLoggedReadyMessage = true;
           }
 
+          if (!observerSetupDone) {
+            try {
+              await setupDomMutationSignal(page, handleDomMutationSignal, { debounceMs: 150, maxWaitMs: 350 });
+              observerSetupDone = true;
+              log.success('[FAST PATH] Đã cài đặt MutationObserver thành công trên Meta Inbox (debounce=150ms, maxWait=350ms)!');
+            } catch (obsErr) {
+              log.warn(`[FAST PATH] Lỗi cài đặt MutationObserver: ${obsErr.message}`);
+            }
+          } else {
+            await installMetaInboxDomObserver(page, { debounceMs: 150, maxWaitMs: 350 }).catch(() => {});
+          }
+
           // Extract Page Name (safe, non-blocking)
           try {
             const pageName = await withTimeout(extractPageName(page), 5000, 'extractPageName');
@@ -469,15 +526,41 @@ async function main() {
           // ===================================================================
           // 2. INBOUND SCANNING SECOND (Bounded time budget & round-robin scan)
           // ===================================================================
-          const scanResult = await performInboundScan(page, expectedPageId, cachedPageName, {
-            scanTimeBudgetMs: SCAN_CONFIG.SCAN_TIME_BUDGET_MS,
-            maxHeavyThreads: SCAN_CONFIG.MAX_HEAVY_THREADS_PER_CYCLE,
-            readCursor: readConversationCursor
-          });
-          readConversationCursor = scanResult.nextReadCursor;
+          isInboundScanRunning = true;
+          let currentScanIsUrgent = Boolean(nextScanIsUrgent);
+          let currentDomSignalAt = nextDomSignalAt;
+          nextScanIsUrgent = false;
+          nextDomSignalAt = null;
 
-          // Wait before next poll cycle
-          await sleep(CONFIG.POLL_INTERVAL_MS);
+          try {
+            const scanResult = await performInboundScan(page, expectedPageId, cachedPageName, {
+              isUrgent: currentScanIsUrgent,
+              domSignalAt: currentDomSignalAt,
+              readCursor: readConversationCursor
+            });
+            readConversationCursor = scanResult.nextReadCursor;
+          } finally {
+            isInboundScanRunning = false;
+          }
+
+          // If an urgent signal arrived while scan was running, immediately loop without sleeping
+          if (pendingUrgentScan) {
+            nextScanIsUrgent = true;
+            nextDomSignalAt = pendingDomSignalAt;
+            pendingUrgentScan = false;
+            pendingDomSignalAt = null;
+            cycleWaker.clear();
+            log.info('[FAST PATH] Phát hiện pending urgent scan trong khi scan cũ đang chạy -> Thực hiện ngay lượt quét bổ sung.');
+            continue;
+          }
+
+          // Wait before next cycle: either fallback timeout (POLL_INTERVAL_MS = 5000) OR instant DOM mutation signal
+          const cycleEvent = await cycleWaker.waitForNextCycle(CONFIG.POLL_INTERVAL_MS);
+          if (cycleEvent.type === 'SIGNAL') {
+            nextScanIsUrgent = true;
+            nextDomSignalAt = cycleEvent.domSignalAt || Date.now();
+            log.info(`[FAST PATH] Worker thức dậy ngay lập tức từ DOM mutation signal (latency start: ${nextDomSignalAt})`);
+          }
         } else {
           healthServer.updateState({ meta_inbox_state: state });
           await sleep(CONFIG.STATE_CHECK_INTERVAL_MS);
