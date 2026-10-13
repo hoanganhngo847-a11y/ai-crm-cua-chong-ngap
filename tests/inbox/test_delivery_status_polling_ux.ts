@@ -558,6 +558,48 @@ async function runDeliveryStatusPollingUxTests() {
     mergeDeliveryStatus('PENDING', 'SENT') === 'SENT'
   );
 
+  recordTest(
+    '15.9. mergeDeliveryStatus: SENT + FAILED -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'FAILED')}`,
+    mergeDeliveryStatus('SENT', 'FAILED') === 'SENT'
+  );
+
+  recordTest(
+    '15.10. mergeDeliveryStatus: SENT + RECONCILE_REQUIRED -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'RECONCILE_REQUIRED')}`,
+    mergeDeliveryStatus('SENT', 'RECONCILE_REQUIRED') === 'SENT'
+  );
+
+  recordTest(
+    '15.11. mergeDeliveryStatus: DELIVERED + FAILED -> DELIVERED',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'FAILED')}`,
+    mergeDeliveryStatus('DELIVERED', 'FAILED') === 'DELIVERED'
+  );
+
+  recordTest(
+    '15.12. mergeDeliveryStatus: DELIVERED + RECONCILE_REQUIRED -> DELIVERED',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'RECONCILE_REQUIRED')}`,
+    mergeDeliveryStatus('DELIVERED', 'RECONCILE_REQUIRED') === 'DELIVERED'
+  );
+
+  recordTest(
+    '15.13. mergeDeliveryStatus: FAILED + SENT -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('FAILED', 'SENT')}`,
+    mergeDeliveryStatus('FAILED', 'SENT') === 'SENT'
+  );
+
+  recordTest(
+    '15.14. mergeDeliveryStatus: RECONCILE_REQUIRED + SENT -> SENT',
+    'SENT',
+    `${mergeDeliveryStatus('RECONCILE_REQUIRED', 'SENT')}`,
+    mergeDeliveryStatus('RECONCILE_REQUIRED', 'SENT') === 'SENT'
+  );
+
   // Khôi phục DEMO_MODE
   process.env.DEMO_MODE = 'true';
 

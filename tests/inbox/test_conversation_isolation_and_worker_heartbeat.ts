@@ -990,6 +990,48 @@ async function runAllTests() {
     mergeDeliveryStatus('PENDING', 'SENT') === 'SENT'
   );
 
+  recordTest(
+    'Case K.9: mergeDeliveryStatus("SENT", "FAILED") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'FAILED')}`,
+    mergeDeliveryStatus('SENT', 'FAILED') === 'SENT'
+  );
+
+  recordTest(
+    'Case K.10: mergeDeliveryStatus("SENT", "RECONCILE_REQUIRED") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('SENT', 'RECONCILE_REQUIRED')}`,
+    mergeDeliveryStatus('SENT', 'RECONCILE_REQUIRED') === 'SENT'
+  );
+
+  recordTest(
+    'Case K.11: mergeDeliveryStatus("DELIVERED", "FAILED") -> "DELIVERED"',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'FAILED')}`,
+    mergeDeliveryStatus('DELIVERED', 'FAILED') === 'DELIVERED'
+  );
+
+  recordTest(
+    'Case K.12: mergeDeliveryStatus("DELIVERED", "RECONCILE_REQUIRED") -> "DELIVERED"',
+    'DELIVERED',
+    `${mergeDeliveryStatus('DELIVERED', 'RECONCILE_REQUIRED')}`,
+    mergeDeliveryStatus('DELIVERED', 'RECONCILE_REQUIRED') === 'DELIVERED'
+  );
+
+  recordTest(
+    'Case K.13: mergeDeliveryStatus("FAILED", "SENT") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('FAILED', 'SENT')}`,
+    mergeDeliveryStatus('FAILED', 'SENT') === 'SENT'
+  );
+
+  recordTest(
+    'Case K.14: mergeDeliveryStatus("RECONCILE_REQUIRED", "SENT") -> "SENT"',
+    'SENT',
+    `${mergeDeliveryStatus('RECONCILE_REQUIRED', 'SENT')}`,
+    mergeDeliveryStatus('RECONCILE_REQUIRED', 'SENT') === 'SENT'
+  );
+
   // ========================================================================================
   // WORKER HEARTBEAT & DEGRADED READINESS TESTS (Section 1: Cases A through F)
   // ========================================================================================

@@ -104,46 +104,30 @@ export function mergeDeliveryStatus(
     return incomingStatus as MessageDeliveryStatus;
   }
 
-  // Once DELIVERED, never downgrade to SENT or any non-terminal state
+  // Khi local đã là DELIVERED, không trạng thái nào được downgrade nó
   if (normLocal === 'DELIVERED') {
-    if (normIncoming === 'SENT' || isPendingDelivery(normIncoming)) {
-      return 'DELIVERED';
-    }
+    return 'DELIVERED';
   }
 
-  // If incoming is DELIVERED, upgrade from SENT or non-terminal
+  // Khi local đã là SENT, chỉ cho phép SENT + DELIVERED => DELIVERED, còn lại giữ SENT
+  if (normLocal === 'SENT') {
+    return normIncoming === 'DELIVERED'
+      ? 'DELIVERED'
+      : 'SENT';
+  }
+
+  // Sau đó mới xử lý các trạng thái khác:
   if (normIncoming === 'DELIVERED') {
     return 'DELIVERED';
   }
 
-  // Once SENT, never downgrade to any non-terminal state
-  if (normLocal === 'SENT') {
-    if (isPendingDelivery(normIncoming)) {
-      return 'SENT';
-    }
+  if (normIncoming === 'SENT') {
+    return 'SENT';
   }
 
-  // If local is non-terminal, incoming SENT upgrades it
-  if (isPendingDelivery(normLocal)) {
-    if (normIncoming === 'SENT') {
-      return 'SENT';
-    }
-  }
-
-  // Terminal error states: do not downgrade FAILED or RECONCILE_REQUIRED to non-terminal
+  // FAILED hoặc RECONCILE_REQUIRED ở local không bị downgrade về in-flight/non-terminal
   if (
     (normLocal === 'FAILED' || normLocal === 'RECONCILE_REQUIRED') &&
-    isPendingDelivery(normIncoming)
-  ) {
-    return localStatus as MessageDeliveryStatus;
-  }
-
-  // Do not downgrade terminal state to non-terminal
-  if (
-    (normLocal === 'SENT' ||
-      normLocal === 'DELIVERED' ||
-      normLocal === 'FAILED' ||
-      normLocal === 'RECONCILE_REQUIRED') &&
     isPendingDelivery(normIncoming)
   ) {
     return localStatus as MessageDeliveryStatus;
