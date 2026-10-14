@@ -939,6 +939,9 @@ https://namethatui.com/</div></div>
         content: scannedMsg.content,
         direction: 'inbound',
         timestamp: scannedMsg.timestamp,
+        metadata: {
+          legacy_alias_confidence: 'confirmed',
+        },
       }),
       headers: {
         'content-type': 'application/json',
@@ -1615,6 +1618,255 @@ https://namethatui.com/</div></div>
       'unique=true, stable=true, newDistinct=true',
       `unique=${m10Unique}, fp2Stable=${m10Fp2Stable}, fp3Stable=${m10Fp3Stable}, newDistinct=${m10NewDistinct}`,
       m10Passed
+    );
+
+    // ===============================================================================================
+    // TEST 36 (M11 BẮT BUỘC): Historical single message + fresh upgraded worker with new identical message
+    // DB has 1 message: A = "hello", timestamp = "10:00 PM", F0.
+    // Fresh upgraded worker (no historical checkpoint) sees brand-new message B = "hello", mid.$B.
+    // Viewport occurrence ordinal is 0, so guessed legacy ref is F0.
+    // Invariant: B is a NEW physical inbound message (canonical mid.$B).
+    // B must NOT be falsely suppressed by F0.
+    // Expected:
+    //   B first sync: is_duplicate = false
+    //   B second sync: is_duplicate = true
+    //   total messages: 2
+    // ===============================================================================================
+    const threadM11 = `${PAGE_ID}:61592309996234`;
+    messageReconciler.resetThread(threadM11);
+    InboxService.resetInboxStore();
+
+    const legacyM11F0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM11}:10:00 PM:hello:INBOUND`)
+      .digest('hex');
+
+    // 1. Pre-upgrade CRM: historical message A with legacy F0
+    const m11HistA = await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: COMPANY_M6,
+      senderName: 'Khách hàng M11',
+      externalUserId: '61592309996234',
+      externalConversationId: threadM11,
+      externalRef: legacyM11F0,
+      externalMessageId: legacyM11F0,
+      content: 'hello',
+      timestamp: '10:00 PM',
+    });
+    const m11ConvId = m11HistA.conversationId;
+    const m11InitCount = (await InboxService.getMessagesByConversationId(COMPANY_M6, m11ConvId)).length;
+    assert.strictEqual(m11InitCount, 1, 'M11 initial count must be 1');
+
+    // 2. Fresh upgraded worker (no prior state) scans message B with mid.$B
+    const canonicalM11B = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM11}:mid.$m11_B`)
+      .digest('hex');
+    const guessedLegacyM11B = legacyM11F0; // occurrence 0 in fresh worker viewport
+
+    // Sync B first time:
+    const m11SyncRes1 = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech',
+        sender_name: 'Khách hàng M11',
+        customer_fb_id: '61592309996234',
+        external_conversation_id: threadM11,
+        external_message_id: canonicalM11B,
+        legacy_external_message_id: guessedLegacyM11B,
+        content: 'hello',
+        direction: 'inbound',
+        timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m11CountAfterB1 = (await InboxService.getMessagesByConversationId(COMPANY_M6, m11ConvId)).length;
+
+    // Sync B second time (rescan):
+    const m11SyncRes2 = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech',
+        sender_name: 'Khách hàng M11',
+        customer_fb_id: '61592309996234',
+        external_conversation_id: threadM11,
+        external_message_id: canonicalM11B,
+        legacy_external_message_id: guessedLegacyM11B,
+        content: 'hello',
+        direction: 'inbound',
+        timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m11CountAfterB2 = (await InboxService.getMessagesByConversationId(COMPANY_M6, m11ConvId)).length;
+
+    const m11Passed = m11SyncRes1.is_duplicate === false &&
+      m11CountAfterB1 === 2 &&
+      m11SyncRes2.is_duplicate === true &&
+      m11CountAfterB2 === 2;
+
+    recordResult(
+      36,
+      'M11 (P0 Fix): Historical single message A + fresh worker new identical message B — B NOT suppressed, count=2',
+      'B first: is_dup=false, count=2; B rescan: is_dup=true, count=2',
+      `B first: is_dup=${m11SyncRes1.is_duplicate}, count=${m11CountAfterB1}; B rescan: is_dup=${m11SyncRes2.is_duplicate}, count=${m11CountAfterB2}`,
+      m11Passed
+    );
+
+    // ===============================================================================================
+    // TEST 37 (M12): Historical single message rescan without proof mapping (Intentional Migration Tradeoff)
+    // CRM pre-upgrade has: hello A -> F0
+    // After upgrade, DOM displays this same message A with mid.$A.
+    // Caller does NOT have proof mapping historical alias (no legacy_alias_confidence: 'confirmed').
+    // Expected under new policy:
+    // - First v2 sync may insert one-time canonical duplicate (NO MESSAGE LOSS > ONE-TIME HISTORICAL DUPLICATE).
+    // - Subsequent rescan of same mid.$A deduplicates via canonical MID -> no further duplicates.
+    // ===============================================================================================
+    const threadM12 = `${PAGE_ID}:61592309996235`;
+    messageReconciler.resetThread(threadM12);
+    InboxService.resetInboxStore();
+
+    const legacyM12F0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM12}:10:00 PM:hello:INBOUND`)
+      .digest('hex');
+
+    const m12HistA = await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: COMPANY_M6,
+      senderName: 'Khách hàng M12',
+      externalUserId: '61592309996235',
+      externalConversationId: threadM12,
+      externalRef: legacyM12F0,
+      externalMessageId: legacyM12F0,
+      content: 'hello',
+      timestamp: '10:00 PM',
+    });
+    const m12ConvId = m12HistA.conversationId;
+
+    const canonicalM12A = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM12}:mid.$m12_A`)
+      .digest('hex');
+
+    // First v2 sync without proof mapping (intentional one-time insertion):
+    const m12SyncRes1 = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech',
+        sender_name: 'Khách hàng M12',
+        customer_fb_id: '61592309996235',
+        external_conversation_id: threadM12,
+        external_message_id: canonicalM12A,
+        legacy_external_message_id: legacyM12F0,
+        content: 'hello',
+        direction: 'inbound',
+        timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m12CountAfterSync1 = (await InboxService.getMessagesByConversationId(COMPANY_M6, m12ConvId)).length;
+
+    // Rescan identical mid.$m12_A:
+    const m12SyncRes2 = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech',
+        sender_name: 'Khách hàng M12',
+        customer_fb_id: '61592309996235',
+        external_conversation_id: threadM12,
+        external_message_id: canonicalM12A,
+        legacy_external_message_id: legacyM12F0,
+        content: 'hello',
+        direction: 'inbound',
+        timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m12CountAfterSync2 = (await InboxService.getMessagesByConversationId(COMPANY_M6, m12ConvId)).length;
+
+    const m12Passed = m12SyncRes1.is_duplicate === false &&
+      m12CountAfterSync1 === 2 &&
+      m12SyncRes2.is_duplicate === true &&
+      m12CountAfterSync2 === 2;
+
+    recordResult(
+      37,
+      'M12: Historical message rescan without proof mapping — one-time insertion, canonical rescan deduped (count=2)',
+      'first: is_dup=false, count=2; rescan: is_dup=true, count=2 (stable canonical dedupe)',
+      `first: is_dup=${m12SyncRes1.is_duplicate}, count=${m12CountAfterSync1}; rescan: is_dup=${m12SyncRes2.is_duplicate}, count=${m12CountAfterSync2}`,
+      m12Passed
+    );
+
+    // ===============================================================================================
+    // TEST 38 (M13): Explicit confirmed alias path with verified proof
+    // Setup: old interaction has legacy ref F0.
+    // Caller has verified proof that new canonical MID V2A corresponds to historical F0.
+    // Request explicitly includes: metadata.legacy_alias_confidence = 'confirmed'.
+    // Expected:
+    // - is_duplicate = true
+    // - existing interaction returned, count remains 1
+    // Note: Caller is responsible for providing proof before setting 'confirmed'.
+    // ===============================================================================================
+    const threadM13 = `${PAGE_ID}:61592309996236`;
+    messageReconciler.resetThread(threadM13);
+    InboxService.resetInboxStore();
+
+    const legacyM13F0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM13}:10:00 PM:hello:INBOUND`)
+      .digest('hex');
+
+    const m13HistA = await InboxService.addInboundMessage({
+      channel: 'facebook',
+      company_id: COMPANY_M6,
+      senderName: 'Khách hàng M13',
+      externalUserId: '61592309996236',
+      externalConversationId: threadM13,
+      externalRef: legacyM13F0,
+      externalMessageId: legacyM13F0,
+      content: 'hello',
+      timestamp: '10:00 PM',
+    });
+    const m13ConvId = m13HistA.conversationId;
+
+    const canonicalM13A = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM13}:mid.$m13_A`)
+      .digest('hex');
+
+    // Sync with explicit confirmed alias proof:
+    const m13SyncRes = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID,
+        page_name: 'MD Tech',
+        sender_name: 'Khách hàng M13',
+        customer_fb_id: '61592309996236',
+        external_conversation_id: threadM13,
+        external_message_id: canonicalM13A,
+        legacy_external_message_id: legacyM13F0,
+        content: 'hello',
+        direction: 'inbound',
+        timestamp: '10:00 PM',
+        metadata: {
+          legacy_alias_confidence: 'confirmed',
+        },
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m13Count = (await InboxService.getMessagesByConversationId(COMPANY_M6, m13ConvId)).length;
+    const m13Passed = m13SyncRes.is_duplicate === true && m13Count === 1;
+
+    recordResult(
+      38,
+      'M13: Explicit confirmed alias (with proof) — is_duplicate=true, count remains 1',
+      'is_duplicate=true && count=1',
+      `is_duplicate=${m13SyncRes.is_duplicate}, count=${m13Count}`,
+      m13Passed
     );
 
   } finally {

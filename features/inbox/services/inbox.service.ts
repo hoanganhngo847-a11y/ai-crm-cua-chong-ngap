@@ -1542,20 +1542,15 @@ export async function addInboundMessage(params: {
       // 2. Legacy ref match with Confirmed-Alias Semantics:
       // When externalRef (canonical v2) is present, legacy ref is only checked if CONFIRMED:
       // (a) Pure v1 caller (!externalRef or externalRef === legacyExternalRef)
-      // (b) OR explicitly confirmed: legacy_alias_confidence === 'confirmed'
-      // (c) OR message content is UNIQUE in this conversation (count === 1), where ordinal shift from virtualization is impossible.
-      // If content is repeated (count > 1) and confidence is not confirmed, the legacy ref is an UNCONFIRMED
-      // guessed alias from a virtualized viewport and MUST NOT suppress a new canonical MID.
+      // (b) OR explicitly confirmed: legacyAliasConfidence === 'confirmed'
+      //
+      // Guessed legacy refs from current viewports without historical proof MUST NOT suppress
+      // a new canonical MID. Priority: NO MESSAGE LOSS > ONE-TIME HISTORICAL DUPLICATE.
       if (legacyExternalRef) {
-        const sameContentCount = messagesStore[conversation.id].filter(
-          (m) => m.content === (params.content || '') && m.direction === 'inbound'
-        ).length;
-
         const isConfirmedLegacy = Boolean(
           !externalRef ||
           externalRef === legacyExternalRef ||
-          legacyAliasConfidence === 'confirmed' ||
-          (legacyAliasConfidence !== 'unconfirmed' && sameContentCount === 1)
+          legacyAliasConfidence === 'confirmed'
         );
 
         if (isConfirmedLegacy) {
@@ -1644,27 +1639,14 @@ export async function addInboundMessage(params: {
   }
 
   // Confirmed-alias rule for DB-mode dual-ref idempotency:
+  // Legacy ref is only checked if caller is pure v1 or explicitly confirmed.
   const legacyAliasConfidence = (sourceMetadata as Record<string, unknown> | undefined)?.legacy_alias_confidence;
   if (legacyExternalRef && typeof legacyExternalRef === 'string' && legacyExternalRef.trim()) {
-    let isDbConfirmed = Boolean(
+    const isDbConfirmed = Boolean(
       !externalRef ||
       externalRef === legacyExternalRef ||
       legacyAliasConfidence === 'confirmed'
     );
-
-    if (!isDbConfirmed && legacyAliasConfidence !== 'unconfirmed' && externalConversationId) {
-      const { count } = await adminClient
-        .from('interactions')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('channel', channel)
-        .eq('content', rawContent)
-        .eq('direction', 'inbound');
-
-      if (count === 1) {
-        isDbConfirmed = true;
-      }
-    }
 
     if (isDbConfirmed) {
       const { data: legacyInteraction } = await adminClient

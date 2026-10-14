@@ -225,6 +225,7 @@ async function runBrowserSyncEndpointTests() {
         external_conversation_id: 'thread_dual_ref_test',
         external_message_id: newHash,
         legacy_external_message_id: legacyHash,
+        legacy_alias_confidence: 'confirmed',
         content: 'kiem tra dual ref',
         direction: 'inbound',
         timestamp: new Date().toISOString(),
