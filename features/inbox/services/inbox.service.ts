@@ -1424,6 +1424,7 @@ export async function addInboundMessage(params: {
   externalUserId?: string;
   externalConversationId?: string;
   externalRef?: string;
+  legacyExternalRef?: string;
   rawContent?: string;
   metadata?: Record<string, unknown>;
 }, client?: SupabaseClient): Promise<{
@@ -1516,20 +1517,58 @@ export async function addInboundMessage(params: {
     }
 
     const externalRef = params.externalRef || params.externalMessageId;
-    if (externalRef && messagesStore[conversation.id]) {
-      const existingMsg = messagesStore[conversation.id].find(
-        (m) => m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef
-      );
-      if (existingMsg) {
-        return {
-          conversation,
-          message: existingMsg,
-          isNewConversation: false,
-          conversationId: conversation.id,
-          interactionId: existingMsg.id,
-          customerId: conversation.customer_id,
-          isDuplicate: true,
-        };
+    const legacyExternalRef = params.legacyExternalRef;
+    const legacyAliasConfidence = (params.metadata as Record<string, unknown> | undefined)?.legacy_alias_confidence;
+
+    if (messagesStore[conversation.id] && (externalRef || legacyExternalRef)) {
+      // 1. Canonical ref match: always authoritative
+      if (externalRef) {
+        const canonicalMatch = messagesStore[conversation.id].find(
+          (m) => m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef
+        );
+        if (canonicalMatch) {
+          return {
+            conversation,
+            message: canonicalMatch,
+            isNewConversation: false,
+            conversationId: conversation.id,
+            interactionId: canonicalMatch.id,
+            customerId: conversation.customer_id,
+            isDuplicate: true,
+          };
+        }
+      }
+
+      // 2. Legacy ref match with Confirmed-Alias Semantics:
+      // When externalRef (canonical v2) is present, legacy ref is only checked if CONFIRMED:
+      // (a) Pure v1 caller (!externalRef or externalRef === legacyExternalRef)
+      // (b) OR explicitly confirmed: legacyAliasConfidence === 'confirmed'
+      //
+      // Guessed legacy refs from current viewports without historical proof MUST NOT suppress
+      // a new canonical MID. Priority: NO MESSAGE LOSS > ONE-TIME HISTORICAL DUPLICATE.
+      if (legacyExternalRef) {
+        const isConfirmedLegacy = Boolean(
+          !externalRef ||
+          externalRef === legacyExternalRef ||
+          legacyAliasConfidence === 'confirmed'
+        );
+
+        if (isConfirmedLegacy) {
+          const legacyMatch = messagesStore[conversation.id].find(
+            (m) => (m as { external_ref?: string }).external_ref === legacyExternalRef || m.id === legacyExternalRef
+          );
+          if (legacyMatch) {
+            return {
+              conversation,
+              message: legacyMatch,
+              isNewConversation: false,
+              conversationId: conversation.id,
+              interactionId: legacyMatch.id,
+              customerId: conversation.customer_id,
+              isDuplicate: true,
+            };
+          }
+        }
       }
     }
 
@@ -1586,13 +1625,79 @@ export async function addInboundMessage(params: {
 
   const externalConversationId = params.externalConversationId || params.senderId || null;
   const externalRef = params.externalRef || params.externalMessageId || null;
+  const legacyExternalRef = params.legacyExternalRef || null;
   const sourceMetadata = params.metadata || {
     channel: params.channel,
     external_message_id: externalRef,
+    legacy_external_ref: legacyExternalRef,
     sender_id: params.senderId,
     sender_name: params.senderName,
     sender_phone: params.senderPhone,
   };
+  if (legacyExternalRef && !sourceMetadata.legacy_external_ref) {
+    sourceMetadata.legacy_external_ref = legacyExternalRef;
+  }
+
+  // Confirmed-alias rule for DB-mode dual-ref idempotency:
+  // Legacy ref is only checked if caller is pure v1 or explicitly confirmed.
+  const legacyAliasConfidence = (sourceMetadata as Record<string, unknown> | undefined)?.legacy_alias_confidence;
+  if (legacyExternalRef && typeof legacyExternalRef === 'string' && legacyExternalRef.trim()) {
+    const isDbConfirmed = Boolean(
+      !externalRef ||
+      externalRef === legacyExternalRef ||
+      legacyAliasConfidence === 'confirmed'
+    );
+
+    if (isDbConfirmed) {
+      const { data: legacyInteraction } = await adminClient
+        .from('interactions')
+        .select('id, conversation_id, customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', channel)
+        .eq('external_ref', legacyExternalRef.trim())
+        .maybeSingle();
+
+    if (legacyInteraction) {
+      const { data: convData } = await adminClient
+        .from('conversations')
+        .select('*')
+        .eq('id', legacyInteraction.conversation_id)
+        .maybeSingle();
+
+      return {
+        conversation: (convData || {
+          id: legacyInteraction.conversation_id,
+          company_id: companyId,
+          customer_id: legacyInteraction.customer_id,
+          customer_name: params.senderName || 'Khách hàng Facebook',
+          channel: params.channel,
+          customer_stage: 'LEAD_NEW',
+          status: 'active',
+          unread_count: 0,
+          created_at: timestamp,
+          updated_at: timestamp,
+        }) as Conversation,
+        message: {
+          id: legacyInteraction.id,
+          company_id: companyId,
+          conversation_id: legacyInteraction.conversation_id,
+          customer_id: legacyInteraction.customer_id,
+          channel: params.channel,
+          sender_type: 'customer',
+          sender_name: params.senderName || 'Khách hàng Facebook',
+          content: sanitizedContent,
+          direction: 'inbound',
+          created_at: timestamp,
+        } as InboxMessage,
+        isNewConversation: false,
+        conversationId: legacyInteraction.conversation_id,
+        interactionId: legacyInteraction.id,
+        customerId: legacyInteraction.customer_id,
+        isDuplicate: true,
+      };
+    }
+  }
+}
 
   const { data: rpcData, error: rpcError } = await adminClient.rpc(
     'ingest_provider_message_atomic',
@@ -2103,6 +2208,16 @@ export async function getFacebookBrowserOutboxJobs(
   return (data as FacebookBrowserOutboxJob[]) || [];
 }
 
+/**
+ * Server-to-server Lookup: Trả về danh sách external_ref đã ingest cho migration reconciliation.
+ */
+// getSyncedFingerprintsForLookup REMOVED:
+// The GET /api/inbox/browser-sync endpoint that used this function has been removed
+// because (1) the production worker (crm-client.js) never calls it,
+// (2) it did not filter by company_id (tenant isolation violation), and
+// (3) it queried up to 500 external_refs across the entire interactions table (attack surface).
+// See PR #46 root cause analysis for details.
+
 export const InboxService = {
   isDemoModeActive,
   isGenericCustomerName,
@@ -2112,6 +2227,7 @@ export const InboxService = {
   sendMessage,
   getCustomerTimeline,
   addInboundMessage,
+
   updateConversationCustomerStage,
   resetInboxStore,
   claimPendingDeliveries,
@@ -2125,3 +2241,4 @@ export const InboxService = {
   sanitizePhoneInText,
   DEFAULT_INBOX_COMPANY_ID,
 };
+

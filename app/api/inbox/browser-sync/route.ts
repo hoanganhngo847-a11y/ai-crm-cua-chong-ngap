@@ -22,6 +22,11 @@ function secureCompare(a: string, b: string): boolean {
  * 3. Tuyệt đối không log secret, cookie hay token.
  * 4. Kiểm tra chiều tin nhắn: chỉ nhận INBOUND.
  * 5. Tận dụng kiến trúc InboxService.addInboundMessage sẵn có với L2 Durable Idempotency.
+ *
+ * GET endpoint đã bị XÓA (PR #46):
+ * - Production worker (crm-client.js) không sử dụng
+ * - Không filter company_id (tenant isolation violation)
+ * - Query tới 500 unscoped external_ref (attack surface)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -73,6 +78,7 @@ export async function POST(request: NextRequest) {
       customer_fb_id,
       external_conversation_id,
       external_message_id,
+      legacy_external_message_id,
       content,
       timestamp,
       direction,
@@ -110,7 +116,7 @@ export async function POST(request: NextRequest) {
 
     const companyId = process.env.FB_SYNC_COMPANY_ID || clientCompanyId || DEFAULT_INBOX_COMPANY_ID;
 
-    // 4. Ingest via InboxService
+    // 4. Ingest via InboxService with confirmed-alias dual-fingerprint semantics
     const result = await InboxService.addInboundMessage({
       channel: 'facebook',
       company_id: companyId,
@@ -118,6 +124,7 @@ export async function POST(request: NextRequest) {
       externalUserId: customer_fb_id || external_conversation_id,
       externalConversationId: external_conversation_id,
       externalRef: external_message_id,
+      legacyExternalRef: typeof legacy_external_message_id === 'string' && legacy_external_message_id.trim() ? legacy_external_message_id.trim() : undefined,
       externalMessageId: external_message_id,
       content: content.trim(),
       rawContent: content.trim(),
@@ -128,6 +135,8 @@ export async function POST(request: NextRequest) {
         page_name: page_name || 'Trang Facebook',
         customer_fb_id: customer_fb_id || null,
         source: 'meta_business_suite_browser',
+        legacy_external_message_id: legacy_external_message_id || null,
+        legacy_alias_confidence: body.legacy_alias_confidence || (body.metadata && typeof body.metadata === 'object' ? (body.metadata as Record<string, unknown>).legacy_alias_confidence : null) || null,
         ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {})
       }
     });

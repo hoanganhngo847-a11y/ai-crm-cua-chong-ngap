@@ -1,6 +1,35 @@
-import crypto from 'crypto';
 import { log } from './logger.js';
 import { threadStore } from './thread-store.js';
+import { messageReconciler } from './message-reconciler.js';
+
+export function isPureTimestampText(text) {
+  if (!text || typeof text !== 'string') return false;
+  const clean = text.trim();
+  if (!clean || clean.length > 35) return false;
+
+  // Exact relative days
+  if (/^(Hôm nay|Hôm qua|Today|Yesterday)$/i.test(clean)) return true;
+
+  // Day of week standalone
+  if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ\s*(Hai|Ba|Tư|Năm|Sáu|Bảy|Chủ nhật|\d))$/i.test(clean)) return true;
+
+  // Pure time: 12:30, 12:30 PM, 12:30 SA, 12:30:45
+  if (/^\d{1,2}:\d{2}(:\d{2})?(\s*(AM|PM|SA|CH))?$/i.test(clean)) return true;
+
+  // Day + time: "Mon 12:30 PM", "Today 12:30", "Hôm nay 12:30", "Thứ Hai 12:30 PM"
+  if (/^(Hôm nay|Hôm qua|Today|Yesterday|Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ\s*(Hai|Ba|Tư|Năm|Sáu|Bảy|Chủ nhật|\d))\s*,?\s*(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)$/i.test(clean)) return true;
+
+  // Time + Day: "12:30 PM Today"
+  if (/^(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)\s*,?\s*(Hôm nay|Hôm qua|Today|Yesterday)$/i.test(clean)) return true;
+
+  // Date format: "13 thg 10", "13 thg 10, 2026", "13/10/2026", "13-10-2026", "Oct 13", "Oct 13, 2026"
+  if (/^(\d{1,2}\s*(thg|\/|-)\s*\d{1,2}(\s*(,|\/|-)\s*\d{2,4})?)$/i.test(clean)) return true;
+
+  // Date + time: "13 thg 10 lúc 12:30", "13/10 12:30 PM", "Oct 13 at 12:30 PM"
+  if (/^(\d{1,2}\s*(thg|\/|-)\s*\d{1,2}(\s*(,|\/|-)\s*\d{2,4})?)\s*(lúc|at|,)?\s*(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)$/i.test(clean)) return true;
+
+  return false;
+}
 
 export const UI_EXCLUDED_PATTERNS = [
   /^(Hộp thư|Inbox|Chi tiết|Ghi chú|Assign|Facebook|Messenger|Trực tuyến|Online|Offline)$/i,
@@ -80,7 +109,7 @@ export async function extractPageName(page) {
 
       return 'Trang Meta Business';
     });
-  } catch (error) {
+  } catch (_error) {
     return 'Trang Meta Business';
   }
 }
@@ -374,8 +403,21 @@ export async function extractActiveThreadMessages(page, pageId) {
         return s;
       };
 
-      // Check if element is a timestamp header
-      const timePattern = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ|Hôm nay|Hôm qua|Today|Yesterday|\d{1,2}\s*(thg|\/|-)\s*\d{1,2}|\d{1,2}:\d{2}(\s*(AM|PM))?)/i;
+      // Check if text is pure timestamp indicator (exact full match, not prefix)
+      const isPureTimestampText = (text) => {
+        if (!text || typeof text !== 'string') return false;
+        const clean = text.trim();
+        if (!clean || clean.length > 35) return false;
+        if (/^(Hôm nay|Hôm qua|Today|Yesterday)$/i.test(clean)) return true;
+        if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ\s*(Hai|Ba|Tư|Năm|Sáu|Bảy|Chủ nhật|\d))$/i.test(clean)) return true;
+        if (/^\d{1,2}:\d{2}(:\d{2})?(\s*(AM|PM|SA|CH))?$/i.test(clean)) return true;
+        if (/^(Hôm nay|Hôm qua|Today|Yesterday|Mon|Tue|Wed|Thu|Fri|Sat|Sun|Thứ\s*(Hai|Ba|Tư|Năm|Sáu|Bảy|Chủ nhật|\d))\s*,?\s*(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)$/i.test(clean)) return true;
+        if (/^(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)\s*,?\s*(Hôm nay|Hôm qua|Today|Yesterday)$/i.test(clean)) return true;
+        if (/^(\d{1,2}\s*(thg|\/|-)\s*\d{1,2}(\s*(,|\/|-)\s*\d{2,4})?)$/i.test(clean)) return true;
+        if (/^(\d{1,2}\s*(thg|\/|-)\s*\d{1,2}(\s*(,|\/|-)\s*\d{2,4})?)\s*(lúc|at|,)?\s*(\d{1,2}:\d{2}(\s*(AM|PM|SA|CH))?)$/i.test(clean)) return true;
+        return false;
+      };
+
       const excludedUI = /^(Reply in Messenger|Enter|Đính kèm|Assign this conversation|View profile|More items|Send|Gửi|Preview|Chỉ định|Xem trang cá nhân)/i;
 
       // Select candidate nodes:
@@ -390,12 +432,6 @@ export async function extractActiveThreadMessages(page, pageId) {
         if (!text) {
           const hasEmoji = el.querySelector('img[alt], [aria-label]');
           if (!hasEmoji) continue;
-        }
-
-        // Check if timestamp element
-        if (timePattern.test(text) && text.length < 35 && el.children.length === 0) {
-          timestampNodes.push(el);
-          continue;
         }
 
         // Skip non-message UI actions
@@ -417,6 +453,17 @@ export async function extractActiveThreadMessages(page, pageId) {
         const isGray = bg.includes('239, 239, 239') || bg.includes('240, 242, 245') || bg.includes('242, 243, 245') || bg.includes('48, 48, 48') || bg.includes('58, 59, 60') || bg.includes('36, 37, 38');
         const hasRadius = (parseFloat(radius) > 4) || (style && parseFloat(style.borderTopLeftRadius) > 4);
         const isDirAuto = el.getAttribute('dir') === 'auto';
+
+        // Check if timestamp element: must be pure timestamp text or explicit utime metadata, and NOT a colored message bubble
+        const hasExplicitUtime = Boolean(el.querySelector('abbr[data-utime]') || el.tagName === 'ABBR');
+        const isPureTs = isPureTimestampText(text);
+
+        if (!isBlue && !isGray) {
+          if (hasExplicitUtime || (isPureTs && el.children.length === 0)) {
+            timestampNodes.push(el);
+            continue;
+          }
+        }
 
         if (isBlue || isGray) {
           bubbleCandidates.push(el);
@@ -461,7 +508,6 @@ export async function extractActiveThreadMessages(page, pageId) {
       let currentUtime = null;
 
       const parsedMessages = [];
-      const occurrenceMap = new Map();
 
       for (const item of processItems) {
         if (item.type === 'TIMESTAMP') {
@@ -479,20 +525,18 @@ export async function extractActiveThreadMessages(page, pageId) {
         const el = item.node;
 
         // Content extraction from bubble container:
-        let content = '';
-        const rawInnerText = (el.innerText || '').trim();
+        let content = (el.innerText || '').trim();
 
-        // If the bubble has a link preview card with extra lines, extract the URL line
-        const urlMatch = rawInnerText.match(/https?:\/\/[^\s]+/i);
-        if (urlMatch && rawInnerText.includes('\n')) {
-          const firstLine = rawInnerText.split('\n')[0].trim();
-          if (firstLine.startsWith('http://') || firstLine.startsWith('https://')) {
-            content = firstLine;
-          } else {
-            content = rawInnerText;
+        // Check if el contains an explicit Meta preview card attachment container
+        const previewEl = el.querySelector('[data-surface*="preview"], [data-surface*="attachment"], [role="article"]');
+        if (previewEl && el.contains(previewEl)) {
+          const textCandidate = el.querySelector('div[dir="auto"], span[dir="auto"]');
+          if (textCandidate && textCandidate !== previewEl && !previewEl.contains(textCandidate)) {
+            const userText = (textCandidate.innerText || '').trim();
+            if (userText) {
+              content = userText;
+            }
           }
-        } else {
-          content = rawInnerText;
         }
 
         // Fallback for emoji-only bubbles if innerText is empty
@@ -598,9 +642,41 @@ export async function extractActiveThreadMessages(page, pageId) {
           direction_reason = 'ambiguous-direction';
         }
 
-        const occKey = `${direction}::${cleanContent}::${currentTimestampText}`;
-        const occurrence = occurrenceMap.get(occKey) || 0;
-        occurrenceMap.set(occKey, occurrence + 1);
+        function isValidMessageIdString(val) {
+          if (!val || typeof val !== 'string') return false;
+          const s = val.trim();
+          if (!s || s.length < 3) return false;
+          // Reject generic container/thread/row attributes (Negative Test requirement)
+          if (/^(thread|container|row|list|surface|viewport|crm_b_|panel|wrapper)/i.test(s)) return false;
+          return true;
+        }
+
+        // Extract native stable message identifier from Meta DOM if present
+        let messageId = null;
+        const candidateMid = el.getAttribute('data-message-id') ||
+          el.closest('[data-message-id]')?.getAttribute('data-message-id') ||
+          el.querySelector('[data-message-id]')?.getAttribute('data-message-id') ||
+          el.getAttribute('data-mid') ||
+          el.closest('[data-mid]')?.getAttribute('data-mid');
+
+        if (candidateMid && isValidMessageIdString(candidateMid)) {
+          messageId = candidateMid.trim();
+        } else {
+          // If fallback to data-id: strictly enforce Meta message ID format (e.g. starts with mid. or mid$)
+          // Reject arbitrary ancestor data-id like "thread-container-1"
+          const rawIdAttr = el.getAttribute('data-id') || el.closest('[data-id]')?.getAttribute('data-id');
+          if (rawIdAttr && /^mid[\.\$]/i.test(rawIdAttr.trim()) && isValidMessageIdString(rawIdAttr)) {
+            messageId = rawIdAttr.trim();
+          }
+        }
+
+        // Tag element with stable DOM session identifier for virtualization tracking
+        let domNodeUid = el.getAttribute('data-crm-msg-uid');
+        if (!domNodeUid) {
+          if (!window.__crm_bubble_counter) window.__crm_bubble_counter = 0;
+          domNodeUid = `crm_b_${++window.__crm_bubble_counter}_${Math.random().toString(36).slice(2, 7)}`;
+          el.setAttribute('data-crm-msg-uid', domNodeUid);
+        }
 
         parsedMessages.push({
           content: cleanContent,
@@ -608,8 +684,9 @@ export async function extractActiveThreadMessages(page, pageId) {
           direction_reason,
           timestamp: currentTimestampText,
           utime: currentUtime,
-          occurrence,
-          relativeX: Math.round(relativeX * 1000) / 1000
+          relativeX: Math.round(relativeX * 1000) / 1000,
+          domNodeUid,
+          messageId
         });
       }
 
@@ -646,19 +723,11 @@ export async function extractActiveThreadMessages(page, pageId) {
       finalCustomerName
     );
 
-    // Compute deterministic fingerprint for each message (Rule 4)
-    const messages = rawData.parsedMessages.map(m => {
-      const occurrenceSuffix = (typeof m.occurrence === 'number' && m.occurrence > 0) ? `:occ:${m.occurrence}` : '';
-      const fingerprint = crypto
-        .createHash('sha256')
-        .update(`${pageId}:${stableThreadId}:${m.utime || m.timestamp}:${m.content}:${m.direction}${occurrenceSuffix}`)
-        .digest('hex');
-
-      return {
-        ...m,
-        fingerprint,
-        stableThreadId
-      };
+    // Reconcile message instances with stateful thread history (P0 Invariant)
+    const messages = messageReconciler.reconcile({
+      pageId,
+      stableThreadId,
+      rawMessages: rawData.parsedMessages
     });
 
     return {
@@ -838,7 +907,16 @@ export async function selectConversation(page, index = 0) {
       }
       return false;
     }, index);
-  } catch (error) {
+  } catch (_error) {
     return false;
   }
 }
+
+export function isValidMetaMessageId(val) {
+  if (!val || typeof val !== 'string') return false;
+  const s = val.trim();
+  if (!s || s.length < 3) return false;
+  if (/^(thread|container|row|list|surface|viewport|crm_b_|panel|wrapper)/i.test(s)) return false;
+  return true;
+}
+

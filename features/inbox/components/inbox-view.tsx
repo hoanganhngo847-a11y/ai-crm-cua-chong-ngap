@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import type {
   Conversation,
@@ -13,6 +13,7 @@ import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
 import { createClient } from '@/lib/supabase/client';
 import MessageContent from './message-content';
+import { evaluateSkeletonCorrelation } from '../utils/skeleton-helper';
 
 export { mergeDeliveryStatus };
 
@@ -114,6 +115,14 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   const syncingDelayRef = useRef<NodeJS.Timeout | null>(null);
   const activeConversationLastMessageAtRef = useRef<string | null>(null);
   const selectedConversationRef = useRef<Conversation | undefined>(undefined);
+
+  // Correlation ref: records latest interaction timestamp rendered/received per conversation (eliminates race condition)
+  const latestRenderedInteractionTimeByConvRef = useRef<Record<string, number>>({});
+  const userFullNameRef = useRef<string | null | undefined>(userFullName);
+
+  useEffect(() => {
+    userFullNameRef.current = userFullName;
+  }, [userFullName]);
 
   const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
 
@@ -327,6 +336,16 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
           };
         });
 
+        if (serverMessages.length > 0) {
+          const maxServerMsgTime = serverMessages.reduce((max, m) => {
+            const t = m.created_at ? new Date(m.created_at).getTime() : 0;
+            return t > max ? t : max;
+          }, 0);
+          if (maxServerMsgTime > (latestRenderedInteractionTimeByConvRef.current[convId] || 0)) {
+            latestRenderedInteractionTimeByConvRef.current[convId] = maxServerMsgTime;
+          }
+        }
+
         if (!isSilent) {
           setAiSuggestion(null);
           setAiError(null);
@@ -440,7 +459,9 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
   };
 
   // Derive visible messages for active conversation
-  const visibleMessages = selectedConversationId ? (messagesByConversation[selectedConversationId] || []) : [];
+  const visibleMessages = useMemo(() => {
+    return selectedConversationId ? (messagesByConversation[selectedConversationId] || []) : [];
+  }, [selectedConversationId, messagesByConversation]);
 
   // Section 9: Auto-scroll behavior
   // If user is near bottom (<100px): auto-scroll to new bubble.
@@ -506,11 +527,19 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
           };
 
           const convId = newInteraction?.conversation_id;
-          const createdAt = newInteraction?.created_at ? new Date(newInteraction.created_at).getTime() : null;
-          const dbToFrontendMs = createdAt ? frontendRealtimeEventAt - createdAt : null;
+          const createdAt = newInteraction?.created_at ? new Date(newInteraction.created_at).getTime() : Date.now();
+          const dbToFrontendMs = newInteraction?.created_at ? frontendRealtimeEventAt - new Date(newInteraction.created_at).getTime() : null;
           console.log(
             `[REALTIME LATENCY] Inbound interaction INSERT | DB -> Frontend: ${dbToFrontendMs}ms`
           );
+
+          if (convId) {
+            // Record latest received interaction timestamp for this conversation
+            const prevMax = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
+            if (createdAt > prevMax) {
+              latestRenderedInteractionTimeByConvRef.current[convId] = createdAt;
+            }
+          }
 
           // If event belongs to currently active conversation:
           if (convId && convId === activeConversationRef.current) {
@@ -548,7 +577,7 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               if (senderType === 'customer') {
                 senderName = activeConv?.customer_name || 'Khách hàng';
               } else if (senderType === 'sale') {
-                senderName = userFullName || 'Bạn (Sale)';
+                senderName = userFullNameRef.current || 'Bạn (Sale)';
               } else if (senderType === 'ai') {
                 senderName = 'AI Trợ lý';
               }
@@ -609,22 +638,47 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
               [key: string]: unknown;
             };
             if (updatedConv.id && updatedConv.id === activeConversationRef.current) {
+              const convId = updatedConv.id;
               const prevLastAt = activeConversationLastMessageAtRef.current;
-              const newLastAt = updatedConv.last_message_at;
-              const advanced = Boolean(
-                newLastAt && (!prevLastAt || new Date(newLastAt).getTime() > new Date(prevLastAt).getTime())
-              );
-              if (advanced) {
-                activeConversationLastMessageAtRef.current = newLastAt || null;
-                // Anti-flicker delay 180ms
-                if (syncingDelayRef.current) clearTimeout(syncingDelayRef.current);
-                syncingDelayRef.current = setTimeout(() => {
-                  setIsSyncingNewMessage(true);
-                  if (syncingTimeoutRef.current) clearTimeout(syncingTimeoutRef.current);
-                  syncingTimeoutRef.current = setTimeout(() => {
-                    setIsSyncingNewMessage(false);
-                  }, 4000);
-                }, 180);
+              const newLastAt = updatedConv.last_message_at || null;
+              const latestRenderedMs = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
+
+              const decision = evaluateSkeletonCorrelation({
+                conversationLastMessageAt: newLastAt,
+                previousConversationLastMessageAt: prevLastAt,
+                latestRenderedInteractionAtMs: latestRenderedMs,
+              });
+
+              if (decision.advanced) {
+                activeConversationLastMessageAtRef.current = newLastAt;
+
+                if (decision.shouldScheduleSkeleton) {
+                  // Anti-flicker delay 180ms
+                  if (syncingDelayRef.current) clearTimeout(syncingDelayRef.current);
+                  syncingDelayRef.current = setTimeout(() => {
+                    // Double check right before showing skeleton: did interaction arrive during the 180ms window?
+                    const currentRenderedMs = latestRenderedInteractionTimeByConvRef.current[convId] || 0;
+                    if (currentRenderedMs >= decision.newLastAtMs) {
+                      return; // Arrived! Do not show skeleton
+                    }
+                    setIsSyncingNewMessage(true);
+                    if (syncingTimeoutRef.current) clearTimeout(syncingTimeoutRef.current);
+                    syncingTimeoutRef.current = setTimeout(() => {
+                      setIsSyncingNewMessage(false);
+                    }, 4000);
+                  }, 180);
+                } else {
+                  // Already rendered: do NOT show skeleton, clear any lingering timer
+                  if (syncingDelayRef.current) {
+                    clearTimeout(syncingDelayRef.current);
+                    syncingDelayRef.current = null;
+                  }
+                  if (syncingTimeoutRef.current) {
+                    clearTimeout(syncingTimeoutRef.current);
+                    syncingTimeoutRef.current = null;
+                  }
+                  setIsSyncingNewMessage(false);
+                }
               }
             }
           }

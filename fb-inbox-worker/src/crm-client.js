@@ -10,6 +10,7 @@ export async function syncInboundMessageToCRM({
   customerFbId,
   externalConversationId,
   externalMessageId,
+  legacyExternalMessageId,
   content,
   timestamp,
   metadata
@@ -42,6 +43,7 @@ export async function syncInboundMessageToCRM({
     customer_fb_id: customerFbId.trim(),
     external_conversation_id: externalConversationId.trim(),
     external_message_id: externalMessageId.trim(),
+    legacy_external_message_id: (legacyExternalMessageId && typeof legacyExternalMessageId === 'string') ? legacyExternalMessageId.trim() : null,
     content: content.trim(),
     timestamp,
     direction: 'inbound',

@@ -27,6 +27,7 @@ jobs:
       - run: npm ci
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
+      - run: npm run test:idempotency:db
       - run: npm run test:staging-readiness
       - run: npm run test:upload-transport
       - run: npm run test:integration-gate
