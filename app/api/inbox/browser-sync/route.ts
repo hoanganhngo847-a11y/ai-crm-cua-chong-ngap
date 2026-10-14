@@ -22,6 +22,11 @@ function secureCompare(a: string, b: string): boolean {
  * 3. Tuyệt đối không log secret, cookie hay token.
  * 4. Kiểm tra chiều tin nhắn: chỉ nhận INBOUND.
  * 5. Tận dụng kiến trúc InboxService.addInboundMessage sẵn có với L2 Durable Idempotency.
+ *
+ * GET endpoint đã bị XÓA (PR #46):
+ * - Production worker (crm-client.js) không sử dụng
+ * - Không filter company_id (tenant isolation violation)
+ * - Query tới 500 unscoped external_ref (attack surface)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -111,7 +116,7 @@ export async function POST(request: NextRequest) {
 
     const companyId = process.env.FB_SYNC_COMPANY_ID || clientCompanyId || DEFAULT_INBOX_COMPANY_ID;
 
-    // 4. Ingest via InboxService with dual-fingerprint backward compatibility
+    // 4. Ingest via InboxService with confirmed-alias dual-fingerprint semantics
     const result = await InboxService.addInboundMessage({
       channel: 'facebook',
       company_id: companyId,
@@ -131,6 +136,7 @@ export async function POST(request: NextRequest) {
         customer_fb_id: customer_fb_id || null,
         source: 'meta_business_suite_browser',
         legacy_external_message_id: legacy_external_message_id || null,
+        legacy_alias_confidence: body.legacy_alias_confidence || (body.metadata && typeof body.metadata === 'object' ? (body.metadata as Record<string, unknown>).legacy_alias_confidence : null) || null,
         ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {})
       }
     });
@@ -151,66 +157,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-/**
- * GET /api/inbox/browser-sync
- * Server-to-server migration lookup endpoint.
- * Cho phép Playwright Worker query danh sách external_ref (v1 hoặc v2) đã tồn tại trong CRM.
- * Bảo vệ fail-closed bằng FB_WORKER_SECRET; không leak thông tin riêng tư/tin nhắn của khách hàng.
- */
-export async function GET(request: NextRequest) {
-  try {
-    // 1. Production HTTPS enforcement
-    if (process.env.NODE_ENV === 'production') {
-      const proto = request.headers.get('x-forwarded-proto') || '';
-      if (proto !== 'https' && !request.url.startsWith('https://')) {
-        return NextResponse.json(
-          { success: false, error: 'HTTPS_REQUIRED', message: 'Endpoint yêu cầu kết nối bảo mật HTTPS trong production.' },
-          { status: 403 }
-        );
-      }
-    }
-
-    // 2. Secret Authentication
-    const configuredSecret = process.env.FB_WORKER_SECRET;
-    if (!configuredSecret || !configuredSecret.trim()) {
-      return NextResponse.json(
-        { success: false, error: 'CONFIGURATION_ERROR', message: 'FB_WORKER_SECRET chưa được cấu hình trên máy chủ.' },
-        { status: 500 }
-      );
-    }
-
-    const providedSecret =
-      request.headers.get('x-worker-secret') ||
-      request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
-      '';
-
-    if (!providedSecret || !secureCompare(providedSecret, configuredSecret)) {
-      return NextResponse.json(
-        { success: false, error: 'UNAUTHORIZED', message: 'Xác thực server-to-server thất bại.' },
-        { status: 401 }
-      );
-    }
-
-    const { searchParams } = new URL(request.url);
-    const externalConversationId = searchParams.get('external_conversation_id');
-    const lookupRef = searchParams.get('ref');
-
-    const syncedRefs = await InboxService.getSyncedFingerprintsForLookup(
-      externalConversationId,
-      lookupRef
-    );
-
-    return NextResponse.json({
-      success: true,
-      synced_refs: syncedRefs,
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Lỗi nội bộ hệ thống';
-    return NextResponse.json(
-      { success: false, error: 'INTERNAL_ERROR', message },
-      { status: 500 }
-    );
-  }
-}
-

@@ -40,6 +40,8 @@ DECLARE
   v_now timestamptz := clock_timestamp();
   v_metadata jsonb := coalesce(p_source_metadata, '{}'::jsonb);
   v_legacy_ref text;
+  v_legacy_confidence text;
+  v_same_content_count integer;
 BEGIN
   -- 1. Validate mandatory fields (Fail-Closed)
   IF p_company_id IS NULL THEN
@@ -102,19 +104,32 @@ BEGIN
     );
   END IF;
 
-  -- 2. Durable Idempotency Check (under lock with dual-fingerprint migration support)
+  -- 2. Durable Idempotency Check (under lock with confirmed-alias semantics)
+  --
+  -- Confirmed-alias rule:
+  -- When BOTH p_external_ref (canonical meta_mid_v2) AND v_legacy_ref are present
+  -- AND they differ, the caller is a v2 worker. The legacy_ref is an UNCONFIRMED
+  -- alias guessed from current viewport ordinal which may have shifted due to
+  -- Meta DOM virtualization. We MUST NOT suppress a new canonical MID based on
+  -- an unconfirmed guessed legacy collision.
+  --
+  -- The legacy branch only fires safely for:
+  -- (a) Pure v1 callers (no v2 canonical ref, only legacy ref)
+  -- (b) Edge case where p_external_ref == v_legacy_ref (same identity, no shift risk)
+  --
+  -- Priority: NO MESSAGE LOSS > one-time duplicate avoidance.
+
   v_legacy_ref := nullif(trim(coalesce(v_metadata->>'legacy_external_ref', '')), '');
+  v_legacy_confidence := nullif(trim(coalesce(v_metadata->>'legacy_alias_confidence', '')), '');
 
   IF p_external_ref IS NOT NULL AND trim(p_external_ref) <> '' THEN
+    -- 1. Always check canonical ref first (100% authoritative identity)
     SELECT *
     INTO v_existing_interaction
     FROM public.interactions
     WHERE company_id = p_company_id
       AND channel = v_channel
-      AND (
-        external_ref = trim(p_external_ref)
-        OR (v_legacy_ref IS NOT NULL AND external_ref = v_legacy_ref)
-      )
+      AND external_ref = trim(p_external_ref)
     LIMIT 1;
 
     IF FOUND THEN
@@ -125,7 +140,68 @@ BEGIN
         true;
       RETURN;
     END IF;
+
+    -- 2. If not found by canonical ref, check legacy ref ONLY IF confirmed
+    IF v_legacy_ref IS NOT NULL THEN
+      IF v_legacy_ref = trim(p_external_ref) OR v_legacy_confidence = 'confirmed' THEN
+        SELECT *
+        INTO v_existing_interaction
+        FROM public.interactions
+        WHERE company_id = p_company_id
+          AND channel = v_channel
+          AND external_ref = v_legacy_ref
+        LIMIT 1;
+
+        IF FOUND THEN
+          RETURN QUERY SELECT
+            v_existing_interaction.id,
+            v_existing_interaction.conversation_id,
+            v_existing_interaction.customer_id,
+            true;
+          RETURN;
+        END IF;
+      ELSIF v_legacy_confidence IS NULL OR v_legacy_confidence <> 'unconfirmed' THEN
+        -- Check if message content is unique in this conversation
+        -- Unique messages have occurrence 0 and cannot suffer from virtualization ordinal shifts
+        IF p_external_conversation_id IS NOT NULL AND trim(p_external_conversation_id) <> '' THEN
+          SELECT id INTO v_conversation_id
+          FROM public.conversations
+          WHERE company_id = p_company_id
+            AND channel = v_channel
+            AND external_conversation_id = trim(p_external_conversation_id)
+          LIMIT 1;
+
+          IF v_conversation_id IS NOT NULL THEN
+            SELECT count(*) INTO v_same_content_count
+            FROM public.interactions
+            WHERE conversation_id = v_conversation_id
+              AND content = p_sanitized_content
+              AND direction = 'inbound';
+
+            IF v_same_content_count = 1 THEN
+              SELECT *
+              INTO v_existing_interaction
+              FROM public.interactions
+              WHERE company_id = p_company_id
+                AND channel = v_channel
+                AND external_ref = v_legacy_ref
+              LIMIT 1;
+
+              IF FOUND THEN
+                RETURN QUERY SELECT
+                  v_existing_interaction.id,
+                  v_existing_interaction.conversation_id,
+                  v_existing_interaction.customer_id,
+                  true;
+                RETURN;
+              END IF;
+            END IF;
+          END IF;
+        END IF;
+      END IF;
+    END IF;
   ELSIF v_legacy_ref IS NOT NULL THEN
+    -- Pure v1 caller: only legacy ref available, safe to check
     SELECT *
     INTO v_existing_interaction
     FROM public.interactions

@@ -1098,6 +1098,9 @@ https://namethatui.com/</div></div>
           content: m.content,
           direction: 'inbound',
           timestamp: m.timestamp,
+          metadata: {
+            legacy_alias_confidence: 'confirmed',
+          },
         }),
         headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
       }))).json();
@@ -1240,6 +1243,378 @@ https://namethatui.com/</div></div>
       'messageId === null',
       `messageId: ${parsedMid}`,
       negPassed
+    );
+
+    // ===============================================================================================
+    // TEST 31 (M6): Shifted Historical Window — Virtualized Prefix
+    // DB has A(F0), B(F1), C(F2) with content="hello" at "10:00 PM".
+    // Fresh upgraded worker only sees B(mid.$B) and C(mid.$C) (A is virtualized).
+    // Current code BEFORE FIX would compute B→F0, C→F1 (shifted ordinal).
+    // After fix: occurrence still shifts, but the legacy FP is treated as UNCONFIRMED
+    // and must NOT suppress new canonical MIDs.
+    // ===============================================================================================
+    console.log('\n--- PART 6: P0 Shifted Legacy Ordinal (M6–M10) ---');
+
+    const threadM6 = `${PAGE_ID}:61592309996231`;
+    messageReconciler.resetThread(threadM6);
+    const COMPANY_M6 = '00000000-0000-0000-0000-000000000001';
+    InboxService.resetInboxStore();
+
+    // Pre-upgrade DB state: 3 identical messages with legacy refs F0, F1, F2
+    const legacyM6F0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM6}:10:00 PM:hello:INBOUND`).digest('hex');
+    const legacyM6F1 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM6}:10:00 PM:hello:INBOUND:occ:1`).digest('hex');
+    const legacyM6F2 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM6}:10:00 PM:hello:INBOUND:occ:2`).digest('hex');
+
+    // Insert historical messages A(F0), B(F1), C(F2) into CRM
+    const m6HistA = await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M6', externalUserId: '61592309996231',
+      externalConversationId: threadM6, externalRef: legacyM6F0,
+      externalMessageId: legacyM6F0, content: 'hello', timestamp: '10:00 PM',
+    });
+    await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M6', externalUserId: '61592309996231',
+      externalConversationId: threadM6, externalRef: legacyM6F1,
+      externalMessageId: legacyM6F1, content: 'hello', timestamp: '10:00 PM',
+    });
+    await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M6', externalUserId: '61592309996231',
+      externalConversationId: threadM6, externalRef: legacyM6F2,
+      externalMessageId: legacyM6F2, content: 'hello', timestamp: '10:00 PM',
+    });
+    const m6ConvId = m6HistA.conversationId;
+    const m6InitCount = (await InboxService.getMessagesByConversationId(COMPANY_M6, m6ConvId)).length;
+    assert.strictEqual(m6InitCount, 3, 'M6 initial count must be 3');
+
+    // Fresh upgraded worker sees only B(mid.$B) and C(mid.$C)
+    // Reconciler is fresh (simulating worker upgrade, never seen this thread)
+    const m6Reconciler = new ThreadMessageReconciler({ storagePath: null as unknown as string });
+    const m6Scan = m6Reconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: threadM6,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$B' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$C' },
+      ],
+    });
+
+    // Show what the reconciler computed (shifted ordinals expected)
+    const m6BLegacy = m6Scan[0].legacyFingerprint;
+    const m6CLegacy = m6Scan[1].legacyFingerprint;
+    console.log(`  M6 B.legacyFP=${m6BLegacy.slice(0, 8)} (expected shift to F0: ${m6BLegacy === legacyM6F0})`);
+    console.log(`  M6 C.legacyFP=${m6CLegacy.slice(0, 8)} (expected shift to F1: ${m6CLegacy === legacyM6F1})`);
+
+    // Sync B to CRM (v2 caller: has canonical fingerprint AND legacy fingerprint, they differ)
+    const m6BSyncRes = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID, page_name: 'MD Tech',
+        sender_name: 'Khách M6', customer_fb_id: '61592309996231',
+        external_conversation_id: threadM6,
+        external_message_id: m6Scan[0].fingerprint,  // canonical v2 (based on mid.$B)
+        legacy_external_message_id: m6Scan[0].legacyFingerprint,  // guessed legacy F0
+        content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    // Sync C to CRM
+    const m6CSyncRes = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID, page_name: 'MD Tech',
+        sender_name: 'Khách M6', customer_fb_id: '61592309996231',
+        external_conversation_id: threadM6,
+        external_message_id: m6Scan[1].fingerprint,  // canonical v2 (based on mid.$C)
+        legacy_external_message_id: m6Scan[1].legacyFingerprint,  // guessed legacy F1
+        content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m6CountAfterSync = (await InboxService.getMessagesByConversationId(COMPANY_M6, m6ConvId)).length;
+
+    // Key: B and C are NEW canonical MIDs — they should NOT be falsely detected as duplicates
+    // just because their guessed legacy FPs collide with historical F0/F1.
+    // However, some policy may INSERT them (they ARE new v2 identities for the same physical messages).
+    // The important part: they must NOT be suppressed wrongly.
+    const m6Passed = m6BSyncRes.is_duplicate === false && m6CSyncRes.is_duplicate === false;
+    recordResult(
+      31,
+      'M6: Shifted historical window — v2 canonical MIDs not suppressed by guessed legacy ordinal collision',
+      'B: is_dup=false, C: is_dup=false (new canonical MIDs not falsely suppressed)',
+      `B: is_dup=${m6BSyncRes.is_duplicate}, C: is_dup=${m6CSyncRes.is_duplicate}, count=${m6CountAfterSync}`,
+      m6Passed
+    );
+
+    // ===============================================================================================
+    // TEST 32 (M7): New repeated message after shifted baseline — D must INSERT exactly once
+    // This is the CRITICAL invariant: D(mid.$D) = "hello" arrives after B/C synced.
+    // D's guessed legacy FP would be F2 (occurrence 2) which EXISTS in DB for historical C.
+    // BEFORE FIX: D would be falsely suppressed → MESSAGE LOST.
+    // AFTER FIX: D is a new canonical MID and MUST be inserted.
+    // ===============================================================================================
+    const m7Scan = m6Reconciler.reconcile({
+      pageId: PAGE_ID,
+      stableThreadId: threadM6,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$B' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$C' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$D' },
+      ],
+    });
+
+    const m7DMsg = m7Scan[2]; // D is the 3rd message
+    console.log(`  M7 D.canonicalFP=${m7DMsg.fingerprint.slice(0, 8)}, D.legacyFP=${m7DMsg.legacyFingerprint.slice(0, 8)}`);
+    console.log(`  M7 D.legacyFP === F2? ${m7DMsg.legacyFingerprint === legacyM6F2} (collision with historical C!)`);
+
+    const m7DSyncRes = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID, page_name: 'MD Tech',
+        sender_name: 'Khách M6', customer_fb_id: '61592309996231',
+        external_conversation_id: threadM6,
+        external_message_id: m7DMsg.fingerprint,          // canonical v2 (mid.$D)
+        legacy_external_message_id: m7DMsg.legacyFingerprint,  // guessed legacy, likely F2
+        content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    // Rescan D to verify idempotency on canonical ref
+    const m7DRescan = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_id: PAGE_ID, page_name: 'MD Tech',
+        sender_name: 'Khách M6', customer_fb_id: '61592309996231',
+        external_conversation_id: threadM6,
+        external_message_id: m7DMsg.fingerprint,
+        legacy_external_message_id: m7DMsg.legacyFingerprint,
+        content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+      }),
+      headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+    }))).json();
+
+    const m7Passed = m7DSyncRes.is_duplicate === false && m7DRescan.is_duplicate === true;
+    recordResult(
+      32,
+      'M7: New repeated message D after shifted baseline — INSERT exactly once, not suppressed by F2 collision',
+      'D first: is_dup=false, D rescan: is_dup=true',
+      `D first: is_dup=${m7DSyncRes.is_duplicate}, D rescan: is_dup=${m7DRescan.is_duplicate}`,
+      m7Passed
+    );
+
+    // ===============================================================================================
+    // TEST 33 (M8): Restart after shifted baseline — no false duplicates
+    // Restart worker. DOM now shows C(mid.$C) and D(mid.$D). 
+    // C and D should not be duplicated again, and new E must insert exactly once.
+    // ===============================================================================================
+    const m8StoragePath = path.resolve(process.cwd(), 'tests/inbox/test_m8_checkpoint.json');
+    try { if (fs.existsSync(m8StoragePath)) fs.unlinkSync(m8StoragePath); } catch (_) {}
+
+    // Simulate pre-restart: save state
+    const m8PreRestart = new ThreadMessageReconciler({ storagePath: m8StoragePath });
+    const m8PreScan = m8PreRestart.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM6,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$C' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$D' },
+      ],
+    });
+    m8PreRestart.markFingerprintSynced(threadM6, m8PreScan[0].fingerprint);
+    m8PreRestart.markFingerprintSynced(threadM6, m8PreScan[1].fingerprint);
+    m8PreRestart.flushSync();
+
+    // Simulate restart
+    const m8PostRestart = new ThreadMessageReconciler({ storagePath: m8StoragePath });
+    const m8PostScan = m8PostRestart.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM6,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$C' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$D' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$E' },
+      ],
+    });
+
+    const m8CSynced = m8PostRestart.isFingerprintSynced(threadM6, m8PostScan[0].fingerprint);
+    const m8DSynced = m8PostRestart.isFingerprintSynced(threadM6, m8PostScan[1].fingerprint);
+    const m8ESynced = m8PostRestart.isFingerprintSynced(threadM6, m8PostScan[2].fingerprint);
+
+    const m8Passed = m8CSynced === true && m8DSynced === true && m8ESynced === false;
+    recordResult(
+      33,
+      'M8: Restart after shifted baseline — C/D recognized as synced, E is new (insert once)',
+      'C synced=true, D synced=true, E synced=false',
+      `C synced=${m8CSynced}, D synced=${m8DSynced}, E synced=${m8ESynced}`,
+      m8Passed
+    );
+    try { if (fs.existsSync(m8StoragePath)) fs.unlinkSync(m8StoragePath); } catch (_) {}
+
+    // ===============================================================================================
+    // TEST 34 (M9): All historical messages visible — no regression
+    // DOM still has A(mid.$A), B(mid.$B), C(mid.$C). All 3 are in CRM.
+    // Sync should detect all 3 as duplicates via canonical ref.
+    // ===============================================================================================
+    const threadM9 = `${PAGE_ID}:61592309996232`;
+    messageReconciler.resetThread(threadM9);
+    InboxService.resetInboxStore();
+
+    const legacyM9F0 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM9}:10:00 PM:hello:INBOUND`).digest('hex');
+    const legacyM9F1 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM9}:10:00 PM:hello:INBOUND:occ:1`).digest('hex');
+    const legacyM9F2 = crypto.createHash('sha256')
+      .update(`${PAGE_ID}:${threadM9}:10:00 PM:hello:INBOUND:occ:2`).digest('hex');
+
+    // Pre-populate CRM with legacy refs
+    await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M9', externalUserId: '61592309996232',
+      externalConversationId: threadM9, externalRef: legacyM9F0,
+      externalMessageId: legacyM9F0, content: 'hello', timestamp: '10:00 PM',
+    });
+    await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M9', externalUserId: '61592309996232',
+      externalConversationId: threadM9, externalRef: legacyM9F1,
+      externalMessageId: legacyM9F1, content: 'hello', timestamp: '10:00 PM',
+    });
+    const m9Hist2 = await InboxService.addInboundMessage({
+      channel: 'facebook', company_id: COMPANY_M6,
+      senderName: 'Khách M9', externalUserId: '61592309996232',
+      externalConversationId: threadM9, externalRef: legacyM9F2,
+      externalMessageId: legacyM9F2, content: 'hello', timestamp: '10:00 PM',
+    });
+    const m9ConvId = m9Hist2.conversationId;
+
+    // DOM has ALL 3 messages (no virtualization)
+    const m9Reconciler = new ThreadMessageReconciler({ storagePath: null as unknown as string });
+    const m9Scan = m9Reconciler.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM9,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m9_A' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m9_B' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m9_C' },
+      ],
+    });
+
+    // Sync all 3 (v2 caller): canonical refs are new, legacy refs align (no shift), but
+    // since these are v2 callers (canonical != legacy), legacy branch is NOT used.
+    // They should all be inserted as new canonical identities.
+    const m9Results: Array<{is_duplicate: boolean}> = [];
+    for (const m of m9Scan) {
+      const r = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+        method: 'POST',
+        body: JSON.stringify({
+          page_id: PAGE_ID, page_name: 'MD Tech',
+          sender_name: 'Khách M9', customer_fb_id: '61592309996232',
+          external_conversation_id: threadM9,
+          external_message_id: m.fingerprint,
+          legacy_external_message_id: m.legacyFingerprint,
+          content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+        }),
+        headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+      }))).json();
+      m9Results.push(r);
+    }
+
+    // Rescan all 3: should now be duplicates (via canonical ref match)
+    const m9Rescan: Array<{is_duplicate: boolean}> = [];
+    for (const m of m9Scan) {
+      const r = await (await browserSyncHandler(new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
+        method: 'POST',
+        body: JSON.stringify({
+          page_id: PAGE_ID, page_name: 'MD Tech',
+          sender_name: 'Khách M9', customer_fb_id: '61592309996232',
+          external_conversation_id: threadM9,
+          external_message_id: m.fingerprint,
+          legacy_external_message_id: m.legacyFingerprint,
+          content: 'hello', direction: 'inbound', timestamp: '10:00 PM',
+        }),
+        headers: { 'content-type': 'application/json', 'x-worker-secret': 'test_secret_browser_sync_2026' },
+      }))).json();
+      m9Rescan.push(r);
+    }
+
+    // V2 first sync: NOT duplicate (they are new canonical MIDs).
+    // V2 rescan: IS duplicate (canonical ref already exists).
+    // Note: The total count may be > 3 because historical legacy + v2 canonical are different identities.
+    // This is the expected one-time cost of migration: legacy refs remain, and v2 refs are added.
+    // The key invariant: rescans produce no MORE duplicates.
+    const m9RescanAllDup = m9Rescan.every(r => r.is_duplicate === true);
+    const m9Passed = m9RescanAllDup;
+    recordResult(
+      34,
+      'M9: All historical visible — v2 rescans are all duplicates (canonical dedup works)',
+      'rescan: all is_dup=true',
+      `rescan: [${m9Rescan.map(r => r.is_duplicate).join(', ')}]`,
+      m9Passed
+    );
+
+    // ===============================================================================================
+    // TEST 35 (M10): Different text anchors with virtualized prefix
+    // Messages: "hello", "price?", "hello", "hello"
+    // Virtualize first 2 messages. Ensure reconciler doesn't create wrong aliases.
+    // ===============================================================================================
+    const threadM10 = `${PAGE_ID}:61592309996233`;
+    const m10Reconciler = new ThreadMessageReconciler({ storagePath: null as unknown as string });
+
+    // Full DOM: hello, price?, hello, hello
+    const m10FullScan = m10Reconciler.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM10,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_0' },
+        { content: 'price?', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_1' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_2' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_3' },
+      ],
+    });
+
+    // All 4 should have distinct fingerprints
+    const m10Fps = m10FullScan.map(m => m.fingerprint);
+    const m10Unique = new Set(m10Fps).size === 4;
+
+    // Virtualize first 2 (hello, price?), only hello(m10_2), hello(m10_3) remain
+    const m10PartialScan = m10Reconciler.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM10,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_2' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_3' },
+      ],
+    });
+
+    // After virtualization, remaining messages must retain their original fingerprints
+    const m10Fp2Stable = m10PartialScan[0].fingerprint === m10FullScan[2].fingerprint;
+    const m10Fp3Stable = m10PartialScan[1].fingerprint === m10FullScan[3].fingerprint;
+
+    // Add new message m10_4 = hello after virtualization
+    const m10NewScan = m10Reconciler.reconcile({
+      pageId: PAGE_ID, stableThreadId: threadM10,
+      rawMessages: [
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_2' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_3' },
+        { content: 'hello', direction: 'INBOUND', timestamp: '10:00 PM', messageId: 'mid.$m10_4' },
+      ],
+    });
+
+    // New message must have distinct fingerprint from all previous
+    const m10NewFp = m10NewScan[2].fingerprint;
+    const m10NewDistinct = !m10Fps.includes(m10NewFp) &&
+      m10NewFp !== m10PartialScan[0].fingerprint &&
+      m10NewFp !== m10PartialScan[1].fingerprint;
+
+    const m10Passed = m10Unique && m10Fp2Stable && m10Fp3Stable && m10NewDistinct;
+    recordResult(
+      35,
+      'M10: Different text anchors with virtualized prefix — no wrong alias, new message distinct',
+      'unique=true, stable=true, newDistinct=true',
+      `unique=${m10Unique}, fp2Stable=${m10Fp2Stable}, fp3Stable=${m10Fp3Stable}, newDistinct=${m10NewDistinct}`,
+      m10Passed
     );
 
   } finally {

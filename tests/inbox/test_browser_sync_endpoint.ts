@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { NextRequest } from 'next/server';
-import { POST as browserSyncHandler, GET as browserSyncGetHandler } from '../../app/api/inbox/browser-sync/route';
+import { POST as browserSyncHandler } from '../../app/api/inbox/browser-sync/route';
 import { InboxService } from '../../features/inbox/services/inbox.service';
 
 async function runBrowserSyncEndpointTests() {
@@ -241,26 +241,15 @@ async function runBrowserSyncEndpointTests() {
     console.log('  -> PASS: Dual-fingerprint deduplication verified, existing legacy interaction recognized as duplicate without re-inserting');
   }
 
-  // Case 9: GET /api/inbox/browser-sync lookup endpoint security and functionality
+  // Case 9: GET /api/inbox/browser-sync has been REMOVED (PR #46)
+  // Verify that the module no longer exports a GET handler
   {
-    console.log('[Test 9] GET lookup endpoint: unauthorized without secret, authorized returns synced refs');
-    // Unauthorized
-    const unauthReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync');
-    const unauthRes = await browserSyncGetHandler(unauthReq);
-    assert.strictEqual(unauthRes.status, 401);
-
-    // Authorized
-    const authReq = new NextRequest('http://localhost:3000/api/inbox/browser-sync', {
-      headers: {
-        'x-worker-secret': 'test_secret_browser_sync_2026',
-      },
-    });
-    const authRes = await browserSyncGetHandler(authReq);
-    assert.strictEqual(authRes.status, 200);
-    const authBody = await authRes.json();
-    assert.strictEqual(authBody.success, true);
-    assert.ok(Array.isArray(authBody.synced_refs), 'Must return synced_refs array');
-    console.log(`  -> PASS: GET lookup endpoint functional and secured, returned ${authBody.synced_refs.length} refs`);
+    console.log('[Test 9] Verify GET lookup endpoint has been removed (tenant isolation + attack surface fix)');
+    // Dynamic import to check exports
+    const routeModule = await import('../../app/api/inbox/browser-sync/route');
+    const hasGet = typeof (routeModule as Record<string, unknown>).GET === 'function';
+    assert.strictEqual(hasGet, false, 'GET handler must be removed');
+    console.log('  -> PASS: GET endpoint correctly removed, no longer exported');
   }
 
   console.log('======================================================================');

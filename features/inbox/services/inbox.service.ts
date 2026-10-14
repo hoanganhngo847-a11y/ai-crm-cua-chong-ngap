@@ -1518,22 +1518,62 @@ export async function addInboundMessage(params: {
 
     const externalRef = params.externalRef || params.externalMessageId;
     const legacyExternalRef = params.legacyExternalRef;
+    const legacyAliasConfidence = (params.metadata as Record<string, unknown> | undefined)?.legacy_alias_confidence;
+
     if (messagesStore[conversation.id] && (externalRef || legacyExternalRef)) {
-      const existingMsg = messagesStore[conversation.id].find(
-        (m) =>
-          (externalRef && (m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef)) ||
-          (legacyExternalRef && ((m as { external_ref?: string }).external_ref === legacyExternalRef || m.id === legacyExternalRef))
-      );
-      if (existingMsg) {
-        return {
-          conversation,
-          message: existingMsg,
-          isNewConversation: false,
-          conversationId: conversation.id,
-          interactionId: existingMsg.id,
-          customerId: conversation.customer_id,
-          isDuplicate: true,
-        };
+      // 1. Canonical ref match: always authoritative
+      if (externalRef) {
+        const canonicalMatch = messagesStore[conversation.id].find(
+          (m) => m.id === externalRef || (m as { external_ref?: string }).external_ref === externalRef
+        );
+        if (canonicalMatch) {
+          return {
+            conversation,
+            message: canonicalMatch,
+            isNewConversation: false,
+            conversationId: conversation.id,
+            interactionId: canonicalMatch.id,
+            customerId: conversation.customer_id,
+            isDuplicate: true,
+          };
+        }
+      }
+
+      // 2. Legacy ref match with Confirmed-Alias Semantics:
+      // When externalRef (canonical v2) is present, legacy ref is only checked if CONFIRMED:
+      // (a) Pure v1 caller (!externalRef or externalRef === legacyExternalRef)
+      // (b) OR explicitly confirmed: legacy_alias_confidence === 'confirmed'
+      // (c) OR message content is UNIQUE in this conversation (count === 1), where ordinal shift from virtualization is impossible.
+      // If content is repeated (count > 1) and confidence is not confirmed, the legacy ref is an UNCONFIRMED
+      // guessed alias from a virtualized viewport and MUST NOT suppress a new canonical MID.
+      if (legacyExternalRef) {
+        const sameContentCount = messagesStore[conversation.id].filter(
+          (m) => m.content === (params.content || '') && m.direction === 'inbound'
+        ).length;
+
+        const isConfirmedLegacy = Boolean(
+          !externalRef ||
+          externalRef === legacyExternalRef ||
+          legacyAliasConfidence === 'confirmed' ||
+          (legacyAliasConfidence !== 'unconfirmed' && sameContentCount === 1)
+        );
+
+        if (isConfirmedLegacy) {
+          const legacyMatch = messagesStore[conversation.id].find(
+            (m) => (m as { external_ref?: string }).external_ref === legacyExternalRef || m.id === legacyExternalRef
+          );
+          if (legacyMatch) {
+            return {
+              conversation,
+              message: legacyMatch,
+              isNewConversation: false,
+              conversationId: conversation.id,
+              interactionId: legacyMatch.id,
+              customerId: conversation.customer_id,
+              isDuplicate: true,
+            };
+          }
+        }
       }
     }
 
@@ -1603,15 +1643,37 @@ export async function addInboundMessage(params: {
     sourceMetadata.legacy_external_ref = legacyExternalRef;
   }
 
-  // Dual-ref idempotency check for legacyExternalRef if provided
+  // Confirmed-alias rule for DB-mode dual-ref idempotency:
+  const legacyAliasConfidence = (sourceMetadata as Record<string, unknown> | undefined)?.legacy_alias_confidence;
   if (legacyExternalRef && typeof legacyExternalRef === 'string' && legacyExternalRef.trim()) {
-    const { data: legacyInteraction } = await adminClient
-      .from('interactions')
-      .select('id, conversation_id, customer_id')
-      .eq('company_id', companyId)
-      .eq('channel', channel)
-      .eq('external_ref', legacyExternalRef.trim())
-      .maybeSingle();
+    let isDbConfirmed = Boolean(
+      !externalRef ||
+      externalRef === legacyExternalRef ||
+      legacyAliasConfidence === 'confirmed'
+    );
+
+    if (!isDbConfirmed && legacyAliasConfidence !== 'unconfirmed' && externalConversationId) {
+      const { count } = await adminClient
+        .from('interactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('channel', channel)
+        .eq('content', rawContent)
+        .eq('direction', 'inbound');
+
+      if (count === 1) {
+        isDbConfirmed = true;
+      }
+    }
+
+    if (isDbConfirmed) {
+      const { data: legacyInteraction } = await adminClient
+        .from('interactions')
+        .select('id, conversation_id, customer_id')
+        .eq('company_id', companyId)
+        .eq('channel', channel)
+        .eq('external_ref', legacyExternalRef.trim())
+        .maybeSingle();
 
     if (legacyInteraction) {
       const { data: convData } = await adminClient
@@ -1653,6 +1715,7 @@ export async function addInboundMessage(params: {
       };
     }
   }
+}
 
   const { data: rpcData, error: rpcError } = await adminClient.rpc(
     'ingest_provider_message_atomic',
@@ -2166,39 +2229,12 @@ export async function getFacebookBrowserOutboxJobs(
 /**
  * Server-to-server Lookup: Trả về danh sách external_ref đã ingest cho migration reconciliation.
  */
-export async function getSyncedFingerprintsForLookup(
-  externalConversationId?: string | null,
-  lookupRef?: string | null,
-  client?: SupabaseClient
-): Promise<string[]> {
-  if (isDemoMode()) {
-    const refs: string[] = [];
-    for (const convMsgs of Object.values(messagesStore)) {
-      for (const m of convMsgs) {
-        const extRef = (m as { external_ref?: string }).external_ref || m.id;
-        if (extRef) refs.push(extRef);
-      }
-    }
-    if (lookupRef) {
-      return refs.filter((r) => r === lookupRef.trim());
-    }
-    return refs;
-  }
-
-  const adminClient = client || createAdminClient();
-  let query = adminClient
-    .from('interactions')
-    .select('external_ref')
-    .not('external_ref', 'is', null);
-
-  if (lookupRef) {
-    query = query.eq('external_ref', lookupRef.trim());
-  }
-
-  const { data, error } = await query.limit(500);
-  if (error || !data) return [];
-  return data.map((row: { external_ref: string }) => row.external_ref).filter(Boolean);
-}
+// getSyncedFingerprintsForLookup REMOVED:
+// The GET /api/inbox/browser-sync endpoint that used this function has been removed
+// because (1) the production worker (crm-client.js) never calls it,
+// (2) it did not filter by company_id (tenant isolation violation), and
+// (3) it queried up to 500 external_refs across the entire interactions table (attack surface).
+// See PR #46 root cause analysis for details.
 
 export const InboxService = {
   isDemoModeActive,
@@ -2209,7 +2245,7 @@ export const InboxService = {
   sendMessage,
   getCustomerTimeline,
   addInboundMessage,
-  getSyncedFingerprintsForLookup,
+
   updateConversationCustomerStage,
   resetInboxStore,
   claimPendingDeliveries,
