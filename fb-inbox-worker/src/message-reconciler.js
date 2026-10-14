@@ -32,7 +32,7 @@ export class ThreadMessageReconciler {
     // Map: stableThreadId -> PersistentCheckpoint (monotonic ordinals and synced fingerprints)
     this.threadCheckpoints = new Map();
 
-    // Debounced asynchronous flush properties (P1 persistence optimization)
+    // Debounced synchronous atomic flush properties (P1 persistence optimization)
     this._isDirty = false;
     this._debounceTimer = null;
 
@@ -127,6 +127,10 @@ export class ThreadMessageReconciler {
       syncedFingerprints: boundedSynced,
       lastActiveAt: Math.max(state.lastActiveAt || 0, existing?.lastActiveAt || 0, Date.now()),
     });
+
+    if (this.threadCheckpoints.size > this.maxCheckpointThreads) {
+      this.pruneCheckpoints();
+    }
   }
 
   scheduleSave(delayMs = 300) {
@@ -173,12 +177,10 @@ export class ThreadMessageReconciler {
         };
       }
 
-      // Checkpoints bounded to maxCheckpointThreads with LRU
-      const cpEntries = Array.from(this.threadCheckpoints.entries())
-        .sort((a, b) => (b[1].lastActiveAt || 0) - (a[1].lastActiveAt || 0))
-        .slice(0, this.maxCheckpointThreads);
+      // Checkpoints bounded to maxCheckpointThreads with in-memory LRU
+      this.pruneCheckpoints();
 
-      for (const [threadId, cp] of cpEntries) {
+      for (const [threadId, cp] of this.threadCheckpoints.entries()) {
         payload.threadCheckpoints[threadId] = {
           signatureNextOrdinal: Object.fromEntries(cp.signatureNextOrdinal),
           syncedFingerprints: Array.from(cp.syncedFingerprints || []).slice(-this.maxSyncedFingerprintsPerThread),
@@ -286,7 +288,37 @@ export class ThreadMessageReconciler {
         this.updateCheckpoint(threadId, threadState);
         this.threads.delete(threadId);
       }
+      this.pruneCheckpoints();
       this.scheduleSave(300);
+    }
+  }
+
+  /**
+   * In-memory LRU pruning for threadCheckpoints (Option A).
+   * Binds total tracked checkpoints to maxCheckpointThreads.
+   * Eviction policy:
+   * 1. Inactive checkpoints (threads not currently in this.threads) are evicted first.
+   * 2. Ties broken by oldest lastActiveAt ascending.
+   *
+   * Residual behavior on evicted thread:
+   * When a thread whose checkpoint was evicted reappears, worker initializes it with fresh ordinals.
+   * Authoritative canonical deduplication remains guaranteed by the CRM database (ingest_provider_message_atomic).
+   */
+  pruneCheckpoints() {
+    if (this.threadCheckpoints.size <= this.maxCheckpointThreads) return;
+
+    const entries = Array.from(this.threadCheckpoints.entries()).sort((a, b) => {
+      const aActive = this.threads.has(a[0]) ? 1 : 0;
+      const bActive = this.threads.has(b[0]) ? 1 : 0;
+      if (aActive !== bActive) {
+        return aActive - bActive; // Inactive (0) evicted before active (1)
+      }
+      return (a[1].lastActiveAt || 0) - (b[1].lastActiveAt || 0);
+    });
+
+    const toDeleteCount = this.threadCheckpoints.size - this.maxCheckpointThreads;
+    for (let i = 0; i < toDeleteCount; i++) {
+      this.threadCheckpoints.delete(entries[i][0]);
     }
   }
 

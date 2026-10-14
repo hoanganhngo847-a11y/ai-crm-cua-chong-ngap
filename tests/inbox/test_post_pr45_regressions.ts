@@ -1869,6 +1869,71 @@ https://namethatui.com/</div></div>
       m13Passed
     );
 
+    // ===============================================================================================
+    // TEST 39 (M14): Checkpoint Bound (P1 Option A) — In-memory LRU pruning for threadCheckpoints
+    // Test that threadCheckpoints does NOT grow unbounded in memory.
+    // Configure reconciler with maxCheckpointThreads = 5, maxThreads = 2.
+    // Create 8 distinct threads, each syncing fingerprints.
+    // Assert:
+    // 1. threadCheckpoints.size <= 5
+    // 2. Old inactive threads (thread_m14_1, thread_m14_2, thread_m14_3) are evicted from memory checkpoints
+    // 3. Retained recent threads (e.g. thread_m14_8) retain correct synced state
+    // 4. Residual behavior: evicted threads fall back safely to CRM DB for canonical deduplication
+    // ===============================================================================================
+    const m14StoragePath = path.resolve(process.cwd(), 'tests/inbox/test_m14_checkpoint.json');
+    try { if (fs.existsSync(m14StoragePath)) fs.unlinkSync(m14StoragePath); } catch (_) {}
+
+    const m14Reconciler = new ThreadMessageReconciler({
+      storagePath: m14StoragePath,
+      maxCheckpointThreads: 5,
+      maxThreads: 2,
+    });
+
+    const m14Threads = Array.from({ length: 8 }, (_, i) => `thread_m14_${i + 1}`);
+    const m14Fps: Record<string, string> = {};
+
+    for (const t of m14Threads) {
+      const scan = m14Reconciler.reconcile({
+        pageId: PAGE_ID,
+        stableThreadId: t,
+        rawMessages: [
+          { content: `hello from ${t}`, direction: 'INBOUND', timestamp: '10:00 PM', messageId: `mid.$${t}` },
+        ],
+      });
+      m14Fps[t] = scan[0].fingerprint;
+      m14Reconciler.markFingerprintSynced(t, scan[0].fingerprint);
+      m14Reconciler.cleanup();
+    }
+    m14Reconciler.flushSync();
+
+    const m14CheckpointSize = m14Reconciler.threadCheckpoints.size;
+    const m14SizeBounded = m14CheckpointSize <= 5;
+
+    // The oldest inactive threads must have been evicted from memory
+    const m14Old1Evicted = !m14Reconciler.threadCheckpoints.has('thread_m14_1');
+    const m14Old2Evicted = !m14Reconciler.threadCheckpoints.has('thread_m14_2');
+    const m14Old3Evicted = !m14Reconciler.threadCheckpoints.has('thread_m14_3');
+
+    // The most recent thread (thread_m14_8) must be retained and report synced = true
+    const m14Recent8Retained = m14Reconciler.threadCheckpoints.has('thread_m14_8');
+    const m14Recent8Synced = m14Reconciler.isFingerprintSynced('thread_m14_8', m14Fps['thread_m14_8']);
+
+    const m14Passed = m14SizeBounded &&
+      m14Old1Evicted &&
+      m14Old2Evicted &&
+      m14Old3Evicted &&
+      m14Recent8Retained &&
+      m14Recent8Synced;
+
+    recordResult(
+      39,
+      'M14 (P1 Option A): In-memory threadCheckpoints bounded by LRU pruning (size <= 5, recent retained)',
+      'size <= 5 && old evicted && recent retained with synced=true',
+      `size=${m14CheckpointSize}, old1Evicted=${m14Old1Evicted}, old2Evicted=${m14Old2Evicted}, recent8Retained=${m14Recent8Retained}, recent8Synced=${m14Recent8Synced}`,
+      m14Passed
+    );
+    try { if (fs.existsSync(m14StoragePath)) fs.unlinkSync(m14StoragePath); } catch (_) {}
+
   } finally {
     await browser.close();
   }

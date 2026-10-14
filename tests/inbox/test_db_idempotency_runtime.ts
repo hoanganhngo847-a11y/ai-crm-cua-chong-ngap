@@ -1,6 +1,54 @@
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 
+/**
+ * Fail-closed guard asserting that the Supabase target URL is local only.
+ * Prevents accidental execution against staging or production environments.
+ */
+export function assertLocalSupabaseUrl(urlStr: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch (_err) {
+    throw new Error('Refusing to run destructive DB idempotency test against non-local Supabase.');
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isLocal =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '[::1]';
+
+  if (!isLocal) {
+    throw new Error('Refusing to run destructive DB idempotency test against non-local Supabase.');
+  }
+}
+
+// 0. Self-test guard functionality before doing any operations
+function verifyGuard() {
+  // Allowed local hosts
+  assert.doesNotThrow(() => assertLocalSupabaseUrl('http://127.0.0.1:54321'));
+  assert.doesNotThrow(() => assertLocalSupabaseUrl('http://localhost:54321'));
+  assert.doesNotThrow(() => assertLocalSupabaseUrl('http://[::1]:54321'));
+
+  // Disallowed remote hosts
+  assert.throws(
+    () => assertLocalSupabaseUrl('https://something.supabase.co'),
+    /Refusing to run destructive DB idempotency test against non-local Supabase\./
+  );
+  assert.throws(
+    () => assertLocalSupabaseUrl('https://api.prod.supabase.io'),
+    /Refusing to run destructive DB idempotency test against non-local Supabase\./
+  );
+  assert.throws(
+    () => assertLocalSupabaseUrl('http://192.168.1.100:54321'),
+    /Refusing to run destructive DB idempotency test against non-local Supabase\./
+  );
+}
+
+verifyGuard();
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
@@ -8,6 +56,9 @@ const ANON_KEY =
 const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+
+// Guard BEFORE creating any client or writing to DB
+assertLocalSupabaseUrl(SUPABASE_URL);
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = ANON_KEY;
@@ -22,14 +73,17 @@ async function runDbIdempotencyRuntimeTests() {
   console.log('Testing public.ingest_provider_message_atomic RPC directly');
   console.log('======================================================================\n');
 
+  // Verify guard once again with the effective URL
+  assertLocalSupabaseUrl(SUPABASE_URL);
+
   const adminClient = createAdminClient();
 
-  // Test company ID & unique thread IDs to isolate runtime test
-  const testCompanyId = '00000000-0000-0000-0000-000000000001';
-  await adminClient.from('companies').upsert({ id: testCompanyId, name: 'Test Co', status: 'ACTIVE' });
+  // Test company ID: Isolated randomized UUID for each run (never touches seeded/default data)
+  const testCompanyId = crypto.randomUUID();
+  const runId = Date.now();
+  await adminClient.from('companies').upsert({ id: testCompanyId, name: `Test Co ${runId}`, status: 'ACTIVE' });
 
   const pageId = '1389294167596309';
-  const runId = Date.now();
   const externalUserId = `61592309${runId % 1000000}`;
   const externalConvId = `${pageId}:${externalUserId}`;
 
