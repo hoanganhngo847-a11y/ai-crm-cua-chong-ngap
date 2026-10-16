@@ -158,6 +158,48 @@ export function validSignature(
     return secureEqual(signature, expected);
 }
 
+export function parseSignedRequest(
+    signedRequest: string,
+    secret: string,
+): Record<string, unknown> & { userId: string } {
+    if (!signedRequest || typeof signedRequest !== 'string') {
+        throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
+    }
+
+    const parts = signedRequest.split('.');
+    if (parts.length !== 2) {
+        throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
+    }
+
+    const [encodedSig, encodedPayload] = parts;
+    if (!encodedSig || !encodedPayload) {
+        throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
+    }
+
+    const expectedSig = createHmac('sha256', secret).update(encodedPayload).digest();
+    let sig: Buffer;
+    try {
+        sig = Buffer.from(encodedSig, 'base64url');
+    } catch {
+        throw new ChannelError('INVALID_SIGNATURE', 403);
+    }
+
+    if (sig.length !== expectedSig.length || !timingSafeEqual(sig, expectedSig)) {
+        throw new ChannelError('INVALID_SIGNATURE', 403);
+    }
+
+    try {
+        const decoded = JSON.parse(
+            Buffer.from(encodedPayload, 'base64url').toString('utf8'),
+        );
+        const data = object(decoded);
+        const userId = typeof data.user_id === 'string' ? data.user_id : '';
+        return { ...data, userId };
+    } catch {
+        throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
+    }
+}
+
 export type MetaEvent = {
     key: string;
     page: string;
@@ -231,9 +273,9 @@ export function parseMeta(body: unknown, page: string): MetaEvent[] {
                 const mid = text(message.mid, 250);
 
                 const content =
-                    typeof message.text === 'string'
+                    typeof message.text === 'string' && message.text.trim().length > 0
                         ? message.text.slice(0, 10000)
-                        : '[Khách gửi tệp đính kèm; nội dung cần kiểm tra]';
+                        : (message.attachments ? '[Khách gửi tệp đính kèm; nội dung cần kiểm tra]' : '[Tin nhắn không có văn bản]');
 
                 result.push({
                     ...base,

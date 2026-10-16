@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 export const metadata: Metadata = {
     title: 'Privacy Policy | AI CRM Cửa Chống Ngập',
@@ -164,6 +165,12 @@ export default function PrivacyPolicyPage() {
                             ủy quyền. Yêu cầu sẽ được xử lý phù hợp với nghĩa vụ pháp lý và yêu
                             cầu lưu trữ hồ sơ hiện hành.
                         </p>
+                        <p className="mt-2 text-sm text-blue-300">
+                            Chi tiết hướng dẫn và quy trình xóa dữ liệu người dùng: xem tại{' '}
+                            <Link href="/data-deletion" className="text-blue-400 underline hover:text-blue-300">
+                                Hướng dẫn xóa dữ liệu người dùng (User Data Deletion Instructions)
+                            </Link>.
+                        </p>
                     </Section>
 
                     <Section title="8. Facebook Platform data / Dữ liệu từ Nền tảng Facebook">
@@ -197,8 +204,13 @@ export default function PrivacyPolicyPage() {
                         <p>
                             For privacy or data-deletion requests, please contact the business
                             through the Facebook Page connected to this CRM or contact the
-                            authorized administrator of the business account using this service.
+                            authorized administrator of the business account using this service:
                         </p>
+                        <ul className="list-disc space-y-1 pl-6 text-sm text-slate-300">
+                            <li>Email: <a href="mailto:privacy@chd.edu.vn" className="text-blue-400 underline">privacy@chd.edu.vn</a> / <a href="mailto:contact@cuachongngap.com" className="text-blue-400 underline">contact@cuachongngap.com</a></li>
+                            <li>Connected Facebook Page: Du học Đức và Học Tiếng Đức CHD / AI CRM Cửa Chống Ngập</li>
+                            <li>Data Deletion Instructions: <Link href="/data-deletion" className="text-blue-400 underline">/data-deletion</Link></li>
+                        </ul>
                         <p>
                             Với yêu cầu về quyền riêng tư hoặc xóa dữ liệu, vui lòng liên hệ
                             doanh nghiệp thông qua Trang Facebook đang kết nối với CRM hoặc quản

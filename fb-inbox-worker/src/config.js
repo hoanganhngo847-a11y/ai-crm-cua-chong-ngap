@@ -49,6 +49,7 @@ export const CONFIG = {
   FB_WORKER_SECRET: process.env.FB_WORKER_SECRET || '',
   FB_PAGE_ID: process.env.FB_PAGE_ID || '1389294167596309',
   CRM_COMPANY_ID: process.env.CRM_COMPANY_ID || '00000000-0000-0000-0000-000000000001',
+  MESSAGE_TRACE: process.env.FB_MESSAGE_TRACE === 'true',
 
   // Polling & intervals (ms)
   POLL_INTERVAL_MS: parseInt(process.env.POLL_INTERVAL_MS || '5000', 10),
