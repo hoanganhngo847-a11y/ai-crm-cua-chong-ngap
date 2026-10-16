@@ -281,12 +281,13 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
                 .eq('company_id', TEST_COMPANY_A);
             assert.equal(updateErr, null);
 
-            // Call deletion with the authoritative verified ASID
+            // Call deletion with the authoritative verified ASID and unique fingerprint
             const { data: authRes, error: authErr } = await admin.rpc('han_record_data_deletion_request', {
                 p_company: TEST_COMPANY_A,
                 p_meta_user_id: 'verified_asid_77777777',
                 p_confirmation_code: 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                p_raw: { user_id: 'verified_asid_77777777' },
+                p_raw: { user_id: 'verified_asid_77777777', issued_at: 1729100000 },
+                p_request_fingerprint: 'fp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             });
             assert.equal(authErr, null);
             assert.equal(authRes.status, 'COMPLETED', 'Must complete deletion for authoritative match');
@@ -315,43 +316,173 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
             assert.equal(intA.sanitized_content, '[Dữ liệu cá nhân đã xóa theo yêu cầu Data Deletion của người dùng]');
         });
 
-        await t.test('6. Second Deletion Request: consecutive deletion requests generate distinct requests', async () => {
-            // Customer Alpha had deletion request 1: del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-            // Now user initiates deletion request 2 with a new confirmation code
+        await t.test('6. Second Deletion Request: consecutive deletion requests generate distinct requests and process new data', async () => {
+            // Step 1 & 2: Customer Alpha (TEST_CUSTOMER_A) had Deletion #1 completed in Test 5
+
+            // Step 3: User interacts again! A new customer record is created for subsequent interaction
+            const TEST_CUSTOMER_A2 = 'c0c0c0c0-0003-4000-8000-000000000003';
+            const TEST_CONV_A2 = 'd0d0d0d0-0003-4000-8000-000000000003';
+            const TEST_INTERACTION_A2 = 'e0e0e0e0-0003-4000-8000-000000000003';
+
+            const { error: custA2Err } = await admin.from('customers').insert({
+                id: TEST_CUSTOMER_A2,
+                company_id: TEST_COMPANY_A,
+                name: 'Customer Alpha Re-engagement Name',
+                customer_code: 'CUST-ALPHA-002',
+                stage: 'LEAD_NEW',
+                source: 'FACEBOOK',
+            });
+            assert.equal(custA2Err, null);
+
+            // New private contact for returning customer
+            executeRawSql(`
+                INSERT INTO private.customer_private_contacts (company_id, customer_id, normalized_phone, raw_phone, phone_country_code, is_verified)
+                VALUES ('${TEST_COMPANY_A}', '${TEST_CUSTOMER_A2}', '+84933333333', '0933333333', 'VN', true);
+            `);
+            assert.equal(getPrivateContactsCount(TEST_CUSTOMER_A2), 1, 'New private contact exists prior to deletion');
+
+            // Step 4: Re-link valid authoritative ASID mapping for the new data
+            const { error: idA2Err } = await admin.from('identities').insert({
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A2,
+                channel: 'FACEBOOK',
+                external_id: '1026991374010112:psid_user_99999_return',
+                metadata: { asid: 'verified_asid_77777777', page_id: '1026991374010112' },
+            });
+            assert.equal(idA2Err, null);
+
+            // New conversation
+            const { error: convA2Err } = await admin.from('conversations').insert({
+                id: TEST_CONV_A2,
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A2,
+                channel: 'FACEBOOK',
+                external_conversation_id: 'fb-conv-alpha-002',
+                status: 'OPEN',
+                unread_count: 1,
+            });
+            assert.equal(convA2Err, null);
+
+            // New interaction with active content
+            const { error: intA2Err } = await admin.from('interactions').insert({
+                id: TEST_INTERACTION_A2,
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A2,
+                conversation_id: TEST_CONV_A2,
+                channel: 'FACEBOOK',
+                direction: 'INBOUND',
+                actor_type: 'CUSTOMER',
+                type: 'MESSAGE',
+                sanitized_content: 'Chào công ty, tôi quay lại để đặt lịch đo đạc',
+                sanitization_status: 'SUCCEEDED',
+            });
+            assert.equal(intA2Err, null);
+
+            // Step 5: Deletion #2 with new request (fresh confirmation code & fresh request_fingerprint)
             const { data: req2Res, error: req2Err } = await admin.rpc('han_record_data_deletion_request', {
                 p_company: TEST_COMPANY_A,
                 p_meta_user_id: 'verified_asid_77777777',
                 p_confirmation_code: 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                p_raw: { user_id: 'verified_asid_77777777', attempt: 2 },
+                p_raw: { user_id: 'verified_asid_77777777', issued_at: 1729110000, attempt: 2 },
+                p_request_fingerprint: 'fp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
             });
             assert.equal(req2Err, null);
-            assert.equal(req2Res.confirmation_code, 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
 
-            // Status lookup for request 1 returns request 1
+            // Step 6: Assert request #2 is independent
+            assert.equal(req2Res.confirmation_code, 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+            assert.equal(req2Res.status, 'COMPLETED');
+            assert.equal(req2Res.resolution_strategy, 'AUTO_MATCHED');
+            assert.equal(req2Res.customer_id, TEST_CUSTOMER_A2);
+
+            // Step 7: Assert new data is also anonymized/deleted/scrubbed
+            const { data: custA2 } = await admin.from('customers').select('*').eq('id', TEST_CUSTOMER_A2).single();
+            assert.equal(custA2.name, 'Khách hàng đã xóa dữ liệu (Meta Data Deletion)');
+            assert.equal(custA2.stage, 'LOST');
+
+            const cpcA2Count = getPrivateContactsCount(TEST_CUSTOMER_A2);
+            assert.equal(cpcA2Count, 0, 'New customer private contacts must be deleted');
+
+            const { data: idA2 } = await admin.from('identities').select('*').eq('customer_id', TEST_CUSTOMER_A2);
+            assert.equal(idA2?.length || 0, 0, 'New customer Facebook identity must be deleted');
+
+            const { data: convA2 } = await admin.from('conversations').select('*').eq('id', TEST_CONV_A2).single();
+            assert.equal(convA2.status, 'CLOSED');
+
+            const { data: intA2 } = await admin.from('interactions').select('*').eq('id', TEST_INTERACTION_A2).single();
+            assert.equal(intA2.sanitized_content, '[Dữ liệu cá nhân đã xóa theo yêu cầu Data Deletion của người dùng]');
+
+            // Step 8: Assert request #1 still retains history
             const { data: stat1 } = await admin.rpc('han_get_data_deletion_status', {
                 p_confirmation_code: 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             });
             assert.equal(stat1.confirmation_code, 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
             assert.equal(stat1.status, 'COMPLETED');
 
-            // Status lookup for request 2 returns request 2
             const { data: stat2 } = await admin.rpc('han_get_data_deletion_status', {
                 p_confirmation_code: 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
             });
             assert.equal(stat2.confirmation_code, 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
             assert.notEqual(stat1.confirmation_code, stat2.confirmation_code);
+
+            // Verify both requests for this user exist as independent records in meta_data_deletion_requests
+            const { data: userReqs } = await admin
+                .from('meta_data_deletion_requests')
+                .select('*')
+                .eq('company_id', TEST_COMPANY_A)
+                .eq('meta_user_id', 'verified_asid_77777777')
+                .order('created_at', { ascending: true });
+            assert.equal(userReqs?.length, 2);
+            assert.equal(userReqs[0].customer_id, TEST_CUSTOMER_A);
+            assert.equal(userReqs[1].customer_id, TEST_CUSTOMER_A2);
         });
 
-        await t.test('7. Idempotent Retry: repeating the same confirmation code returns existing record', async () => {
-            const { data: retryRes, error: retryErr } = await admin.rpc('han_record_data_deletion_request', {
+        await t.test('7. Idempotent Retry: repeating confirmation code or request_fingerprint returns existing record', async () => {
+            // 7A: Retry by confirmation_code
+            const { data: retryByCodeRes, error: retryByCodeErr } = await admin.rpc('han_record_data_deletion_request', {
                 p_company: TEST_COMPANY_A,
                 p_meta_user_id: 'verified_asid_77777777',
                 p_confirmation_code: 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                 p_raw: { retry: true },
             });
-            assert.equal(retryErr, null);
-            assert.equal(retryRes.confirmation_code, 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-            assert.equal(retryRes.status, 'COMPLETED');
+            assert.equal(retryByCodeErr, null);
+            assert.equal(retryByCodeRes.confirmation_code, 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+            assert.equal(retryByCodeRes.status, 'COMPLETED');
+
+            // 7B: Exact Retry with matching request_fingerprint returns existing confirmation code
+            // (Even when a fresh candidate code is provided by caller)
+            const candidateCode = 'del_cccccccccccccccccccccccccccccccc';
+            const { data: retryByFpRes, error: retryByFpErr } = await admin.rpc('han_record_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_meta_user_id: 'verified_asid_77777777',
+                p_confirmation_code: candidateCode,
+                p_raw: { retry: true, exact: true },
+                p_request_fingerprint: 'fp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            });
+            assert.equal(retryByFpErr, null);
+            assert.equal(retryByFpRes.confirmation_code, 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Must return existing confirmation code for matching fingerprint');
+            assert.equal(retryByFpRes.status, 'COMPLETED');
+
+            // 7C: Concurrent Retry Race Condition: two simultaneous calls with the same fingerprint
+            const raceFp = 'fp_race_test_1111111111111111';
+            const [call1, call2] = await Promise.all([
+                admin.rpc('han_record_data_deletion_request', {
+                    p_company: TEST_COMPANY_A,
+                    p_meta_user_id: 'race_user_1111',
+                    p_confirmation_code: 'del_11111111111111111111111111111111',
+                    p_raw: { race: true, call: 1 },
+                    p_request_fingerprint: raceFp,
+                }),
+                admin.rpc('han_record_data_deletion_request', {
+                    p_company: TEST_COMPANY_A,
+                    p_meta_user_id: 'race_user_1111',
+                    p_confirmation_code: 'del_22222222222222222222222222222222',
+                    p_raw: { race: true, call: 2 },
+                    p_request_fingerprint: raceFp,
+                }),
+            ]);
+            assert.equal(call1.error, null);
+            assert.equal(call2.error, null);
+            assert.equal(call1.data.confirmation_code, call2.data.confirmation_code, 'Concurrent calls with same fingerprint must resolve to identical confirmation code');
         });
 
     } finally {

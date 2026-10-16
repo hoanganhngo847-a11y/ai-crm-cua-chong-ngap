@@ -138,24 +138,27 @@ export default function PrivacyPolicyPage() {
                         <p>
                             Data is retained only for as long as reasonably necessary for
                             customer service, business records, security, legal obligations and
-                            operational continuity. Application customer profiles, contact numbers,
-                            and chat UI contents are scrubbed upon verified deletion requests.
-                            However, low-level immutable technical logs and security audit trails
-                            (e.g., append-only technical payloads and audit event histories) are retained
-                            for a limited statutory/compliance window (up to 90 days) for security incident
-                            investigation, anti-tampering protection, and dispute reconciliation, after which
-                            they are purged by scheduled maintenance routines.
+                            operational continuity. Upon a verified user data deletion request,
+                            application-level customer profiles (in <code>customers</code>), private contact numbers
+                            (in <code>private.customer_private_contacts</code>), identities, and chat interaction
+                            contents are permanently scrubbed/anonymized in the CRM application.
+                            Low-level immutable technical logs (in <code>private.interaction_raw_contents</code>)
+                            and security audit event histories (in <code>public.audit_logs</code>) are protected
+                            by strict database append-only integrity triggers for anti-tampering, fraud prevention,
+                            and statutory compliance; they are isolated within privileged server schemas, strictly
+                            inaccessible to CRM users, sales staff, or external APIs, and cannot be updated or deleted in place.
                         </p>
                         <p>
-                            Dữ liệu chỉ được lưu trong thời gian cần thiết để phục vụ chăm sóc khách
-                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ pháp lý và tính liên tục vận hành.
-                            Khi có yêu cầu xóa dữ liệu hợp lệ, thông tin hồ sơ khách hàng, số điện thoại
-                            và nội dung hiển thị trong CRM sẽ được xóa/ẩn danh. Tuy nhiên, các bản ghi nhật
-                            ký kỹ thuật tầng thấp và nhật ký kiểm toán bảo mật (nhật ký append-only và audit logs)
-                            được bảo lưu có thời hạn (tối đa 90 ngày) theo chính sách kỹ thuật nhằm mục đích
-                            chống giả mạo, điều tra sự cố bảo mật và đối soát tranh chấp, sau đó được thanh trừng
-                            định kỳ; hệ thống không tuyên bố xóa sạch toàn diện tức thì (complete purge) đối với
-                            các nhật ký bảo mật này.
+                            Dữ liệu chỉ được lưu trữ trong thời gian cần thiết để phục vụ chăm sóc khách
+                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ tuân thủ và tính liên tục vận hành.
+                            Khi có yêu cầu xóa dữ liệu người dùng hợp lệ, thông tin khách hàng (bảng <code>customers</code>),
+                            số điện thoại liên hệ cá nhân (trong bảng bảo mật <code>private.customer_private_contacts</code>),
+                            định danh và nội dung tin nhắn tương tác trên CRM sẽ được xóa và ẩn danh vĩnh viễn.
+                            Các bản ghi nhật ký kỹ thuật tầng thấp (<code>private.interaction_raw_contents</code>)
+                            và nhật ký kiểm toán bảo mật (<code>public.audit_logs</code>) được bảo vệ bằng cơ chế trigger
+                            append-only nghiêm ngặt của cơ sở dữ liệu để chống giả mạo và bảo vệ an ninh hệ thống;
+                            các bản ghi này được cô lập ở mức hạ tầng cơ sở dữ liệu đặc quyền, không bao giờ hiển thị
+                            cho người dùng CRM hay nhân viên kinh doanh, và không bị cập nhật hay xóa tùy tiện.
                         </p>
                     </Section>
 

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS public.meta_data_deletion_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
   confirmation_code text NOT NULL UNIQUE,
+  request_fingerprint text NULL,
   meta_user_id text NOT NULL,
   status text NOT NULL CHECK (status IN ('RECEIVED', 'PROCESSING', 'COMPLETED', 'REJECTED')),
   resolution_strategy text NOT NULL CHECK (resolution_strategy IN ('AUTO_MATCHED', 'MANUAL_REVIEW_REQUIRED', 'NO_MATCH')),
@@ -21,6 +22,10 @@ CREATE TABLE IF NOT EXISTS public.meta_data_deletion_requests (
   CONSTRAINT chk_meta_data_deletion_code_format CHECK (confirmation_code ~ '^del_[a-f0-9]{8,64}$')
 );
 
+-- Ensure request_fingerprint column exists for incremental schema application
+ALTER TABLE public.meta_data_deletion_requests
+  ADD COLUMN IF NOT EXISTS request_fingerprint text NULL;
+
 -- 2. Indexes
 CREATE INDEX IF NOT EXISTS idx_meta_data_deletion_code
   ON public.meta_data_deletion_requests (confirmation_code);
@@ -30,6 +35,10 @@ CREATE INDEX IF NOT EXISTS idx_meta_data_deletion_company_status
 
 CREATE INDEX IF NOT EXISTS idx_meta_data_deletion_user
   ON public.meta_data_deletion_requests (company_id, meta_user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_meta_data_deletion_company_fingerprint
+  ON public.meta_data_deletion_requests (company_id, request_fingerprint)
+  WHERE request_fingerprint IS NOT NULL;
 
 -- 3. RLS
 ALTER TABLE public.meta_data_deletion_requests ENABLE ROW LEVEL SECURITY;
@@ -61,11 +70,14 @@ CREATE TRIGGER trg_updated_at_meta_data_deletion
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- 5. RPC: public.han_record_data_deletion_request
+DROP FUNCTION IF EXISTS public.han_record_data_deletion_request(uuid, text, text, jsonb);
+
 CREATE OR REPLACE FUNCTION public.han_record_data_deletion_request(
     p_company uuid,
     p_meta_user_id text,
     p_confirmation_code text,
-    p_raw jsonb
+    p_raw jsonb,
+    p_request_fingerprint text DEFAULT NULL
 )
     RETURNS jsonb
     LANGUAGE plpgsql
@@ -90,7 +102,26 @@ BEGIN
     RAISE EXCEPTION 'INVALID_REQUEST';
   END IF;
 
-  -- 1. Idempotency check by confirmation_code
+  -- 1a. Idempotency check by request_fingerprint (exact retry of Meta webhook callback)
+  IF p_request_fingerprint IS NOT NULL AND length(trim(p_request_fingerprint)) > 0 THEN
+    SELECT * INTO v_existing
+    FROM public.meta_data_deletion_requests
+    WHERE company_id = p_company
+      AND request_fingerprint = trim(p_request_fingerprint);
+
+    IF FOUND THEN
+      RETURN jsonb_build_object(
+        'confirmation_code', v_existing.confirmation_code,
+        'status', v_existing.status,
+        'resolution_strategy', v_existing.resolution_strategy,
+        'customer_id', v_existing.customer_id,
+        'created_at', v_existing.created_at,
+        'processed_at', v_existing.processed_at
+      );
+    END IF;
+  END IF;
+
+  -- 1b. Idempotency check by confirmation_code
   SELECT * INTO v_existing
   FROM public.meta_data_deletion_requests
   WHERE confirmation_code = trim(p_confirmation_code);
@@ -169,14 +200,49 @@ BEGIN
     v_details := jsonb_build_object('reason', 'NO_AUTHORITATIVE_ASID_MAPPING', 'meta_user_id', trim(p_meta_user_id));
   END IF;
 
-  -- 3. Persist the deletion request
+  -- 3. Persist the deletion request with concurrency conflict protection
   v_request_id := gen_random_uuid();
 
-  INSERT INTO public.meta_data_deletion_requests (
-    id, company_id, confirmation_code, meta_user_id, status, resolution_strategy, customer_id, raw_request, details, created_at, updated_at, processed_at
-  ) VALUES (
-    v_request_id, p_company, trim(p_confirmation_code), trim(p_meta_user_id), v_status, v_resolution, v_customer, p_raw, v_details, now(), now(), v_processed_at
-  );
+  BEGIN
+    INSERT INTO public.meta_data_deletion_requests (
+      id, company_id, confirmation_code, request_fingerprint, meta_user_id, status, resolution_strategy, customer_id, raw_request, details, created_at, updated_at, processed_at
+    ) VALUES (
+      v_request_id, p_company, trim(p_confirmation_code), nullif(trim(p_request_fingerprint), ''), trim(p_meta_user_id), v_status, v_resolution, v_customer, p_raw, v_details, now(), now(), v_processed_at
+    );
+  EXCEPTION WHEN unique_violation THEN
+    -- Concurrent exact retry or race condition: fetch the winning record
+    IF p_request_fingerprint IS NOT NULL AND length(trim(p_request_fingerprint)) > 0 THEN
+      SELECT * INTO v_existing
+      FROM public.meta_data_deletion_requests
+      WHERE company_id = p_company
+        AND request_fingerprint = trim(p_request_fingerprint);
+      IF FOUND THEN
+        RETURN jsonb_build_object(
+          'confirmation_code', v_existing.confirmation_code,
+          'status', v_existing.status,
+          'resolution_strategy', v_existing.resolution_strategy,
+          'customer_id', v_existing.customer_id,
+          'created_at', v_existing.created_at,
+          'processed_at', v_existing.processed_at
+        );
+      END IF;
+    END IF;
+
+    SELECT * INTO v_existing
+    FROM public.meta_data_deletion_requests
+    WHERE confirmation_code = trim(p_confirmation_code);
+    IF FOUND THEN
+      RETURN jsonb_build_object(
+        'confirmation_code', v_existing.confirmation_code,
+        'status', v_existing.status,
+        'resolution_strategy', v_existing.resolution_strategy,
+        'customer_id', v_existing.customer_id,
+        'created_at', v_existing.created_at,
+        'processed_at', v_existing.processed_at
+      );
+    END IF;
+    RAISE;
+  END;
 
   -- 4. Audit trail logging with valid resource_id and result
   INSERT INTO public.audit_logs (
@@ -187,6 +253,7 @@ BEGIN
     'meta_data_deletion_requests', v_request_id, v_customer, 'SUCCESS',
     jsonb_build_object(
       'confirmation_code', trim(p_confirmation_code),
+      'request_fingerprint', trim(p_request_fingerprint),
       'meta_user_id', trim(p_meta_user_id),
       'resolution_strategy', v_resolution,
       'status', v_status
@@ -239,10 +306,10 @@ END;
 $$;
 
 -- Permissions: service_role execution only
-REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb) FROM anon;
-REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb) FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb, text) FROM anon;
+REVOKE ALL ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb, text) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.han_record_data_deletion_request(uuid, text, text, jsonb, text) TO service_role;
 
 REVOKE ALL ON FUNCTION public.han_get_data_deletion_status(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.han_get_data_deletion_status(text) FROM anon;

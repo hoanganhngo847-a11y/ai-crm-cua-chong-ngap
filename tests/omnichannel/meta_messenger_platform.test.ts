@@ -439,13 +439,24 @@ test('8. Outbound routing: uses correct Page ID, correct Page token, and enforce
 test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persists request to DB', async () => {
     const originalFetch = globalThis.fetch;
     const recordedRequests: any[] = [];
-    const dbSimulatedDeletions = new Map<string, any>();
+    const dbSimulatedDeletionsByCode = new Map<string, any>();
+    const dbSimulatedDeletionsByFingerprint = new Map<string, any>();
 
     globalThis.fetch = async (input, init) => {
         const url = String(input);
         if (url.includes('/rest/v1/rpc/han_record_data_deletion_request')) {
             const body = JSON.parse(String(init?.body));
             recordedRequests.push(body);
+
+            // Exact retry idempotency check by request_fingerprint
+            if (body.p_request_fingerprint && dbSimulatedDeletionsByFingerprint.has(body.p_request_fingerprint)) {
+                return Response.json(dbSimulatedDeletionsByFingerprint.get(body.p_request_fingerprint));
+            }
+
+            if (dbSimulatedDeletionsByCode.has(body.p_confirmation_code)) {
+                return Response.json(dbSimulatedDeletionsByCode.get(body.p_confirmation_code));
+            }
+
             const record = {
                 confirmation_code: body.p_confirmation_code,
                 status: 'COMPLETED',
@@ -454,12 +465,15 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
                 created_at: new Date().toISOString(),
                 processed_at: new Date().toISOString(),
             };
-            dbSimulatedDeletions.set(body.p_confirmation_code, record);
+            dbSimulatedDeletionsByCode.set(body.p_confirmation_code, record);
+            if (body.p_request_fingerprint) {
+                dbSimulatedDeletionsByFingerprint.set(body.p_request_fingerprint, record);
+            }
             return Response.json(record);
         }
         if (url.includes('/rest/v1/rpc/han_get_data_deletion_status')) {
             const body = JSON.parse(String(init?.body));
-            const found = dbSimulatedDeletions.get(body.p_confirmation_code) || null;
+            const found = dbSimulatedDeletionsByCode.get(body.p_confirmation_code) || null;
             return Response.json(found);
         }
         return Response.json([]);
@@ -499,9 +513,31 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
         assert.ok(postBody.confirmation_code && /^del_[a-f0-9]{32}$/.test(postBody.confirmation_code), 'Confirmation code matches del_<random32>');
         assert.ok(postBody.url.includes(`/data-deletion?code=${postBody.confirmation_code}`), 'URL points to data deletion status check page');
 
-        // Verify fresh random confirmation code for each new request
+        // 9D2: HTTP EXACT RETRY IDEMPOTENCY TEST:
+        // Calling POST again with the exact same Meta signed_request MUST return the existing confirmation_code and status URL!
+        const retryFormData = new FormData();
+        retryFormData.set('signed_request', validSignedRequest);
+        const retryReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
+            method: 'POST',
+            body: retryFormData,
+        });
+        const retryRes = await dataDeletionPost(retryReq);
+        assert.equal(retryRes.status, 200);
+        const retryBody = await retryRes.json();
+        assert.equal(retryBody.confirmation_code, postBody.confirmation_code, 'HTTP exact retry must return existing confirmation code');
+        assert.equal(retryBody.url, postBody.url, 'HTTP exact retry must return existing status URL');
+
+        // 9D3: NEW REQUEST WITH DIFFERENT ISSUED_AT:
+        // When a user initiates a new deletion request at a later time (different issued_at / signed_request),
+        // it MUST generate a new, distinct random confirmation code and process independently.
+        const payload2 = {
+            user_id: 'fb_user_12345678',
+            algorithm: 'HMAC-SHA256',
+            issued_at: payload.issued_at + 120, // 2 minutes later
+        };
+        const validSignedRequest2 = createSignedRequest(payload2, APP_SECRET);
         const formData2 = new FormData();
-        formData2.set('signed_request', validSignedRequest);
+        formData2.set('signed_request', validSignedRequest2);
         const postReq2 = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
             method: 'POST',
             body: formData2,
@@ -509,12 +545,14 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
         const postRes2 = await dataDeletionPost(postReq2);
         assert.equal(postRes2.status, 200);
         const postBody2 = await postRes2.json();
-        assert.notEqual(postBody.confirmation_code, postBody2.confirmation_code, 'Each deletion request generates a fresh distinct confirmation code');
+        assert.notEqual(postBody.confirmation_code, postBody2.confirmation_code, 'New deletion request at different time generates fresh distinct confirmation code');
+        assert.ok(/^del_[a-f0-9]{32}$/.test(postBody2.confirmation_code));
 
-        assert.equal(recordedRequests.length, 2);
+        assert.equal(recordedRequests.length, 3);
         assert.equal(recordedRequests[0].p_company, COMPANY_A);
         assert.equal(recordedRequests[0].p_meta_user_id, 'fb_user_12345678');
         assert.equal(recordedRequests[0].p_confirmation_code, postBody.confirmation_code);
+        assert.ok(recordedRequests[0].p_request_fingerprint, 'Request fingerprint must be populated');
 
         // 9E: POST with invalid signature returns 403
         const badPostReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {

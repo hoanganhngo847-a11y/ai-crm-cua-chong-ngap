@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
     ChannelError,
     parseSignedRequest,
@@ -73,22 +73,36 @@ export async function POST(request: Request) {
         }
 
         const companyId = resolveTargetCompany();
-        const confirmationCode = `del_${randomBytes(16).toString('hex')}`;
+        const issuedAt = String(payload.issued_at ?? payload.issuedAt ?? '');
+        const requestFingerprint = createHash('sha256')
+            .update(`${companyId}:${userId}:${issuedAt}:${signedRequest}`)
+            .digest('hex');
 
-        // Persist the deletion request into the database via atomic RPC
-        await rpc('han_record_data_deletion_request', {
+        const candidateConfirmationCode = `del_${randomBytes(16).toString('hex')}`;
+
+        // Persist or retrieve the deletion request via atomic idempotent RPC
+        const recorded = (await rpc('han_record_data_deletion_request', {
             p_company: companyId,
             p_meta_user_id: userId,
-            p_confirmation_code: confirmationCode,
+            p_confirmation_code: candidateConfirmationCode,
             p_raw: payload,
-        });
+            p_request_fingerprint: requestFingerprint,
+        })) as {
+            confirmation_code?: string;
+            status?: string;
+            resolution_strategy?: string;
+            customer_id?: string | null;
+            created_at?: string;
+            processed_at?: string | null;
+        } | null;
 
+        const activeConfirmationCode = recorded?.confirmation_code || candidateConfirmationCode;
         const origin = resolveWebsiteOrigin(request);
-        const statusUrl = `${origin}/data-deletion?code=${confirmationCode}`;
+        const statusUrl = `${origin}/data-deletion?code=${activeConfirmationCode}`;
 
         return Response.json({
             url: statusUrl,
-            confirmation_code: confirmationCode,
+            confirmation_code: activeConfirmationCode,
         });
     } catch (error) {
         return errorResponse(error);
