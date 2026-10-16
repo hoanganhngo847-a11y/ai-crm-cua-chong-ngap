@@ -1,7 +1,4 @@
-import { createHash } from 'node:crypto';
-import {
-    pageBindings,
-} from '@/features/omnichannel/facebook/binding';
+import { randomBytes } from 'node:crypto';
 import {
     ChannelError,
     parseSignedRequest,
@@ -13,6 +10,8 @@ import {
 } from '@/features/omnichannel/facebook/server';
 
 export const runtime = 'nodejs';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function resolveWebsiteOrigin(request: Request): string {
     const configured = process.env.WEBSITE_ORIGIN?.trim();
@@ -27,19 +26,11 @@ function resolveWebsiteOrigin(request: Request): string {
 }
 
 function resolveTargetCompany(): string {
-    const configuredCompany = process.env.OMNICHANNEL_COMPANY_ID?.trim();
-    if (configuredCompany) return configuredCompany;
-
-    try {
-        const bindings = pageBindings();
-        if (bindings.length > 0 && bindings[0].company) {
-            return bindings[0].company;
-        }
-    } catch {
-        // Fall back to channel not configured
+    const configuredCompany = process.env.META_DATA_DELETION_COMPANY_ID?.trim();
+    if (!configuredCompany || !UUID_REGEX.test(configuredCompany)) {
+        throw new ChannelError('MISCONFIGURED_DELETION_TENANT', 503);
     }
-
-    throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
+    return configuredCompany;
 }
 
 export async function POST(request: Request) {
@@ -82,12 +73,7 @@ export async function POST(request: Request) {
         }
 
         const companyId = resolveTargetCompany();
-
-        const codeHash = createHash('sha256')
-            .update(`${companyId}:${userId}:${secret}`)
-            .digest('hex')
-            .slice(0, 16);
-        const confirmationCode = `del_${codeHash}`;
+        const confirmationCode = `del_${randomBytes(16).toString('hex')}`;
 
         // Persist the deletion request into the database via atomic RPC
         await rpc('han_record_data_deletion_request', {

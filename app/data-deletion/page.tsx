@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { rpc } from '@/features/omnichannel/facebook/server';
 
 export const metadata: Metadata = {
-    title: 'User Data Deletion Instructions / Hướng dẫn xóa dữ liệu người dùng | AI CRM',
+    title: 'User Data Deletion Instructions / Hướng dẫn xóa dữ liệu người dùng | CRM Messenger Production / AI CRM',
     description:
-        'Instructions on how users can request deletion of their Facebook Messenger and platform data from AI CRM.',
+        'Instructions on how users can request deletion of their Facebook Messenger and platform data from CRM Messenger Production / AI CRM.',
 };
 
 const Section = ({
@@ -54,7 +54,7 @@ export default async function DataDeletionPage(props: {
             <div className="mx-auto max-w-4xl px-6 py-12 sm:px-8 lg:py-16">
                 <header className="mb-10 border-b border-slate-800 pb-8">
                     <p className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-400">
-                        Facebook Messenger Platform Integration
+                        CRM Messenger Production / AI CRM
                     </p>
                     <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
                         User Data Deletion Instructions
@@ -95,7 +95,7 @@ export default async function DataDeletionPage(props: {
                                         <strong className="text-slate-100">Trạng thái (Status):</strong>{' '}
                                         {record.status === 'COMPLETED' && (
                                             <span className="inline-flex items-center rounded-md bg-emerald-500/10 px-2.5 py-0.5 text-emerald-400 font-semibold">
-                                                ĐÃ XÓA DỮ LIỆU (COMPLETED)
+                                                ĐÃ XÓA/ẨN DANH ỨNG DỤNG (COMPLETED)
                                             </span>
                                         )}
                                         {record.status === 'PROCESSING' && (
@@ -105,7 +105,7 @@ export default async function DataDeletionPage(props: {
                                         )}
                                         {record.status === 'RECEIVED' && (
                                             <span className="inline-flex items-center rounded-md bg-blue-500/10 px-2.5 py-0.5 text-blue-400 font-semibold">
-                                                ĐÃ TIẾP NHẬN - CHỜ XÁC MINH (RECEIVED)
+                                                ĐÃ TIẾP NHẬN - CHỜ XÁC MINH THỦ CÔNG (RECEIVED)
                                             </span>
                                         )}
                                         {record.status === 'REJECTED' && (
@@ -118,10 +118,12 @@ export default async function DataDeletionPage(props: {
                                         Thời điểm tiếp nhận (Created At): {new Date(record.created_at).toLocaleString('vi-VN')}
                                         {record.processed_at && ` · Xử lý xong (Processed At): ${new Date(record.processed_at).toLocaleString('vi-VN')}`}
                                     </p>
-                                    <p className="text-xs text-slate-300">
+                                    <p className="text-xs text-slate-300 leading-relaxed">
                                         {record.status === 'COMPLETED'
-                                            ? 'Dữ liệu cá nhân và liên kết tài khoản Facebook của bạn đã được xóa/ẩn danh hoàn toàn khỏi CRM.'
-                                            : 'Yêu cầu của bạn đã được ghi nhận thực sự trên máy chủ và đang được tiến hành rà soát theo đúng quy định.'}
+                                            ? 'Hồ sơ khách hàng, thông tin liên hệ riêng tư và nội dung hiển thị trong giao diện CRM đã được xóa/ẩn danh. Lưu ý: Nhật ký kỹ thuật và audit trail bảo mật được lưu giữ có thời hạn (tối đa 90 ngày) theo chính sách retention của hệ thống.'
+                                            : record.status === 'RECEIVED'
+                                              ? 'Yêu cầu của bạn đã được ghi nhận vào cơ sở dữ liệu hệ thống và đang chờ quản trị viên đối soát, xác minh danh tính thủ công để tiến hành xử lý an toàn.'
+                                              : 'Yêu cầu của bạn đã được ghi nhận trên hệ thống và đang được xử lý theo đúng quy trình.'}
                                     </p>
                                 </>
                             ) : (
@@ -187,24 +189,22 @@ export default async function DataDeletionPage(props: {
                         </ul>
                     </Section>
 
-                    <Section title="4. Processing Workflow & Data Scope / Quy trình và phạm vi xử lý">
+                    <Section title="4. Processing Workflow & Data Retention Scope / Quy trình xử lý và phạm vi lưu giữ dữ liệu">
                         <p>
                             When a data deletion request is received:
                         </p>
                         <ul className="list-disc space-y-2 pl-6">
                             <li>
-                                <strong>Automatic mapping:</strong> If the user identifier matches a single customer record within
-                                the organization, personal contact details and Facebook identities are immediately deleted,
-                                and interaction contents are scrubbed.
+                                <strong>Strict non-heuristic matching:</strong> Because Meta provides an App-Scoped ID (ASID) in deletion callbacks while CRM Messenger interactions store Page-Scoped IDs (PSID), the system requires an authoritative verified link. The system NEVER uses heuristic string or suffix equality. If no authoritative mapping exists, the request is recorded as <code>RECEIVED</code> (with <code>MANUAL_REVIEW_REQUIRED</code>) for human administrator verification, preventing accidental deletion of unrelated customer data.
                             </li>
                             <li>
-                                <strong>Unmapped / Ambiguous requests:</strong> If the identifier cannot be safely mapped to a specific
-                                customer record without ambiguity, the request is recorded as RECEIVED for manual administrative
-                                review to prevent improper data loss.
+                                <strong>Application data anonymization:</strong> When an authoritative match is verified, customer records in <code>customers</code> are anonymized, private contact numbers in <code>customer_private_contacts</code> are permanently deleted, Facebook identities in <code>identities</code> are purged, conversation statuses are set to <code>CLOSED</code>, and message contents visible on the CRM inbox UI are permanently redacted.
                             </li>
                             <li>
-                                <strong>Status tracking:</strong> The server-side confirmation code allows you to check whether the
-                                deletion is RECEIVED, PROCESSING, or COMPLETED at any time.
+                                <strong>Technical Retention Policy:</strong> In compliance with security anti-tampering and dispute reconciliation obligations, immutable low-level technical ingest payloads (in <code>private.interaction_raw_contents</code>) and security audit event logs (in <code>public.audit_logs</code>) are subject to a limited retention schedule of up to 90 days before automated scheduled purge. The system does not claim an immediate 100% complete purge of raw technical audit trails during this retention window.
+                            </li>
+                            <li>
+                                <strong>Authoritative status tracking:</strong> The cryptographic confirmation code enables querying the live server status (<code>RECEIVED</code> &rarr; <code>PROCESSING</code> &rarr; <code>COMPLETED</code> / <code>REJECTED</code>) at any time.
                             </li>
                         </ul>
                     </Section>

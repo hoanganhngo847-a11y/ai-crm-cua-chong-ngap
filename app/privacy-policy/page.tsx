@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-    title: 'Privacy Policy | AI CRM Cửa Chống Ngập',
+    title: 'Privacy Policy | CRM Messenger Production / AI CRM',
     description:
-        'Privacy Policy for AI CRM Cửa Chống Ngập and its Facebook Messenger integration.',
+        'Privacy Policy for CRM Messenger Production / AI CRM and its Facebook Messenger integration.',
 };
 
 const Section = ({
@@ -26,26 +26,26 @@ export default function PrivacyPolicyPage() {
             <div className="mx-auto max-w-4xl px-6 py-12 sm:px-8 lg:py-16">
                 <header className="mb-10 border-b border-slate-800 pb-8">
                     <p className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-400">
-                        AI CRM Cửa Chống Ngập
+                        CRM Messenger Production / AI CRM
                     </p>
                     <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
                         Privacy Policy / Chính sách bảo mật
                     </h1>
                     <p className="mt-4 text-slate-400">
-                        Last updated / Cập nhật lần cuối: 08 October 2026
+                        Last updated / Cập nhật lần cuối: 16 October 2026
                     </p>
                 </header>
 
                 <div className="space-y-10">
                     <Section title="1. Scope / Phạm vi áp dụng">
                         <p>
-                            This Privacy Policy explains how AI CRM Cửa Chống Ngập
+                            This Privacy Policy explains how CRM Messenger Production / AI CRM
                             processes personal data when businesses use the CRM,
                             including data received through connected Facebook Pages
                             and Messenger conversations.
                         </p>
                         <p>
-                            Chính sách này giải thích cách AI CRM Cửa Chống Ngập xử lý
+                            Chính sách này giải thích cách CRM Messenger Production / AI CRM xử lý
                             dữ liệu cá nhân khi doanh nghiệp sử dụng hệ thống CRM, bao gồm
                             dữ liệu nhận được từ Trang Facebook được kết nối và các cuộc hội
                             thoại Messenger.
@@ -138,15 +138,24 @@ export default function PrivacyPolicyPage() {
                         <p>
                             Data is retained only for as long as reasonably necessary for
                             customer service, business records, security, legal obligations and
-                            operational continuity. The application uses access controls,
-                            tenant separation, audit logging and other technical safeguards to
-                            reduce unauthorized access.
+                            operational continuity. Application customer profiles, contact numbers,
+                            and chat UI contents are scrubbed upon verified deletion requests.
+                            However, low-level immutable technical logs and security audit trails
+                            (e.g., append-only technical payloads and audit event histories) are retained
+                            for a limited statutory/compliance window (up to 90 days) for security incident
+                            investigation, anti-tampering protection, and dispute reconciliation, after which
+                            they are purged by scheduled maintenance routines.
                         </p>
                         <p>
-                            Dữ liệu được lưu trong thời gian hợp lý để phục vụ chăm sóc khách
-                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ pháp lý và tính liên tục vận
-                            hành. Hệ thống sử dụng phân quyền truy cập, tách dữ liệu theo doanh
-                            nghiệp, nhật ký kiểm tra và các biện pháp kỹ thuật phù hợp.
+                            Dữ liệu chỉ được lưu trong thời gian cần thiết để phục vụ chăm sóc khách
+                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ pháp lý và tính liên tục vận hành.
+                            Khi có yêu cầu xóa dữ liệu hợp lệ, thông tin hồ sơ khách hàng, số điện thoại
+                            và nội dung hiển thị trong CRM sẽ được xóa/ẩn danh. Tuy nhiên, các bản ghi nhật
+                            ký kỹ thuật tầng thấp và nhật ký kiểm toán bảo mật (nhật ký append-only và audit logs)
+                            được bảo lưu có thời hạn (tối đa 90 ngày) theo chính sách kỹ thuật nhằm mục đích
+                            chống giả mạo, điều tra sự cố bảo mật và đối soát tranh chấp, sau đó được thanh trừng
+                            định kỳ; hệ thống không tuyên bố xóa sạch toàn diện tức thì (complete purge) đối với
+                            các nhật ký bảo mật này.
                         </p>
                     </Section>
 
@@ -216,7 +225,7 @@ export default function PrivacyPolicyPage() {
                 </div>
 
                 <footer className="mt-12 border-t border-slate-800 pt-6 text-sm text-slate-500">
-                    AI CRM Cửa Chống Ngập · Public privacy notice
+                    CRM Messenger Production / AI CRM · Public privacy notice
                 </footer>
             </div>
         </main>

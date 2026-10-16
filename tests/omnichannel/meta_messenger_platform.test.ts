@@ -39,6 +39,7 @@ process.env.META_VERIFY_TOKEN = VERIFY_TOKEN;
 process.env.META_GRAPH_VERSION = GRAPH_VERSION;
 process.env.META_PAGE_CHD_TOKEN = PAGE_A_TOKEN;
 process.env.META_PAGE_B_TOKEN = PAGE_B_TOKEN;
+process.env.META_DATA_DELETION_COMPANY_ID = COMPANY_A;
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key-never-for-client';
 
@@ -495,10 +496,22 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
         const postRes = await dataDeletionPost(postReq);
         assert.equal(postRes.status, 200);
         const postBody = await postRes.json();
-        assert.ok(postBody.confirmation_code && /^del_[a-f0-9]{16}$/.test(postBody.confirmation_code), 'Confirmation code matches del_<hash>');
+        assert.ok(postBody.confirmation_code && /^del_[a-f0-9]{32}$/.test(postBody.confirmation_code), 'Confirmation code matches del_<random32>');
         assert.ok(postBody.url.includes(`/data-deletion?code=${postBody.confirmation_code}`), 'URL points to data deletion status check page');
 
-        assert.equal(recordedRequests.length, 1);
+        // Verify fresh random confirmation code for each new request
+        const formData2 = new FormData();
+        formData2.set('signed_request', validSignedRequest);
+        const postReq2 = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
+            method: 'POST',
+            body: formData2,
+        });
+        const postRes2 = await dataDeletionPost(postReq2);
+        assert.equal(postRes2.status, 200);
+        const postBody2 = await postRes2.json();
+        assert.notEqual(postBody.confirmation_code, postBody2.confirmation_code, 'Each deletion request generates a fresh distinct confirmation code');
+
+        assert.equal(recordedRequests.length, 2);
         assert.equal(recordedRequests[0].p_company, COMPANY_A);
         assert.equal(recordedRequests[0].p_meta_user_id, 'fb_user_12345678');
         assert.equal(recordedRequests[0].p_confirmation_code, postBody.confirmation_code);
@@ -511,7 +524,28 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
         });
         assert.equal((await dataDeletionPost(badPostReq)).status, 403);
 
-        // 9F: GET with existing code returns authoritative DB status
+        // 9F: Missing or non-UUID META_DATA_DELETION_COMPANY_ID fails closed with 503
+        const originalTenant = process.env.META_DATA_DELETION_COMPANY_ID;
+        try {
+            process.env.META_DATA_DELETION_COMPANY_ID = 'not-a-valid-uuid';
+            const badTenantReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ signed_request: validSignedRequest }),
+            });
+            const badTenantRes = await dataDeletionPost(badTenantReq);
+            assert.equal(badTenantRes.status, 503);
+            const errBody = await badTenantRes.json();
+            assert.equal(errBody.error, 'MISCONFIGURED_DELETION_TENANT');
+
+            delete process.env.META_DATA_DELETION_COMPANY_ID;
+            const missingTenantRes = await dataDeletionPost(badTenantReq);
+            assert.equal(missingTenantRes.status, 503);
+        } finally {
+            process.env.META_DATA_DELETION_COMPANY_ID = originalTenant;
+        }
+
+        // 9G: GET with existing code returns authoritative DB status
         const getReqWithCode = new Request(`https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion?code=${postBody.confirmation_code}`);
         const getResWithCode = await dataDeletionGet(getReqWithCode);
         assert.equal(getResWithCode.status, 200);
@@ -520,12 +554,12 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
         assert.equal(getBody.status, 'COMPLETED');
         assert.equal(getBody.resolution_strategy, 'AUTO_MATCHED');
 
-        // 9G: GET with non-existent code returns 404 NOT_FOUND (never returns fake status!)
+        // 9H: GET with non-existent code returns 404 NOT_FOUND (never returns fake status!)
         const getReqNonExistent = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion?code=del_0000000000000000');
         const getResNonExistent = await dataDeletionGet(getReqNonExistent);
         assert.equal(getResNonExistent.status, 404);
 
-        // 9H: GET without code redirects to /data-deletion
+        // 9I: GET without code redirects to /data-deletion
         const getReqNoCode = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion');
         const getResNoCode = await dataDeletionGet(getReqNoCode);
         assert.equal(getResNoCode.status, 302);
@@ -537,40 +571,66 @@ test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persist
 
 test('10. Data Deletion Identity Resolution: safe auto-matching, unmapped handling, and zero guessing', async () => {
     // Tests the 3 resolution paths of han_record_data_deletion_request:
-    // Path 1: Exactly 1 customer match -> AUTO_MATCHED, status = COMPLETED
-    // Path 2: 0 customer matches -> NO_MATCH, status = RECEIVED (awaits manual review)
-    // Path 3: >1 customer matches -> MANUAL_REVIEW_REQUIRED, status = RECEIVED (fails closed)
+    // Path 1: Authoritative ASID match (metadata->>'asid') -> AUTO_MATCHED, status = COMPLETED
+    // Path 2: Unmapped / No authoritative ASID link -> MANUAL_REVIEW_REQUIRED, status = RECEIVED
+    // Path 3: Ambiguous (>1 matches) -> MANUAL_REVIEW_REQUIRED, status = RECEIVED (fails closed)
 
-    function simulateResolution(matchingCustomerIds: string[]) {
-        let status = 'RECEIVED';
-        let resolution = 'NO_MATCH';
-        let customerId: string | null = null;
-        let processedAt: string | null = null;
-
-        if (matchingCustomerIds.length === 1) {
-            customerId = matchingCustomerIds[0];
-            resolution = 'AUTO_MATCHED';
-            status = 'COMPLETED';
-            processedAt = new Date().toISOString();
-        } else if (matchingCustomerIds.length > 1) {
-            resolution = 'MANUAL_REVIEW_REQUIRED';
-            status = 'RECEIVED';
+    function resolveIdentity(opts: {
+        hasAuthoritativeAsidMatch: boolean;
+        authoritativeMatchesCount: number;
+        hasOnlyPsidSuffixMatch: boolean;
+    }) {
+        // Zero heuristic guessing: PSID equality or suffix match alone MUST NOT auto-match!
+        if (opts.hasOnlyPsidSuffixMatch && !opts.hasAuthoritativeAsidMatch) {
+            return {
+                status: 'RECEIVED',
+                resolution: 'MANUAL_REVIEW_REQUIRED',
+                customerId: null,
+            };
         }
 
-        return { status, resolution, customerId, processedAt };
+        if (opts.hasAuthoritativeAsidMatch && opts.authoritativeMatchesCount === 1) {
+            return {
+                status: 'COMPLETED',
+                resolution: 'AUTO_MATCHED',
+                customerId: 'cust-verified-1',
+            };
+        }
+
+        return {
+            status: 'RECEIVED',
+            resolution: 'MANUAL_REVIEW_REQUIRED',
+            customerId: null,
+        };
     }
 
-    const singleMatch = simulateResolution(['cust-1']);
-    assert.equal(singleMatch.status, 'COMPLETED');
-    assert.equal(singleMatch.resolution, 'AUTO_MATCHED');
-    assert.equal(singleMatch.customerId, 'cust-1');
+    // Heuristic test: PSID suffix match exists ('1026991374010112:12345678') but no authoritative ASID link
+    // MUST NOT auto-match! Fails closed into MANUAL_REVIEW_REQUIRED with RECEIVED status.
+    const heuristicAttempt = resolveIdentity({
+        hasAuthoritativeAsidMatch: false,
+        authoritativeMatchesCount: 0,
+        hasOnlyPsidSuffixMatch: true,
+    });
+    assert.equal(heuristicAttempt.status, 'RECEIVED');
+    assert.equal(heuristicAttempt.resolution, 'MANUAL_REVIEW_REQUIRED');
+    assert.equal(heuristicAttempt.customerId, null, 'Must NOT auto-delete customer based on PSID suffix equality');
 
-    const noMatch = simulateResolution([]);
-    assert.equal(noMatch.status, 'RECEIVED');
-    assert.equal(noMatch.resolution, 'NO_MATCH');
-    assert.equal(noMatch.customerId, null);
+    // Authoritative test: explicit verified ASID mapping matches exactly 1 customer
+    const authoritativeMatch = resolveIdentity({
+        hasAuthoritativeAsidMatch: true,
+        authoritativeMatchesCount: 1,
+        hasOnlyPsidSuffixMatch: false,
+    });
+    assert.equal(authoritativeMatch.status, 'COMPLETED');
+    assert.equal(authoritativeMatch.resolution, 'AUTO_MATCHED');
+    assert.equal(authoritativeMatch.customerId, 'cust-verified-1');
 
-    const ambiguousMatch = simulateResolution(['cust-1', 'cust-2']);
+    // Ambiguous test: multiple matches
+    const ambiguousMatch = resolveIdentity({
+        hasAuthoritativeAsidMatch: true,
+        authoritativeMatchesCount: 2,
+        hasOnlyPsidSuffixMatch: false,
+    });
     assert.equal(ambiguousMatch.status, 'RECEIVED');
     assert.equal(ambiguousMatch.resolution, 'MANUAL_REVIEW_REQUIRED');
     assert.equal(ambiguousMatch.customerId, null);

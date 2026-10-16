@@ -80,6 +80,7 @@ DECLARE
   v_status text := 'RECEIVED';
   v_processed_at timestamptz := NULL;
   v_details jsonb := '{}'::jsonb;
+  v_request_id uuid;
 BEGIN
   IF p_company IS NULL
      OR p_meta_user_id IS NULL OR length(trim(p_meta_user_id)) = 0
@@ -105,15 +106,17 @@ BEGIN
     );
   END IF;
 
-  -- 2. Identity Resolution strictly within tenant
+  -- 2. Identity Resolution strictly within tenant:
+  -- Only authoritative explicit ASID mapping (metadata->>'asid' or metadata->>'meta_asid') is accepted.
+  -- Heuristic string equality or suffix matching on PSID (external_id) is STRICTLY PROHIBITED.
   SELECT array_agg(DISTINCT customer_id)
   INTO v_matching_customers
   FROM public.identities
   WHERE company_id = p_company
     AND channel = 'FACEBOOK'
     AND (
-      external_id = trim(p_meta_user_id)
-      OR external_id LIKE '%:' || trim(p_meta_user_id)
+      metadata->>'asid' = trim(p_meta_user_id)
+      OR metadata->>'meta_asid' = trim(p_meta_user_id)
     );
 
   IF v_matching_customers IS NOT NULL AND array_length(v_matching_customers, 1) = 1 THEN
@@ -150,18 +153,6 @@ BEGIN
         unread_count = 0
     WHERE customer_id = v_customer AND company_id = p_company;
 
-    -- Audit trail
-    INSERT INTO public.audit_logs (
-      company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata
-    ) VALUES (
-      p_company, NULL, 'META_DATA_DELETION_PURGED', 'Customer', v_customer, v_customer, 'SUCCESS',
-      jsonb_build_object(
-        'confirmation_code', trim(p_confirmation_code),
-        'meta_user_id', trim(p_meta_user_id),
-        'resolution', v_resolution
-      )
-    );
-
     v_details := jsonb_build_object('purged_customer_id', v_customer);
 
   ELSIF v_matching_customers IS NOT NULL AND array_length(v_matching_customers, 1) > 1 THEN
@@ -170,40 +161,36 @@ BEGIN
     v_status := 'RECEIVED';
     v_details := jsonb_build_object('candidate_customer_ids', v_matching_customers);
 
-    INSERT INTO public.audit_logs (
-      company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata
-    ) VALUES (
-      p_company, NULL, 'META_DATA_DELETION_AMBIGUOUS', 'Identity', NULL, NULL, 'MANUAL_REVIEW_REQUIRED',
-      jsonb_build_object(
-        'confirmation_code', trim(p_confirmation_code),
-        'meta_user_id', trim(p_meta_user_id),
-        'candidate_count', array_length(v_matching_customers, 1)
-      )
-    );
-
   ELSE
-    -- No matching customer found in CRM for this Meta user_id.
-    -- Logged as RECEIVED for audit trail, without guessing or touching unrelated records.
-    v_resolution := 'NO_MATCH';
+    -- No authoritative ASID match found in CRM for this Meta user_id.
+    -- Kept safely as RECEIVED and MANUAL_REVIEW_REQUIRED. Zero heuristic guessing, zero auto-deletion.
+    v_resolution := 'MANUAL_REVIEW_REQUIRED';
     v_status := 'RECEIVED';
-    v_details := jsonb_build_object('reason', 'unmapped_meta_user_id');
-
-    INSERT INTO public.audit_logs (
-      company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata
-    ) VALUES (
-      p_company, NULL, 'META_DATA_DELETION_UNMAPPED', 'Identity', NULL, NULL, 'RECEIVED',
-      jsonb_build_object(
-        'confirmation_code', trim(p_confirmation_code),
-        'meta_user_id', trim(p_meta_user_id)
-      )
-    );
+    v_details := jsonb_build_object('reason', 'NO_AUTHORITATIVE_ASID_MAPPING', 'meta_user_id', trim(p_meta_user_id));
   END IF;
 
   -- 3. Persist the deletion request
+  v_request_id := gen_random_uuid();
+
   INSERT INTO public.meta_data_deletion_requests (
-    company_id, confirmation_code, meta_user_id, status, resolution_strategy, customer_id, raw_request, details, created_at, updated_at, processed_at
+    id, company_id, confirmation_code, meta_user_id, status, resolution_strategy, customer_id, raw_request, details, created_at, updated_at, processed_at
   ) VALUES (
-    p_company, trim(p_confirmation_code), trim(p_meta_user_id), v_status, v_resolution, v_customer, p_raw, v_details, now(), now(), v_processed_at
+    v_request_id, p_company, trim(p_confirmation_code), trim(p_meta_user_id), v_status, v_resolution, v_customer, p_raw, v_details, now(), now(), v_processed_at
+  );
+
+  -- 4. Audit trail logging with valid resource_id and result
+  INSERT INTO public.audit_logs (
+    company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata
+  ) VALUES (
+    p_company, NULL,
+    CASE WHEN v_status = 'COMPLETED' THEN 'META_DATA_DELETION_PURGED' ELSE 'META_DATA_DELETION_RECEIVED' END,
+    'meta_data_deletion_requests', v_request_id, v_customer, 'SUCCESS',
+    jsonb_build_object(
+      'confirmation_code', trim(p_confirmation_code),
+      'meta_user_id', trim(p_meta_user_id),
+      'resolution_strategy', v_resolution,
+      'status', v_status
+    )
   );
 
   RETURN jsonb_build_object(
