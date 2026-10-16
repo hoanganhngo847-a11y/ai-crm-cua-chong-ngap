@@ -1,7 +1,6 @@
 import { log } from './logger.js';
 import { threadStore } from './thread-store.js';
 import { messageReconciler } from './message-reconciler.js';
-import { CONFIG } from './config.js';
 
 export function isPureTimestampText(text) {
   if (!text || typeof text !== 'string') return false;
@@ -220,7 +219,7 @@ export async function extractConversationsList(page, maxCap = 20) {
 export async function extractActiveThreadMessages(page, pageId) {
   try {
     const startTime = Date.now();
-    const rawData = await page.evaluate((traceEnabled) => {
+    const rawData = await page.evaluate(() => {
       // 1. Identify Customer Profile Link in right sidebar or thread header
       const profileLinks = Array.from(
         document.querySelectorAll('a[href*="facebook.com/profile.php"], a[href*="facebook.com/"]')
@@ -430,8 +429,10 @@ export async function extractActiveThreadMessages(page, pageId) {
 
       for (const el of rawDivs) {
         const text = (el.innerText || '').trim();
-        const hasFallbackContent = Boolean((el.textContent || '').trim() || el.querySelector('img[alt], a[href]'));
-        if (!text && !hasFallbackContent) continue;
+        if (!text) {
+          const hasEmoji = el.querySelector('img[alt], [aria-label]');
+          if (!hasEmoji) continue;
+        }
 
         // Skip non-message UI actions
         if (excludedUI.test(text)) {
@@ -507,74 +508,6 @@ export async function extractActiveThreadMessages(page, pageId) {
       let currentUtime = null;
 
       const parsedMessages = [];
-      const traceRecords = [];
-      const traceBubble = (el, stage, details = {}) => {
-        if (!traceEnabled) return;
-        const rawText = (el.innerText || '').trim();
-        const textContent = (el.textContent || '').trim();
-        const extractedHref = el.querySelector('a[href]')?.getAttribute('href') || null;
-        if (!/https?:\/\//i.test(`${rawText} ${textContent} ${extractedHref || ''}`)) return;
-        traceRecords.push({
-          stage,
-          metaMessageId: el.getAttribute('data-message-id') || el.closest('[data-message-id]')?.getAttribute('data-message-id') || null,
-          rawText,
-          textContent,
-          extractedHref,
-          ...details
-        });
-      };
-
-      if (traceEnabled) {
-        for (const node of msgContainer.querySelectorAll('[data-message-id]')) {
-          traceBubble(node, 'DOM_MESSAGE_RAW');
-          if (!uniqueBubbles.some(b => node.contains(b) || b.contains(node))) {
-            traceBubble(node, 'PARSER_SKIP', { reason: 'no_bubble_candidate' });
-          }
-        }
-      }
-
-      // Read text only from this bubble. Preview-card descendants are not a second
-      // message, and their title/description must not replace the sender's text.
-      const readBubbleText = (root, omitPreviews) => {
-        let value = '';
-        const visit = (node) => {
-          if (node.nodeType === Node.TEXT_NODE) {
-            value += node.nodeValue || '';
-            return;
-          }
-          if (node.nodeType !== Node.ELEMENT_NODE) return;
-          const tag = node.tagName.toLowerCase();
-          if (['script', 'style', 'button', 'nav'].includes(tag)) return;
-          if (omitPreviews && node !== root && node.matches('[data-surface*="preview"], [data-surface*="attachment"], [role="article"]')) return;
-          if (tag === 'br') {
-            value += '\n';
-            return;
-          }
-          const block = node !== root && ['div', 'p'].includes(tag);
-          if (block && value && !value.endsWith('\n')) value += '\n';
-          for (const child of node.childNodes) visit(child);
-          if (block && value && !value.endsWith('\n')) value += '\n';
-        };
-        visit(root);
-        return value.trim();
-      };
-
-      const bubbleHref = (root, outsidePreviewOnly) => {
-        for (const anchor of root.querySelectorAll('a[href]')) {
-          if (outsidePreviewOnly && anchor.closest('[data-surface*="preview"], [data-surface*="attachment"], [role="article"]')) continue;
-          const href = anchor.getAttribute('href') || '';
-          if (!/^https?:\/\//i.test(href)) continue;
-          try {
-            const target = new URL(href);
-            if (target.hostname === 'l.facebook.com' && target.pathname === '/l.php') {
-              const original = target.searchParams.get('u') || '';
-              if (/^https?:\/\//i.test(original)) return original;
-            }
-          } catch (_) {}
-          return href;
-        }
-        return '';
-      };
 
       for (const item of processItems) {
         if (item.type === 'TIMESTAMP') {
@@ -590,7 +523,6 @@ export async function extractActiveThreadMessages(page, pageId) {
         }
 
         const el = item.node;
-        traceBubble(el, 'PARSER_CANDIDATE');
 
         // Content extraction from bubble container:
         let content = (el.innerText || '').trim();
@@ -598,14 +530,14 @@ export async function extractActiveThreadMessages(page, pageId) {
         // Check if el contains an explicit Meta preview card attachment container
         const previewEl = el.querySelector('[data-surface*="preview"], [data-surface*="attachment"], [role="article"]');
         if (previewEl && el.contains(previewEl)) {
-          content = readBubbleText(el, true);
+          const textCandidate = el.querySelector('div[dir="auto"], span[dir="auto"]');
+          if (textCandidate && textCandidate !== previewEl && !previewEl.contains(textCandidate)) {
+            const userText = (textCandidate.innerText || '').trim();
+            if (userText) {
+              content = userText;
+            }
+          }
         }
-
-        // Meta may render a URL as an anchor whose visible innerText is empty.
-        // Use only descendants of the selected bubble, never page-level links.
-        if (!content && previewEl) content = bubbleHref(el, true) || bubbleHref(el, false);
-        if (!content) content = readBubbleText(el, false);
-        if (!content) content = bubbleHref(el, false);
 
         // Fallback for emoji-only bubbles if innerText is empty
         if (!content) {
@@ -615,24 +547,15 @@ export async function extractActiveThreadMessages(page, pageId) {
           }
         }
 
-        if (!content) {
-          traceBubble(el, 'PARSER_SKIP', { reason: 'empty_content_after_extraction' });
-          continue;
-        }
+        if (!content) continue;
 
         // Skip non-message UI actions
-        if (excludedUI.test(content)) {
-          traceBubble(el, 'PARSER_SKIP', { reason: 'excluded_ui_text', normalizedContent: content });
-          continue;
-        }
+        if (excludedUI.test(content)) continue;
 
         // Clean out "You:" prefix
         const startsWithYou = content.startsWith('You:');
         const cleanContent = content.replace(/^You:\s*/i, '').trim();
-        if (!cleanContent) {
-          traceBubble(el, 'PARSER_SKIP', { reason: 'empty_content_after_normalization', normalizedContent: cleanContent });
-          continue;
-        }
+        if (!cleanContent) continue;
 
         // Hierarchical Direction Classification:
         let foundBg = '';
@@ -765,7 +688,6 @@ export async function extractActiveThreadMessages(page, pageId) {
           domNodeUid,
           messageId
         });
-        traceBubble(el, 'PARSER_CONTENT', { normalizedContent: cleanContent, direction, messageId });
       }
 
       return {
@@ -774,10 +696,9 @@ export async function extractActiveThreadMessages(page, pageId) {
         customerName,
         customerNameSource,
         candidateCount: uniqueBubbles.length,
-        parsedMessages,
-        traceRecords
+        parsedMessages
       };
-    }, CONFIG.MESSAGE_TRACE);
+    });
 
     const durationMs = Date.now() - startTime;
     log.info(`[INBOUND_PARSE] duration_ms=${durationMs} candidate_count=${rawData?.candidateCount || 0}`);
@@ -802,26 +723,12 @@ export async function extractActiveThreadMessages(page, pageId) {
       finalCustomerName
     );
 
-    if (CONFIG.MESSAGE_TRACE) {
-      for (const record of rawData.traceRecords || []) {
-        log.info(`[${record.stage}] ${JSON.stringify({ threadId: stableThreadId, ...record })}`);
-      }
-    }
-
     // Reconcile message instances with stateful thread history (P0 Invariant)
     const messages = messageReconciler.reconcile({
       pageId,
       stableThreadId,
       rawMessages: rawData.parsedMessages
     });
-
-    if (CONFIG.MESSAGE_TRACE) {
-      for (const msg of messages) {
-        if (/https?:\/\//i.test(`${msg.content} ${msg.rawText || ''}`)) {
-          log.info(`[RECONCILER_MESSAGE] ${JSON.stringify({ threadId: stableThreadId, metaMessageId: msg.messageId, normalizedContent: msg.content, direction: msg.direction, fingerprint: msg.fingerprint })}`);
-        }
-      }
-    }
 
     return {
       customerFbId: rawData.customerFbId,
@@ -1012,3 +919,4 @@ export function isValidMetaMessageId(val) {
   if (/^(thread|container|row|list|surface|viewport|crm_b_|panel|wrapper)/i.test(s)) return false;
   return true;
 }
+

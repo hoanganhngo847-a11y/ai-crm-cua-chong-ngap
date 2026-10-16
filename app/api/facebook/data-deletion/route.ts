@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto';
 import {
+    pageBindings,
+} from '@/features/omnichannel/facebook/binding';
+import {
     ChannelError,
     parseSignedRequest,
 } from '@/features/omnichannel/facebook/core';
 import {
     env,
     errorResponse,
+    rpc,
 } from '@/features/omnichannel/facebook/server';
 
 export const runtime = 'nodejs';
@@ -20,6 +24,22 @@ function resolveWebsiteOrigin(request: Request): string {
     const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
     const protocol = forwardedProto || 'https';
     return host ? `${protocol}://${host}` : new URL(request.url).origin;
+}
+
+function resolveTargetCompany(): string {
+    const configuredCompany = process.env.OMNICHANNEL_COMPANY_ID?.trim();
+    if (configuredCompany) return configuredCompany;
+
+    try {
+        const bindings = pageBindings();
+        if (bindings.length > 0 && bindings[0].company) {
+            return bindings[0].company;
+        }
+    } catch {
+        // Fall back to channel not configured
+    }
+
+    throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
 }
 
 export async function POST(request: Request) {
@@ -57,11 +77,25 @@ export async function POST(request: Request) {
         const payload = parseSignedRequest(signedRequest, secret);
         const userId = String(payload.userId || payload.user_id || 'unknown');
 
+        if (!userId || userId === 'unknown') {
+            throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
+        }
+
+        const companyId = resolveTargetCompany();
+
         const codeHash = createHash('sha256')
-            .update(`${userId}:${Date.now()}:${secret}`)
+            .update(`${companyId}:${userId}:${secret}`)
             .digest('hex')
             .slice(0, 16);
         const confirmationCode = `del_${codeHash}`;
+
+        // Persist the deletion request into the database via atomic RPC
+        await rpc('han_record_data_deletion_request', {
+            p_company: companyId,
+            p_meta_user_id: userId,
+            p_confirmation_code: confirmationCode,
+            p_raw: payload,
+        });
 
         const origin = resolveWebsiteOrigin(request);
         const statusUrl = `${origin}/data-deletion?code=${confirmationCode}`;
@@ -76,18 +110,45 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-    const url = new URL(request.url);
-    const code = url.searchParams.get('code');
-    const origin = resolveWebsiteOrigin(request);
+    try {
+        const url = new URL(request.url);
+        const code = url.searchParams.get('code')?.trim();
+        const origin = resolveWebsiteOrigin(request);
 
-    if (code) {
+        if (!code) {
+            return Response.redirect(`${origin}/data-deletion`, 302);
+        }
+
+        if (!/^del_[a-f0-9]{8,64}$/.test(code)) {
+            return Response.json(
+                { error: 'INVALID_CODE', message: 'Mã xác nhận không đúng định dạng.' },
+                { status: 400 },
+            );
+        }
+
+        const record = await rpc('han_get_data_deletion_status', {
+            p_confirmation_code: code,
+        });
+
+        if (!record) {
+            return Response.json(
+                {
+                    error: 'NOT_FOUND',
+                    message: 'Không tìm thấy yêu cầu xóa dữ liệu với mã xác nhận này.',
+                },
+                { status: 404 },
+            );
+        }
+
         return Response.json({
-            confirmation_code: code,
-            status: 'RECEIVED',
-            message: 'Yêu cầu xóa dữ liệu đã được tiếp nhận và đang được xử lý theo quy định.',
+            confirmation_code: record.confirmation_code,
+            status: record.status,
+            resolution_strategy: record.resolution_strategy,
+            created_at: record.created_at,
+            processed_at: record.processed_at,
             url: `${origin}/data-deletion?code=${encodeURIComponent(code)}`,
         });
+    } catch (error) {
+        return errorResponse(error);
     }
-
-    return Response.redirect(`${origin}/data-deletion`, 302);
 }

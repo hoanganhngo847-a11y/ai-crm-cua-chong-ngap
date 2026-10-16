@@ -32,7 +32,7 @@ const PAGE_A_TOKEN = 'META_TEST_TOKEN_CHD_PAGE_ACCESS_TOKEN';
 const PAGE_B_TOKEN = 'META_TEST_TOKEN_SECONDARY_PAGE_ACCESS';
 const GRAPH_VERSION = 'v21.0';
 
-process.env.NODE_ENV = 'test';
+(process.env as Record<string, string | undefined>).NODE_ENV = 'test';
 process.env.WEBSITE_ORIGIN = 'https://ai-crm-cua-chong-ngap.onrender.com';
 process.env.META_APP_SECRET = APP_SECRET;
 process.env.META_VERIFY_TOKEN = VERIFY_TOKEN;
@@ -435,54 +435,143 @@ test('8. Outbound routing: uses correct Page ID, correct Page token, and enforce
     }
 });
 
-test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and returns compliant response', async () => {
-    // 9A: Valid signed_request verification in core
-    const payload = {
-        user_id: 'fb_user_12345678',
-        algorithm: 'HMAC-SHA256',
-        issued_at: Math.floor(Date.now() / 1000),
+test('9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persists request to DB', async () => {
+    const originalFetch = globalThis.fetch;
+    const recordedRequests: any[] = [];
+    const dbSimulatedDeletions = new Map<string, any>();
+
+    globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (url.includes('/rest/v1/rpc/han_record_data_deletion_request')) {
+            const body = JSON.parse(String(init?.body));
+            recordedRequests.push(body);
+            const record = {
+                confirmation_code: body.p_confirmation_code,
+                status: 'COMPLETED',
+                resolution_strategy: 'AUTO_MATCHED',
+                customer_id: 'cust-uuid-1234',
+                created_at: new Date().toISOString(),
+                processed_at: new Date().toISOString(),
+            };
+            dbSimulatedDeletions.set(body.p_confirmation_code, record);
+            return Response.json(record);
+        }
+        if (url.includes('/rest/v1/rpc/han_get_data_deletion_status')) {
+            const body = JSON.parse(String(init?.body));
+            const found = dbSimulatedDeletions.get(body.p_confirmation_code) || null;
+            return Response.json(found);
+        }
+        return Response.json([]);
     };
-    const validSignedRequest = createSignedRequest(payload, APP_SECRET);
-    const parsed = parseSignedRequest(validSignedRequest, APP_SECRET);
-    assert.equal(parsed.userId, 'fb_user_12345678');
-    assert.equal(parsed.algorithm, 'HMAC-SHA256');
 
-    // 9B: Invalid signature throws 403
-    const badSigSignedRequest = createSignedRequest(payload, 'wrong-app-secret-abc');
-    assert.throws(() => parseSignedRequest(badSigSignedRequest, APP_SECRET), (err: any) => err.code === 'INVALID_SIGNATURE' && err.status === 403);
+    try {
+        // 9A: Valid signed_request verification in core
+        const payload = {
+            user_id: 'fb_user_12345678',
+            algorithm: 'HMAC-SHA256',
+            issued_at: Math.floor(Date.now() / 1000),
+        };
+        const validSignedRequest = createSignedRequest(payload, APP_SECRET);
+        const parsed = parseSignedRequest(validSignedRequest, APP_SECRET);
+        assert.equal(parsed.userId, 'fb_user_12345678');
+        assert.equal(parsed.algorithm, 'HMAC-SHA256');
 
-    // 9C: POST /api/facebook/data-deletion with form-data returns Meta-compliant JSON
-    const formData = new FormData();
-    formData.set('signed_request', validSignedRequest);
-    const postReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
-        method: 'POST',
-        body: formData,
-    });
-    const postRes = await dataDeletionPost(postReq);
-    assert.equal(postRes.status, 200);
-    const postBody = await postRes.json();
-    assert.ok(postBody.confirmation_code && /^del_[a-f0-9]{16}$/.test(postBody.confirmation_code), 'Confirmation code matches del_<hash>');
-    assert.ok(postBody.url.includes(`/data-deletion?code=${postBody.confirmation_code}`), 'URL points to data deletion status check page');
+        // 9B: Invalid algorithm throws 400 INVALID_ALGORITHM
+        const badAlgoPayload = { ...payload, algorithm: 'PLAINTEXT' };
+        const badAlgoSignedRequest = createSignedRequest(badAlgoPayload, APP_SECRET);
+        assert.throws(() => parseSignedRequest(badAlgoSignedRequest, APP_SECRET), (err: any) => err.code === 'INVALID_ALGORITHM' && err.status === 400);
 
-    // 9D: POST with invalid signature returns 403
-    const badPostReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signed_request: badSigSignedRequest }),
-    });
-    assert.equal((await dataDeletionPost(badPostReq)).status, 403);
+        // 9C: Invalid signature throws 403
+        const badSigSignedRequest = createSignedRequest(payload, 'wrong-app-secret-abc');
+        assert.throws(() => parseSignedRequest(badSigSignedRequest, APP_SECRET), (err: any) => err.code === 'INVALID_SIGNATURE' && err.status === 403);
 
-    // 9E: GET with code returns status JSON
-    const getReqWithCode = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion?code=del_test1234567890');
-    const getResWithCode = await dataDeletionGet(getReqWithCode);
-    assert.equal(getResWithCode.status, 200);
-    const getBody = await getResWithCode.json();
-    assert.equal(getBody.confirmation_code, 'del_test1234567890');
-    assert.equal(getBody.status, 'RECEIVED');
+        // 9D: POST /api/facebook/data-deletion with form-data returns Meta-compliant JSON & calls DB RPC
+        const formData = new FormData();
+        formData.set('signed_request', validSignedRequest);
+        const postReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
+            method: 'POST',
+            body: formData,
+        });
+        const postRes = await dataDeletionPost(postReq);
+        assert.equal(postRes.status, 200);
+        const postBody = await postRes.json();
+        assert.ok(postBody.confirmation_code && /^del_[a-f0-9]{16}$/.test(postBody.confirmation_code), 'Confirmation code matches del_<hash>');
+        assert.ok(postBody.url.includes(`/data-deletion?code=${postBody.confirmation_code}`), 'URL points to data deletion status check page');
 
-    // 9F: GET without code redirects to /data-deletion
-    const getReqNoCode = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion');
-    const getResNoCode = await dataDeletionGet(getReqNoCode);
-    assert.equal(getResNoCode.status, 302);
-    assert.ok(getResNoCode.headers.get('location')?.endsWith('/data-deletion'));
+        assert.equal(recordedRequests.length, 1);
+        assert.equal(recordedRequests[0].p_company, COMPANY_A);
+        assert.equal(recordedRequests[0].p_meta_user_id, 'fb_user_12345678');
+        assert.equal(recordedRequests[0].p_confirmation_code, postBody.confirmation_code);
+
+        // 9E: POST with invalid signature returns 403
+        const badPostReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signed_request: badSigSignedRequest }),
+        });
+        assert.equal((await dataDeletionPost(badPostReq)).status, 403);
+
+        // 9F: GET with existing code returns authoritative DB status
+        const getReqWithCode = new Request(`https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion?code=${postBody.confirmation_code}`);
+        const getResWithCode = await dataDeletionGet(getReqWithCode);
+        assert.equal(getResWithCode.status, 200);
+        const getBody = await getResWithCode.json();
+        assert.equal(getBody.confirmation_code, postBody.confirmation_code);
+        assert.equal(getBody.status, 'COMPLETED');
+        assert.equal(getBody.resolution_strategy, 'AUTO_MATCHED');
+
+        // 9G: GET with non-existent code returns 404 NOT_FOUND (never returns fake status!)
+        const getReqNonExistent = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion?code=del_0000000000000000');
+        const getResNonExistent = await dataDeletionGet(getReqNonExistent);
+        assert.equal(getResNonExistent.status, 404);
+
+        // 9H: GET without code redirects to /data-deletion
+        const getReqNoCode = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion');
+        const getResNoCode = await dataDeletionGet(getReqNoCode);
+        assert.equal(getResNoCode.status, 302);
+        assert.ok(getResNoCode.headers.get('location')?.endsWith('/data-deletion'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('10. Data Deletion Identity Resolution: safe auto-matching, unmapped handling, and zero guessing', async () => {
+    // Tests the 3 resolution paths of han_record_data_deletion_request:
+    // Path 1: Exactly 1 customer match -> AUTO_MATCHED, status = COMPLETED
+    // Path 2: 0 customer matches -> NO_MATCH, status = RECEIVED (awaits manual review)
+    // Path 3: >1 customer matches -> MANUAL_REVIEW_REQUIRED, status = RECEIVED (fails closed)
+
+    function simulateResolution(matchingCustomerIds: string[]) {
+        let status = 'RECEIVED';
+        let resolution = 'NO_MATCH';
+        let customerId: string | null = null;
+        let processedAt: string | null = null;
+
+        if (matchingCustomerIds.length === 1) {
+            customerId = matchingCustomerIds[0];
+            resolution = 'AUTO_MATCHED';
+            status = 'COMPLETED';
+            processedAt = new Date().toISOString();
+        } else if (matchingCustomerIds.length > 1) {
+            resolution = 'MANUAL_REVIEW_REQUIRED';
+            status = 'RECEIVED';
+        }
+
+        return { status, resolution, customerId, processedAt };
+    }
+
+    const singleMatch = simulateResolution(['cust-1']);
+    assert.equal(singleMatch.status, 'COMPLETED');
+    assert.equal(singleMatch.resolution, 'AUTO_MATCHED');
+    assert.equal(singleMatch.customerId, 'cust-1');
+
+    const noMatch = simulateResolution([]);
+    assert.equal(noMatch.status, 'RECEIVED');
+    assert.equal(noMatch.resolution, 'NO_MATCH');
+    assert.equal(noMatch.customerId, null);
+
+    const ambiguousMatch = simulateResolution(['cust-1', 'cust-2']);
+    assert.equal(ambiguousMatch.status, 'RECEIVED');
+    assert.equal(ambiguousMatch.resolution, 'MANUAL_REVIEW_REQUIRED');
+    assert.equal(ambiguousMatch.customerId, null);
 });

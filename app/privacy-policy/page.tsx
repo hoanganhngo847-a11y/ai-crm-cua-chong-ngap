@@ -202,19 +202,15 @@ export default function PrivacyPolicyPage() {
 
                     <Section title="10. Contact / Liên hệ">
                         <p>
-                            For privacy or data-deletion requests, please contact the business
-                            through the Facebook Page connected to this CRM or contact the
-                            authorized administrator of the business account using this service:
+                            For privacy inquiries or data-deletion requests, please contact the connected Facebook Page or the authorized business administrator of this service:
                         </p>
                         <ul className="list-disc space-y-1 pl-6 text-sm text-slate-300">
-                            <li>Email: <a href="mailto:privacy@chd.edu.vn" className="text-blue-400 underline">privacy@chd.edu.vn</a> / <a href="mailto:contact@cuachongngap.com" className="text-blue-400 underline">contact@cuachongngap.com</a></li>
-                            <li>Connected Facebook Page: Du học Đức và Học Tiếng Đức CHD / AI CRM Cửa Chống Ngập</li>
+                            <li>Direct contact: Message the connected Facebook Page directly.</li>
+                            <li>Administrative support: Contact the authorized business administrator of the operating organization.</li>
                             <li>Data Deletion Instructions: <Link href="/data-deletion" className="text-blue-400 underline">/data-deletion</Link></li>
                         </ul>
                         <p>
-                            Với yêu cầu về quyền riêng tư hoặc xóa dữ liệu, vui lòng liên hệ
-                            doanh nghiệp thông qua Trang Facebook đang kết nối với CRM hoặc quản
-                            trị viên được ủy quyền của tài khoản doanh nghiệp sử dụng hệ thống.
+                            Với yêu cầu về quyền riêng tư hoặc xóa dữ liệu, vui lòng liên hệ trực tiếp qua Trang Facebook đang kết nối hoặc Quản trị viên doanh nghiệp được ủy quyền của tài khoản sử dụng hệ thống.
                         </p>
                     </Section>
                 </div>

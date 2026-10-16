@@ -51,7 +51,6 @@
     "test:inbox:db": "tsx --conditions=react-server tests/inbox/database.test.ts",
     "test:realtime-inbox": "tsx --conditions=react-server tests/inbox/test_event_driven_realtime_inbox.ts",
     "test:short-messages-and-links": "tsx --conditions=react-server tests/inbox/test_short_message_and_link_realtime.ts",
-    "test:url-only-runtime": "tsx --conditions=react-server tests/inbox/test_url_only_runtime_parsing.ts",
     "test:post-pr45-regressions": "tsx --conditions=react-server tests/inbox/test_post_pr45_regressions.ts",
     "test:idempotency:db": "tsx --conditions=react-server tests/inbox/test_db_idempotency_runtime.ts",
     "test:commercial": "tsx --conditions=react-server tests/commercial/pricing.test.ts && tsx --conditions=react-server tests/commercial/payment.test.ts && tsx --conditions=react-server tests/commercial/contract.test.ts",

@@ -51,9 +51,6 @@ export async function syncInboundMessageToCRM({
     metadata: (metadata && typeof metadata === 'object') ? metadata : {}
   };
 
-  const traceUrl = CONFIG.MESSAGE_TRACE && /https?:\/\//i.test(content);
-  if (traceUrl) log.info(`[BROWSER_SYNC_REQUEST] ${JSON.stringify({ threadId: externalConversationId, metaMessageId: metadata?.meta_message_id || null, rawText: content, normalizedContent: payload.content, direction: payload.direction, fingerprint: externalMessageId })}`);
-
   // 3. Network call with bounded AbortController timeout (Section 2)
   const controller = new AbortController();
   const timer = setTimeout(() => {
@@ -72,7 +69,6 @@ export async function syncInboundMessageToCRM({
     });
 
     const data = await res.json().catch(() => ({}));
-    if (traceUrl) log.info(`[BROWSER_SYNC_RESPONSE] ${JSON.stringify({ threadId: externalConversationId, metaMessageId: metadata?.meta_message_id || null, normalizedContent: payload.content, direction: payload.direction, fingerprint: externalMessageId, status: res.status, isDuplicate: data.is_duplicate, interactionId: data.interaction_id, reason: data.error || null })}`);
 
     if (!res.ok) {
       log.warn(`CRM Sync Endpoint trả về lỗi HTTP ${res.status}: ${data.message || data.error || 'Unknown error'}`);

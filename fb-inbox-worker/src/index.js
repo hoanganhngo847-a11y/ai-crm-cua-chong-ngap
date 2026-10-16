@@ -33,17 +33,14 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
   const domSignalAt = options?.domSignalAt || null;
 
   for (const msg of threadData.messages) {
-    const traceUrl = CONFIG.MESSAGE_TRACE && /https?:\/\//i.test(msg.content || '');
     // Requirement 14: AMBIGUOUS_DIRECTION handling
     if (msg.direction === 'AMBIGUOUS_DIRECTION') {
-      if (traceUrl) log.warn(`[PARSER_SKIP] ${JSON.stringify({ threadId: threadData.stableThreadId, metaMessageId: msg.messageId, normalizedContent: msg.content, direction: msg.direction, fingerprint: msg.fingerprint, reason: 'ambiguous_direction' })}`);
       log.warn(`[AMBIGUOUS_DIRECTION] Bỏ qua tin nhắn không xác định rõ chiều (không mặc định inbound): "${msg.content}" (Khách: ${threadData.customerName})`);
       continue;
     }
 
     // Requirement 13 & 5: OUTBOUND handling
     if (msg.direction === 'OUTBOUND') {
-      if (traceUrl) log.info(`[PARSER_SKIP] ${JSON.stringify({ threadId: threadData.stableThreadId, metaMessageId: msg.messageId, normalizedContent: msg.content, direction: msg.direction, fingerprint: msg.fingerprint, reason: 'outbound_message' })}`);
       if (!syncedFingerprints.has(msg.fingerprint)) {
         syncedFingerprints.add(msg.fingerprint);
         messageReconciler.markFingerprintSynced(threadData.stableThreadId, msg.fingerprint);
@@ -58,7 +55,6 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
 
       // A. Nếu fingerprint đã cached: skip.
       if (!syncedFingerprints.has(fingerprint)) {
-        if (traceUrl) log.info(`[INBOUND_DETECTED] ${JSON.stringify({ threadId: threadData.stableThreadId, metaMessageId: msg.messageId, normalizedContent: msg.content, direction: msg.direction, fingerprint })}`);
         const workerDetectedAt = Date.now();
         if (domSignalAt) {
           const domToWorkerMs = workerDetectedAt - domSignalAt;
@@ -85,7 +81,6 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
           content: msg.content,
           timestamp: msg.timestamp,
           metadata: {
-            meta_message_id: msg.messageId || null,
             fingerprint_version: msg.fingerprintVersion || (msg.messageId ? 'meta_mid_v2' : 'legacy_v1'),
             legacy_external_ref: msg.legacyFingerprint || null,
             canonical_external_ref: msg.canonicalFingerprint || null,
@@ -127,8 +122,6 @@ export async function processThreadData(threadData, cachedPageId, cachedPageName
           // Message được phép retry ở scan cycle kế tiếp.
           log.warn(`  • Trạng thái sync CRM: THAT_BAI (${syncResult?.error || 'Unknown error'}) - Sẽ thử lại ở chu kỳ quét sau.`);
         }
-      } else if (traceUrl) {
-        log.info(`[PARSER_SKIP] ${JSON.stringify({ threadId: threadData.stableThreadId, metaMessageId: msg.messageId, normalizedContent: msg.content, direction: msg.direction, fingerprint, reason: 'already_synced_canonical_fingerprint' })}`);
       }
     }
   }

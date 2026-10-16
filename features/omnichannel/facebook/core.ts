@@ -193,9 +193,13 @@ export function parseSignedRequest(
             Buffer.from(encodedPayload, 'base64url').toString('utf8'),
         );
         const data = object(decoded);
+        if (data.algorithm !== 'HMAC-SHA256') {
+            throw new ChannelError('INVALID_ALGORITHM', 400);
+        }
         const userId = typeof data.user_id === 'string' ? data.user_id : '';
         return { ...data, userId };
-    } catch {
+    } catch (err) {
+        if (err instanceof ChannelError) throw err;
         throw new ChannelError('INVALID_SIGNED_REQUEST', 400);
     }
 }
