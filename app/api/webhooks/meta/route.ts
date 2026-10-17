@@ -59,16 +59,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
     try {
         const raw = await readBody(request);
+        const signatureValid = validSignature(
+            raw,
+            request.headers.get('x-hub-signature-256'),
+            env('META_APP_SECRET'),
+        );
 
-        if (
-            !validSignature(
-                raw,
-                request.headers.get('x-hub-signature-256'),
-                env('META_APP_SECRET'),
-            )
-        ) {
+        if (!signatureValid) {
+            console.warn('[meta-webhook] signature=invalid');
             throw new ChannelError('INVALID_SIGNATURE', 403);
         }
+
+        console.info('[meta-webhook] signature=valid');
 
         const body = object(JSON.parse(raw));
         if (body.object !== 'page' || !Array.isArray(body.entry) || body.entry.length > 200) {
@@ -135,6 +137,7 @@ export async function POST(request: Request) {
             }
         }
 
+        console.info('[meta-webhook] processed=true');
         return Response.json({ received: true });
     } catch (error) {
         return errorResponse(error);
