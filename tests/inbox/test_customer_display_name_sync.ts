@@ -174,7 +174,7 @@ async function runDisplayNameSyncTests() {
   const convsBefore = await InboxService.getConversations(testCompanyId);
   
   // Find customer KH-000004 and set generic name "Khách hàng"
-  let conv4 = convsBefore.find(c => c.customer_code === 'KH-000004');
+  const conv4 = convsBefore.find(c => c.customer_code === 'KH-000004');
   if (!conv4) {
     throw new Error('Customer KH-000004 must exist in baseline store');
   }

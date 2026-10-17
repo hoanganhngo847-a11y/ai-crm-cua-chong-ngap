@@ -34,6 +34,8 @@
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test:operations": "tsx --conditions=react-server --test tests/operations/operations.test.ts tests/operations/database.test.ts",
     "test:omnichannel": "tsx --conditions=react-server --test tests/omnichannel/runtime.test.ts",
+    "test:meta-messenger": "tsx --conditions=react-server --test tests/omnichannel/meta_messenger_platform.test.ts",
+    "test:meta-deletion:db": "tsx --conditions=react-server --test tests/omnichannel/meta_data_deletion_db.integration.test.ts",
     "test:omnichannel:db": "tsx tests/omnichannel/database.test.ts",
     "test:zalo:db": "tsx --conditions=react-server tests/zalo/zalo_supabase.integration.test.ts",
     "test:crm": "npx tsx --conditions=react-server tests/crm/test_p0_fail_closed_and_zero_phone.ts && npx tsx --conditions=react-server tests/crm/test_p0_atomic_compensation.ts && npx tsx --conditions=react-server tests/crm/test_p0_urgent_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_history_tenant_isolation.ts && npx tsx --conditions=react-server tests/crm/test_p1_stage_allowlist.ts && npx tsx --conditions=react-server tests/crm/test_p1_server_authority_identity.ts",

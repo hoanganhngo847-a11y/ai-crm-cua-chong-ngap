@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 export const metadata: Metadata = {
-    title: 'Privacy Policy | AI CRM Cửa Chống Ngập',
+    title: 'Privacy Policy | CRM Messenger Production / AI CRM',
     description:
-        'Privacy Policy for AI CRM Cửa Chống Ngập and its Facebook Messenger integration.',
+        'Privacy Policy for CRM Messenger Production / AI CRM and its Facebook Messenger integration.',
 };
 
 const Section = ({
@@ -25,26 +26,26 @@ export default function PrivacyPolicyPage() {
             <div className="mx-auto max-w-4xl px-6 py-12 sm:px-8 lg:py-16">
                 <header className="mb-10 border-b border-slate-800 pb-8">
                     <p className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-400">
-                        AI CRM Cửa Chống Ngập
+                        CRM Messenger Production / AI CRM
                     </p>
                     <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
                         Privacy Policy / Chính sách bảo mật
                     </h1>
                     <p className="mt-4 text-slate-400">
-                        Last updated / Cập nhật lần cuối: 08 October 2026
+                        Last updated / Cập nhật lần cuối: 16 October 2026
                     </p>
                 </header>
 
                 <div className="space-y-10">
                     <Section title="1. Scope / Phạm vi áp dụng">
                         <p>
-                            This Privacy Policy explains how AI CRM Cửa Chống Ngập
+                            This Privacy Policy explains how CRM Messenger Production / AI CRM
                             processes personal data when businesses use the CRM,
                             including data received through connected Facebook Pages
                             and Messenger conversations.
                         </p>
                         <p>
-                            Chính sách này giải thích cách AI CRM Cửa Chống Ngập xử lý
+                            Chính sách này giải thích cách CRM Messenger Production / AI CRM xử lý
                             dữ liệu cá nhân khi doanh nghiệp sử dụng hệ thống CRM, bao gồm
                             dữ liệu nhận được từ Trang Facebook được kết nối và các cuộc hội
                             thoại Messenger.
@@ -137,15 +138,34 @@ export default function PrivacyPolicyPage() {
                         <p>
                             Data is retained only for as long as reasonably necessary for
                             customer service, business records, security, legal obligations and
-                            operational continuity. The application uses access controls,
-                            tenant separation, audit logging and other technical safeguards to
-                            reduce unauthorized access.
+                            operational continuity. Upon a verified user data deletion request,
+                            application-level customer profiles (in <code>customers</code>), private contact numbers
+                            (in <code>private.customer_private_contacts</code>), identities, and chat interaction
+                            contents are permanently scrubbed/anonymized in the CRM application.
+                            Furthermore, upon completion of a deletion request, external platform user identifiers and
+                            raw ingest payloads associated with the request are scrubbed and minimized into pseudonymous
+                            subject references, ensuring no unnecessary plaintext identifiers remain in storage or security logs.
+                            Low-level immutable technical logs (in <code>private.interaction_raw_contents</code>)
+                            and security audit event histories (in <code>public.audit_logs</code>) are protected
+                            by strict database append-only integrity triggers for anti-tampering, fraud prevention,
+                            and statutory compliance; they are isolated within privileged server schemas, strictly
+                            inaccessible to CRM users, sales staff, or external APIs, and cannot be updated or deleted in place.
                         </p>
                         <p>
-                            Dữ liệu được lưu trong thời gian hợp lý để phục vụ chăm sóc khách
-                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ pháp lý và tính liên tục vận
-                            hành. Hệ thống sử dụng phân quyền truy cập, tách dữ liệu theo doanh
-                            nghiệp, nhật ký kiểm tra và các biện pháp kỹ thuật phù hợp.
+                            Dữ liệu chỉ được lưu trữ trong thời gian cần thiết để phục vụ chăm sóc khách
+                            hàng, hồ sơ nghiệp vụ, bảo mật, nghĩa vụ tuân thủ và tính liên tục vận hành.
+                            Khi có yêu cầu xóa dữ liệu người dùng hợp lệ, thông tin khách hàng (bảng <code>customers</code>),
+                            số điện thoại liên hệ cá nhân (trong bảng bảo mật <code>private.customer_private_contacts</code>),
+                            định danh và nội dung tin nhắn tương tác trên CRM sẽ được xóa và ẩn danh vĩnh viễn.
+                            Đồng thời, sau khi hoàn tất yêu cầu xóa, các định danh người dùng nền tảng bên ngoài và
+                            payload tiếp nhận thô liên quan cũng được làm sạch và tối thiểu hóa thành các tham chiếu
+                            chủ thể ẩn danh, đảm bảo không lưu giữ định danh người dùng dạng văn bản thô không cần thiết
+                            trong kho lưu trữ hay nhật ký an ninh.
+                            Các bản ghi nhật ký kỹ thuật tầng thấp (<code>private.interaction_raw_contents</code>)
+                            và nhật ký kiểm toán bảo mật (<code>public.audit_logs</code>) được bảo vệ bằng cơ chế trigger
+                            append-only nghiêm ngặt của cơ sở dữ liệu để chống giả mạo và bảo vệ an ninh hệ thống;
+                            các bản ghi này được cô lập ở mức hạ tầng cơ sở dữ liệu đặc quyền, không bao giờ hiển thị
+                            cho người dùng CRM hay nhân viên kinh doanh, và không bị cập nhật hay xóa tùy tiện.
                         </p>
                     </Section>
 
@@ -163,6 +183,12 @@ export default function PrivacyPolicyPage() {
                             chính Trang Facebook đã kết nối hoặc thông qua quản trị viên CRM được
                             ủy quyền. Yêu cầu sẽ được xử lý phù hợp với nghĩa vụ pháp lý và yêu
                             cầu lưu trữ hồ sơ hiện hành.
+                        </p>
+                        <p className="mt-2 text-sm text-blue-300">
+                            Chi tiết hướng dẫn và quy trình xóa dữ liệu người dùng: xem tại{' '}
+                            <Link href="/data-deletion" className="text-blue-400 underline hover:text-blue-300">
+                                Hướng dẫn xóa dữ liệu người dùng (User Data Deletion Instructions)
+                            </Link>.
                         </p>
                     </Section>
 
@@ -195,20 +221,21 @@ export default function PrivacyPolicyPage() {
 
                     <Section title="10. Contact / Liên hệ">
                         <p>
-                            For privacy or data-deletion requests, please contact the business
-                            through the Facebook Page connected to this CRM or contact the
-                            authorized administrator of the business account using this service.
+                            For privacy inquiries or data-deletion requests, please contact the connected Facebook Page or the authorized business administrator of this service:
                         </p>
+                        <ul className="list-disc space-y-1 pl-6 text-sm text-slate-300">
+                            <li>Direct contact: Message the connected Facebook Page directly.</li>
+                            <li>Administrative support: Contact the authorized business administrator of the operating organization.</li>
+                            <li>Data Deletion Instructions: <Link href="/data-deletion" className="text-blue-400 underline">/data-deletion</Link></li>
+                        </ul>
                         <p>
-                            Với yêu cầu về quyền riêng tư hoặc xóa dữ liệu, vui lòng liên hệ
-                            doanh nghiệp thông qua Trang Facebook đang kết nối với CRM hoặc quản
-                            trị viên được ủy quyền của tài khoản doanh nghiệp sử dụng hệ thống.
+                            Với yêu cầu về quyền riêng tư hoặc xóa dữ liệu, vui lòng liên hệ trực tiếp qua Trang Facebook đang kết nối hoặc Quản trị viên doanh nghiệp được ủy quyền của tài khoản sử dụng hệ thống.
                         </p>
                     </Section>
                 </div>
 
                 <footer className="mt-12 border-t border-slate-800 pt-6 text-sm text-slate-500">
-                    AI CRM Cửa Chống Ngập · Public privacy notice
+                    CRM Messenger Production / AI CRM · Public privacy notice
                 </footer>
             </div>
         </main>

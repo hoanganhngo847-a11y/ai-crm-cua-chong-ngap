@@ -30,6 +30,8 @@ jobs:
       - run: npm run test:idempotency:db
       - run: npm run test:staging-readiness
       - run: npm run test:upload-transport
+      - run: npm run test:meta-messenger
+      - run: npm run test:meta-deletion:db
       - run: npm run test:integration-gate
       - run: npm run test:fixture-repeatability
       - run: npm run test:omnichannel
