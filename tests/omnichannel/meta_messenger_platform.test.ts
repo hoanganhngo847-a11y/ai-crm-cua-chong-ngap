@@ -21,6 +21,7 @@ import {
 import { dispatchMessage } from '../../features/omnichannel/facebook/transport';
 import { GET as webhookGet, POST as webhookPost } from '../../app/api/webhooks/meta/route';
 import { GET as dataDeletionGet, POST as dataDeletionPost } from '../../app/api/facebook/data-deletion/route';
+import { POST as dataDeletionResolvePost } from '../../app/api/facebook/data-deletion/resolve/route';
 
 const TARGET_PAGE_ID = '1026991374010112';
 const SECONDARY_PAGE_ID = '2222222222222222';
@@ -41,6 +42,7 @@ process.env.META_PAGE_CHD_TOKEN = PAGE_A_TOKEN;
 process.env.META_PAGE_B_TOKEN = PAGE_B_TOKEN;
 process.env.META_DATA_DELETION_COMPANY_ID = COMPANY_A;
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key-never-for-client';
 
 process.env.META_PAGE_BINDINGS = JSON.stringify([
@@ -672,4 +674,61 @@ test('10. Data Deletion Identity Resolution: safe auto-matching, unmapped handli
     assert.equal(ambiguousMatch.status, 'RECEIVED');
     assert.equal(ambiguousMatch.resolution, 'MANUAL_REVIEW_REQUIRED');
     assert.equal(ambiguousMatch.customerId, null);
+});
+
+test('11. Manual Review Completion Route: validates input, enforces authentication & authorization', async () => {
+    // 11A: Invalid JSON payload -> 400
+    const badJsonReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion/resolve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'invalid-json{',
+    });
+    const badJsonRes = await dataDeletionResolvePost(badJsonReq);
+    assert.equal(badJsonRes.status, 400);
+    const badJsonData = await badJsonRes.json();
+    assert.equal(badJsonData.error, 'INVALID_JSON');
+
+    // 11B: Missing confirmation code -> 400
+    const missingCodeReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion/resolve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'APPROVE', customer_id: 'cust-1' }),
+    });
+    const missingCodeRes = await dataDeletionResolvePost(missingCodeReq);
+    assert.equal(missingCodeRes.status, 400);
+    const missingCodeData = await missingCodeRes.json();
+    assert.equal(missingCodeData.error, 'INVALID_REQUEST');
+
+    // 11C: Invalid action -> 400
+    const badActionReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion/resolve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmation_code: 'del_12345678', action: 'MAYBE' }),
+    });
+    const badActionRes = await dataDeletionResolvePost(badActionReq);
+    assert.equal(badActionRes.status, 400);
+    const badActionData = await badActionRes.json();
+    assert.equal(badActionData.error, 'INVALID_ACTION');
+
+    // 11D: APPROVE without customer_id -> 400
+    const approveNoCustReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion/resolve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmation_code: 'del_12345678', action: 'APPROVE' }),
+    });
+    const approveNoCustRes = await dataDeletionResolvePost(approveNoCustReq);
+    assert.equal(approveNoCustRes.status, 400);
+    const approveNoCustData = await approveNoCustRes.json();
+    assert.equal(approveNoCustData.error, 'INVALID_ACTION');
+
+    // 11E: Unauthenticated request -> 401
+    const unauthReq = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/facebook/data-deletion/resolve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmation_code: 'del_12345678', action: 'REJECT' }),
+    });
+    const unauthRes = await dataDeletionResolvePost(unauthReq);
+    assert.equal(unauthRes.status, 401);
+    const unauthData = await unauthRes.json();
+    assert.equal(unauthData.error, 'UNAUTHORIZED');
 });

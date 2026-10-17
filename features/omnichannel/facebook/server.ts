@@ -60,6 +60,12 @@ export async function rpc(
             DISPATCH_UNCERTAIN: 409,
             AI_ALREADY_RESPONDED: 409,
             SALE_ALREADY_DISPATCHING: 409,
+            INVALID_REQUEST: 400,
+            INVALID_ACTION: 400,
+            CUSTOMER_NOT_FOUND_IN_TENANT: 400,
+            DELETION_REQUEST_NOT_FOUND: 404,
+            REQUEST_ALREADY_COMPLETED: 409,
+            REQUEST_ALREADY_REJECTED: 409,
         };
 
         if (known[error.message]) {
@@ -374,4 +380,47 @@ export async function campaignStats(id: string, actorClient?: SupabaseClient) {
         p_company: campaign.company_id,
         p_campaign: id,
     });
+}
+
+export interface ResolveManualDataDeletionParams {
+    companyId: string;
+    confirmationCode: string;
+    action: 'APPROVE' | 'REJECT';
+    customerId?: string | null;
+    reason?: string | null;
+    adminUserId?: string | null;
+}
+
+export async function resolveManualDataDeletion(params: ResolveManualDataDeletionParams) {
+    const { companyId, confirmationCode, action, customerId, reason, adminUserId } = params;
+
+    if (!companyId || !confirmationCode || !action) {
+        throw new ChannelError('INVALID_REQUEST', 400);
+    }
+
+    if (action !== 'APPROVE' && action !== 'REJECT') {
+        throw new ChannelError('INVALID_ACTION', 400);
+    }
+
+    if (action === 'APPROVE' && !customerId) {
+        throw new ChannelError('INVALID_ACTION', 400);
+    }
+
+    const result = await rpc('han_resolve_data_deletion_request', {
+        p_company: companyId,
+        p_confirmation_code: confirmationCode.trim(),
+        p_action: action,
+        p_customer_id: customerId || null,
+        p_reason: reason || null,
+        p_admin_user_id: adminUserId || null,
+    });
+
+    return result as {
+        confirmation_code: string;
+        status: 'COMPLETED' | 'REJECTED';
+        resolution_strategy: 'MANUAL_RESOLVED' | 'MANUAL_REJECTED';
+        customer_id: string | null;
+        created_at: string;
+        processed_at: string;
+    };
 }

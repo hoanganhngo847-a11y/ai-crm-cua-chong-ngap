@@ -231,7 +231,7 @@ async function runTests() {
   // ==========================================================================
   console.log('\n--- SECTION 8: Actual Playwright Observer Tests (Headless DOM) ---');
 
-  // @ts-ignore
+  // @ts-expect-error Optional worker dependency
   const { chromium } = await import('../../fb-inbox-worker/node_modules/playwright/index.mjs');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -442,7 +442,7 @@ async function runTests() {
     const activeConversationId = 'conv_kh000004';
     let silentFetchTriggered: boolean = false;
     let loadingStateChanged: boolean = false;
-    let userDraft = 'Dạ em chào anh HoàngAnh';
+    const userDraft = 'Dạ em chào anh HoàngAnh';
 
     const mockFetchMessages = async (_convId: string, options?: { silent?: boolean }) => {
       if (options?.silent) {

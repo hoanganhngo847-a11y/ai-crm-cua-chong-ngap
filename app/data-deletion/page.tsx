@@ -120,10 +120,14 @@ export default async function DataDeletionPage(props: {
                                     </p>
                                     <p className="text-xs text-slate-300 leading-relaxed">
                                         {record.status === 'COMPLETED'
-                                            ? 'Hồ sơ khách hàng, thông tin liên hệ riêng tư và nội dung hiển thị trong giao diện CRM đã được xóa/ẩn danh. Lưu ý: Nhật ký kỹ thuật và audit trail bảo mật được lưu giữ có thời hạn (tối đa 90 ngày) theo chính sách retention của hệ thống.'
+                                            ? 'Hồ sơ khách hàng, thông tin liên hệ riêng tư và nội dung hiển thị trong giao diện CRM đã được xóa/ẩn danh hoàn tất. Các bản ghi nhật ký kỹ thuật và audit trail bảo mật tuân thủ cơ chế append-only chỉ phục vụ an ninh hệ thống và nghĩa vụ pháp lý, không bao giờ hiển thị trong CRM hay API bên ngoài.'
                                             : record.status === 'RECEIVED'
                                               ? 'Yêu cầu của bạn đã được ghi nhận vào cơ sở dữ liệu hệ thống và đang chờ quản trị viên đối soát, xác minh danh tính thủ công để tiến hành xử lý an toàn.'
-                                              : 'Yêu cầu của bạn đã được ghi nhận trên hệ thống và đang được xử lý theo đúng quy trình.'}
+                                              : record.status === 'PROCESSING'
+                                                ? 'Yêu cầu của bạn đã được xác minh và đang trong quá trình thực thi xóa/ẩn danh dữ liệu trên hệ thống.'
+                                                : record.status === 'REJECTED'
+                                                  ? 'Yêu cầu không thể xác minh danh tính hợp lệ với hồ sơ trên hệ thống hoặc đã bị từ chối theo quy định.'
+                                                  : 'Yêu cầu của bạn đã được ghi nhận trên hệ thống và đang được xử lý theo đúng quy trình.'}
                                     </p>
                                 </>
                             ) : (
@@ -189,7 +193,7 @@ export default async function DataDeletionPage(props: {
                         </ul>
                     </Section>
 
-                    <Section title="4. Processing Workflow & Data Retention Scope / Quy trình xử lý và phạm vi lưu giữ dữ liệu">
+                    <Section title="4. Processing Workflow & Deletion Scope / Quy trình xử lý và phạm vi xóa dữ liệu">
                         <p>
                             When a data deletion request is received:
                         </p>
@@ -199,6 +203,9 @@ export default async function DataDeletionPage(props: {
                             </li>
                             <li>
                                 <strong>Application data anonymization:</strong> When an authoritative match is verified, customer records in <code>customers</code> are anonymized, private contact numbers in <code>customer_private_contacts</code> are permanently deleted, Facebook identities in <code>identities</code> are purged, conversation statuses are set to <code>CLOSED</code>, and message contents visible on the CRM inbox UI are permanently redacted.
+                            </li>
+                            <li>
+                                <strong>Identifier minimization & privacy by design:</strong> Following completion of data deletion (whether auto-matched or manually verified), Meta user identifiers and raw request payloads in deletion records are immediately scrubbed and replaced with one-way pseudonymous subject references, while cryptographic request fingerprints and confirmation codes are retained solely for status tracking and idempotency. Security audit logs never record plaintext Meta user IDs.
                             </li>
                             <li>
                                 <strong>Technical & Audit Log Protection:</strong> In compliance with anti-tampering, fraud prevention, and audit compliance requirements, low-level technical ingest payloads (in <code>private.interaction_raw_contents</code>) and security audit logs (in <code>public.audit_logs</code>) are enforced by database append-only triggers. These audit records are strictly isolated within privileged server schemas, cannot be altered or deleted in place, and are never exposed to CRM users, sales staff, or external APIs. All application-level personal data (customer profile, private phone contacts in <code>private.customer_private_contacts</code>, identities, and chat interaction contents) is permanently scrubbed/anonymized.

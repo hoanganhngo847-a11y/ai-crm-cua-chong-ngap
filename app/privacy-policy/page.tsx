@@ -142,6 +142,9 @@ export default function PrivacyPolicyPage() {
                             application-level customer profiles (in <code>customers</code>), private contact numbers
                             (in <code>private.customer_private_contacts</code>), identities, and chat interaction
                             contents are permanently scrubbed/anonymized in the CRM application.
+                            Furthermore, upon completion of a deletion request, external platform user identifiers and
+                            raw ingest payloads associated with the request are scrubbed and minimized into pseudonymous
+                            subject references, ensuring no unnecessary plaintext identifiers remain in storage or security logs.
                             Low-level immutable technical logs (in <code>private.interaction_raw_contents</code>)
                             and security audit event histories (in <code>public.audit_logs</code>) are protected
                             by strict database append-only integrity triggers for anti-tampering, fraud prevention,
@@ -154,6 +157,10 @@ export default function PrivacyPolicyPage() {
                             Khi có yêu cầu xóa dữ liệu người dùng hợp lệ, thông tin khách hàng (bảng <code>customers</code>),
                             số điện thoại liên hệ cá nhân (trong bảng bảo mật <code>private.customer_private_contacts</code>),
                             định danh và nội dung tin nhắn tương tác trên CRM sẽ được xóa và ẩn danh vĩnh viễn.
+                            Đồng thời, sau khi hoàn tất yêu cầu xóa, các định danh người dùng nền tảng bên ngoài và
+                            payload tiếp nhận thô liên quan cũng được làm sạch và tối thiểu hóa thành các tham chiếu
+                            chủ thể ẩn danh, đảm bảo không lưu giữ định danh người dùng dạng văn bản thô không cần thiết
+                            trong kho lưu trữ hay nhật ký an ninh.
                             Các bản ghi nhật ký kỹ thuật tầng thấp (<code>private.interaction_raw_contents</code>)
                             và nhật ký kiểm toán bảo mật (<code>public.audit_logs</code>) được bảo vệ bằng cơ chế trigger
                             append-only nghiêm ngặt của cơ sở dữ liệu để chống giả mạo và bảo vệ an ninh hệ thống;

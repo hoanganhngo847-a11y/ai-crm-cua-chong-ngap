@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cleanupCompanyFixtures, executeRawSql } from '../helpers/fixture-cleanup';
+import { resolveManualDataDeletion } from '../../features/omnichannel/facebook/server';
 
 function getPrivateContactsCount(customerId: string): number {
     const raw = executeRawSql(`SELECT count(*) FROM private.customer_private_contacts WHERE customer_id = '${customerId}';`);
@@ -27,9 +28,13 @@ function getPrivateContactsCount(customerId: string): number {
     return match ? parseInt(match[1], 10) : 0;
 }
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 const TEST_COMPANY_A = 'a0a0a0a0-0001-4000-8000-000000000001';
 const TEST_COMPANY_B = 'a0a0a0a0-0002-4000-8000-000000000002';
@@ -203,6 +208,22 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
             });
             assert.ok(statErr, 'Anon execution of han_get_data_deletion_status must fail');
 
+            // Anon cannot execute manual resolution RPC directly
+            const { error: resolveErr } = await anon.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: 'del_anon_forbidden_1',
+                p_action: 'APPROVE',
+                p_customer_id: TEST_CUSTOMER_A,
+            });
+            assert.ok(resolveErr, 'Anon execution of han_resolve_data_deletion_request must fail');
+
+            // Anon cannot execute shared purge helper directly
+            const { error: purgeErr } = await anon.rpc('_han_purge_customer_data', {
+                p_company: TEST_COMPANY_A,
+                p_customer: TEST_CUSTOMER_A,
+            });
+            assert.ok(purgeErr, 'Anon execution of _han_purge_customer_data must fail');
+
             // Anon cannot read meta_data_deletion_requests directly through RLS
             const { data: anonData } = await anon.from('meta_data_deletion_requests').select('*');
             assert.equal(anonData?.length || 0, 0, 'RLS must block anon from reading deletion requests');
@@ -314,6 +335,26 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
             // Verify interaction content scrubbed
             const { data: intA } = await admin.from('interactions').select('*').eq('id', TEST_INTERACTION_A).single();
             assert.equal(intA.sanitized_content, '[Dữ liệu cá nhân đã xóa theo yêu cầu Data Deletion của người dùng]');
+
+            // Verify identifier minimization on COMPLETED record
+            const { data: recA } = await admin
+                .from('meta_data_deletion_requests')
+                .select('*')
+                .eq('confirmation_code', 'del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+                .single();
+            assert.match(recA.meta_user_id, /^sub_[0-9a-f]{16}$/, 'meta_user_id must be minimized to pseudonymous subject reference');
+            assert.deepEqual(recA.raw_request, { minimized: true }, 'raw_request must be scrubbed/minimized');
+
+            // Verify audit_logs does not contain plaintext meta_user_id
+            const { data: auditLogsA } = await admin
+                .from('audit_logs')
+                .select('*')
+                .eq('company_id', TEST_COMPANY_A)
+                .eq('resource_id', recA.id);
+            assert.ok(auditLogsA && auditLogsA.length > 0, 'Audit log must be recorded');
+            const auditEntry = auditLogsA[0];
+            assert.equal(auditEntry.metadata?.meta_user_id, undefined, 'Audit log must not contain plaintext meta_user_id');
+            assert.match(auditEntry.metadata?.subject_ref, /^sub_[0-9a-f]{16}$/, 'Audit log must contain pseudonymous subject_ref');
         });
 
         await t.test('6. Second Deletion Request: consecutive deletion requests generate distinct requests and process new data', async () => {
@@ -429,11 +470,15 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
                 .from('meta_data_deletion_requests')
                 .select('*')
                 .eq('company_id', TEST_COMPANY_A)
-                .eq('meta_user_id', 'verified_asid_77777777')
+                .in('confirmation_code', ['del_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'del_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'])
                 .order('created_at', { ascending: true });
             assert.equal(userReqs?.length, 2);
             assert.equal(userReqs[0].customer_id, TEST_CUSTOMER_A);
             assert.equal(userReqs[1].customer_id, TEST_CUSTOMER_A2);
+            assert.match(userReqs[0].meta_user_id, /^sub_[0-9a-f]{16}$/);
+            assert.match(userReqs[1].meta_user_id, /^sub_[0-9a-f]{16}$/);
+            assert.deepEqual(userReqs[0].raw_request, { minimized: true });
+            assert.deepEqual(userReqs[1].raw_request, { minimized: true });
         });
 
         await t.test('7. Idempotent Retry: repeating confirmation code or request_fingerprint returns existing record', async () => {
@@ -483,6 +528,231 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
             assert.equal(call1.error, null);
             assert.equal(call2.error, null);
             assert.equal(call1.data.confirmation_code, call2.data.confirmation_code, 'Concurrent calls with same fingerprint must resolve to identical confirmation code');
+        });
+
+        await t.test('8. Manual Review Resolution Suite (P0-2 Tenant Safety & Identifier Minimization)', async () => {
+            // Seed a target customer for manual resolution: Customer A3 in Company A
+            const TEST_CUSTOMER_A3 = 'c0c0c0c0-0005-4000-8000-000000000005';
+            const TEST_CONV_A3 = 'd0d0d0d0-0005-4000-8000-000000000005';
+            const TEST_INTERACTION_A3 = 'e0e0e0e0-0005-4000-8000-000000000005';
+
+            await admin.from('customers').insert({
+                id: TEST_CUSTOMER_A3,
+                company_id: TEST_COMPANY_A,
+                name: 'Customer A3 For Manual Review',
+                customer_code: 'CUST-ALPHA-003',
+                stage: 'LEAD_NEW',
+                source: 'FACEBOOK',
+            });
+
+            executeRawSql(`
+                INSERT INTO private.customer_private_contacts (company_id, customer_id, normalized_phone, raw_phone, phone_country_code, is_verified)
+                VALUES ('${TEST_COMPANY_A}', '${TEST_CUSTOMER_A3}', '+84944444444', '0944444444', 'VN', true);
+            `);
+
+            await admin.from('identities').insert({
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A3,
+                channel: 'FACEBOOK',
+                external_id: '1026991374010112:psid_user_unmapped_333',
+                metadata: {}, // Deliberately unmapped (no asid)
+            });
+
+            await admin.from('conversations').insert({
+                id: TEST_CONV_A3,
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A3,
+                channel: 'FACEBOOK',
+                external_conversation_id: 'fb-conv-alpha-003',
+                status: 'OPEN',
+                unread_count: 2,
+            });
+
+            await admin.from('interactions').insert({
+                id: TEST_INTERACTION_A3,
+                company_id: TEST_COMPANY_A,
+                customer_id: TEST_CUSTOMER_A3,
+                conversation_id: TEST_CONV_A3,
+                channel: 'FACEBOOK',
+                direction: 'INBOUND',
+                actor_type: 'CUSTOMER',
+                type: 'MESSAGE',
+                sanitized_content: 'Yêu cầu kiểm tra xóa dữ liệu cá nhân',
+                sanitization_status: 'SUCCEEDED',
+            });
+
+            // 8.1: Unmapped callback -> status RECEIVED with MANUAL_REVIEW_REQUIRED
+            const manualCode = 'del_d1d1d1d1000000000000000000000001';
+            const { data: initRes, error: initErr } = await admin.rpc('han_record_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_meta_user_id: 'meta_user_unmapped_333',
+                p_confirmation_code: manualCode,
+                p_raw: { user_id: 'meta_user_unmapped_333', algorithm: 'HMAC-SHA256', issued_at: 1729200000 },
+                p_request_fingerprint: 'fp_manual_review_test_001',
+            });
+            assert.equal(initErr, null);
+            assert.equal(initRes.status, 'RECEIVED');
+            assert.equal(initRes.resolution_strategy, 'MANUAL_REVIEW_REQUIRED');
+            assert.equal(initRes.customer_id, null);
+
+            // Verify in DB that while RECEIVED, minimal verification payload is kept for admin review
+            const { data: recInit } = await admin.from('meta_data_deletion_requests').select('*').eq('confirmation_code', manualCode).single();
+            assert.equal(recInit.status, 'RECEIVED');
+            assert.equal(recInit.meta_user_id, 'meta_user_unmapped_333');
+            assert.equal(recInit.raw_request.user_id, 'meta_user_unmapped_333');
+
+            // Audit log check for RECEIVED: must contain subject_ref and NO plaintext meta_user_id
+            const { data: initAudit } = await admin.from('audit_logs').select('*').eq('resource_id', recInit.id);
+            assert.ok(initAudit && initAudit.length > 0);
+            assert.equal(initAudit[0].metadata?.meta_user_id, undefined, 'No plaintext meta_user_id in audit log');
+            assert.match(initAudit[0].metadata?.subject_ref, /^sub_[0-9a-f]{16}$/);
+
+            // 8.2: Wrong-company manual target -> fail closed
+            // Attempt to resolve Company A's deletion request targeting Customer B (in Company B)
+            const { data: wrongCoData, error: wrongCoErr } = await admin.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: manualCode,
+                p_action: 'APPROVE',
+                p_customer_id: TEST_CUSTOMER_B, // Company B!
+                p_reason: 'Testing cross-tenant attack',
+            });
+            assert.ok(wrongCoErr, 'Cross-tenant customer resolution must fail closed');
+            assert.match(wrongCoErr.message, /CUSTOMER_NOT_FOUND_IN_TENANT/);
+
+            // Verify Customer B is completely untouched
+            const { data: custBCheck } = await admin.from('customers').select('*').eq('id', TEST_CUSTOMER_B).single();
+            assert.equal(custBCheck.name, 'Customer Beta Original Name', 'Customer B untouched');
+
+            // Verify the request is still in RECEIVED status
+            const { data: recStillReceived } = await admin.from('meta_data_deletion_requests').select('*').eq('confirmation_code', manualCode).single();
+            assert.equal(recStillReceived.status, 'RECEIVED');
+
+            // 8.3: Authorized manual resolution -> transitions to PROCESSING/COMPLETED, purges data & minimizes identifiers
+            const { data: resolveRes, error: resolveErr } = await admin.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: manualCode,
+                p_action: 'APPROVE',
+                p_customer_id: TEST_CUSTOMER_A3,
+                p_reason: 'Admin verified customer Facebook Page interaction manually',
+            });
+            assert.equal(resolveErr, null);
+            assert.equal(resolveRes.status, 'COMPLETED');
+            assert.equal(resolveRes.resolution_strategy, 'MANUAL_RESOLVED');
+            assert.equal(resolveRes.customer_id, TEST_CUSTOMER_A3);
+            assert.ok(resolveRes.processed_at);
+
+            // Verify Customer A3 is thoroughly anonymized
+            const { data: custA3 } = await admin.from('customers').select('*').eq('id', TEST_CUSTOMER_A3).single();
+            assert.equal(custA3.name, 'Khách hàng đã xóa dữ liệu (Meta Data Deletion)');
+            assert.equal(custA3.stage, 'LOST');
+
+            // Verify Customer A3 private contacts deleted
+            assert.equal(getPrivateContactsCount(TEST_CUSTOMER_A3), 0);
+
+            // Verify Customer A3 identity deleted
+            const { data: idA3 } = await admin.from('identities').select('*').eq('customer_id', TEST_CUSTOMER_A3);
+            assert.equal(idA3?.length || 0, 0);
+
+            // Verify Customer A3 conversation closed
+            const { data: convA3 } = await admin.from('conversations').select('*').eq('id', TEST_CONV_A3).single();
+            assert.equal(convA3.status, 'CLOSED');
+
+            // Verify Customer A3 interaction scrubbed
+            const { data: intA3 } = await admin.from('interactions').select('*').eq('id', TEST_INTERACTION_A3).single();
+            assert.equal(intA3.sanitized_content, '[Dữ liệu cá nhân đã xóa theo yêu cầu Data Deletion của người dùng]');
+
+            // Verify Identifier Minimization on the resolved request
+            const { data: recResolved } = await admin.from('meta_data_deletion_requests').select('*').eq('confirmation_code', manualCode).single();
+            assert.match(recResolved.meta_user_id, /^sub_[0-9a-f]{16}$/, 'meta_user_id must be scrubbed to sub_<hash>');
+            assert.deepEqual(recResolved.raw_request, { minimized: true }, 'raw_request must be minimized');
+            assert.equal(recResolved.details.manual_resolution, true);
+            assert.equal(recResolved.details.purged_customer_id, TEST_CUSTOMER_A3);
+
+            // Verify Audit Log: META_DATA_DELETION_MANUAL_RESOLVED with subject_ref
+            const { data: resolveAudit } = await admin.from('audit_logs').select('*')
+                .eq('resource_id', recResolved.id)
+                .eq('action', 'META_DATA_DELETION_MANUAL_RESOLVED');
+            assert.ok(resolveAudit && resolveAudit.length > 0);
+            assert.equal(resolveAudit[0].metadata?.meta_user_id, undefined, 'No plaintext meta_user_id in resolve audit log');
+            assert.match(resolveAudit[0].metadata?.subject_ref, /^sub_[0-9a-f]{16}$/);
+
+            // 8.4: Completed request cannot be reprocessed improperly
+            const { data: dupResolveData, error: dupResolveErr } = await admin.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: manualCode,
+                p_action: 'APPROVE',
+                p_customer_id: TEST_CUSTOMER_A3,
+            });
+            assert.ok(dupResolveErr, 'Reprocessing a completed request must fail');
+            assert.match(dupResolveErr.message, /REQUEST_ALREADY_COMPLETED/);
+
+            // 8.5: Manual rejection path (REJECT) with reason
+            const rejectCode = 'del_d2d2d2d2000000000000000000000002';
+            await admin.rpc('han_record_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_meta_user_id: 'meta_user_unverifiable_404',
+                p_confirmation_code: rejectCode,
+                p_raw: { user_id: 'meta_user_unverifiable_404', issued_at: 1729210000 },
+                p_request_fingerprint: 'fp_manual_review_test_002',
+            });
+
+            const { data: rejectRes, error: rejectErr } = await admin.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: rejectCode,
+                p_action: 'REJECT',
+                p_reason: 'Không thể xác minh danh tính chủ tài khoản Facebook với bất kỳ hồ sơ nào',
+            });
+            assert.equal(rejectErr, null);
+            assert.equal(rejectRes.status, 'REJECTED');
+            assert.equal(rejectRes.resolution_strategy, 'MANUAL_REJECTED');
+            assert.equal(rejectRes.customer_id, null);
+
+            // Verify Identifier Minimization on REJECTED record
+            const { data: recRejected } = await admin.from('meta_data_deletion_requests').select('*').eq('confirmation_code', rejectCode).single();
+            assert.match(recRejected.meta_user_id, /^sub_[0-9a-f]{16}$/);
+            assert.deepEqual(recRejected.raw_request, { minimized: true });
+            assert.equal(recRejected.details.rejection_reason, 'Không thể xác minh danh tính chủ tài khoản Facebook với bất kỳ hồ sơ nào');
+
+            // Reprocessing rejected request must fail
+            const { error: dupRejectErr } = await admin.rpc('han_resolve_data_deletion_request', {
+                p_company: TEST_COMPANY_A,
+                p_confirmation_code: rejectCode,
+                p_action: 'REJECT',
+            });
+            assert.ok(dupRejectErr);
+            assert.match(dupRejectErr.message, /REQUEST_ALREADY_REJECTED/);
+
+            // 8.6: TypeScript service layer function resolveManualDataDeletion
+            // Throws on invalid action input
+            await assert.rejects(
+                () => resolveManualDataDeletion({
+                    companyId: TEST_COMPANY_A,
+                    confirmationCode: rejectCode,
+                    action: 'INVALID' as any,
+                }),
+                /INVALID_ACTION/
+            );
+
+            // Throws on APPROVE without customerId
+            await assert.rejects(
+                () => resolveManualDataDeletion({
+                    companyId: TEST_COMPANY_A,
+                    confirmationCode: rejectCode,
+                    action: 'APPROVE',
+                }),
+                /INVALID_ACTION/
+            );
+
+            // Throws on non-existent confirmation code
+            await assert.rejects(
+                () => resolveManualDataDeletion({
+                    companyId: TEST_COMPANY_A,
+                    confirmationCode: 'del_00000000000000000000000000009999',
+                    action: 'APPROVE',
+                    customerId: TEST_CUSTOMER_A,
+                }),
+                /DELETION_REQUEST_NOT_FOUND/
+            );
         });
 
     } finally {
