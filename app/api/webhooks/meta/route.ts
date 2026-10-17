@@ -59,9 +59,20 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
     try {
         const raw = await readBody(request);
+        const signature = request.headers.get('x-hub-signature-256');
+        const signatureHeaderState = !signature
+            ? 'missing'
+            : /^sha256=[a-f0-9]{64}$/i.test(signature)
+                ? 'present'
+                : 'malformed';
+
+        console.info(
+            `[meta-webhook] signature_header=${signatureHeaderState} body_bytes=${Buffer.byteLength(raw, 'utf8')}`,
+        );
+
         const signatureValid = validSignature(
             raw,
-            request.headers.get('x-hub-signature-256'),
+            signature,
             env('META_APP_SECRET'),
         );
 
