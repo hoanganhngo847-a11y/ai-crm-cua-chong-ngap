@@ -29,4 +29,4 @@ RUN npm install --omit=dev --no-audit --no-fund /tmp/zca-js.tgz \
 COPY src ./src
 
 EXPOSE 10000
-CMD ["node", "src/index.mjs"]
+CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/index.mjs"]
