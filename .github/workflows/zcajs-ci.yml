@@ -1,0 +1,34 @@
+name: ZCAJS Integration CI
+
+on:
+  pull_request:
+    paths:
+      - 'app/api/inbox/zalo-zcajs/**'
+      - 'features/omnichannel/zalo/**'
+      - 'zalo-zcajs-worker/**'
+      - '.env.example'
+      - '.github/workflows/zcajs-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  crm-zalo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test:zalo
+      - run: npm run build
+
+  zcajs-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --check zalo-zcajs-worker/src/index.mjs
+      - run: docker build -f zalo-zcajs-worker/Dockerfile zalo-zcajs-worker
