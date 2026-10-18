@@ -13,6 +13,7 @@ import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
 import { generateAiDraftSuggestionAction } from '../actions';
 import { createClient } from '@/lib/supabase/client';
 import MessageContent from './message-content';
+import ZaloComposer from './zalo-composer';
 import { evaluateSkeletonCorrelation } from '../utils/skeleton-helper';
 
 export { mergeDeliveryStatus };
@@ -933,6 +934,103 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
     }
   };
 
+  const handleQuickSend = async (text: string): Promise<boolean> => {
+    if (!selectedConversationId || sendingByConversation[selectedConversationId]) return false;
+    const convId = selectedConversationId;
+    const cleanText = text.trim();
+    if (!cleanText) return false;
+
+    const commandId = crypto.randomUUID();
+    setSendingByConversation((prev) => ({ ...prev, [convId]: true }));
+    setSendErrorByConversation((prev) => ({ ...prev, [convId]: null }));
+
+    try {
+      const res = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversation_id: convId,
+          content: cleanText,
+          client_command_id: commandId,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        const message = json?.message || json?.error || `Gửi tin nhắn thất bại (HTTP ${res.status})`;
+        setSendErrorByConversation((prev) => ({ ...prev, [convId]: message }));
+        return false;
+      }
+
+      void fetchMessages(convId, { silent: true });
+      void fetchConversations({ silent: true });
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Lỗi kết nối khi gửi tin nhắn';
+      setSendErrorByConversation((prev) => ({ ...prev, [convId]: message }));
+      return false;
+    } finally {
+      setSendingByConversation((prev) => ({ ...prev, [convId]: false }));
+    }
+  };
+
+  const handleSendMedia = async (files: File[], caption: string): Promise<boolean> => {
+    if (!selectedConversationId || files.length === 0) return false;
+    const convId = selectedConversationId;
+    const conversation = conversations.find((item) => item.id === convId);
+    if (!conversation || conversation.channel !== 'zalo') {
+      setSendErrorByConversation((prev) => ({
+        ...prev,
+        [convId]: 'Gửi ảnh/tệp trực tiếp hiện chỉ hỗ trợ hội thoại Zalo.',
+      }));
+      return false;
+    }
+    if (sendingByConversation[convId]) return false;
+
+    setSendingByConversation((prev) => ({ ...prev, [convId]: true }));
+    setSendErrorByConversation((prev) => ({ ...prev, [convId]: null }));
+
+    try {
+      const formData = new FormData();
+      formData.set('conversation_id', convId);
+      formData.set('caption', caption.trim());
+      files.forEach((file) => formData.append('files', file, file.name));
+
+      const res = await fetch('/api/inbox/zalo-zcajs/media', {
+        method: 'POST',
+        body: formData,
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        const message = json?.message || json?.error || `Gửi ảnh/tệp thất bại (HTTP ${res.status})`;
+        setSendErrorByConversation((prev) => ({ ...prev, [convId]: message }));
+        return false;
+      }
+
+      setDraftsByConversation((prev) => ({ ...prev, [convId]: '' }));
+      const preview = caption.trim() || (files.length === 1 ? '[Đã gửi 1 tệp]' : `[Đã gửi ${files.length} tệp]`);
+      setConversations((prev) =>
+        prev.map((item) => item.id === convId ? { ...item, last_message: preview } : item)
+      );
+
+      // The ZCAJS self-listener returns the canonical provider media payload (including CDN URL).
+      // Reconcile shortly after acceptance in addition to realtime, without re-sending the media.
+      setTimeout(() => {
+        if (activeConversationRef.current === convId) void fetchMessages(convId, { silent: true });
+        void fetchConversations({ silent: true });
+      }, 700);
+      setTimeout(() => {
+        if (activeConversationRef.current === convId) void fetchMessages(convId, { silent: true });
+      }, 1800);
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Lỗi kết nối khi gửi ảnh/tệp';
+      setSendErrorByConversation((prev) => ({ ...prev, [convId]: message }));
+      return false;
+    } finally {
+      setSendingByConversation((prev) => ({ ...prev, [convId]: false }));
+    }
+  };
+
   const isSendingCurrent = Boolean(selectedConversationId && sendingByConversation[selectedConversationId]);
   const isLoadingAiCurrent = Boolean(selectedConversationId && loadingAiByConversation[selectedConversationId]);
   const currentSendError = selectedConversationId ? sendErrorByConversation[selectedConversationId] : null;
@@ -1397,61 +1495,23 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                     </div>
                   )}
 
-                  <div className="flex items-end gap-2">
-                    <textarea
-                      rows={2}
-                      value={currentDraft}
-                      onChange={(e) => handleDraftChange(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendMessage();
-                        }
-                      }}
-                      placeholder="Nhập nội dung tư vấn phản hồi (Nhấn Enter để gửi)..."
-                      className="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl p-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
-                    />
-
-                    <button
-                      type="button"
-                      disabled={isLoadingAiCurrent || isSendingCurrent}
-                      onClick={handleRequestAiSuggestion}
-                      className="px-3 py-3 rounded-xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-700/60 text-purple-300 hover:text-white font-medium text-xs flex items-center gap-1 transition disabled:opacity-40"
-                      title="Tạo bản nháp gợi ý từ AI dựa trên phong cách Sale và phân tích khách hàng"
-                    >
-                      {isLoadingAiCurrent ? (
-                        <span>Đang tạo...</span>
-                      ) : (
-                        <>
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                          </svg>
-                          <span>Gợi ý AI</span>
-                        </>
-                      )}
-                    </button>
-
-                    <button
-                      type="submit"
-                      disabled={isSendingCurrent || !currentDraft.trim()}
-                      className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-lg shadow-blue-600/20"
-                    >
-                      {isSendingCurrent ? (
-                        <span>Gửi...</span>
-                      ) : (
-                        <>
-                          <span>Gửi</span>
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                          </svg>
-                        </>
-                      )}
-                    </button>
-                  </div>
+                  <ZaloComposer
+                    channel={selectedConversation.channel}
+                    draft={currentDraft}
+                    disabled={isSendingCurrent}
+                    aiLoading={isLoadingAiCurrent}
+                    customerName={selectedConversation.customer_name}
+                    customerPhone={selectedConversation.customer_phone}
+                    onDraftChange={handleDraftChange}
+                    onSendText={() => handleSendMessage()}
+                    onQuickSend={handleQuickSend}
+                    onSendMedia={handleSendMedia}
+                    onRequestAi={handleRequestAiSuggestion}
+                  />
 
                   <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
                     <span>Quy tắc 5 phút: Nếu Sale trả lời, AI tự động nhường quyền xử lý.</span>
-                    <span className="text-slate-400">Shift + Enter để xuống dòng</span>
+                    <span className="text-slate-400">Khung chat hỗ trợ dán ảnh trực tiếp từ clipboard trên Zalo.</span>
                   </div>
                 </form>
               </div>
