@@ -5,8 +5,11 @@ on:
     paths:
       - 'app/api/inbox/zalo-zcajs/**'
       - 'features/omnichannel/zalo/**'
+      - 'features/inbox/components/message-content.tsx'
       - 'zalo-zcajs-worker/**'
+      - 'supabase/migrations/**'
       - 'tests/zalo/zalo_zcajs_dispatch_loop_wiring.test.ts'
+      - 'tests/zalo/zalo_zcajs_media_self_sync_wiring.test.ts'
       - '.env.example'
       - '.github/workflows/zcajs-ci.yml'
   workflow_dispatch:
@@ -24,6 +27,7 @@ jobs:
       - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npx tsx tests/zalo/zalo_zcajs_dispatch_loop_wiring.test.ts
+      - run: npx tsx tests/zalo/zalo_zcajs_media_self_sync_wiring.test.ts
 
   zcajs-worker:
     runs-on: ubuntu-latest
@@ -34,4 +38,6 @@ jobs:
           node-version: 20
       - run: node --check zalo-zcajs-worker/src/index.mjs
       - run: node --check zalo-zcajs-worker/src/dispatch-loop.mjs
+      - run: node --check zalo-zcajs-worker/src/message-normalizer.mjs
+      - run: node --test zalo-zcajs-worker/test/message-normalizer.test.mjs
       - run: docker build -f zalo-zcajs-worker/Dockerfile zalo-zcajs-worker
