@@ -1,7 +1,12 @@
 import crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
-import { ZaloClientFactory, ZaloSendResult } from './zalo-client';
+import type { ZaloSendResult } from './zalo-client';
+import {
+  ensureZcaJsRoutingConfig,
+  getZaloTransportClient,
+  getZaloTransportMode,
+} from './zcajs-client';
 import type { SendZaloReplyResult } from './types';
 import type { ZaloOutboundClientProvider } from './inbox-service';
 
@@ -32,8 +37,8 @@ interface CanonicalClaimRow {
  * - TV2 owns the canonical command authority: `record_outbound_interaction_atomic` writes to
  *   `public.outbound_deliveries` (channel = 'ZALO') and `public.interactions`.
  * - TV3 Dispatcher owns the provider transport: claims the canonical delivery atomically,
- *   retrieves raw content from private storage, resolves OA and private credentials,
- *   calls Zalo API, and updates canonical delivery + interaction with explicit provider outcome.
+ *   retrieves raw content from private storage, resolves the configured Zalo transport route,
+ *   calls the provider, and updates canonical delivery + interaction with explicit provider outcome.
  *
  * Outcome semantics:
  * - ACCEPTED with stable message_id → delivery SENT, external_ref linked.
@@ -50,8 +55,7 @@ export class ZaloOutboundDispatcher {
     this.supabase = supabase;
     this.clientProvider =
       options.clientProvider ??
-      ((companyId, oaId) =>
-        ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
+      ((companyId, oaId) => getZaloTransportClient(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
   }
 
   /**
@@ -69,17 +73,46 @@ export class ZaloOutboundDispatcher {
     options: { workerId?: string; overrideOaId?: string } = {}
   ): Promise<SendZaloReplyResult> {
     const workerId = options.workerId || `zalo_dispatcher_${crypto.randomUUID()}`;
+    let overrideOaId = options.overrideOaId;
+
+    if (getZaloTransportMode() === 'ZCAJS') {
+      const { data: delivery, error: deliveryError } = await this.supabase
+        .from('outbound_deliveries')
+        .select('company_id')
+        .eq('id', deliveryId)
+        .maybeSingle();
+
+      if (deliveryError || !delivery?.company_id) {
+        return {
+          success: false,
+          status: 'FAILED',
+          deliveryId,
+          error: 'Không thể xác định doanh nghiệp cho tin nhắn Zalo.',
+        };
+      }
+
+      try {
+        overrideOaId = await ensureZcaJsRoutingConfig(this.supabase, delivery.company_id);
+      } catch (error: unknown) {
+        return {
+          success: false,
+          status: 'FAILED',
+          deliveryId,
+          error: error instanceof Error ? error.message : 'Không thể chuẩn bị kết nối Zalo.',
+        };
+      }
+    }
 
     // 1. Atomic claim via trusted RPC
     const { data: claimData, error: claimError } = await this.supabase.rpc('zalo_claim_canonical_delivery', {
       p_delivery_id: deliveryId,
       p_worker_id: workerId,
-      p_override_oa_id: options.overrideOaId ?? null,
+      p_override_oa_id: overrideOaId ?? null,
     });
 
     if (claimError) {
       if (claimError.message.includes('ZALO_OA_NOT_CONFIGURED')) {
-        return { success: false, status: 'FAILED', deliveryId, error: 'Zalo OA chưa được cấu hình cho doanh nghiệp này.' };
+        return { success: false, status: 'FAILED', deliveryId, error: 'Kênh Zalo chưa được cấu hình cho doanh nghiệp này.' };
       }
       if (claimError.message.includes('ZALO_CONVERSATION_NOT_FOUND')) {
         return { success: false, status: 'FAILED', deliveryId, error: 'Không tìm thấy cuộc hội thoại.' };
@@ -128,7 +161,7 @@ export class ZaloOutboundDispatcher {
       };
     }
 
-    // 2. Call Zalo provider API
+    // 2. Call selected Zalo provider transport
     let sendResult: ZaloSendResult;
     try {
       const client = await this.clientProvider(row.company_id, row.oa_id);
