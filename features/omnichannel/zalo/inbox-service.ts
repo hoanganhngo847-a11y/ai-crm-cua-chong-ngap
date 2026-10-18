@@ -3,7 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { ServerAuthError } from '../../../lib/server-auth/errors';
 import type { TrustedActorContext } from '../../../lib/server-auth/sensitive-context';
-import { ZaloClient, ZaloClientFactory, ZaloSendResult } from './zalo-client';
+import type { ZaloSendResult } from './zalo-client';
+import {
+  ensureZcaJsRoutingConfig,
+  getZaloTransportClient,
+  type ZaloTransportClient,
+} from './zcajs-client';
 import { sanitizeMessageContent } from './sanitizer';
 import {
   SendZaloReplyParams,
@@ -54,11 +59,11 @@ interface FinalizeResult {
   provider_msg_id: string | null;
 }
 
-export type ZaloOutboundClientProvider = (companyId: string, oaId: string) => Promise<ZaloClient>;
+export type ZaloOutboundClientProvider = (companyId: string, oaId: string) => Promise<ZaloTransportClient>;
 
 export interface ZaloInboxServiceOptions {
   supabase?: SupabaseClient;
-  /** Overrides per-OA client resolution (tests). Production uses ZaloClientFactory. */
+  /** Overrides transport resolution (tests). Production selects OA or ZCAJS from server config. */
   clientProvider?: ZaloOutboundClientProvider;
   fetchFn?: typeof fetch;
 }
@@ -108,9 +113,9 @@ function mapClaimError(message: string): Error {
  *
  * Outbound pipeline (every step durable, provider called at most once per command_id):
  *   1. zalo_claim_outbound_delivery — verifies actor membership/role + tenant in the DB, derives
- *      recipient and OA from the conversation, writes the outbox row (SENDING + lease + claim
+ *      recipient and transport route from the conversation, writes the outbox row (SENDING + lease + claim
  *      token) keyed by UNIQUE(company_id, channel, command_id). Any failure → no provider call.
- *   2. Zalo API call, outcome classified ACCEPTED / REJECTED / UNCERTAIN.
+ *   2. Selected Zalo transport call (official OA or ZCAJS), outcome classified ACCEPTED / REJECTED / UNCERTAIN.
  *   3. zalo_record_outbound_provider_result — provider_msg_id persisted right after success.
  *   4. zalo_finalize_outbound_delivery — interaction + private raw + conversation + SENT in one
  *      transaction; idempotent and retried by reconcilePendingDeliveries() without resending.
@@ -124,7 +129,7 @@ export class ZaloInboxService {
     this.supabase = supabase;
     this.clientProvider =
       options.clientProvider ??
-      ((companyId, oaId) => ZaloClientFactory.getClientForOa(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
+      ((companyId, oaId) => getZaloTransportClient(companyId, oaId, { supabase, fetchFn: options.fetchFn }));
   }
 
   async getZaloConversations(params: GetZaloConversationsParams): Promise<ZaloConversationItem[]> {
@@ -244,6 +249,17 @@ export class ZaloInboxService {
     const { sanitizedText } = sanitizeMessageContent(content);
     const contentHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 
+    let transportRouteId: string | undefined;
+    try {
+      transportRouteId = await ensureZcaJsRoutingConfig(this.supabase, companyId);
+    } catch (error: unknown) {
+      return {
+        success: false,
+        status: 'FAILED',
+        error: error instanceof Error ? error.message : 'Không thể chuẩn bị kết nối Zalo.',
+      };
+    }
+
     // 1. Durable claim (fail-closed)
     const { data: claimData, error: claimError } = await this.supabase.rpc('zalo_claim_outbound_delivery', {
       p_company_id: companyId,
@@ -254,12 +270,12 @@ export class ZaloInboxService {
       p_raw_content: content,
       p_sanitized_content: sanitizedText,
       p_content_sha256: contentHash,
-      p_oa_id: params.oaId ?? null,
+      p_oa_id: transportRouteId ?? params.oaId ?? null,
     });
 
     if (claimError) {
       if (claimError.message.includes('ZALO_OA_NOT_CONFIGURED')) {
-        return { success: false, status: 'FAILED', error: 'Zalo OA chưa được cấu hình cho hội thoại này.' };
+        return { success: false, status: 'FAILED', error: 'Kênh Zalo chưa được cấu hình cho hội thoại này.' };
       }
       if (claimError.message.includes('AI_DISPATCH_FENCED')) {
         return { success: false, status: 'BUSY', error: 'AI đang giữ quyền phản hồi (AI_DISPATCH_FENCED).' };
