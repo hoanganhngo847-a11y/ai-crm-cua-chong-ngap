@@ -6,10 +6,13 @@ on:
       - 'app/api/inbox/zalo-zcajs/**'
       - 'features/omnichannel/zalo/**'
       - 'features/inbox/components/message-content.tsx'
+      - 'features/inbox/components/zalo-composer.tsx'
+      - 'features/inbox/components/inbox-view.tsx'
       - 'zalo-zcajs-worker/**'
       - 'supabase/migrations/**'
       - 'tests/zalo/zalo_zcajs_dispatch_loop_wiring.test.ts'
       - 'tests/zalo/zalo_zcajs_media_self_sync_wiring.test.ts'
+      - 'tests/zalo/zalo_composer_media_wiring.test.ts'
       - '.env.example'
       - '.github/workflows/zcajs-ci.yml'
   workflow_dispatch:
@@ -28,6 +31,7 @@ jobs:
       - run: npx tsc --noEmit
       - run: npx tsx tests/zalo/zalo_zcajs_dispatch_loop_wiring.test.ts
       - run: npx tsx tests/zalo/zalo_zcajs_media_self_sync_wiring.test.ts
+      - run: npx tsx tests/zalo/zalo_composer_media_wiring.test.ts
 
   zcajs-worker:
     runs-on: ubuntu-latest

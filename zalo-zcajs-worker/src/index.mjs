@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 import http from 'http';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { Zalo, MessageType } from 'zca-js';
 import { normalizeDirectMessage } from './message-normalizer.mjs';
 
@@ -12,6 +15,10 @@ const IMEI = process.env.ZCAJS_IMEI || '';
 const USER_AGENT = process.env.ZCAJS_USER_AGENT || '';
 const INBOUND_MAX_RETRIES = 6;
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_MEDIA_BODY_BYTES = 30 * 1024 * 1024;
+const MAX_MEDIA_FILES = 5;
+const MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_MEDIA_TOTAL_BYTES = 20 * 1024 * 1024;
 const CRM_ECHO_WINDOW_MS = 30_000;
 const RECENT_PROVIDER_ID_TTL_MS = 10 * 60_000;
 
@@ -73,12 +80,12 @@ function json(res, status, body) {
   res.end(payload);
 }
 
-async function readJson(req) {
+async function readJson(req, maxBodyBytes = MAX_BODY_BYTES) {
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > MAX_BODY_BYTES) throw new Error('BODY_TOO_LARGE');
+    if (total > maxBodyBytes) throw new Error('BODY_TOO_LARGE');
     chunks.push(chunk);
   }
   if (chunks.length === 0) return null;
@@ -304,6 +311,159 @@ async function handleSend(req, res) {
   }
 }
 
+function extensionForMime(mimeType) {
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime === 'image/jpeg') return '.jpg';
+  if (mime === 'image/png') return '.png';
+  if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/gif') return '.gif';
+  if (mime === 'video/mp4') return '.mp4';
+  if (mime === 'audio/mpeg') return '.mp3';
+  if (mime === 'application/pdf') return '.pdf';
+  return '';
+}
+
+function safeMediaFilename(name, mimeType, index) {
+  const raw = path.basename(String(name || `attachment-${index + 1}`));
+  const sanitized = raw.replace(/[^a-zA-Z0-9._()\- ]+/g, '_').replace(/\.{2,}/g, '.').slice(0, 120);
+  const existingExt = path.extname(sanitized);
+  const fallbackExt = extensionForMime(mimeType);
+  return sanitized || `attachment-${index + 1}${fallbackExt || '.bin'}`;
+}
+
+function decodeBase64File(value) {
+  if (typeof value !== 'string' || !value) throw new Error('INVALID_BASE64');
+  const normalized = value.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error('INVALID_BASE64');
+  const buffer = Buffer.from(normalized, 'base64');
+  if (buffer.length === 0) throw new Error('EMPTY_FILE');
+  return buffer;
+}
+
+async function handleSendMedia(req, res) {
+  if (!isAuthorized(req)) {
+    return json(res, 401, {
+      outcome: 'REJECTED',
+      errorCode: 'UNAUTHORIZED',
+      errorMessage: 'Worker authentication failed.',
+    });
+  }
+
+  let body;
+  try {
+    body = await readJson(req, MAX_MEDIA_BODY_BYTES);
+  } catch (error) {
+    return json(res, error instanceof Error && error.message === 'BODY_TOO_LARGE' ? 413 : 400, {
+      outcome: 'REJECTED',
+      errorCode: 'INVALID_MEDIA_PAYLOAD',
+      errorMessage: 'Media request body is invalid.',
+    });
+  }
+
+  if (!body || body.companyId !== COMPANY_ID) {
+    return json(res, 403, {
+      outcome: 'REJECTED',
+      errorCode: 'COMPANY_MISMATCH',
+      errorMessage: 'Worker is not configured for this company.',
+    });
+  }
+
+  const recipientZaloId = typeof body.recipientZaloId === 'string' ? body.recipientZaloId.trim() : '';
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const files = Array.isArray(body.files) ? body.files : [];
+
+  if (!recipientZaloId || files.length === 0 || files.length > MAX_MEDIA_FILES) {
+    return json(res, 400, {
+      outcome: 'REJECTED',
+      errorCode: 'INVALID_ARGUMENT',
+      errorMessage: 'recipientZaloId and 1-5 files are required.',
+    });
+  }
+  if (!api || !loggedIn) {
+    return json(res, 503, {
+      outcome: 'REJECTED',
+      errorCode: 'ZCAJS_NOT_LOGGED_IN',
+      errorMessage: 'Zalo session is not ready.',
+    });
+  }
+
+  let totalBytes = 0;
+  const decoded = [];
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      const item = files[index] || {};
+      const buffer = decodeBase64File(item.dataBase64);
+      if (buffer.length > MAX_MEDIA_FILE_BYTES) throw new Error('FILE_TOO_LARGE');
+      totalBytes += buffer.length;
+      if (totalBytes > MAX_MEDIA_TOTAL_BYTES) throw new Error('PAYLOAD_TOO_LARGE');
+      decoded.push({
+        name: safeMediaFilename(item.name, item.mimeType, index),
+        mimeType: String(item.mimeType || 'application/octet-stream'),
+        buffer,
+      });
+    }
+  } catch (error) {
+    return json(res, 413, {
+      outcome: 'REJECTED',
+      errorCode: error instanceof Error ? error.message : 'INVALID_MEDIA_FILE',
+      errorMessage: 'One or more media files are invalid or too large.',
+    });
+  }
+
+  let tempDir;
+  try {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zcajs-media-'));
+    const localPaths = [];
+    for (let index = 0; index < decoded.length; index += 1) {
+      const item = decoded[index];
+      let fileName = item.name;
+      if (!path.extname(fileName)) fileName += extensionForMime(item.mimeType) || '.bin';
+      const localPath = path.join(tempDir, `${index}-${fileName}`);
+      await fs.writeFile(localPath, item.buffer, { flag: 'wx' });
+      localPaths.push(localPath);
+    }
+
+    // Deliberately do not register this send in the text echo-suppression maps.
+    // The self-listener event contains Zalo's canonical CDN/attachment payload, which
+    // the CRM needs in order to render the sent media in the unified timeline.
+    const result = await api.sendMessage(
+      { msg: text || '', attachments: localPaths },
+      recipientZaloId,
+      MessageType.DirectMessage
+    );
+
+    const providerMessageIds = [
+      result?.message?.msgId,
+      ...(Array.isArray(result?.attachment) ? result.attachment.map((item) => item?.msgId) : []),
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+
+    if (providerMessageIds.length === 0) {
+      return json(res, 502, {
+        outcome: 'UNCERTAIN',
+        errorCode: 'MISSING_PROVIDER_MSG_ID',
+        errorMessage: 'ZCAJS returned without stable media message ids.',
+      });
+    }
+
+    return json(res, 200, {
+      outcome: 'ACCEPTED',
+      providerMessageIds,
+    });
+  } catch (error) {
+    return json(res, 502, {
+      outcome: 'UNCERTAIN',
+      errorCode: 'ZCAJS_MEDIA_SEND_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'ZCAJS media send failed.',
+    });
+  } finally {
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+}
+
 function requestHandler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
@@ -320,6 +480,11 @@ function requestHandler(req, res) {
       ready: Boolean(api && loggedIn),
       listenerConnected,
     });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/v1/send-media') {
+    void handleSendMedia(req, res);
+    return;
   }
 
   if (req.method === 'POST' && url.pathname === '/v1/send') {
