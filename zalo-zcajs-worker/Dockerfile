@@ -10,7 +10,7 @@ RUN apt-get update \
 WORKDIR /src/zcajs
 RUN git clone "$ZCAJS_REPO" . \
   && git checkout "$ZCAJS_COMMIT" \
-  && npm ci \
+  && npm install --no-audit --no-fund \
   && npm run build \
   && mkdir -p /out \
   && npm pack --pack-destination /out
@@ -23,7 +23,7 @@ WORKDIR /app
 
 COPY package.json ./package.json
 COPY --from=zcajs-build /out/zca-js-1.2.1.tgz /tmp/zca-js.tgz
-RUN npm install --omit=dev /tmp/zca-js.tgz \
+RUN npm install --omit=dev --no-audit --no-fund /tmp/zca-js.tgz \
   && rm -f /tmp/zca-js.tgz
 
 COPY src ./src
