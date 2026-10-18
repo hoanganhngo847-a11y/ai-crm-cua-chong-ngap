@@ -20,7 +20,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - run: npx tsc --noEmit
 
   zcajs-worker:
     runs-on: ubuntu-latest
