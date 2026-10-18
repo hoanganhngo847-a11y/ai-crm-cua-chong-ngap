@@ -1,0 +1,36 @@
+name: Apply Zalo composer media patch
+
+on:
+  push:
+    branches:
+      - feat/zalo-composer-media
+    paths:
+      - 'scripts/apply-zalo-composer-media-patch.mjs'
+      - '.github/workflows/apply-zalo-composer-media-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/zalo-composer-media
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply patch
+        run: node scripts/apply-zalo-composer-media-patch.mjs
+      - name: Commit generated changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add features/inbox/components/inbox-view.tsx zalo-zcajs-worker/src/index.mjs
+          if git diff --cached --quiet; then
+            echo 'No generated changes to commit.'
+            exit 0
+          fi
+          git commit -m 'feat(zalo): wire Zalo-style composer and media transport'
+          git push origin HEAD:feat/zalo-composer-media
