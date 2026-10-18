@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { ZaloOutboundDispatcher } from '../../../../../features/omnichannel/zalo/outbound-dispatcher';
 
+export const runtime = 'nodejs';
+
 const DEFAULT_BATCH_LIMIT = 5;
 const MAX_BATCH_LIMIT = 20;
 
