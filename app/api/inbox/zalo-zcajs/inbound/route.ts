@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedEvent } from '@/features/inbox/services/inbox-ingress.service';
+import { sanitizePhoneInText } from '@/features/crm/utils/phone-sanitizer';
 import {
   ensureZcaJsRoutingConfig,
   getZaloTransportMode,
@@ -19,6 +20,12 @@ function secureCompare(a: string, b: string): boolean {
 
 function unauthorized() {
   return NextResponse.json({ success: false, error: 'UNAUTHORIZED' }, { status: 401 });
+}
+
+function normalizeTimestamp(value: string): string {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
 export async function POST(request: NextRequest) {
@@ -68,6 +75,8 @@ export async function POST(request: NextRequest) {
           senderName?: unknown;
           content?: unknown;
           timestamp?: unknown;
+          direction?: unknown;
+          isSelf?: unknown;
         }
       | null;
 
@@ -80,6 +89,8 @@ export async function POST(request: NextRequest) {
     const senderName = typeof body.senderName === 'string' ? body.senderName.trim() : undefined;
     const content = typeof body.content === 'string' ? body.content.trim() : '';
     const timestamp = typeof body.timestamp === 'string' ? body.timestamp.trim() : '';
+    const requestedDirection = typeof body.direction === 'string' ? body.direction.trim().toLowerCase() : 'inbound';
+    const direction = requestedDirection === 'outbound' ? 'outbound' : 'inbound';
 
     if (!messageId || !externalUserId || !content) {
       return NextResponse.json(
@@ -91,6 +102,45 @@ export async function POST(request: NextRequest) {
     const supabase = createAdminClient();
     await ensureZcaJsRoutingConfig(supabase, companyId);
 
+    const sourceMetadata = {
+      transport: 'ZCAJS',
+      source: 'ngogiaphat/ZCAJS',
+      direction,
+      observed_self_message: direction === 'outbound',
+    };
+
+    // Self-listener messages are observations of messages already sent from the native Zalo account.
+    // Persist them as SENT/OUTBOUND interactions only. Never enqueue them for provider dispatch again.
+    if (direction === 'outbound') {
+      const { data, error } = await supabase.rpc('record_observed_zcajs_outbound_atomic', {
+        p_company_id: companyId,
+        p_external_conversation_id: externalUserId,
+        p_provider_msg_id: messageId,
+        p_sanitized_content: sanitizePhoneInText(content),
+        p_raw_content: content,
+        p_source_metadata: sourceMetadata,
+        p_timestamp: normalizeTimestamp(timestamp),
+      });
+
+      if (error) {
+        console.error('[ZCAJS inbound] observed outbound persistence failed:', error.message);
+        return NextResponse.json(
+          { success: false, error: 'OBSERVED_OUTBOUND_PERSIST_FAILED' },
+          { status: 500 }
+        );
+      }
+
+      const result = (data || {}) as Record<string, unknown>;
+      return NextResponse.json({
+        success: true,
+        duplicate: result.is_duplicate === true,
+        conversationId: typeof result.conversation_id === 'string' ? result.conversation_id : undefined,
+        interactionId: typeof result.interaction_id === 'string' ? result.interaction_id : undefined,
+        customerId: typeof result.customer_id === 'string' ? result.customer_id : undefined,
+        direction: 'outbound',
+      });
+    }
+
     const result = await ingestNormalizedEvent(
       {
         provider: 'ZALO',
@@ -99,11 +149,8 @@ export async function POST(request: NextRequest) {
         sender_name: senderName || `Khách Zalo ${externalUserId.slice(-4)}`,
         message_id: messageId,
         content,
-        timestamp: timestamp || new Date().toISOString(),
-        metadata: {
-          transport: 'ZCAJS',
-          source: 'ngogiaphat/ZCAJS',
-        },
+        timestamp: normalizeTimestamp(timestamp),
+        metadata: sourceMetadata,
       },
       { client: supabase }
     );
@@ -121,6 +168,7 @@ export async function POST(request: NextRequest) {
       conversationId: result.conversation_id,
       interactionId: result.message_id,
       customerId: result.customer_id,
+      direction: 'inbound',
     });
   } catch (error: unknown) {
     console.error(

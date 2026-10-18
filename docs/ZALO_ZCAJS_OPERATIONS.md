@@ -14,13 +14,21 @@ The fork does not commit its `dist/` directory and has no `prepare` script. Its 
 
 ## Architecture
 
-Inbound:
+Inbound customer messages:
 
 `Zalo personal account -> ZCAJS WebSocket listener -> ZCAJS worker -> POST /api/inbox/zalo-zcajs/inbound -> ingestNormalizedEvent -> Unified Inbox`
 
-Outbound:
+Manual messages sent from the connected native Zalo account:
 
-`Unified Inbox -> durable Zalo outbox -> ZcaJsTransportClient -> ZCAJS worker /v1/send -> api.sendMessage -> Zalo user`
+`Zalo native app -> ZCAJS self listener -> worker -> /api/inbox/zalo-zcajs/inbound -> record_observed_zcajs_outbound_atomic -> Unified Inbox`
+
+These observed native messages are persisted as `OUTBOUND` interactions and are never enqueued back to Zalo.
+
+CRM outbound:
+
+`Unified Inbox -> durable Zalo outbox -> authenticated dispatch endpoint -> ZcaJsTransportClient -> ZCAJS worker /v1/send -> api.sendMessage -> Zalo user`
+
+The worker suppresses the self-listener echo of CRM-originated sends so a successful CRM send produces one canonical bubble instead of a duplicate observed-native bubble.
 
 The existing official OA webhook/client remain available when `ZALO_TRANSPORT=OA`.
 
@@ -60,15 +68,15 @@ Health endpoints:
 
 ## Current supported message scope
 
-The bridge intentionally starts with direct text messages only:
-
 - direct inbound text -> CRM inbox
-- direct outbound text -> Zalo
+- direct inbound Zalo photo/image attachment -> CRM inbox image preview
+- direct outbound text from CRM -> Zalo
+- direct messages sent manually from the connected Zalo account -> mirrored into CRM as outbound history
 - group messages are ignored
-- non-text inbound events are ignored
-- outbound success requires the stable `msgId` returned by ZCAJS; missing IDs are marked `UNCERTAIN`, never synthesized
+- unsupported non-text attachment types are represented with a safe placeholder/link when possible
+- outbound CRM success requires the stable `msgId` returned by ZCAJS; missing IDs are marked `UNCERTAIN`, never synthesized
 
-This keeps the current CRM idempotency and no-duplicate-send guarantees intact.
+Provider-hosted image URLs are rendered with `referrerPolicy=no-referrer` and an external-link fallback. They can expire according to Zalo/CDN behavior; permanent media archiving is not part of this bridge.
 
 ## Important ZCAJS constraint
 
@@ -83,4 +91,6 @@ Because ZCAJS is an unofficial API that simulates Zalo Web, the selected reposit
 - Production CRM rejects non-HTTPS worker URLs.
 - The inbound endpoint derives `company_id` from server environment, never from the worker payload.
 - The worker rejects outbound requests for any company other than its configured company.
+- Native self messages use a dedicated non-dispatch persistence RPC to prevent send loops.
+- CRM-originated self echoes are suppressed in the worker and also deduped at the database by provider message id.
 - Network/5xx ambiguity is classified `UNCERTAIN` so the CRM does not automatically resend and create duplicate customer messages.

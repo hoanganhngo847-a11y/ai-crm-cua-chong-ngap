@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import http from 'http';
 import { Zalo, MessageType } from 'zca-js';
+import { normalizeDirectMessage } from './message-normalizer.mjs';
 
 const PORT = Number(process.env.PORT || 10000);
 const COMPANY_ID = (process.env.ZCAJS_COMPANY_ID || '').trim();
@@ -11,6 +12,8 @@ const IMEI = process.env.ZCAJS_IMEI || '';
 const USER_AGENT = process.env.ZCAJS_USER_AGENT || '';
 const INBOUND_MAX_RETRIES = 6;
 const MAX_BODY_BYTES = 64 * 1024;
+const CRM_ECHO_WINDOW_MS = 30_000;
+const RECENT_PROVIDER_ID_TTL_MS = 10 * 60_000;
 
 let api = null;
 let loggedIn = false;
@@ -18,6 +21,11 @@ let listenerConnected = false;
 let listenerRestartAttempt = 0;
 let listenerRestartTimer = null;
 let loginLoopRunning = false;
+
+// Used only to suppress the self-listener echo created by a CRM-originated send.
+// Manual messages sent directly in Zalo are not placed in these maps and are forwarded to CRM.
+const pendingCrmSends = new Map();
+const recentCrmProviderMsgIds = new Map();
 
 function requireConfig() {
   const missing = [];
@@ -84,34 +92,32 @@ function isAuthorized(req) {
   return Boolean(provided) && secureCompare(provided, WORKER_SECRET);
 }
 
-function normalizeTimestamp(raw) {
-  const numeric = Number(raw);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    const milliseconds = numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
-    const date = new Date(milliseconds);
-    if (!Number.isNaN(date.getTime())) return date.toISOString();
+function pruneCrmEchoTracking(now = Date.now()) {
+  for (const [key, value] of pendingCrmSends.entries()) {
+    if (now - value.startedAt > CRM_ECHO_WINDOW_MS) pendingCrmSends.delete(key);
   }
-  return new Date().toISOString();
+  for (const [providerMsgId, expiresAt] of recentCrmProviderMsgIds.entries()) {
+    if (expiresAt <= now) recentCrmProviderMsgIds.delete(providerMsgId);
+  }
 }
 
-function normalizeDirectMessage(message) {
-  if (!message || message.type !== MessageType.DirectMessage || message.isSelf) return null;
-  const content = message.data?.content;
-  if (typeof content !== 'string' || !content.trim()) return null;
+function shouldSuppressCrmSelfEcho(message) {
+  if (!message?.isSelf || message.direction !== 'outbound') return false;
+  const now = Date.now();
+  pruneCrmEchoTracking(now);
 
-  const messageId = String(
-    message.data?.msgId || message.data?.realMsgId || message.data?.cliMsgId || ''
-  ).trim();
-  const externalUserId = String(message.threadId || message.data?.uidFrom || '').trim();
-  if (!messageId || !externalUserId) return null;
+  if (recentCrmProviderMsgIds.has(message.messageId)) return true;
 
-  return {
-    messageId,
-    externalUserId,
-    senderName: String(message.data?.dName || '').trim() || undefined,
-    content: content.trim(),
-    timestamp: normalizeTimestamp(message.data?.ts),
-  };
+  for (const pending of pendingCrmSends.values()) {
+    if (
+      pending.recipientZaloId === message.externalUserId &&
+      pending.text === message.content &&
+      now - pending.startedAt <= CRM_ECHO_WINDOW_MS
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function postInbound(payload, attempt = 0) {
@@ -173,6 +179,7 @@ function attachListener(currentApi) {
   currentApi.listener.on('message', (message) => {
     const normalized = normalizeDirectMessage(message);
     if (!normalized) return;
+    if (shouldSuppressCrmSelfEcho(normalized)) return;
     void postInbound(normalized);
   });
 }
@@ -191,7 +198,7 @@ async function loginLoop() {
           userAgent: USER_AGENT,
         },
         {
-          selfListen: false,
+          selfListen: true,
           checkUpdate: false,
         }
       );
@@ -261,6 +268,13 @@ async function handleSend(req, res) {
     });
   }
 
+  const pendingKey = crypto.randomUUID();
+  pendingCrmSends.set(pendingKey, {
+    recipientZaloId,
+    text,
+    startedAt: Date.now(),
+  });
+
   try {
     const result = await api.sendMessage({ msg: text }, recipientZaloId, MessageType.DirectMessage);
     const providerMessageId = String(result?.message?.msgId ?? '').trim();
@@ -272,6 +286,7 @@ async function handleSend(req, res) {
       });
     }
 
+    recentCrmProviderMsgIds.set(providerMessageId, Date.now() + RECENT_PROVIDER_ID_TTL_MS);
     return json(res, 200, {
       outcome: 'ACCEPTED',
       providerMessageId,
@@ -283,6 +298,9 @@ async function handleSend(req, res) {
       errorCode: 'ZCAJS_SEND_ERROR',
       errorMessage: error instanceof Error ? error.message : 'ZCAJS send failed.',
     });
+  } finally {
+    pendingCrmSends.delete(pendingKey);
+    pruneCrmEchoTracking();
   }
 }
 
