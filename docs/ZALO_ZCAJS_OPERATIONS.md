@@ -10,7 +10,7 @@ The worker image builds directly from:
 - Commit: `0d99d7d025f5183822d627088fac89d1f55ef691`
 - Package version at that commit: `zca-js@1.2.1`
 
-The fork does not commit its `dist/` directory and has no `prepare` script, so the worker Dockerfile clones the exact commit, runs `npm ci`, builds it and installs the resulting package tarball. It does not silently substitute the npm/upstream version.
+The fork does not commit its `dist/` directory and has no `prepare` script. Its committed `package-lock.json` is also out of sync with `package.json` at the pinned commit, so `npm ci` cannot build that exact fork. The worker Dockerfile therefore clones the exact commit, runs `npm install` to resolve the fork's declared dependencies, builds it, and installs the resulting package tarball. It does not silently substitute another ZCAJS repository or npm/upstream implementation.
 
 ## Architecture
 
