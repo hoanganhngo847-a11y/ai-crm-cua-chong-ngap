@@ -13,7 +13,8 @@ console.log('--- CRM Recorded Voice Routing Regression ---');
 
 const userUuid = '11111111-2222-4333-8444-555555555555';
 const stringeeUserId = toStringeeSaleUserId(userUuid, 'tenant-a');
-assert.match(stringeeUserId, /^crm_sale_[a-f0-9]{32}$/);
+assert.match(stringeeUserId, /^crm_s_[A-Za-z0-9_-]{22}$/);
+assert.ok(stringeeUserId.length <= 30);
 assert.equal(stringeeUserId, toStringeeSaleUserId(userUuid, 'tenant-a'));
 assert.equal(stringeeUserId.includes(userUuid.replaceAll('-', '')), false);
 assert.equal(isAllowedCrmStringeeAgentUserId(stringeeUserId), true);
@@ -38,6 +39,8 @@ assert.deepEqual(recordedScco, [
 ]);
 assert.notEqual(stringeeUserId, toStringeeSaleUserId(userUuid, 'tenant-b'));
 const pair = toStringeeTestUserIds(userUuid, 'tenant-a');
+assert.ok(pair.A.length <= 30 && pair.B.length <= 30);
+assert.throws(() => createStringeeClientToken('SK_test', 'secret', `crm_sale_${'a'.repeat(32)}`), /Invalid Stringee user id/);
 assert.notEqual(pair.A, pair.B);
 assert.notEqual(pair.A, stringeeUserId);
 assert.equal(isStringeeTestPair(pair.A, pair.B, pair.A), true);
