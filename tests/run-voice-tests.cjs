@@ -9,4 +9,5 @@ try {
 
 const { register } = require('tsx/cjs/api');
 register();
+require('./voice-recording-routing.test.ts');
 require('./voice.integration.test.ts');

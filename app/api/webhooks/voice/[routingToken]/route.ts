@@ -10,8 +10,27 @@ import {
 } from '../../../../../features/voice/services/webhook-processor';
 import { processRecordingReady } from '../../../../../features/voice/services/media-pipeline';
 import { resolveVoiceIntegration } from '../../../../../features/voice/services/integration-resolver';
+import { isAllowedCrmStringeeAgentUserId } from '../../../../../features/voice/providers/stringee-provider';
 
 type Context = { params: Promise<{ routingToken: string }> };
+
+/**
+ * Stringee records only when the record SCCO is placed before connect and the media
+ * is server-routed. Keeping this helper server-side guarantees every CRM-controlled
+ * call is recordable before it is bridged to the agent/customer.
+ */
+function recordedConnectAction(connectAction: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    {
+      action: 'record',
+      format: 'mp3',
+    },
+    {
+      ...connectAction,
+      peerToPeerCall: false,
+    },
+  ];
+}
 
 export async function POST(request: NextRequest, context: Context): Promise<NextResponse> {
   const { routingToken } = await context.params;
@@ -72,14 +91,21 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
   if (correlationId) {
     if (stringeeCallId) await bindStringeeCallId(correlationId, stringeeCallId, integration.companyId);
     const agentUserId = url.searchParams.get('agentUserId') || '';
-    if (![integration.aiAgentUserId, integration.saleAgentUserId].filter(Boolean).includes(agentUserId)) {
+    if (!isAllowedCrmStringeeAgentUserId(agentUserId, {
+      fromNumber: integration.fromNumber || '',
+      answerUrl: integration.answerUrl || '',
+      aiAgentUserId: integration.aiAgentUserId,
+      saleAgentUserId: integration.saleAgentUserId,
+    })) {
       return NextResponse.json({ error: 'Invalid agent' }, { status: 400 });
     }
-    return NextResponse.json([{
+    return NextResponse.json(recordedConnectAction({
       action: 'connect',
       from: { type: 'external', number: integration.fromNumber || '', alias: 'AI CRM' },
       to: { type: 'internal', number: agentUserId, alias: 'CRM Agent' },
-    }]);
+      timeout: 45,
+      maxConnectTime: -1,
+    }));
   }
   if (fromInternal) return NextResponse.json({ error: 'Missing correlation' }, { status: 400 });
 
@@ -94,9 +120,11 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
   if (!integration.aiAgentUserId) {
     return NextResponse.json([{ action: 'talk', text: 'Xin lỗi, tổng đài đang bận. Vui lòng gọi lại sau.' }]);
   }
-  return NextResponse.json([{
+  return NextResponse.json(recordedConnectAction({
     action: 'connect',
     from: { type: 'external', number: url.searchParams.get('from') || '', alias: 'Hotline' },
     to: { type: 'internal', number: integration.aiAgentUserId, alias: 'AI Hotline' },
-  }]);
+    timeout: 45,
+    maxConnectTime: -1,
+  }));
 }
