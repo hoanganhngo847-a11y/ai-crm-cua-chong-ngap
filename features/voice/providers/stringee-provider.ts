@@ -16,11 +16,20 @@ export interface StringeeProviderConfig {
   fromNumber: string;
   answerUrl: string;
   aiAgentUserId?: string;
+  /** Legacy fixed sale user. New CRM sales use deterministic per-user identities instead. */
   saleAgentUserId?: string;
 }
 
 function base64Url(value: string): string {
   return Buffer.from(value).toString('base64url');
+}
+
+function signStringeeJwt(apiKey: string, apiSecret: string, payload: Record<string, unknown>): string {
+  const header = base64Url(JSON.stringify({ typ: 'JWT', alg: 'HS256', cty: 'stringee-api;v=1' }));
+  const encodedPayload = base64Url(JSON.stringify(payload));
+  const unsigned = `${header}.${encodedPayload}`;
+  const signature = createHmac('sha256', apiSecret).update(unsigned).digest('base64url');
+  return `${unsigned}.${signature}`;
 }
 
 /** Create the short-lived HS256 token required by Stringee REST APIs. */
@@ -29,16 +38,47 @@ export function createStringeeRestToken(
   apiSecret: string,
   nowSeconds = Math.floor(Date.now() / 1000)
 ): string {
-  const header = base64Url(JSON.stringify({ typ: 'JWT', alg: 'HS256', cty: 'stringee-api;v=1' }));
-  const payload = base64Url(JSON.stringify({
+  return signStringeeJwt(apiKey, apiSecret, {
     jti: `${apiKey}_${nowSeconds}_${randomUUID()}`,
     iss: apiKey,
     exp: nowSeconds + 300,
     rest_api: true,
-  }));
-  const unsigned = `${header}.${payload}`;
-  const signature = createHmac('sha256', apiSecret).update(unsigned).digest('base64url');
-  return `${unsigned}.${signature}`;
+  });
+}
+
+/**
+ * Stable Stringee Web-SDK identity for one authenticated CRM user.
+ * The browser never supplies this value; the trusted server derives it from actor.userId.
+ */
+export function toStringeeSaleUserId(crmUserId: string): string {
+  const compact = crmUserId.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!compact || compact.length < 16 || compact.length > 80) {
+    throw new Error('Invalid CRM user id for Stringee identity.');
+  }
+  return `crm_sale_${compact}`;
+}
+
+/** Create a short-lived Web-SDK access token. API secret never leaves the server. */
+export function createStringeeClientToken(
+  apiKey: string,
+  apiSecret: string,
+  userId: string,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): string {
+  if (!/^[A-Za-z0-9_.-]{3,120}$/.test(userId)) throw new Error('Invalid Stringee user id.');
+  return signStringeeJwt(apiKey, apiSecret, {
+    jti: `${apiKey}_${nowSeconds}_${randomUUID()}`,
+    iss: apiKey,
+    exp: nowSeconds + 3600,
+    userId,
+  });
+}
+
+export function isAllowedCrmStringeeAgentUserId(userId: string, config?: StringeeProviderConfig): boolean {
+  if (!userId) return false;
+  if (config?.aiAgentUserId && userId === config.aiAgentUserId) return true;
+  if (config?.saleAgentUserId && userId === config.saleAgentUserId) return true;
+  return /^crm_sale_[a-z0-9]{16,80}$/.test(userId);
 }
 
 /** Provider-specific Stringee details stay behind the generic CallProvider contract. */
@@ -71,7 +111,7 @@ export class StringeeProvider implements CallProvider {
     const correlationId = `crm_${randomUUID()}`;
     const agentUserId = params.fromStaffUserId === 'AI_WORKER'
       ? this.aiAgentUserId
-      : this.saleAgentUserId;
+      : toStringeeSaleUserId(params.fromStaffUserId);
     if (!agentUserId) throw new Error('Stringee agent is not configured.');
     const answerUrl = new URL(this.answerUrl);
     answerUrl.searchParams.set('crmCorrelationId', correlationId);
