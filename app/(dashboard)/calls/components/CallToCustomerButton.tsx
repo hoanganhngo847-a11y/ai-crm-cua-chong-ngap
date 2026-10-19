@@ -12,56 +12,7 @@ interface Props {
   disabled?: boolean;
 }
 
-type StringeeResult = { r?: number; message?: string; userId?: string };
-type StringeeState = { reason?: string; code?: number };
-type StringeeTrack = {
-  attach?: (audioOnly?: boolean) => HTMLElement;
-  detachAndRemove?: () => void;
-};
-type StringeeCallLike = {
-  answer: (callback?: (result: StringeeResult) => void) => void;
-  reject?: (callback?: (result: StringeeResult) => void) => void;
-  hangup: (callback?: (result: StringeeResult) => void) => void;
-  on: (event: string, callback: (...args: never[]) => void) => void;
-};
-type StringeeClientLike = {
-  connect: (accessToken: string) => void;
-  disconnect: () => void;
-  on: (event: string, callback: (...args: never[]) => void) => void;
-};
-type StringeeClientConstructor = new () => StringeeClientLike;
-
-declare global {
-  interface Window {
-    StringeeClient?: StringeeClientConstructor;
-  }
-}
-
-const STRINGEE_SDK_URL = 'https://cdn.stringee.com/sdk/web/latest/stringee-web-sdk.min.js';
-
-async function ensureStringeeSdk(): Promise<void> {
-  if (window.StringeeClient) return;
-  const existing = document.querySelector<HTMLScriptElement>('script[data-crm-stringee-sdk="true"]');
-  if (existing) {
-    await new Promise<void>((resolve, reject) => {
-      if (window.StringeeClient) return resolve();
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('STRINGEE_SDK_LOAD_FAILED')), { once: true });
-    });
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = STRINGEE_SDK_URL;
-    script.async = true;
-    script.dataset.crmStringeeSdk = 'true';
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('STRINGEE_SDK_LOAD_FAILED'));
-    document.head.appendChild(script);
-  });
-  if (!window.StringeeClient) throw new Error('STRINGEE_SDK_UNAVAILABLE');
-}
+import { ensureStringeeSdk, STRINGEE_SERVER_ADDRS, type StringeeResult, type StringeeState, type StringeeTrack, type StringeeCallLike, type StringeeClientLike } from '../../../../features/voice/client/stringee-sdk';
 
 /**
  * CRM browser softphone. The browser never receives the customer's phone number or provider secret.
@@ -78,11 +29,15 @@ export default function CallToCustomerButton({
 }: Props) {
   const [isPending, startTransition] = useTransition();
   const [softphoneReady, setSoftphoneReady] = useState(false);
+  const [connectionState, setConnectionState] = useState('Connecting');
+  const [pstnAvailable, setPstnAvailable] = useState(false);
+  const [recordingEnabled, setRecordingEnabled] = useState(false);
   const [softphoneError, setSoftphoneError] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<'IDLE' | 'DIALING' | 'WAITING' | 'INCOMING' | 'ACTIVE' | 'ENDED' | 'ERROR'>('IDLE');
   const [callId, setCallId] = useState<string | null>(null);
   const [callMessage, setCallMessage] = useState<string | null>(null);
   const [manualAnswerRequired, setManualAnswerRequired] = useState(false);
+  const recordingEnabledRef = useRef(false);
   const clientRef = useRef<StringeeClientLike | null>(null);
   const callRef = useRef<StringeeCallLike | null>(null);
   const pendingOutgoingRef = useRef(false);
@@ -125,13 +80,13 @@ export default function CallToCustomerButton({
       if (reason.includes('answer') || reason.includes('connected')) {
         setManualAnswerRequired(false);
         setCallStatus('ACTIVE');
-        setCallMessage('Đã kết nối — cuộc gọi đang được ghi âm.');
+        setCallMessage(recordingEnabledRef.current ? 'Đã kết nối — cuộc gọi đang được ghi âm.' : 'Đã kết nối. Recording đang tắt.');
       }
       if (reason.includes('end') || reason.includes('hangup') || reason.includes('busy') || reason.includes('reject')) {
         pendingOutgoingRef.current = false;
         setManualAnswerRequired(false);
         setCallStatus('ENDED');
-        setCallMessage('Cuộc gọi đã kết thúc. Bản ghi sẽ được xử lý tự động.');
+        setCallMessage(recordingEnabledRef.current ? 'Cuộc gọi đã kết thúc. Bản ghi sẽ được xử lý tự động.' : 'Cuộc gọi đã kết thúc.');
         clearRemoteMedia();
         callRef.current = null;
       }
@@ -150,42 +105,51 @@ export default function CallToCustomerButton({
         return;
       }
       setCallStatus('ACTIVE');
-      setCallMessage('Đã kết nối — cuộc gọi đang được ghi âm.');
+      setCallMessage(recordingEnabledRef.current ? 'Đã kết nối — cuộc gọi đang được ghi âm.' : 'Đã kết nối. Recording đang tắt.');
     });
   }, [attachCallEvents]);
 
   const fetchClientToken = useCallback(async (): Promise<string> => {
     const response = await fetch('/api/voice/client-token', { cache: 'no-store' });
-    const body = await response.json().catch(() => null) as { accessToken?: string; error?: string } | null;
+    const body = await response.json().catch(() => null) as { accessToken?: string; error?: string; pstnAvailable?: boolean; recordingEnabled?: boolean } | null;
     if (!response.ok || !body?.accessToken) {
       if (body?.error === 'CALL_PROVIDER_NOT_CONFIGURED') throw new Error('CALL_PROVIDER_NOT_CONFIGURED');
       throw new Error('VOICE_CLIENT_TOKEN_FAILED');
     }
+    setPstnAvailable(body.pstnAvailable === true);
+    setRecordingEnabled(body.recordingEnabled === true);
+    recordingEnabledRef.current = body.recordingEnabled === true;
     return body.accessToken;
   }, []);
 
   const connectSoftphone = useCallback(async () => {
     setSoftphoneError(null);
     setSoftphoneReady(false);
+    setConnectionState('Connecting');
     try {
       await ensureStringeeSdk();
       if (!window.StringeeClient) throw new Error('STRINGEE_SDK_UNAVAILABLE');
       const accessToken = await fetchClientToken();
-      const client = new window.StringeeClient();
+      clientRef.current?.disconnect();
+      const client = new window.StringeeClient(STRINGEE_SERVER_ADDRS);
       clientRef.current = client;
 
+      client.on('connect', (() => setConnectionState('Connecting')) as never);
       client.on('authen', ((result: StringeeResult) => {
         if (result?.r === 0) {
           setSoftphoneReady(true);
+          setConnectionState('Connected');
           setSoftphoneError(null);
         } else {
           setSoftphoneReady(false);
+          setConnectionState('Error');
           setSoftphoneError('Không thể xác thực tổng đài trên trình duyệt.');
         }
       }) as never);
 
       client.on('disconnect', (() => {
         setSoftphoneReady(false);
+        setConnectionState('Disconnected');
       }) as never);
 
       client.on('requestnewtoken', (() => {
@@ -210,6 +174,7 @@ export default function CallToCustomerButton({
       client.connect(accessToken);
     } catch (error) {
       setSoftphoneReady(false);
+      setConnectionState('Error');
       setSoftphoneError(
         error instanceof Error && error.message === 'CALL_PROVIDER_NOT_CONFIGURED'
           ? 'Tổng đài chưa được cấu hình cho doanh nghiệp.'
@@ -291,7 +256,7 @@ export default function CallToCustomerButton({
       clearRemoteMedia();
       callRef.current = null;
       setCallStatus('ENDED');
-      setCallMessage('Cuộc gọi đã kết thúc. Bản ghi sẽ được xử lý tự động.');
+      setCallMessage(recordingEnabledRef.current ? 'Cuộc gọi đã kết thúc. Bản ghi sẽ được xử lý tự động.' : 'Cuộc gọi đã kết thúc.');
     });
   };
 
@@ -307,7 +272,7 @@ export default function CallToCustomerButton({
         <button
           type="button"
           onClick={() => void handleCall()}
-          disabled={disabled || isPending || active || !providerConfigured}
+          disabled={disabled || isPending || active || !providerConfigured || !pstnAvailable}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition ${
             disabled || !providerConfigured
               ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
@@ -318,7 +283,7 @@ export default function CallToCustomerButton({
           title="Gọi qua tổng đài CRM; cuộc gọi được ghi âm và chép lời theo chính sách doanh nghiệp"
         >
           <span>{active ? '●' : '📞'}</span>
-          <span>{active ? 'ĐANG GỌI…' : 'GỌI & GHI ÂM'}</span>
+          <span>{active ? 'ĐANG GỌI…' : recordingEnabled ? 'GỌI & GHI ÂM' : 'GỌI KHÁCH'}</span>
         </button>
 
         {callStatus === 'INCOMING' && manualAnswerRequired && (
@@ -351,7 +316,8 @@ export default function CallToCustomerButton({
       <div className="flex items-center gap-2 text-xs">
         <span className={`w-2 h-2 rounded-full ${softphoneReady ? 'bg-emerald-400' : 'bg-amber-400'}`} />
         <span className={softphoneReady ? 'text-emerald-300' : 'text-slate-400'}>
-          {softphoneReady ? 'Softphone CRM sẵn sàng' : (softphoneError || 'Đang kết nối tổng đài…')}
+          {connectionState}: {softphoneReady ? 'Softphone CRM sẵn sàng' : (softphoneError || 'Đang kết nối tổng đài…')}
+          {softphoneReady && !pstnAvailable && ' — Chưa có số gọi PSTN.'}
         </span>
       </div>
 

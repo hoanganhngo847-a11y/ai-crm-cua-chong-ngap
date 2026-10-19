@@ -4,14 +4,17 @@ import {
   createStringeeClientToken,
   isAllowedCrmStringeeAgentUserId,
   toStringeeSaleUserId,
+  toStringeeTestUserIds,
+  isStringeeTestPair,
+  buildStringeeConnectScco,
 } from '../features/voice/providers/stringee-provider';
 
 console.log('--- CRM Recorded Voice Routing Regression ---');
 
 const userUuid = '11111111-2222-4333-8444-555555555555';
-const stringeeUserId = toStringeeSaleUserId(userUuid);
+const stringeeUserId = toStringeeSaleUserId(userUuid, 'tenant-a');
 assert.match(stringeeUserId, /^crm_sale_[a-f0-9]{32}$/);
-assert.equal(stringeeUserId, toStringeeSaleUserId(userUuid));
+assert.equal(stringeeUserId, toStringeeSaleUserId(userUuid, 'tenant-a'));
 assert.equal(stringeeUserId.includes(userUuid.replaceAll('-', '')), false);
 assert.equal(isAllowedCrmStringeeAgentUserId(stringeeUserId), true);
 assert.equal(isAllowedCrmStringeeAgentUserId('attacker-controlled-user'), false);
@@ -26,12 +29,23 @@ assert.equal(payload.rest_api, undefined);
 assert.equal(payload.exp, 1_700_003_600);
 
 const routeSource = readFileSync('app/api/webhooks/voice/[routingToken]/route.ts', 'utf8');
-const recordIndex = routeSource.indexOf("action: 'record'");
-const connectIndex = routeSource.indexOf("action: 'connect'");
-assert.ok(recordIndex >= 0, 'record action must exist');
-assert.ok(connectIndex >= 0, 'connect action must exist');
-assert.ok(recordIndex < connectIndex, 'record action must be emitted before connect');
-assert.match(routeSource, /peerToPeerCall:\s*false/);
+const plainScco = buildStringeeConnectScco({ action: 'connect' }, false, 'https://crm.example/events');
+assert.deepEqual(plainScco, [{ action: 'connect', peerToPeerCall: true }]);
+const recordedScco = buildStringeeConnectScco({ action: 'connect' }, true, 'https://crm.example/events');
+assert.deepEqual(recordedScco, [
+  { action: 'record', format: 'mp3', eventUrl: 'https://crm.example/events' },
+  { action: 'connect', peerToPeerCall: false },
+]);
+assert.notEqual(stringeeUserId, toStringeeSaleUserId(userUuid, 'tenant-b'));
+const pair = toStringeeTestUserIds(userUuid, 'tenant-a');
+assert.notEqual(pair.A, pair.B);
+assert.notEqual(pair.A, stringeeUserId);
+assert.equal(isStringeeTestPair(pair.A, pair.B, pair.A), true);
+assert.equal(isStringeeTestPair(pair.A, pair.B, pair.B), false);
+assert.equal(isStringeeTestPair(pair.A, pair.A, pair.A), false);
+assert.equal(isStringeeTestPair(pair.A, toStringeeTestUserIds(userUuid, 'tenant-b').B, pair.A), false);
+assert.equal(isStringeeTestPair(pair.A, '+84901234567', pair.A), false);
+assert.match(routeSource, /isStringeeTestPair/);
 assert.match(routeSource, /isAllowedCrmStringeeAgentUserId/);
 
 const tokenRouteSource = readFileSync('app/api/voice/client-token/route.ts', 'utf8');

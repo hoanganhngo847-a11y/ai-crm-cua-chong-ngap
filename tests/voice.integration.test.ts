@@ -81,6 +81,14 @@ async function runTests() {
   });
   assert.equal(failed.status, 'failed');
 
+  const recording = normalizeVoiceWebhookPayload({
+    event: '', type: 'recording', call_id: 'call-vn-test-12345678', project_id: 123,
+    recording_url: 'https://api.stringee.com/v1/call/recording/call-vn-test-12345678',
+  });
+  assert.equal(recording.event, 'call.recording_ready');
+  assert.equal(recording.provider_call_id, 'call-vn-test-12345678');
+  assert.equal(recording.recording_id, 'call-vn-test-12345678');
+
   // Stringee initiateCall contract
   process.env.STRINGEE_FROM_NUMBER = '84281234567';
   process.env.STRINGEE_ANSWER_URL = 'https://crm.example/api/webhooks/voice';
@@ -138,6 +146,10 @@ async function runTests() {
   assert.match(p0Migration, /attach_call_recording_ref_atomic/);
 
   console.log('✓ Pure unit tests passed.\n');
+  if (process.argv.includes('--unit')) {
+    console.log('Local Supabase integration tests intentionally excluded by --unit.');
+    return;
+  }
 
   // ---------------------------------------------------------------------------
   // Real Local Supabase Database Integration Tests

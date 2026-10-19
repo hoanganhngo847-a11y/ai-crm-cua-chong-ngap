@@ -10,26 +10,16 @@ import {
 } from '../../../../../features/voice/services/webhook-processor';
 import { processRecordingReady } from '../../../../../features/voice/services/media-pipeline';
 import { resolveVoiceIntegration } from '../../../../../features/voice/services/integration-resolver';
-import { isAllowedCrmStringeeAgentUserId } from '../../../../../features/voice/providers/stringee-provider';
+import { buildStringeeConnectScco, isAllowedCrmStringeeAgentUserId, isStringeeTestPair } from '../../../../../features/voice/providers/stringee-provider';
 
 type Context = { params: Promise<{ routingToken: string }> };
 
 /**
  * Stringee records only when the record SCCO is placed before connect and the media
- * is server-routed. Keeping this helper server-side guarantees every CRM-controlled
- * call is recordable before it is bridged to the agent/customer.
+ * is server-routed. Recording stays disabled until explicitly enabled server-side.
  */
-function recordedConnectAction(connectAction: Record<string, unknown>): Array<Record<string, unknown>> {
-  return [
-    {
-      action: 'record',
-      format: 'mp3',
-    },
-    {
-      ...connectAction,
-      peerToPeerCall: false,
-    },
-  ];
+function recordedConnectAction(connectAction: Record<string, unknown>, callbackUrl: string): Array<Record<string, unknown>> {
+  return buildStringeeConnectScco(connectAction, process.env.VOICE_RECORDING_ENABLED === 'true', callbackUrl);
 }
 
 export async function POST(request: NextRequest, context: Context): Promise<NextResponse> {
@@ -88,6 +78,23 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
   const fromInternal = url.searchParams.get('fromInternal') === 'true';
   const stringeeCallId = url.searchParams.get('callId') || url.searchParams.get('uuid') || '';
   const correlationId = url.searchParams.get('crmCorrelationId') || '';
+  const callbackUrl = `${url.origin}${url.pathname}`;
+  if (fromInternal && !correlationId) {
+    const from = url.searchParams.get('from') || '';
+    const to = url.searchParams.get('to') || '';
+    if (!process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID ||
+        integration.providerAccountId !== process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID ||
+        !isStringeeTestPair(from, to, url.searchParams.get('userId') || '')) {
+      return NextResponse.json({ error: 'VOICE_TEST_FORBIDDEN' }, { status: 403 });
+    }
+    // Diagnostics only: internal endpoints, no customer, PSTN dispatch or recording.
+    return NextResponse.json(buildStringeeConnectScco({
+      action: 'connect',
+      from: { type: 'internal', number: from, alias: 'CRM Test A' },
+      to: { type: 'internal', number: to, alias: 'CRM Test B' },
+      timeout: 30, maxConnectTime: 60,
+    }, false, callbackUrl));
+  }
   if (correlationId) {
     if (stringeeCallId) await bindStringeeCallId(correlationId, stringeeCallId, integration.companyId);
     const agentUserId = url.searchParams.get('agentUserId') || '';
@@ -105,7 +112,7 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
       to: { type: 'internal', number: agentUserId, alias: 'CRM Agent' },
       timeout: 45,
       maxConnectTime: -1,
-    }));
+    }, callbackUrl));
   }
   if (fromInternal) return NextResponse.json({ error: 'Missing correlation' }, { status: 400 });
 
@@ -126,5 +133,5 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
     to: { type: 'internal', number: integration.aiAgentUserId, alias: 'AI Hotline' },
     timeout: 45,
     maxConnectTime: -1,
-  }));
+  }, callbackUrl));
 }

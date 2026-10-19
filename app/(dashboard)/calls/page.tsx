@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { getCompanyCallHistoryAction } from '../../actions/voice';
@@ -45,6 +46,9 @@ export default async function CallsPage() {
       </div>
 
       <CustomerCallSearch provider={(process.env.VOICE_PROVIDER || 'MANUAL').toUpperCase()} />
+      {isBossAdmin && process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID && (
+        <Link href="/calls/test" className="inline-block text-sm text-blue-300 underline">Kiểm tra Web SDK App-to-App</Link>
+      )}
 
       {/* Kết quả */}
       {result.success && result.data ? (
