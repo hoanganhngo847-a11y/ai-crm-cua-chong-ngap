@@ -54,19 +54,21 @@ export function createStringeeRestToken(
 export function toStringeeSaleUserId(crmUserId: string, companyId: string): string {
   const normalized = crmUserId.trim();
   if (!normalized || normalized.length > 200 || !companyId?.trim()) throw new Error('Invalid CRM identity.');
-  const digest = createHash('sha256').update(JSON.stringify(['crm-stringee-sale', companyId, normalized])).digest('hex').slice(0, 32);
-  return `crm_sale_${digest}`;
+  // Keep our identities within 30 ASCII characters, including the test suffix.
+  // Stringee rejects the previous 41/43-character identities with USER_ID_TOO_LONG.
+  const digest = createHash('sha256').update(JSON.stringify(['crm-stringee-sale', companyId, normalized])).digest('base64url').slice(0, 22);
+  return `crm_s_${digest}`;
 }
 
 /** Two isolated diagnostic identities; neither can impersonate a real sale. */
 export function toStringeeTestUserIds(crmUserId: string, companyId: string): { A: string; B: string } {
-  const suffix = toStringeeSaleUserId(crmUserId, companyId).slice('crm_sale_'.length);
-  return { A: `crm_test_${suffix}_a`, B: `crm_test_${suffix}_b` };
+  const suffix = toStringeeSaleUserId(crmUserId, companyId).slice('crm_s_'.length);
+  return { A: `crm_t_${suffix}_a`, B: `crm_t_${suffix}_b` };
 }
 
 export function isStringeeTestPair(from: string, to: string, authenticatedUserId: string): boolean {
-  const source = /^crm_test_([a-f0-9]{32})_([ab])$/.exec(from);
-  const target = /^crm_test_([a-f0-9]{32})_([ab])$/.exec(to);
+  const source = /^crm_t_([A-Za-z0-9_-]{22})_([ab])$/.exec(from);
+  const target = /^crm_t_([A-Za-z0-9_-]{22})_([ab])$/.exec(to);
   return Boolean(source && target && source[1] === target[1] && source[2] !== target[2] && from === authenticatedUserId);
 }
 
@@ -87,7 +89,7 @@ export function createStringeeClientToken(
   userId: string,
   nowSeconds = Math.floor(Date.now() / 1000)
 ): string {
-  if (!/^[A-Za-z0-9_.-]{3,120}$/.test(userId)) throw new Error('Invalid Stringee user id.');
+  if (!/^[A-Za-z0-9_.-]{3,30}$/.test(userId)) throw new Error('Invalid Stringee user id.');
   return signStringeeJwt(apiKey, apiSecret, {
     jti: `${apiKey}_${nowSeconds}_${randomUUID()}`,
     iss: apiKey,
@@ -100,7 +102,7 @@ export function isAllowedCrmStringeeAgentUserId(userId: string, config?: Stringe
   if (!userId) return false;
   if (config?.aiAgentUserId && userId === config.aiAgentUserId) return true;
   if (config?.saleAgentUserId && userId === config.saleAgentUserId) return true;
-  return /^crm_sale_[a-f0-9]{32}$/.test(userId);
+  return /^crm_s_[A-Za-z0-9_-]{22}$/.test(userId);
 }
 
 /** Provider-specific Stringee details stay behind the generic CallProvider contract. */
