@@ -10,7 +10,9 @@ console.log('--- CRM Recorded Voice Routing Regression ---');
 
 const userUuid = '11111111-2222-4333-8444-555555555555';
 const stringeeUserId = toStringeeSaleUserId(userUuid);
-assert.equal(stringeeUserId, 'crm_sale_11111111222243338444555555555555');
+assert.match(stringeeUserId, /^crm_sale_[a-f0-9]{32}$/);
+assert.equal(stringeeUserId, toStringeeSaleUserId(userUuid));
+assert.equal(stringeeUserId.includes(userUuid.replaceAll('-', '')), false);
 assert.equal(isAllowedCrmStringeeAgentUserId(stringeeUserId), true);
 assert.equal(isAllowedCrmStringeeAgentUserId('attacker-controlled-user'), false);
 
