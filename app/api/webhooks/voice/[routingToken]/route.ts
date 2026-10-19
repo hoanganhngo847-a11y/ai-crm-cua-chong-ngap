@@ -10,6 +10,7 @@ import {
 } from '../../../../../features/voice/services/webhook-processor';
 import { processRecordingReady } from '../../../../../features/voice/services/media-pipeline';
 import { resolveVoiceIntegration } from '../../../../../features/voice/services/integration-resolver';
+import { isAllowedCrmStringeeAgentUserId } from '../../../../../features/voice/providers/stringee-provider';
 
 type Context = { params: Promise<{ routingToken: string }> };
 
@@ -90,7 +91,12 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
   if (correlationId) {
     if (stringeeCallId) await bindStringeeCallId(correlationId, stringeeCallId, integration.companyId);
     const agentUserId = url.searchParams.get('agentUserId') || '';
-    if (![integration.aiAgentUserId, integration.saleAgentUserId].filter(Boolean).includes(agentUserId)) {
+    if (!isAllowedCrmStringeeAgentUserId(agentUserId, {
+      fromNumber: integration.fromNumber || '',
+      answerUrl: integration.answerUrl || '',
+      aiAgentUserId: integration.aiAgentUserId,
+      saleAgentUserId: integration.saleAgentUserId,
+    })) {
       return NextResponse.json({ error: 'Invalid agent' }, { status: 400 });
     }
     return NextResponse.json(recordedConnectAction({
