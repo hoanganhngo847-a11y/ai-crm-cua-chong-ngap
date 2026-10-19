@@ -16,7 +16,7 @@ Baseline audited: `77fd5073df40b2e67c6e1477fe1877caa684f4d0`.
 1. Explicitly enable `STRINGEE_APP_TO_APP_TEST_PROJECT_ID` for the intended test project; recording must be off. This does not enable PSTN or change billing.
 2. A trusted operator creates a synthetic customer without a phone in the test tenant, and registers its customer/integration IDs in service-only `voice_test_customers`. Real customers are excluded from the test route/action.
 3. Open the customer context → call history → “Thử cuộc gọi CRM tới Client B”. The page/action retain the existing diagnostic BOSS_ADMIN restriction.
-4. Connect A and B; call from A. The same `executeClickToCall` helper authorizes the customer and atomically creates a call, Stringee attempt, actor association/audit and a short-lived A/B reservation before `makeCall`.
+4. Use the peer link to open Client B in a separate tab. Each business-test tab mounts only one SDK client. Connect A and B; call from A. The same `executeClickToCall` helper authorizes the customer and atomically creates a call, Stringee attempt, actor association/audit and a short-lived A/B reservation before `makeCall`.
 5. The signature-verified, project-checked Answer URL binds the canonical Stringee call ID to that prepared call/attempt. It never creates a new call for this route. Early status events are reconciled.
 6. Answer B, speak in both directions, hang up. The existing signed status processor drives the lifecycle. Only webhook evidence can establish CONNECTED/COMPLETED; the browser cannot report successful lifecycle status to the database.
 7. Compare specific call/attempt/event IDs, not only counts. Re-deliver a status and confirm one persisted idempotency key and no duplicate call/attempt.
@@ -31,3 +31,5 @@ Human Sale attempts do not advance AI retry stages. Production PSTN still resolv
 - `npm run test:voice:business`: all repository migrations on PostgreSQL/PGlite; preparation, actor/tenant/customer/integration denial, retry idempotency, early event reconciliation, monotonic lifecycle, attempt finalization, no human retry/stage mutation, service-only access.
 - Voice CI additionally runs the existing real Supabase auth/security/Voice suites, lint, build and typecheck.
 - Local PostgreSQL/PGlite does not prove real provider behavior, microphone permission, network media, PostgREST/JWT behavior or true multi-connection concurrency. Production verification is reported separately.
+
+Production media verification observed one-way reception with two SDK clients in one page, and live non-silent remote audio in both directions with one client per tab. Business test UI therefore isolates the SDK contexts by default. This does not assert a provider root cause or intelligible-speech confirmation.
