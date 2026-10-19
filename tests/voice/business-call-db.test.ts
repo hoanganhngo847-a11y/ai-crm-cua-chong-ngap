@@ -23,7 +23,7 @@ async function main() {
         VALUES($1,$2,'STRINGEE',$3,$4,'TEST_SECRET')`,[id,company,project,'a'.repeat(63)+(company===tenant?'a':'b')]);
     }
     await db.query<Record<string, unknown>>(`INSERT INTO voice_test_customers VALUES($1,$2)`,[customer,integration]);
-    const pair = toStringeeTestUserIds(boss,tenant), request = randomUUID();
+    const pair = toStringeeTestUserIds(`${boss}:${customer}`,tenant), request = randomUUID();
     const prepare = (c=customer,i=integration,actor=boss,req=request) => db.query<{call_id:string;attempt_id:string}>(
       `SELECT * FROM prepare_sale_voice_call_atomic($1,$2,$3,'STRINGEE',$4,$5,$6,$7)`,[tenant,c,actor,req,i,pair.A,pair.B]);
     await assert.rejects(prepare(otherCustomer));

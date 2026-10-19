@@ -10,8 +10,8 @@ import {
 
 type TokenData = { accessToken: string; userId: string; peerUserId?: string; expiresIn: number };
 
-async function getToken(side?: 'A' | 'B'): Promise<{ data: TokenData; summary: string }> {
-  const response = await fetch(`/api/voice/client-token${side ? `?testClient=${side}` : ''}`, { cache: 'no-store' });
+async function getToken(side?: 'A' | 'B', customerId?: string): Promise<{ data: TokenData; summary: string }> {
+  const response = await fetch(`/api/voice/client-token${side ? `?testClient=${side}${customerId ? `&testCustomer=${encodeURIComponent(customerId)}` : ''}` : ''}`, { cache: 'no-store' });
   const data = await response.json();
   if (!response.ok || typeof data.accessToken !== 'string') throw new Error(`HTTP ${response.status}: ${data.error || 'TOKEN_FAILED'}`);
   const allowed = ['ok', 'accessToken', 'userId', 'peerUserId', 'expiresIn', 'serverAddresses', 'pstnAvailable', 'recordingEnabled'];
@@ -116,7 +116,7 @@ function TestClient({ side, customer }: { side: 'A' | 'B'; customer?: TestCustom
       client.current?.disconnect();
       await ensureStringeeSdk();
       setSdkLoaded(true);
-      const result = await getToken(side);
+      const result = await getToken(side, customer?.id);
       if (current !== generation.current) return;
       setTokenSummary(result.summary); setIdentity(result.data.userId);
       users.current = { own: result.data.userId, peer: result.data.peerUserId || '' };
@@ -137,7 +137,7 @@ function TestClient({ side, customer }: { side: 'A' | 'B'; customer?: TestCustom
       sdkClient.on('requestnewtoken', (() => {
         if (current !== generation.current) return;
         log('requestnewtoken');
-        void getToken(side).then(result => {
+        void getToken(side, customer?.id).then(result => {
           if (current === generation.current) { setTokenSummary(result.summary); sdkClient.connect(result.data.accessToken); }
         }).catch(() => { setStatus('Error'); setError('Token renewal failed'); });
       }) as never);

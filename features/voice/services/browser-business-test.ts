@@ -15,5 +15,5 @@ export async function resolveBrowserBusinessTest(companyId: string, actorId: str
   const { data, error } = await createAdminClient().from('voice_test_customers')
     .select('customer_id').eq('customer_id', customerId).eq('integration_id', integration.integrationId).maybeSingle();
   if (error || !data) throw new ServerAuthError('Khách hàng chưa được đăng ký cho Voice test.', 403, 'RESOURCE_FORBIDDEN');
-  return { integrationId: integration.integrationId, ...toStringeeTestUserIds(actorId, companyId) };
+  return { integrationId: integration.integrationId, ...toStringeeTestUserIds(`${actorId}:${customerId}`, companyId) };
 }
