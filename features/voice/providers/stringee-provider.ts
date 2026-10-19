@@ -1,5 +1,5 @@
 import 'server-only';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { CallProvider } from '../../../shared/contracts/sensitive';
 
 type FetchLike = typeof fetch;
@@ -48,14 +48,14 @@ export function createStringeeRestToken(
 
 /**
  * Stable Stringee Web-SDK identity for one authenticated CRM user.
- * The browser never supplies this value; the trusted server derives it from actor.userId.
+ * Hashing prevents the CRM auth UUID from becoming a provider-visible identifier while preserving
+ * deterministic routing between the server-initiated call and the sale's browser softphone.
  */
 export function toStringeeSaleUserId(crmUserId: string): string {
-  const compact = crmUserId.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (!compact || compact.length < 16 || compact.length > 80) {
-    throw new Error('Invalid CRM user id for Stringee identity.');
-  }
-  return `crm_sale_${compact}`;
+  const normalized = crmUserId.trim();
+  if (!normalized || normalized.length > 200) throw new Error('Invalid CRM user id for Stringee identity.');
+  const digest = createHash('sha256').update(`crm-stringee-sale:${normalized}`).digest('hex').slice(0, 32);
+  return `crm_sale_${digest}`;
 }
 
 /** Create a short-lived Web-SDK access token. API secret never leaves the server. */
@@ -78,7 +78,7 @@ export function isAllowedCrmStringeeAgentUserId(userId: string, config?: Stringe
   if (!userId) return false;
   if (config?.aiAgentUserId && userId === config.aiAgentUserId) return true;
   if (config?.saleAgentUserId && userId === config.saleAgentUserId) return true;
-  return /^crm_sale_[a-z0-9]{16,80}$/.test(userId);
+  return /^crm_sale_[a-f0-9]{32}$/.test(userId);
 }
 
 /** Provider-specific Stringee details stay behind the generic CallProvider contract. */
