@@ -1,4 +1,5 @@
 import 'server-only';
+import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../supabase/admin';
 import {
@@ -65,13 +66,14 @@ function resolveCallProvider(injectedProvider?: CallProvider): CallProvider {
 export async function executeClickToCall(
   params: ClickToCallParams,
   callProvider?: CallProvider,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  browserTest?: { integrationId: string; from: string; to: string; requestId: string }
 ): Promise<ClickToCallResult> {
   if (!params || !params.customerId) {
     throw new ServerAuthError('Mã khách hàng không hợp lệ.', 400, 'RESOURCE_NOT_FOUND');
   }
 
-  const provider = resolveCallProvider(callProvider);
+  const provider = browserTest ? { name: 'STRINGEE' } : resolveCallProvider(callProvider);
 
   // 1. Authorize customer access with CLICK_TO_CALL purpose
   // Fixed policy: BOSS_ADMIN and SALE allowed; TECHNICIAN forbidden.
@@ -81,77 +83,45 @@ export async function executeClickToCall(
     client
   );
 
-  // 2. Privately resolve customer raw phone inside trusted server
-  const contact = await resolveCustomerPrivateContactForTrustedOperation(
-    customer.id,
-    CONTACT_ACCESS_PURPOSES.CLICK_TO_CALL,
-    client
+  // A test target is supplied only by the restricted server action, never raw browser input.
+  // It does not resolve or dial a customer's private phone.
+  const contact = browserTest ? null : await resolveCustomerPrivateContactForTrustedOperation(
+    customer.id, CONTACT_ACCESS_PURPOSES.CLICK_TO_CALL, client
   );
-
   const adminClient = createAdminClient();
-
   const providerDbValue = ['MANUAL', 'STRINGEE', 'VIETTEL', 'TWILIO', 'VINFON'].includes(provider.name)
-    ? provider.name
-    : 'MANUAL';
-
-  // 3. DURABLE ORCHESTRATION: Create call record in database BEFORE external dialing
-  const { data: callRecord, error: callError } = await adminClient
-    .from('calls')
-    .insert({
-      company_id: customer.company_id,
-      customer_id: customer.id,
-      direction: 'OUTBOUND',
-      // `agent_type = SALE` is the existing schema's human outbound-agent category.
-      // The actual RBAC actor (SALE or BOSS_ADMIN) is preserved in audit_logs.user_id.
-      agent_type: 'SALE',
-      started_at: new Date().toISOString(),
-      status: 'INITIATED',
-      provider: providerDbValue,
-      transcript_status: 'PENDING',
-    })
-    .select('id')
-    .single();
-
-  if (callError || !callRecord) {
-    throw new ServerAuthError('Lỗi khởi tạo hồ sơ cuộc gọi.', 500, 'CALL_PROVIDER_FAILURE');
-  }
-
-  // 4. MANDATORY AUDIT: Write INITIATE_CALL event
-  const { error: auditError } = await adminClient.from('audit_logs').insert({
-    company_id: customer.company_id,
-    user_id: actor.userId,
-    action: 'INITIATE_CALL',
-    resource_type: 'CALL',
-    resource_id: callRecord.id,
-    customer_id: customer.id,
-    result: 'SUCCESS',
-    metadata: {
-      call_id: callRecord.id,
-    },
+    ? provider.name : 'MANUAL';
+  // One transaction: durable call, actor audit, Stringee attempt and optional browser reservation.
+  const { data: prepared, error: prepareError } = await adminClient.rpc('prepare_sale_voice_call_atomic', {
+    p_company_id: customer.company_id, p_customer_id: customer.id, p_actor_id: actor.userId,
+    p_provider: providerDbValue, p_request_id: browserTest?.requestId || randomUUID(),
+    p_test_integration_id: browserTest?.integrationId || null,
+    p_test_from: browserTest?.from || null, p_test_to: browserTest?.to || null,
   });
-
-  if (auditError) {
-    // If audit write fails, mark call as FAILED and fail closed
-    await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callRecord.id);
-    throw new ServerAuthError(
-      'Lỗi ghi nhận kiểm toán cuộc gọi. Thao tác bị từ chối.',
-      500,
-      'AUDIT_WRITE_FAILED'
-    );
+  const row = Array.isArray(prepared) ? prepared[0] : prepared;
+  if (prepareError || !row?.call_id) {
+    throw new ServerAuthError('Không thể khởi tạo hồ sơ và kiểm toán cuộc gọi.', 409, 'CALL_PROVIDER_FAILURE');
   }
+  const callRecord = { id: row.call_id as string };
+  if (browserTest) return { success: true, callId: callRecord.id, status: 'PREPARED' };
 
   // 5. Invoke PBX provider adapter
   let providerResult: { providerCallId: string; status: string };
   try {
-    providerResult = await provider.initiateCall({
+    providerResult = await (provider as CallProvider).initiateCall({
       fromStaffUserId: actor.userId,
-      targetRawPhone: contact.rawPhone,
+      targetRawPhone: contact!.rawPhone,
+      correlationId: `crm_${callRecord.id}`,
       customerId: customer.id,
       companyId: customer.company_id,
     });
   } catch {
     // Mark call record as FAILED in database
-    await adminClient.from('calls').update({ status: 'FAILED' }).eq('id', callRecord.id);
+    await adminClient.rpc('apply_voice_call_status_atomic', {
+      p_company_id: customer.company_id, p_provider: providerDbValue,
+      p_provider_call_id: `crm_${callRecord.id}`, p_new_status: 'FAILED',
+      p_event_idempotency_key: `dispatch_failed_${callRecord.id}`,
+    });
 
     // CRITICAL SECURITY: NEVER expose _err.message to client as it could contain raw phone or PBX tokens!
     throw new ServerAuthError(
@@ -161,14 +131,13 @@ export async function executeClickToCall(
     );
   }
 
-  // 6. Update call record with provider correlation ID and status
-  await adminClient
-    .from('calls')
-    .update({
-      provider_call_id: providerResult.providerCallId,
-      status: 'RINGING',
-    })
-    .eq('id', callRecord.id);
+  // Signed answer callbacks may have already bound the canonical id. Do not overwrite it
+  // or regress CONNECTED/COMPLETED to RINGING after a fast callback.
+  const { error: bindError } = await adminClient.rpc('bind_sale_voice_provider_call', {
+    p_company_id: customer.company_id, p_call_id: callRecord.id,
+    p_provider_call_id: providerResult.providerCallId,
+  });
+  if (bindError) throw new ServerAuthError('Cuộc gọi cần đối soát liên kết.', 503, 'CALL_PROVIDER_FAILURE');
 
   // Insert non-textual system interaction event
   await adminClient.from('interactions').insert({

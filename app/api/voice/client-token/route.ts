@@ -1,3 +1,5 @@
+import { authorizeCustomerAccess } from '../../../../lib/server-auth/resource-access';
+import { resolveBrowserBusinessTest } from '../../../../features/voice/services/browser-business-test';
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '../../../../lib/supabase/server';
 import { AuthError, getActorContext, requireActiveMember, requireBossAdmin } from '../../../../lib/auth/context';
@@ -41,7 +43,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'VOICE_TEST_DISABLED' }, { status: 403 });
     }
     if (testClient !== null) await requireBossAdmin(actor.companyId, {}, client);
-    const testUsers = testClient !== null ? toStringeeTestUserIds(actor.userId, actor.companyId) : null;
+    const testCustomer = request.nextUrl.searchParams.get('testCustomer');
+    if (testCustomer !== null && testClient === null) return NextResponse.json({ error: 'VOICE_TEST_FORBIDDEN' }, { status: 403 });
+    let testUsers = testClient !== null ? toStringeeTestUserIds(actor.userId, actor.companyId) : null;
+    if (testCustomer !== null) {
+      const { customer } = await authorizeCustomerAccess(testCustomer, 'CLICK_TO_CALL', client);
+      if (customer.company_id !== actor.companyId) return NextResponse.json({ error: 'VOICE_TEST_FORBIDDEN' }, { status: 403 });
+      testUsers = await resolveBrowserBusinessTest(actor.companyId, actor.userId, customer.id);
+    }
     const userId = testUsers
       ? testUsers[testClient as 'A' | 'B']
       : toStringeeSaleUserId(actor.userId, actor.companyId);

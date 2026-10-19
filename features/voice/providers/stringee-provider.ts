@@ -129,10 +129,11 @@ export class StringeeProvider implements CallProvider {
   async initiateCall(params: {
     fromStaffUserId: string;
     targetRawPhone: string;
+    correlationId?: string;
     customerId: string;
     companyId: string;
   }): Promise<{ providerCallId: string; status: string }> {
-    const correlationId = `crm_${randomUUID()}`;
+    const correlationId = params.correlationId || `crm_${randomUUID()}`;
     const agentUserId = params.fromStaffUserId === 'AI_WORKER'
       ? this.aiAgentUserId
       : toStringeeSaleUserId(params.fromStaffUserId, params.companyId);

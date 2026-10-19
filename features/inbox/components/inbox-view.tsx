@@ -80,7 +80,7 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
   return null;
 }
 
-export default function InboxView({ initialCustomerId, userFullName }: InboxViewProps) {
+export default function InboxView({ initialCustomerId, userFullName, userRole }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
@@ -1302,6 +1302,9 @@ export default function InboxView({ initialCustomerId, userFullName }: InboxView
                 </div>
 
                 <div className="text-xs text-slate-400 flex items-center gap-2">
+                  {selectedConversation.customer_id && (userRole === 'SALE' || userRole === 'BOSS_ADMIN') && (
+                    <Link href={`/calls/${selectedConversation.customer_id}`} className="rounded-lg bg-emerald-700 px-3 py-2 text-white">Gọi khách</Link>
+                  )}
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Trực tuyến</span>
                 </div>

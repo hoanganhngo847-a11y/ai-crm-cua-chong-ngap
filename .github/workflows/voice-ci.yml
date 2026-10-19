@@ -32,4 +32,5 @@ jobs:
       - run: npm run test:auth
       - run: npm run test:security
       - run: npm run test:voice
+      - run: npm run test:voice:business
       - run: git diff --check

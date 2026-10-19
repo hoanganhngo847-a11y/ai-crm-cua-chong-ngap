@@ -1,3 +1,4 @@
+import { createAdminClient } from '../../../../../lib/supabase/admin';
 import { NextResponse, type NextRequest } from 'next/server';
 import {
   verifyWebhookSignature,
@@ -87,7 +88,13 @@ export async function GET(request: NextRequest, context: Context): Promise<NextR
         !isStringeeTestPair(from, to, url.searchParams.get('userId') || '')) {
       return NextResponse.json({ error: 'VOICE_TEST_FORBIDDEN' }, { status: 403 });
     }
-    // Diagnostics only: internal endpoints, no customer, PSTN dispatch or recording.
+    // Bind only an existing, server-reserved CRM business call. Legacy diagnostics remain unbound.
+    const { error: bindError } = await createAdminClient().rpc('bind_voice_browser_test_call', {
+      p_integration_id: integration.integrationId, p_from: from, p_to: to,
+      p_provider_call_id: stringeeCallId,
+    });
+    if (bindError) return NextResponse.json({ error: 'VOICE_TEST_BIND_FAILED' }, { status: 503 });
+    // Internal endpoints only: no PSTN dispatch or recording.
     return NextResponse.json(buildStringeeConnectScco({
       action: 'connect',
       from: { type: 'internal', number: from, alias: 'CRM Test A' },

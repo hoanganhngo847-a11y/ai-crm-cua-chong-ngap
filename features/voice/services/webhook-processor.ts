@@ -182,15 +182,13 @@ export async function bindStringeeCallId(
     return false;
   }
   const adminClient = createAdminClient();
-  const { data, error } = await adminClient
-    .from('calls')
-    .update({ provider_call_id: stringeeCallId })
-    .eq('company_id', companyId)
-    .eq('provider', 'STRINGEE')
-    .eq('provider_call_id', correlationId)
-    .select('id')
-    .maybeSingle();
-  return !error && Boolean(data);
+  const { data: call } = await adminClient.from('calls').select('id')
+    .eq('company_id', companyId).eq('provider', 'STRINGEE').eq('provider_call_id', correlationId).maybeSingle();
+  if (!call) return false;
+  const { error } = await adminClient.rpc('bind_sale_voice_provider_call', {
+    p_company_id: companyId, p_call_id: call.id, p_provider_call_id: stringeeCallId,
+  });
+  return !error;
 }
 
 // ---------------------------------------------------------------------------

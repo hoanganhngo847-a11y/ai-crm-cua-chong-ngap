@@ -1,5 +1,9 @@
 'use server';
 
+import { requireBossAdmin } from '../../lib/auth/context';
+import { authorizeCustomerAccess } from '../../lib/server-auth/resource-access';
+import { resolveBrowserBusinessTest } from '../../features/voice/services/browser-business-test';
+import { createAdminClient } from '../../lib/supabase/admin';
 import { createClient } from '../../lib/supabase/server';
 import { getActorContext } from '../../lib/auth/context';
 import { requireActiveMember } from '../../lib/auth/context';
@@ -237,6 +241,8 @@ export async function callCustomerViaVoiceAction(
     if (actor.role === 'TECHNICIAN') {
       return { success: false, error: 'Kỹ thuật viên không có quyền gọi khách.' };
     }
+    const { customer } = await authorizeCustomerAccess(params.customerId, 'CLICK_TO_CALL', client);
+    if (customer.company_id !== companyId) throw new ServerAuthError('Không tìm thấy khách hàng.', 404, 'RESOURCE_NOT_FOUND');
     const provider = await resolveVoiceCallProviderForCompany(companyId);
     const result = await executeClickToCall(params, provider, client);
     return { success: true, data: { callId: result.callId, status: result.status } };
@@ -246,4 +252,42 @@ export async function callCustomerViaVoiceAction(
       error: err instanceof ServerAuthError ? err.message : 'Không thể thực hiện cuộc gọi.',
     };
   }
+}
+
+/** Restricted test adapter into the same customer-authorized Sale business flow. No PSTN provider is invoked. */
+export async function prepareBrowserBusinessCallAction(params: { customerId: string; requestId: string }): Promise<{
+  success: boolean; data?: { callId: string; status: string }; error?: string;
+}> {
+  try {
+    if (!params || !/^[0-9a-f-]{36}$/i.test(params.requestId)) throw new Error('INVALID_REQUEST');
+    const { companyId, client } = await resolveCompanyId();
+    const actor = await requireBossAdmin(companyId, {}, client);
+    const { customer } = await authorizeCustomerAccess(params.customerId, 'CLICK_TO_CALL', client);
+    if (customer.company_id !== companyId) throw new Error('CUSTOMER_SCOPE');
+    const test = await resolveBrowserBusinessTest(companyId, actor.userId, customer.id);
+    const result = await executeClickToCall({ customerId: customer.id }, undefined, client, {
+      integrationId: test.integrationId, from: test.A, to: test.B, requestId: params.requestId,
+    });
+    return { success: true, data: { callId: result.callId, status: result.status } };
+  } catch (error) {
+    return { success: false, error: error instanceof ServerAuthError ? error.message : 'Không thể tạo cuộc gọi test nghiệp vụ.' };
+  }
+}
+
+/** Clean up a prepared test call only when the SDK rejected before canonical provider binding. */
+export async function cancelPreparedBrowserBusinessCallAction(params: { callId: string }): Promise<void> {
+  const { companyId, client } = await resolveCompanyId();
+  const actor = await requireBossAdmin(companyId, {}, client);
+  const admin = createAdminClient();
+  const { data: call } = await admin.from('calls').select('id, customer_id')
+    .eq('id', params.callId).eq('company_id', companyId).eq('initiated_by', actor.userId)
+    .eq('status', 'INITIATED').eq('provider_call_id', `crm_${params.callId}`).maybeSingle();
+  if (!call) return;
+  await resolveBrowserBusinessTest(companyId, actor.userId, call.customer_id);
+  const { data: session } = await admin.from('voice_browser_call_sessions').select('call_id').eq('call_id', call.id).maybeSingle();
+  if (!session) return;
+  await admin.rpc('apply_voice_call_status_atomic', {
+    p_company_id: companyId, p_provider: 'STRINGEE', p_provider_call_id: `crm_${call.id}`,
+    p_new_status: 'FAILED', p_event_idempotency_key: `browser_dispatch_failed_${call.id}`,
+  });
 }

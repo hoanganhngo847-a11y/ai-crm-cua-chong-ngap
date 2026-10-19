@@ -20,6 +20,7 @@ const PLATFORM_STUBS = `
 CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
 CREATE ROLE supabase_auth_admin NOLOGIN; CREATE ROLE authenticator NOLOGIN;
 CREATE SCHEMA auth; CREATE SCHEMA storage; CREATE SCHEMA extensions;
+CREATE PUBLICATION supabase_realtime;
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 CREATE TABLE auth.users (id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb default '{}'::jsonb, created_at timestamptz default now());
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true),'')::uuid $$;
