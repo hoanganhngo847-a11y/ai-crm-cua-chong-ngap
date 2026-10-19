@@ -82,6 +82,7 @@ export default function CallToCustomerButton({
   const [callStatus, setCallStatus] = useState<'IDLE' | 'DIALING' | 'WAITING' | 'INCOMING' | 'ACTIVE' | 'ENDED' | 'ERROR'>('IDLE');
   const [callId, setCallId] = useState<string | null>(null);
   const [callMessage, setCallMessage] = useState<string | null>(null);
+  const [manualAnswerRequired, setManualAnswerRequired] = useState(false);
   const clientRef = useRef<StringeeClientLike | null>(null);
   const callRef = useRef<StringeeCallLike | null>(null);
   const pendingOutgoingRef = useRef(false);
@@ -122,11 +123,13 @@ export default function CallToCustomerButton({
     call.on('signalingstate', ((state: StringeeState) => {
       const reason = String(state?.reason || '').toLowerCase();
       if (reason.includes('answer') || reason.includes('connected')) {
+        setManualAnswerRequired(false);
         setCallStatus('ACTIVE');
         setCallMessage('Đã kết nối — cuộc gọi đang được ghi âm.');
       }
       if (reason.includes('end') || reason.includes('hangup') || reason.includes('busy') || reason.includes('reject')) {
         pendingOutgoingRef.current = false;
+        setManualAnswerRequired(false);
         setCallStatus('ENDED');
         setCallMessage('Cuộc gọi đã kết thúc. Bản ghi sẽ được xử lý tự động.');
         clearRemoteMedia();
@@ -137,6 +140,7 @@ export default function CallToCustomerButton({
 
   const answerIncoming = useCallback((call: StringeeCallLike) => {
     callRef.current = call;
+    setManualAnswerRequired(false);
     attachCallEvents(call);
     call.answer((result) => {
       if (typeof result?.r === 'number' && result.r !== 0) {
@@ -194,8 +198,12 @@ export default function CallToCustomerButton({
         callRef.current = incoming;
         setCallStatus('INCOMING');
         setCallMessage('Khách đã bắt máy. Đang nối cuộc gọi tới trình duyệt…');
-        if (pendingOutgoingRef.current) answerIncoming(incoming);
-        else attachCallEvents(incoming);
+        if (pendingOutgoingRef.current) {
+          answerIncoming(incoming);
+        } else {
+          setManualAnswerRequired(true);
+          attachCallEvents(incoming);
+        }
       }) as never;
       client.on('incomingcall', onIncoming);
       client.on('incomingcall2', onIncoming);
@@ -211,8 +219,11 @@ export default function CallToCustomerButton({
   }, [answerIncoming, attachCallEvents, fetchClientToken]);
 
   useEffect(() => {
-    void connectSoftphone();
+    const startTimer = window.setTimeout(() => {
+      void connectSoftphone();
+    }, 0);
     return () => {
+      window.clearTimeout(startTimer);
       pendingOutgoingRef.current = false;
       try { callRef.current?.hangup(); } catch { /* best-effort cleanup */ }
       try { clientRef.current?.disconnect(); } catch { /* best-effort cleanup */ }
@@ -243,6 +254,7 @@ export default function CallToCustomerButton({
     if (!(await requestMicrophone())) return;
 
     pendingOutgoingRef.current = true;
+    setManualAnswerRequired(false);
     setCallStatus('DIALING');
     setCallMessage('Đang yêu cầu tổng đài gọi khách…');
     setCallId(null);
@@ -269,6 +281,7 @@ export default function CallToCustomerButton({
   const handleHangup = () => {
     const call = callRef.current;
     pendingOutgoingRef.current = false;
+    setManualAnswerRequired(false);
     if (!call) {
       setCallStatus('ENDED');
       setCallMessage('Đã hủy chờ kết nối.');
@@ -308,7 +321,7 @@ export default function CallToCustomerButton({
           <span>{active ? 'ĐANG GỌI…' : 'GỌI & GHI ÂM'}</span>
         </button>
 
-        {callStatus === 'INCOMING' && !pendingOutgoingRef.current && (
+        {callStatus === 'INCOMING' && manualAnswerRequired && (
           <button
             type="button"
             onClick={handleAnswer}
