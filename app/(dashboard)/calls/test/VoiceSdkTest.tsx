@@ -70,13 +70,14 @@ function TestClient({ side }: { side: 'A' | 'B' }) {
       sdkClient.on('connect', (() => { if (current === generation.current) log('connect'); }) as never);
       sdkClient.on('authen', ((result: StringeeResult) => {
         if (current !== generation.current) return;
-        log(`authen: r=${result.r}`);
+        const message = String(result.message || '').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[JWT REDACTED]').slice(0, 200);
+        log(`authen: r=${result.r} ${message}`);
         setStatus(result.r === 0 ? 'Connected' : 'Error');
-        if (result.r !== 0) setError('Stringee authentication failed');
+        if (result.r !== 0) setError(`Stringee authentication failed: ${message || result.r}`);
       }) as never);
       sdkClient.on('disconnect', (() => {
         if (current !== generation.current) return;
-        setStatus('Disconnected'); log('disconnect');
+        setStatus(previous => previous === 'Error' ? 'Error' : 'Disconnected'); log('disconnect');
       }) as never);
       sdkClient.on('requestnewtoken', (() => {
         if (current !== generation.current) return;
