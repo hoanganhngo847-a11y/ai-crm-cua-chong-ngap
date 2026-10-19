@@ -227,18 +227,23 @@ function TestClient({ side, customer }: { side: 'A' | 'B'; customer?: TestCustom
   </section>;
 }
 
-export default function VoiceSdkTest({ customer, testCustomerIds = [] }: { customer?: TestCustomer; testCustomerIds?: string[] }) {
+export default function VoiceSdkTest({ customer, clientSide, testCustomerIds = [] }: { customer?: TestCustomer; clientSide?: 'A' | 'B'; testCustomerIds?: string[] }) {
   const [normalToken, setNormalToken] = useState('Chưa kiểm tra');
   return <div className="space-y-5">
     <h1 className="text-2xl font-bold">CRM Voice — {customer ? 'Business App-to-App Test' : 'App-to-App Test'}</h1>
     {customer ? <p>Customer test: {customer.name} [{customer.customer_code}] · {customer.id} · <Link href={`/calls/${customer.id}`}>Lịch sử CRM</Link></p>
       : testCustomerIds.map(id => <Link className="block text-blue-300" key={id} href={`/calls/test?customerId=${id}`}>Mở business test cho customer {id}</Link>)}
-    <p className="text-sm text-slate-400">Hai client test riêng trong trình duyệt hiện tại. Kết nối A và B, sau đó gọi A → B và nhận tại B. Recording: Off. PSTN: Disabled.</p>
+    {customer && clientSide ? <div className="space-y-2 text-sm text-slate-300">
+      <p>Tab này chạy Client {clientSide}. Mỗi tab chỉ kết nối một client để kiểm tra âm thanh hai chiều. Recording: Off. PSTN: Disabled.</p>
+      <Link className="inline-block rounded bg-blue-700 px-3 py-2 text-white" href={`/calls/test?customerId=${encodeURIComponent(customer.id)}&side=${clientSide === 'A' ? 'B' : 'A'}`} target="_blank" rel="noopener noreferrer">Mở Client {clientSide === 'A' ? 'B' : 'A'} ở tab riêng</Link>
+      <p>Kết nối A và B, gọi từ A rồi nhận tại B. Chỉ dùng customer test hiển thị phía trên.</p>
+    </div> : <p className="text-sm text-slate-400">Hai client diagnostic riêng. Dùng business test để kiểm tra luồng CRM và audio trong hai tab. Recording: Off. PSTN: Disabled.</p>}
     <button className="px-3 py-2 rounded bg-slate-700" onClick={() => {
       void getToken().then(result => setNormalToken(`${result.summary} · userId: ${result.data.userId}`))
         .catch(error => setNormalToken(error instanceof Error ? error.message : 'TOKEN_FAILED'));
     }}>Kiểm tra token CRM</button>
     <p className="text-xs break-all" role="status">{normalToken}</p>
-    <div className="grid gap-4 lg:grid-cols-2"><TestClient side="A" customer={customer} /><TestClient side="B" customer={customer} /></div>
+    {customer && clientSide ? <TestClient side={clientSide} customer={customer} />
+      : <div className="grid gap-4 lg:grid-cols-2"><TestClient side="A" /><TestClient side="B" /></div>}
   </div>;
 }
