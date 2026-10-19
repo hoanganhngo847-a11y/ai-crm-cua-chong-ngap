@@ -60,6 +60,20 @@ async function main() {
     assert.equal((await db.query<Record<string, unknown>>(`SELECT count(*)::int AS n FROM call_attempts`)).rows[0].n,1);
     assert.equal((await db.query<Record<string, unknown>>(`SELECT count(*)::int AS n FROM voice_webhook_events WHERE call_id=$1 AND processed_at IS NOT NULL`,[prepared.call_id])).rows[0].n,6);
     assert.equal((await db.query<Record<string, unknown>>(`SELECT stage FROM customers WHERE id=$1`,[customer])).rows[0].stage,'LEAD_NEW');
+    // The same preparation supports real human Sale calls, without enabling the restricted browser test.
+    const human=(await db.query<{call_id:string;attempt_id:string}>(
+      `SELECT * FROM prepare_sale_voice_call_atomic($1,$2,$3,'STRINGEE',$4)`,[tenant,realCustomer,sale,randomUUID()])).rows[0];
+    assert.ok(human.attempt_id);
+    await db.query(`SELECT * FROM apply_voice_call_status_atomic($1,'STRINGEE',$2,'NO_ANSWER','human-no-answer',null,now()+interval '1 hour')`,[tenant,`crm_${human.call_id}`]);
+    assert.equal((await db.query<Record<string,unknown>>(`SELECT count(*)::int AS n FROM call_attempts WHERE customer_id=$1`,[realCustomer])).rows[0].n,1);
+    assert.equal((await db.query<Record<string,unknown>>(`SELECT stage FROM customers WHERE id=$1`,[realCustomer])).rows[0].stage,'LEAD_NEW');
+    // Mandatory audit failure rolls back both durable records, before any provider can be invoked.
+    const before=(await db.query<Record<string,unknown>>(`SELECT count(*)::int AS n FROM calls`)).rows[0].n;
+    await db.exec(`CREATE FUNCTION pg_temp.reject_voice_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'INJECTED_AUDIT_FAILURE'; END $$;
+      CREATE TRIGGER voice_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_voice_audit();`);
+    await assert.rejects(db.query(`SELECT * FROM prepare_sale_voice_call_atomic($1,$2,$3,'STRINGEE',$4)`,[tenant,realCustomer,sale,randomUUID()]));
+    await db.exec(`DROP TRIGGER voice_audit_failure ON audit_logs`);
+    assert.equal((await db.query<Record<string,unknown>>(`SELECT count(*)::int AS n FROM calls`)).rows[0].n,before);
     await db.exec(`SET ROLE authenticated`);
     await assert.rejects(prepare());
     await assert.rejects(db.query<Record<string, unknown>>(`SELECT * FROM voice_browser_call_sessions`));
