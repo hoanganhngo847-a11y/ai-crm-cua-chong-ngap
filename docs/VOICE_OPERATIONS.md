@@ -17,7 +17,7 @@ Tài liệu: [Stringee outbound](https://developer.stringee.com/docs/rest-api-re
 1. Apply lần lượt migration `20260921000001_voice_media_pipeline.sql`, `20260921000002_openai_realtime.sql` và `20260922000003_voice_security_hardening.sql`.
 2. Chép nhóm biến Voice trong `.env.example` sang môi trường triển khai.
 3. Sinh hai routing token ngẫu nhiên tối thiểu 32 ký tự (một Stringee, một OpenAI). Chỉ lưu SHA-256 của token và tên biến môi trường trong `voice_provider_integrations`; secret thật không nằm trong DB.
-4. Trên Stringee Dashboard, cấu hình Event URL và Answer URL thành `https://<domain>/api/webhooks/voice/<STRINGEE_ROUTING_TOKEN>`, bật recording. `project_id` từ webhook phải khớp `provider_account_id` đã cấu hình.
+4. Trên Stringee Dashboard, cấu hình Event URL và Answer URL thành `https://<domain>/api/webhooks/voice/<STRINGEE_ROUTING_TOKEN>`, chỉ bật recording sau khi được cho phép và đặt `VOICE_RECORDING_ENABLED=true`. `project_id` từ webhook phải khớp `provider_account_id` đã cấu hình.
 5. Tạo Stringee user/SIP endpoint cho sale và AI; cấu hình qua các biến env được integration row tham chiếu.
 6. Tạo OpenAI Project webhook trỏ tới `https://<domain>/api/webhooks/openai-realtime/<OPENAI_ROUTING_TOKEN>` và đăng ký event `realtime.call.incoming`.
 7. Route leg AI từ Stringee qua SBC/SIP bridge tới `sip:<OPENAI_PROJECT_ID>@sip.api.openai.com;transport=tls`.
@@ -94,3 +94,32 @@ CI không thể xác nhận PSTN thật; bước đó cần Stringee credentials
 - Dùng transcript provider lỗi, xác nhận `transcript_status=FAILED` sau lần cuối và không có object public.
 - Đăng nhập SALE, tìm `Nguyễn Văn A`/`KH-000123`, kiểm tra Network/Console không có số thật.
 - Đăng nhập BOSS_ADMIN+AAL2 mới mở được recording/transcript; SALE và TECHNICIAN bị từ chối.
+
+
+## Web SDK test without PSTN
+
+The client-token endpoint resolves the authenticated active membership server-side and uses the
+integration's `api_key_env` / `api_secret_env` references. It does not require a caller number.
+Set API SID, API secret, and project signing secret as server environment variables; never use
+`NEXT_PUBLIC_` for them. The DB stores their environment variable names, not secret values.
+
+Identities hash both company and user IDs. Browser responses contain only the short-lived
+client JWT, opaque userId, and public configuration. REST JWTs stay server-side.
+
+For the isolated admin diagnostic, set `STRINGEE_APP_TO_APP_TEST_PROJECT_ID` to the test project's
+ID and open `/calls/test` with BOSS_ADMIN + MFA. Two test-only identities are generated from that
+actor and tenant. The signed Answer URL permits only these paired internal identities;
+PSTN targets and real sales identities are rejected. The diagnostic uses two independent SDK
+clients in one browser and emits no recording SCCO, customer rows or dispatch commands.
+Call status webhooks are verified with HMAC-SHA1 and persisted in `voice_webhook_events`;
+without a customer call, there is intentionally no `calls` or `call_attempts` row to update.
+
+Use the production integration's exact opaque webhook route as Event URL and, for this SDK
+test, Answer URL. Keep the routing token out of version control. Preserve its SHA-256 hash in
+the DB integration. `VOICE_RECORDING_ENABLED` defaults to false. Native `type: recording`
+callbacks normalize to recording-ready jobs and the record action explicitly includes eventUrl.
+The legacy COMPLETED-event recording import fallback also requires the recording flag.
+
+Recording, media import, transcription and domain-specific intake extraction still require
+separate end-to-end acceptance. The existing door/flood intake extractor is technical debt;
+this integration does not change it into any other business domain.

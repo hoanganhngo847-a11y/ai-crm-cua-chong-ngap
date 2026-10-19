@@ -51,11 +51,33 @@ export function createStringeeRestToken(
  * Hashing prevents the CRM auth UUID from becoming a provider-visible identifier while preserving
  * deterministic routing between the server-initiated call and the sale's browser softphone.
  */
-export function toStringeeSaleUserId(crmUserId: string): string {
+export function toStringeeSaleUserId(crmUserId: string, companyId: string): string {
   const normalized = crmUserId.trim();
-  if (!normalized || normalized.length > 200) throw new Error('Invalid CRM user id for Stringee identity.');
-  const digest = createHash('sha256').update(`crm-stringee-sale:${normalized}`).digest('hex').slice(0, 32);
+  if (!normalized || normalized.length > 200 || !companyId?.trim()) throw new Error('Invalid CRM identity.');
+  const digest = createHash('sha256').update(JSON.stringify(['crm-stringee-sale', companyId, normalized])).digest('hex').slice(0, 32);
   return `crm_sale_${digest}`;
+}
+
+/** Two isolated diagnostic identities; neither can impersonate a real sale. */
+export function toStringeeTestUserIds(crmUserId: string, companyId: string): { A: string; B: string } {
+  const suffix = toStringeeSaleUserId(crmUserId, companyId).slice('crm_sale_'.length);
+  return { A: `crm_test_${suffix}_a`, B: `crm_test_${suffix}_b` };
+}
+
+export function isStringeeTestPair(from: string, to: string, authenticatedUserId: string): boolean {
+  const source = /^crm_test_([a-f0-9]{32})_([ab])$/.exec(from);
+  const target = /^crm_test_([a-f0-9]{32})_([ab])$/.exec(to);
+  return Boolean(source && target && source[1] === target[1] && source[2] !== target[2] && from === authenticatedUserId);
+}
+
+/** Recording is opt-in. Its callback is explicit, separate from call status events. */
+export function buildStringeeConnectScco(
+  connect: Record<string, unknown>, recordingEnabled: boolean, eventUrl: string
+): Array<Record<string, unknown>> {
+  return [
+    ...(recordingEnabled ? [{ action: 'record', format: 'mp3', eventUrl }] : []),
+    { ...connect, peerToPeerCall: !recordingEnabled },
+  ];
 }
 
 /** Create a short-lived Web-SDK access token. API secret never leaves the server. */
@@ -111,7 +133,7 @@ export class StringeeProvider implements CallProvider {
     const correlationId = `crm_${randomUUID()}`;
     const agentUserId = params.fromStaffUserId === 'AI_WORKER'
       ? this.aiAgentUserId
-      : toStringeeSaleUserId(params.fromStaffUserId);
+      : toStringeeSaleUserId(params.fromStaffUserId, params.companyId);
     if (!agentUserId) throw new Error('Stringee agent is not configured.');
     const answerUrl = new URL(this.answerUrl);
     answerUrl.searchParams.set('crmCorrelationId', correlationId);

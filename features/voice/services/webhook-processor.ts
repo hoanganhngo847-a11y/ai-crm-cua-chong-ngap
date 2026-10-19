@@ -108,6 +108,14 @@ export function verifyWebhookSignature(
 
 /** Convert provider-native Stringee events to the module's stable event contract. */
 export function normalizeVoiceWebhookPayload(payload: VoiceWebhookPayload): VoiceWebhookPayload {
+  if (!payload.event && payload.type === 'recording') {
+    return {
+      ...payload,
+      event: 'call.recording_ready',
+      provider_call_id: payload.provider_call_id || payload.call_id,
+      recording_id: payload.recording_id || payload.call_id,
+    };
+  }
   if (payload.event || !payload.call_status) return payload;
 
   const status = payload.call_status.toLowerCase();
@@ -136,6 +144,7 @@ export function normalizeVoiceWebhookPayload(payload: VoiceWebhookPayload): Voic
     from_number: payload.from_number || payload.from?.number,
     to_number: payload.to_number || payload.to?.number,
     duration: payload.duration,
+    timestamp: payload.timestamp ?? payload.timestamp_ms as number | undefined,
   };
 }
 
@@ -257,7 +266,7 @@ export async function processCallStatusUpdate(
     return { handled: true, message: 'duplicate event acknowledged' };
   }
 
-  if (newStatus === 'COMPLETED') {
+  if (newStatus === 'COMPLETED' && process.env.VOICE_RECORDING_ENABLED === 'true') {
     try {
       await processRecordingReady({
         event: 'call.recording_ready',

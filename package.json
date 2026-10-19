@@ -58,7 +58,8 @@
     "test:commercial:db": "tsx --conditions=react-server tests/commercial/commercial-db.integration.test.ts",
     "test:round3-product-runtime": "tsx --conditions=react-server tests/e2e/round3-product-runtime.test.ts",
     "test:all": "npm run test:auth && npm run test:security && npm run test:crm && npm run test:inbox",
-    "test": "npm run test:auth && npm run test:security && npm run test:survey"
+    "test": "npm run test:auth && npm run test:security && npm run test:survey",
+    "test:voice:unit": "node --conditions=react-server tests/run-voice-tests.cjs --unit"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
