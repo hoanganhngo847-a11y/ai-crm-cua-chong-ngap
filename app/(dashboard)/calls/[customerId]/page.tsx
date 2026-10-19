@@ -1,4 +1,7 @@
 import React from 'react';
+import Link from 'next/link';
+import { authorizeCustomerAccess } from '../../../../lib/server-auth/resource-access';
+import { resolveBrowserBusinessTest } from '../../../../features/voice/services/browser-business-test';
 import { redirect, notFound } from 'next/navigation';
 import { getActorContext } from '../../../../lib/auth/context';
 import { getCallHistoryAction, getContactCycleStatusAction } from '../../../actions/voice';
@@ -47,10 +50,16 @@ export default async function CustomerCallsPage({ params }: Props) {
     notFound();
   }
 
-  // Thông tin khách từ lịch sử (item đầu tiên)
-  const firstCall = historyResult.data?.items[0];
-  const customerName = firstCall?.customerName || 'Khách hàng';
-  const customerCode = firstCall?.customerCode || '';
+  const { customer } = await authorizeCustomerAccess(customerId, 'CLICK_TO_CALL');
+  if (customer.company_id !== actor.companyId) notFound();
+  let businessTestEnabled = false;
+  if (isBossAdmin) {
+    try { await resolveBrowserBusinessTest(actor.companyId, actor.userId, customerId); businessTestEnabled = true; }
+    catch { /* Not a registered test customer/project. */ }
+  }
+  // Resolve the customer even when no call history exists.
+  const customerName = customer.name;
+  const customerCode = customer.customer_code;
 
   return (
     <div className="space-y-8">
@@ -79,6 +88,7 @@ export default async function CustomerCallsPage({ params }: Props) {
         </div>
       </div>
 
+      {businessTestEnabled && <Link className="inline-block rounded-lg bg-blue-700 px-4 py-2 text-white" href={`/calls/test?customerId=${customerId}`}>Thử cuộc gọi CRM tới Client B (không PSTN)</Link>}
       {/* Chu kỳ gọi hiện tại */}
       {cycleResult.success && cycleResult.data && (
         <section>

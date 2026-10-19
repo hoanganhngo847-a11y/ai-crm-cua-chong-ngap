@@ -75,6 +75,7 @@ export interface CallProvider {
   initiateCall(params: {
     fromStaffUserId: string;
     targetRawPhone: string;
+    correlationId?: string;
     customerId: string;
     companyId: string;
   }): Promise<{
