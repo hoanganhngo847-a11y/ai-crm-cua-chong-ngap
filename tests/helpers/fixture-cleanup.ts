@@ -139,6 +139,9 @@ BEGIN
     DELETE FROM public.customer_stage_histories WHERE company_id IN (${idList});
     DELETE FROM public.ai_analyses WHERE company_id IN (${idList});
     DELETE FROM public.sales_style_profiles WHERE company_id IN (${idList});
+    DELETE FROM public.zalo_personal_calls WHERE company_id IN (${idList});
+    DELETE FROM public.zalo_customer_identity_mappings WHERE company_id IN (${idList});
+    DELETE FROM public.zalo_recording_devices WHERE company_id IN (${idList});
     DELETE FROM public.audit_logs WHERE company_id IN (${idList});
     DELETE FROM public.customers WHERE company_id IN (${idList});
 
