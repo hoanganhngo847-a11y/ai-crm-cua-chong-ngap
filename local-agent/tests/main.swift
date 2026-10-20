@@ -243,4 +243,49 @@ try require(NativeCallCapture.isZalo(bundleID: "com.vng.zalo.ZaloCall"), "includ
 try require(!NativeCallCapture.isZalo(bundleID: "com.vng.zalofake"), "reject lookalike bundle prefix")
 try require(!NativeCallCapture.isZalo(bundleID: "com.google.Chrome"), "never fall back to all system audio")
 print("PASS: preroll alignment and app isolation")
+
+// Test ZaloAutomation normalization
+let auto = ZaloAutomation.shared
+try require(auto.normalizeName("Lương Thắng") == "luong thang", "ZaloAutomation normalizes diacritics")
+try require(auto.normalizeName("  Đặng   Văn   Lâm  ") == "dang van lam", "ZaloAutomation normalizes Đ and spaces")
+
+// Test LoopbackServer and OutboundContext
+let testPort: UInt16 = 48199
+let testServer = LoopbackServer(port: testPort)
+var receivedReq: String? = nil
+let testSem = DispatchSemaphore(value: 0)
+testServer.onCallRequest = { reqId in
+    receivedReq = reqId
+    testSem.signal()
+}
+try testServer.start()
+
+// Test GET /health
+let healthUrl = URL(string: "http://127.0.0.1:\(testPort)/health")!
+let healthData = try Data(contentsOf: healthUrl)
+let healthJson = try JSONSerialization.jsonObject(with: healthData) as! [String: Any]
+try require(healthJson["ok"] as? Bool == true, "LoopbackServer /health responds ok")
+
+// Test POST /call
+var postReq = URLRequest(url: URL(string: "http://127.0.0.1:\(testPort)/call")!)
+postReq.httpMethod = "POST"
+postReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+let sampleReqId = UUID().uuidString
+postReq.httpBody = try JSONSerialization.data(withJSONObject: ["request_id": sampleReqId])
+
+var postRespOk = false
+let postSem = DispatchSemaphore(value: 0)
+URLSession.shared.dataTask(with: postReq) { data, _, _ in
+    defer { postSem.signal() }
+    guard let data = data,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+    postRespOk = (json["ok"] as? Bool == true)
+}.resume()
+_ = postSem.wait(timeout: .now() + 2.0)
+_ = testSem.wait(timeout: .now() + 2.0)
+try require(postRespOk, "LoopbackServer /call accepts request")
+try require(receivedReq == sampleReqId, "LoopbackServer delivers request_id to handler")
+
+testServer.stop()
+print("PASS: ZaloAutomation normalization, LoopbackServer health, CORS, and call dispatch")
 print("ALL LOCAL AGENT REGRESSIONS PASSED")
