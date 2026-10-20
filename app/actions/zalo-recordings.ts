@@ -43,13 +43,126 @@ export async function playZaloRecording(callId: string) {
   return data.signedUrl;
 }
 export async function listZaloDevices() {
-  const actor=await recordingActor(true),admin=createAdminClient();
-  const [{data,error},{data:staff,error:staffError}]=await Promise.all([
-    admin.from('zalo_recording_devices').select('id,device_name,staff_user_id,active,last_seen_at,created_at').eq('company_id',actor.companyId).order('created_at',{ascending:false}),
-    admin.from('company_members').select('user_id,role,user_profiles(full_name)').eq('company_id',actor.companyId).eq('status','ACTIVE').in('role',['SALE','BOSS_ADMIN'])
+  const actor = await recordingActor(true), admin = createAdminClient();
+  const [{ data, error }, { data: staff, error: staffError }] = await Promise.all([
+    admin.from('zalo_recording_devices')
+      .select('id,device_name,staff_user_id,active,last_seen_at,created_at,agent_version,agent_status,zalo_running,permissions_ok,permissions_detail,loopback_ready,last_error_code,last_error_at')
+      .eq('company_id', actor.companyId)
+      .order('created_at', { ascending: false }),
+    admin.from('company_members')
+      .select('user_id,role,user_profiles(full_name)')
+      .eq('company_id', actor.companyId)
+      .eq('status', 'ACTIVE')
+      .in('role', ['SALE', 'BOSS_ADMIN'])
   ]);
-  if(error || staffError) throw new RecordingError('Không thể tải thiết bị Zalo.',503);
-  return {devices:data || [],staff:staff || []};
+  if (error || staffError) throw new RecordingError('Không thể tải thiết bị Zalo.', 503);
+
+  const now = Date.now();
+  const twoMinutesMs = 2 * 60 * 1000;
+
+  const devices = (data || []).map((device) => {
+    const lastSeenTime = device.last_seen_at ? new Date(device.last_seen_at).getTime() : 0;
+    const isRecent = now - lastSeenTime <= twoMinutesMs;
+    let effective_status: 'ONLINE' | 'DEGRADED' | 'OFFLINE' = 'OFFLINE';
+
+    if (!device.active) {
+      effective_status = 'OFFLINE';
+    } else if (!isRecent) {
+      effective_status = 'OFFLINE';
+    } else if (!device.permissions_ok || !device.loopback_ready || device.agent_status === 'DEGRADED') {
+      effective_status = 'DEGRADED';
+    } else {
+      effective_status = 'ONLINE';
+    }
+
+    return {
+      ...device,
+      effective_status,
+    };
+  });
+
+  return { devices, staff: staff || [] };
+}
+
+export async function getZaloDeviceReadiness() {
+  const actor = await recordingActor();
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc('zalo_get_devices_readiness', {
+    p_company: actor.companyId,
+    p_actor: actor.userId,
+  });
+  if (error || !data) throw new RecordingError('Không thể kiểm tra trạng thái thiết bị Zalo.', 503);
+
+  const devices = (data.devices || []) as Array<{
+    id: string;
+    device_name: string;
+    staff_user_id: string | null;
+    is_current_staff: boolean;
+    active: boolean;
+    agent_version: string | null;
+    raw_status: string | null;
+    computed_status: 'ONLINE' | 'DEGRADED' | 'OFFLINE';
+    zalo_running: boolean;
+    permissions_ok: boolean;
+    permissions_detail: Record<string, boolean>;
+    loopback_ready: boolean;
+    last_error_code: string | null;
+    last_error_at: string | null;
+    last_seen_at: string | null;
+    created_at: string;
+  }>;
+
+  if (devices.length === 0) {
+    return {
+      isReady: false,
+      status: 'NO_DEVICE' as const,
+      reason: 'Chưa đăng ký thiết bị Mac Zalo cho tổ chức.',
+      devices: [],
+      readyDevice: null,
+      zaloRunning: false,
+    };
+  }
+
+  // Multi-device selection:
+  // 1. Look for device assigned to current staff that is ONLINE
+  const assignedOnline = devices.find((d) => d.is_current_staff && d.computed_status === 'ONLINE');
+  // 2. Or any ONLINE device
+  const anyOnline = devices.find((d) => d.computed_status === 'ONLINE');
+  // 3. Or assigned DEGRADED device
+  const assignedDegraded = devices.find((d) => d.is_current_staff && d.computed_status === 'DEGRADED');
+  // 4. Or any DEGRADED device
+  const anyDegraded = devices.find((d) => d.computed_status === 'DEGRADED');
+
+  const selectedDevice = assignedOnline || anyOnline || assignedDegraded || anyDegraded || devices[0];
+  const status = selectedDevice.computed_status;
+  const isReady = status === 'ONLINE';
+
+  let reason = '';
+  if (!isReady) {
+    if (status === 'OFFLINE') {
+      reason = 'Zalo Agent đang offline trên máy Mac.';
+    } else if (status === 'DEGRADED') {
+      const perms = selectedDevice.permissions_detail || {};
+      if (perms.accessibility === false) {
+        reason = 'Thiếu quyền Accessibility trên máy Mac.';
+      } else if (perms.microphone === false || perms.screen_recording === false) {
+        reason = 'Thiếu quyền ghi âm màn hình / microphone.';
+      } else if (!selectedDevice.loopback_ready) {
+        reason = 'Loopback agent (127.0.0.1:48123) chưa sẵn sàng.';
+      } else {
+        reason = selectedDevice.last_error_code || 'Agent đang chạy nhưng chưa sẵn sàng.';
+      }
+    }
+  }
+
+  return {
+    isReady,
+    status,
+    reason,
+    devices,
+    readyDevice: selectedDevice,
+    zaloRunning: Boolean(selectedDevice.zalo_running),
+  };
 }
 export async function registerZaloDevice(deviceId: string, name: string, staffId: string | null) {
   const actor=await recordingActor(true);

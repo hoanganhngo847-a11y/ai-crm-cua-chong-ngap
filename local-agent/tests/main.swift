@@ -265,6 +265,14 @@ let healthUrl = URL(string: "http://127.0.0.1:\(testPort)/health")!
 let healthData = try Data(contentsOf: healthUrl)
 let healthJson = try JSONSerialization.jsonObject(with: healthData) as! [String: Any]
 try require(healthJson["ok"] as? Bool == true, "LoopbackServer /health responds ok")
+try require(healthJson["version"] as? String == "1.2.0", "LoopbackServer /health reports version 1.2.0")
+
+// Test HeartbeatManager payload collection
+let heartbeatPayload = HeartbeatManager.shared.collectHealthPayload()
+try require(heartbeatPayload.agent_version == "1.2.0", "HeartbeatManager collects version 1.2.0")
+try require(heartbeatPayload.loopback_ready == true, "HeartbeatManager reflects loopback ready state")
+let encodedHeartbeat = try JSONEncoder().encode(heartbeatPayload)
+try require(!encodedHeartbeat.isEmpty, "HeartbeatManager payload encodes to JSON")
 
 // Test POST /call with forbidden Origin
 var forbiddenReq = URLRequest(url: URL(string: "http://127.0.0.1:\(testPort)/call")!)

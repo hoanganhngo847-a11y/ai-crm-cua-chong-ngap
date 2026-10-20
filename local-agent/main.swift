@@ -307,6 +307,9 @@ final class ZaloAgent {
             print("[LoopbackServer Warning] \(error.localizedDescription)")
         }
 
+        // Start periodic heartbeat
+        HeartbeatManager.shared.start(intervalSeconds: 30)
+
         // Register custom URL scheme handler
         URLSchemeHandler.shared.register()
 
@@ -415,6 +418,7 @@ final class ZaloAgent {
         guard !stopping else { return }
         stopping = true
         timer?.invalidate()
+        HeartbeatManager.shared.stop()
         loopbackServer?.stop()
         print("[Shutdown] Closing native capture and finalizing active recording...")
         if state == .finalizing { return }
@@ -457,6 +461,74 @@ do {
         try withAgentConfigurationLock { try UploadConfiguration.configure() }
     } else if CommandLine.arguments.contains("--retry-uploads") {
         try withAgentConfigurationLock { try RecordingUploadQueue.shared.retryPending() }
+    } else if CommandLine.arguments.contains("--send-heartbeat") {
+        print("[CLI] Sending manual heartbeat...")
+        let sem = DispatchSemaphore(value: 0)
+        HeartbeatManager.shared.sendHeartbeat { success, msg in
+            if success {
+                print("[CLI] Heartbeat sent successfully!")
+            } else {
+                print("[CLI] Heartbeat failed: \(msg ?? "unknown")")
+            }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 5)
+    } else if CommandLine.arguments.contains("--status") {
+        let lockFD = open("/tmp/zalo-recorder-\(getuid()).lock", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        let isRunning = lockFD >= 0 && flock(lockFD, LOCK_EX | LOCK_NB) != 0
+        if lockFD >= 0 { close(lockFD) }
+
+        print("=== Zalo Personal Recording Agent ===")
+        print("Agent Version: 1.2.0")
+        let devId = (try? AgentIdentity.deviceID()) ?? "uninitialized"
+        print("Device ID: \(devId)")
+        if let config = UploadConfiguration.load() {
+            print("Configured CRM: \(config.server_url.absoluteString)")
+            print("Enrolled At: \(config.enrolled_at)")
+        } else {
+            print("Configured CRM: Not configured (run --configure-upload)")
+        }
+        print("Agent Process: \(isRunning ? "RUNNING" : "STOPPED")")
+
+        // Permissions summary
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let screen = CGPreflightScreenCaptureAccess()
+        let ax = AXIsProcessTrusted()
+        print("Permissions:")
+        print("  - Microphone: \(mic ? "GRANTED" : "DENIED")")
+        print("  - Screen Recording: \(screen ? "GRANTED" : "DENIED")")
+        print("  - Accessibility: \(ax ? "GRANTED" : "DENIED")")
+
+        let probe = ZaloDetector.shared.probe()
+        let runningApps = NSWorkspace.shared.runningApplications
+        let zaloRunning = runningApps.contains { app in
+            app.bundleIdentifier == "com.vng.zalo" || app.localizedName == "Zalo"
+        }
+        print("Zalo Desktop: \(zaloRunning ? "RUNNING" : "NOT RUNNING")")
+        print("Active Call Window: \(probe.isActive ? "YES" : "NO")")
+
+        // Check Loopback health
+        if isRunning {
+            let url = URL(string: "http://127.0.0.1:48123/health")!
+            let sem = DispatchSemaphore(value: 0)
+            var loopbackOk = false
+            var loopbackMsg = "timeout"
+            let task = URLSession.shared.dataTask(with: url) { data, resp, err in
+                if let http = resp as? HTTPURLResponse, http.statusCode == 200, let data = data,
+                   let str = String(data: data, encoding: .utf8) {
+                    loopbackOk = true
+                    loopbackMsg = str
+                } else if let err = err {
+                    loopbackMsg = err.localizedDescription
+                }
+                sem.signal()
+            }
+            task.resume()
+            _ = sem.wait(timeout: .now() + 1.5)
+            print("Loopback Server (127.0.0.1:48123): \(loopbackOk ? "HEALTHY (\(loopbackMsg))" : "UNHEALTHY (\(loopbackMsg))")")
+        } else {
+            print("Loopback Server: OFFLINE")
+        }
     } else if CommandLine.arguments.contains("--diagnose") {
         let audio = AudioManager.shared
         print("Output: \(audio.defaultUID() ?? "unknown")")

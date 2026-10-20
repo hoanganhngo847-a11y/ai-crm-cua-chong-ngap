@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { createZaloOutboundCall } from '../../../actions/zalo-recordings';
+import { createZaloOutboundCall, getZaloDeviceReadiness } from '../../../actions/zalo-recordings';
 
 interface Props {
   customerId: string;
@@ -19,11 +19,32 @@ type CallStatus =
   | 'COMPLETED'
   | 'FAILED';
 
+interface DeviceItem {
+  id: string;
+  device_name: string;
+  staff_user_id: string | null;
+  is_current_staff: boolean;
+  computed_status: 'ONLINE' | 'DEGRADED' | 'OFFLINE';
+  zalo_running: boolean;
+  permissions_ok: boolean;
+}
+
+interface ReadinessState {
+  isReady: boolean;
+  status: 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'NO_DEVICE';
+  reason: string;
+  devices: DeviceItem[];
+  readyDevice: DeviceItem | null;
+  zaloRunning: boolean;
+}
+
 export default function ZaloCallButton({ customerId, customerName, disabled = false }: Props) {
   const [status, setStatus] = useState<CallStatus>('IDLE');
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [requestId, setRequestId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [readiness, setReadiness] = useState<ReadinessState | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const cleanupTimer = () => {
@@ -32,6 +53,40 @@ export default function ZaloCallButton({ customerId, customerName, disabled = fa
       pollTimerRef.current = null;
     }
   };
+
+  // Poll device readiness from CRM
+  useEffect(() => {
+    let active = true;
+    const checkReadiness = async () => {
+      try {
+        const res = await getZaloDeviceReadiness();
+        if (active) {
+          setReadiness(res);
+          if (res.readyDevice && !selectedDeviceId) {
+            setSelectedDeviceId(res.readyDevice.id);
+          }
+        }
+      } catch {
+        if (active) {
+          setReadiness({
+            isReady: false,
+            status: 'OFFLINE',
+            reason: 'Không thể kết nối máy chủ để kiểm tra thiết bị.',
+            devices: [],
+            readyDevice: null,
+            zaloRunning: false,
+          });
+        }
+      }
+    };
+
+    checkReadiness();
+    const interval = setInterval(checkReadiness, 15000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [selectedDeviceId]);
 
   useEffect(() => {
     return () => cleanupTimer();
@@ -43,7 +98,8 @@ export default function ZaloCallButton({ customerId, customerName, disabled = fa
       setStatusMessage('Đang khởi tạo yêu cầu gọi Zalo...');
       setShowModal(true);
 
-      const res = await createZaloOutboundCall(customerId);
+      const targetDeviceId = selectedDeviceId || readiness?.readyDevice?.id || undefined;
+      const res = await createZaloOutboundCall(customerId, targetDeviceId);
       const reqId = res.request_id;
       setRequestId(reqId);
       setStatus('AGENT_DISPATCHING');
@@ -121,20 +177,56 @@ export default function ZaloCallButton({ customerId, customerName, disabled = fa
     }
   };
 
+  const isEligible = readiness?.isReady === true;
+  const isBusy = status === 'CREATING' || status === 'AGENT_DISPATCHING';
+  const buttonDisabled = disabled || !isEligible || isBusy;
+
+  const tooltipText = !readiness
+    ? 'Đang kiểm tra trạng thái Agent...'
+    : !isEligible
+    ? readiness.reason || 'Agent Zalo chưa sẵn sàng'
+    : `Gọi Zalo tới ${customerName}${readiness.readyDevice ? ` qua ${readiness.readyDevice.device_name}` : ''}${!readiness.zaloRunning ? ' (Agent sẽ tự mở Zalo)' : ''}`;
+
+  const onlineDevices = (readiness?.devices || []).filter((d) => d.computed_status === 'ONLINE');
+
   return (
-    <>
+    <div className="inline-flex items-center gap-1.5">
       <button
         type="button"
-        disabled={disabled || status === 'CREATING' || status === 'AGENT_DISPATCHING'}
+        disabled={buttonDisabled}
         onClick={handleStartCall}
-        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-blue-600/20 transition active:scale-95"
-        title={`Gọi Zalo tới ${customerName}`}
+        className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold shadow-lg transition active:scale-95 ${
+          buttonDisabled
+            ? 'bg-slate-700/60 text-slate-400 cursor-not-allowed opacity-60 shadow-none'
+            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
+        }`}
+        title={tooltipText}
       >
         <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
           <path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2.05 21.45a.75.75 0 00.9.9l4.282-1.388A9.957 9.957 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2zm0 18a7.96 7.96 0 01-4.24-1.21.75.75 0 00-.518-.088l-2.955.958.958-2.955a.75.75 0 00-.088-.518A7.96 7.96 0 014 12c0-4.411 3.589-8 8-8s8 3.589 8 8-3.589 8-8 8zm-2.5-11a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-2.75h1.75a.75.75 0 000-1.5h-2.5zm6 0a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-2.75h1.75a.75.75 0 000-1.5h-2.5z" />
         </svg>
         <span>Gọi Zalo</span>
+        {readiness && !isEligible && (
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 ml-0.5" title={readiness.reason} />
+        )}
       </button>
+
+      {/* Multi-Device Selector (if multiple online devices available) */}
+      {onlineDevices.length > 1 && (
+        <select
+          value={selectedDeviceId}
+          onChange={(e) => setSelectedDeviceId(e.target.value)}
+          aria-label="Chọn thiết bị Mac gọi Zalo"
+          className="text-[11px] rounded-lg bg-slate-800 border border-slate-700 text-slate-300 py-1.5 px-2 focus:ring-1 focus:ring-blue-500"
+          title="Chọn thiết bị Mac thực hiện cuộc gọi"
+        >
+          {onlineDevices.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.device_name} {d.is_current_staff ? '(Máy của bạn)' : ''}
+            </option>
+          ))}
+        </select>
+      )}
 
       {/* Status Modal / Notification */}
       {showModal && (
@@ -213,6 +305,6 @@ export default function ZaloCallButton({ customerId, customerName, disabled = fa
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

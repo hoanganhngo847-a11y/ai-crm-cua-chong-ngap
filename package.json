@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts",
+    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx --conditions=react-server tests/zalo-recordings/heartbeat.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts",
     "test:zalo-recordings:db": "tsx --conditions=react-server tests/zalo-recordings/supabase.test.ts",
     "dev": "next dev",
     "build": "next build",
