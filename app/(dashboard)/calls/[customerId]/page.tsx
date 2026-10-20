@@ -9,6 +9,7 @@ import { getCallTranscriptAction } from '../../../actions/sensitive';
 import CallHistoryTable from '../components/CallHistoryTable';
 import CallAttemptTimeline from '../components/CallAttemptTimeline';
 import CallToCustomerButton from '../components/CallToCustomerButton';
+import ZaloRecordingHistory from '../components/ZaloRecordingHistory';
 
 interface Props {
   params: Promise<{ customerId: string }>;
@@ -63,6 +64,7 @@ export default async function CustomerCallsPage({ params }: Props) {
 
   return (
     <div className="space-y-8">
+      <ZaloRecordingHistory customerId={customerId} />
       {/* Header */}
       <div className="border-b border-slate-800 pb-4">
         <div className="flex items-start justify-between flex-wrap gap-4">

@@ -5,6 +5,7 @@ import { getActorContext } from '../../../lib/auth/context';
 import { getCompanyCallHistoryAction } from '../../actions/voice';
 import CallHistoryTable from './components/CallHistoryTable';
 import CustomerCallSearch from './components/CustomerCallSearch';
+import ZaloRecordingHistory from './components/ZaloRecordingHistory';
 
 export default async function CallsPage() {
   const actor = await getActorContext();
@@ -46,6 +47,8 @@ export default async function CallsPage() {
       </div>
 
       <CustomerCallSearch provider={(process.env.VOICE_PROVIDER || 'MANUAL').toUpperCase()} />
+      {isBossAdmin && <Link href="/calls/zalo-devices" className="inline-block text-sm text-blue-300 underline">Thiết bị ghi âm Zalo</Link>}
+      <ZaloRecordingHistory />
       {isBossAdmin && process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID && (
         <Link href="/calls/test" className="inline-block text-sm text-blue-300 underline">Kiểm tra Web SDK App-to-App</Link>
       )}
