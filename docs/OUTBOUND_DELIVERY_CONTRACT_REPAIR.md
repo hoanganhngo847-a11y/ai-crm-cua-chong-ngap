@@ -7,6 +7,8 @@ Two browser-outbox changes broke existing outbound paths:
 
 Both migrations preserve existing rows and existing migration files. Their timestamps follow the repository's existing future-dated migration `20261020220000`; the CLI-generated scaffolds were renamed to preserve deterministic ordering.
 
+Fresh hosted CI also exposed broad core grants that reopened direct `service_role` writes to `response_sla_windows`, `ai_analyses`, and `sales_style_profiles`. The earlier local database already contained an uncommitted ACL repair, so its green results did not establish a clean-schema result. Migration `20261020220004_restore_rpc_only_domain_acls.sql` restores the RPC-only boundary without changing rows or trusted RPC execution grants. `tests/security/rpc_only_domain_acls.test.ts` verifies actual denied SQL operations and the trusted function catalog in PGlite; it independently fails without the repair.
+
 ## Validation
 
 `npm run test:inbox` includes actual PGlite SQL regressions for canonical metadata, tenant isolation, actor attribution, idempotency, status acceptance/rejection, and client write denial. Each test independently fails when only its repair migration is excluded from the in-memory bootstrap.
@@ -28,6 +30,6 @@ Codex verified the real local Supabase Inbox and Zalo OA database suites, all 72
 
 ## Rollout
 
-Apply the two additive migrations, verify the database and RPCs, then merge and deploy. Main may auto-deploy on Render.
+Apply additive migrations `220001`, `220003`, and `220004` in timestamp order, verify the database and RPCs, then merge and deploy. The combined Zalo hardening PR also contains migration `220005`; see `ZALO_OUTBOUND_HARDENING.md`. Main may auto-deploy on Render.
 
 During this overnight run, the two reviewed SQL repairs were applied only to the named local Docker Supabase instance for testing, without changing migration history. No production migration, main merge, or production deployment was performed. Production rollout requires separate explicit authorization.

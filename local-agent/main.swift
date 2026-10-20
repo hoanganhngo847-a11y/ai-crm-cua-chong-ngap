@@ -175,6 +175,7 @@ final class CallRecorder {
     let startedAt = Date()
     let capture: NativeCallCapture
     private var endedAt: Date?
+    var boundOutboundContext: PendingOutboundContext?
 
     init(callID: String) throws {
         self.callID = callID
@@ -214,14 +215,11 @@ final class CallRecorder {
         } else {
             status = "WARNING_ONE_TRACK_SILENT"
         }
-        var effectiveDirection = direction
-        let outboundContext = OutboundCallManager.shared.currentOutboundContext(for: contact)
         var crmCallRequestId: String? = nil
-        if let ctx = outboundContext {
+        var effectiveDirection = direction
+        if let ctx = boundOutboundContext {
             effectiveDirection = .outbound
             crmCallRequestId = ctx.requestId
-            OutboundCallManager.shared.clearActiveContext()
-            print("[Outbound] Associated recording with CRM request \(ctx.requestId) for customer '\(ctx.customerName)'")
         }
 
         let iso = ISO8601DateFormatter()
@@ -337,7 +335,12 @@ final class ZaloAgent {
         if probe.isActive {
             inactiveCount = 0
             contact = RemoteDisplayName.retaining(contact, observed: probe.contactName)
-            if direction == .unknown { direction = probe.direction }
+            if probe.direction == .inbound {
+                direction = .inbound
+            } else if direction == .unknown {
+                direction = probe.direction
+            }
+            checkAndBindOutbound()
             if state == .idle { begin() }
         } else if state != .idle {
             inactiveCount += 1
@@ -347,10 +350,30 @@ final class ZaloAgent {
         if status != lastStatus { print(status); lastStatus = status }
     }
 
+    private func checkAndBindOutbound() {
+        guard let rec = recorder else { return }
+        if let bound = OutboundCallManager.shared.bindOutboundContext(
+            callID: rec.callID,
+            contactName: contact,
+            direction: direction,
+            startedAt: rec.startedAt
+        ) {
+            if rec.boundOutboundContext == nil {
+                rec.boundOutboundContext = bound
+                print("[Outbound] Early bound call \(rec.callID) with CRM request \(bound.requestId) for '\(bound.customerName)'")
+                OutboundCallManager.shared.notifyCallDetectedAsync(requestId: bound.requestId)
+            }
+        } else if rec.boundOutboundContext != nil {
+            print("[Outbound] Invalidation detected for call \(rec.callID). Clearing bound context.")
+            rec.boundOutboundContext = nil
+        }
+    }
+
     private func begin() {
         do {
             let recorder = try CallRecorder(callID: UUID().uuidString.lowercased())
             self.recorder = recorder
+            OutboundCallManager.shared.registerActiveSession(callID: recorder.callID)
             state = .starting
             recorder.capture.onFailure = { [weak self] message in
                 DispatchQueue.main.async {
@@ -358,6 +381,7 @@ final class ZaloAgent {
                     print("[Capture error] \(message)")
                 }
             }
+            checkAndBindOutbound()
             recorder.capture.start { [weak self, weak recorder] result in
                 DispatchQueue.main.async {
                     guard let self = self, let recorder = recorder, self.recorder === recorder,
@@ -385,8 +409,10 @@ final class ZaloAgent {
         let savedContact = contact
         let savedDirection = direction
         let savedError = lastError
+        let closingCallID = recorder.callID
         recorder.stop { error in
             DispatchQueue.global(qos: .utility).async {
+                defer { OutboundCallManager.shared.releaseSession(callID: closingCallID) }
                 do {
                     let path = try recorder.finalize(contact: savedContact, direction: savedDirection,
                                                      captureError: error ?? savedError)
@@ -407,6 +433,7 @@ final class ZaloAgent {
     }
 
     private func reset() {
+        if let rec = recorder { OutboundCallManager.shared.releaseSession(callID: rec.callID) }
         recorder = nil
         contact = nil
         direction = .unknown

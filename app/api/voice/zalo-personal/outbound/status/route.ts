@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       throw new RecordingError('INVALID_REQUEST', 400);
     }
 
-    const validStatuses = ['OPENING_ZALO', 'CONTACT_VERIFIED', 'CALL_TRIGGERED', 'CALL_DETECTED', 'COMPLETED', 'FAILED'];
+    const validStatuses = ['OPENING_ZALO', 'CONTACT_VERIFIED', 'CALL_TRIGGERED', 'CALL_DETECTED', 'FAILED'];
     if (!validStatuses.includes(status)) throw new RecordingError('INVALID_STATUS', 400);
 
     const hash = sha256(token);
@@ -32,15 +32,26 @@ export async function POST(request: Request) {
 
     if (error) {
       if (error.code === '42501') throw new RecordingError('DEVICE_UNAUTHORIZED', 401);
+      if (error.message?.includes('ZALO_REQUEST_DEVICE_MISMATCH') || error.message?.includes('ZALO_REQUEST_STAFF_MISMATCH')) {
+        throw new RecordingError('REQUEST_MISMATCH', 403);
+      }
+      if (error.message?.includes('ZALO_REQUEST_NOT_FOUND')) throw new RecordingError('REQUEST_NOT_FOUND', 404);
+      if (error.message?.includes('ZALO_REQUEST_EXPIRED')) throw new RecordingError('REQUEST_EXPIRED', 410);
+      if (error.message?.includes('ZALO_STATUS_INVALID')) throw new RecordingError('INVALID_STATUS', 400);
+      if (error.message?.includes('ZALO_STATUS_TERMINAL') || error.message?.includes('ZALO_STATUS_TRANSITION_INVALID')) {
+        throw new RecordingError('STATUS_TRANSITION_INVALID', 409);
+      }
       throw new RecordingError('STATUS_UPDATE_FAILED', 503);
     }
 
     return Response.json({ ok: true, data }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const known = error instanceof RecordingError;
+    const status = known ? error.status : 503;
+    const code = known ? error.code : 'STATUS_UPDATE_FAILED';
     return Response.json(
-      { ok: false, error: known ? error.code : 'STATUS_UPDATE_FAILED' },
-      { status: known ? error.status : 503, headers: { 'Cache-Control': 'no-store' } }
+      { ok: false, error: code },
+      { status, headers: { 'Cache-Control': 'no-store' } }
     );
   }
 }
@@ -48,26 +59,45 @@ export async function POST(request: Request) {
 // GET: Called by CRM frontend to poll request status
 export async function GET(request: Request) {
   try {
-    const actor = await recordingActor();
     const { searchParams } = new URL(request.url);
     const requestId = searchParams.get('request_id');
     if (!requestId || !UUID.test(requestId)) throw new RecordingError('INVALID_REQUEST', 400);
 
+    const actor = await recordingActor();
     const admin = createAdminClient();
-    const { data, error } = await admin
+    let query = admin
       .from('zalo_outbound_call_requests')
-      .select('id, customer_id, status, failure_reason, expected_display_name, phone_normalized, created_at, claimed_at, completed_at')
+      .select('id, customer_id, staff_user_id, status, failure_reason, expected_display_name, created_at, claimed_at, completed_at')
       .eq('company_id', actor.companyId)
-      .eq('id', requestId)
-      .maybeSingle();
+      .eq('id', requestId);
+
+    if (actor.role === 'SALE') {
+      query = query.eq('staff_user_id', actor.userId);
+    }
+
+    const { data, error } = await query.maybeSingle();
 
     if (error || !data) throw new RecordingError('NOT_FOUND', 404);
-    return Response.json({ ok: true, request: data }, { headers: { 'Cache-Control': 'no-store' } });
+
+    const safeRequest = {
+      id: data.id,
+      customer_id: data.customer_id,
+      status: data.status,
+      failure_reason: data.failure_reason,
+      expected_display_name: data.expected_display_name,
+      created_at: data.created_at,
+      claimed_at: data.claimed_at,
+      completed_at: data.completed_at,
+    };
+
+    return Response.json({ ok: true, request: safeRequest }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const known = error instanceof RecordingError;
+    const status = known ? error.status : 503;
+    const code = known ? error.code : 'UNAVAILABLE';
     return Response.json(
-      { ok: false, error: known ? error.code : 'UNAVAILABLE' },
-      { status: known ? error.status : 503, headers: { 'Cache-Control': 'no-store' } }
+      { ok: false, error: code },
+      { status, headers: { 'Cache-Control': 'no-store' } }
     );
   }
 }
