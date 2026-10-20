@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.local.zalo-recorder</string>
+    <key>CFBundleName</key><string>Zalo Recorder</string>
+    <key>NSMicrophoneUsageDescription</key><string>Record the local side of your Zalo calls.</string>
+    <key>NSScreenCaptureUsageDescription</key><string>Capture Zalo application audio for your call recordings. No video is saved.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>Record the remote side of your Zalo calls without changing your speakers.</string>
+</dict></plist>
