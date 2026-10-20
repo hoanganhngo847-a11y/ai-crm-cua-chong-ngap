@@ -71,6 +71,7 @@ public final class LoopbackServer {
         }
 
         isRunning = true
+        HeartbeatManager.shared.setLoopbackReady(true)
         print("[LoopbackServer] Listening on http://127.0.0.1:\(port)")
 
         queue.async { [weak self] in
@@ -80,6 +81,7 @@ public final class LoopbackServer {
 
     public func stop() {
         isRunning = false
+        HeartbeatManager.shared.setLoopbackReady(false)
         if serverFd >= 0 {
             close(serverFd)
             serverFd = -1
@@ -177,12 +179,12 @@ public final class LoopbackServer {
                     return
                 }
                 let deviceId = (try? AgentIdentity.deviceID()) ?? "unknown"
-                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.1.0\"}"
+                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.2.0\"}"
                 sendJsonResponse(fd, json: json, status: 200, origin: origin)
                 return
             } else {
                 let deviceId = (try? AgentIdentity.deviceID()) ?? "unknown"
-                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.1.0\"}"
+                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.2.0\"}"
                 sendJsonResponse(fd, json: json, status: 200, origin: nil)
                 return
             }
