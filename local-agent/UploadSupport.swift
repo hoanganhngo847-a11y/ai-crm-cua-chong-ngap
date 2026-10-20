@@ -80,11 +80,30 @@ struct UploadConfiguration: Codable {
             kSecAttrService as String: "com.local.zalo-recorder.device", kSecAttrAccount as String: device_id,
             kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw RecorderFailure(message: "Device Keychain credential unavailable.")
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+           let data = result as? Data, let value = String(data: data, encoding: .utf8) {
+            return value
         }
-        return value
+
+        // Fallback for recompiled ad-hoc local agent binaries: query user login keychain via security CLI
+        let pipe = Pipe()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = ["find-generic-password", "-s", "com.local.zalo-recorder.device", "-a", device_id, "-w"]
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            if proc.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+                    return str
+                }
+            }
+        } catch {}
+
+        throw RecorderFailure(message: "Device Keychain credential unavailable.")
     }
 }
 

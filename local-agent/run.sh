@@ -36,6 +36,8 @@ install_agent() {
     compile_agent
     mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
     chmod 700 "$LOG_DIR"
+    cp "$DIR/zalo-recorder" "$LOG_DIR/zalo-recorder"
+    chmod 755 "$LOG_DIR/zalo-recorder"
 
     # Stop any existing process so LaunchAgent can bind the port and take lock
     launchctl bootout "gui/$UID/$PLIST_LABEL" 2>/dev/null || launchctl unload "$PLIST_PATH" 2>/dev/null || true
@@ -51,10 +53,10 @@ install_agent() {
     <string>${PLIST_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${DIR}/zalo-recorder</string>
+        <string>${LOG_DIR}/zalo-recorder</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>${DIR}</string>
+    <string>${LOG_DIR}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

@@ -291,7 +291,9 @@ final class ZaloAgent {
         print("In Zalo Call, select a physical speaker/headphone or System Default, not Multi-Output/BlackHole.")
         print("Files: \(Config.outputDirectory)")
         if !AXIsProcessTrusted() {
-            print("[Permission] Accessibility is unavailable: caller name/direction may be unknown.")
+            print("[Permission] Accessibility is unavailable: caller name/direction may be unknown. Prompting user...")
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
         }
         RecordingUploadQueue.shared.start(recordings: URL(fileURLWithPath: Config.outputDirectory))
 

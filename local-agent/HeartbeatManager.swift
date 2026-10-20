@@ -30,6 +30,29 @@ public final class HeartbeatManager {
         isLoopbackReady = ready
     }
 
+    private func isLoopbackListening() -> Bool {
+        if isLoopbackReady { return true }
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { return false }
+        defer { close(sock) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(LoopbackServer.defaultPort.bigEndian)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        var timeout = timeval(tv_sec: 0, tv_usec: 200_000)
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        let res = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return res == 0
+    }
+
     public func collectHealthPayload() -> HeartbeatPayload {
         let micAuth = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let screenAuth = CGPreflightScreenCaptureAccess()
@@ -50,11 +73,13 @@ public final class HeartbeatManager {
             app.localizedName == "ZaloCall"
         }
 
+        let loopbackActive = isLoopbackListening()
+
         return HeartbeatPayload(
             agent_version: Self.currentVersion,
             zalo_running: zaloIsRunning,
             permissions: permissions,
-            loopback_ready: isLoopbackReady,
+            loopback_ready: loopbackActive,
             recording_ready: true,
             error_code: nil
         )
