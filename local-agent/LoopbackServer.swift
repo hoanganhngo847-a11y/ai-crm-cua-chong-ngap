@@ -3,6 +3,11 @@ import Darwin
 
 public final class LoopbackServer {
     public static let defaultPort: UInt16 = 48123
+    public static let allowedOrigins: Set<String> = [
+        "https://ai-crm-cua-chong-ngap.onrender.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ]
     private let port: UInt16
     private var serverFd: Int32 = -1
     private var isRunning = false
@@ -11,6 +16,23 @@ public final class LoopbackServer {
 
     public init(port: UInt16 = defaultPort) {
         self.port = port
+    }
+
+    private func isAllowedOrigin(_ origin: String?) -> Bool {
+        guard let origin = origin?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !origin.isEmpty else {
+            return false
+        }
+        if Self.allowedOrigins.contains(origin) {
+            return true
+        }
+        if let enrolled = UploadConfiguration.load()?.server_url {
+            let scheme = enrolled.scheme ?? "https"
+            let host = enrolled.host ?? ""
+            let portStr = enrolled.port != nil ? ":\(enrolled.port!)" : ""
+            let enrolledOrigin = "\(scheme)://\(host)\(portStr)".lowercased()
+            if origin == enrolledOrigin { return true }
+        }
+        return false
     }
 
     public func start() throws {
@@ -123,27 +145,57 @@ public final class LoopbackServer {
         let path = pathComponents[0]
         let query = pathComponents.count > 1 ? pathComponents[1] : ""
 
+        var originHeader: String? = nil
+        for line in lines {
+            if line.lowercased().hasPrefix("origin:") {
+                originHeader = line.dropFirst("origin:".count).trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+
         // Handle CORS Preflight
         if method == "OPTIONS" {
+            guard let origin = originHeader, isAllowedOrigin(origin) else {
+                sendResponse(fd, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                return
+            }
             let response = "HTTP/1.1 204 No Content\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Origin: \(origin)\r\n" +
                 "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
                 "Access-Control-Allow-Headers: Content-Type, Authorization\r\n" +
-                "Access-Control-Max-Age: 86400\r\n\r\n"
+                "Access-Control-Max-Age: 86400\r\n" +
+                "Vary: Origin\r\n\r\n"
             sendResponse(fd, response)
             return
         }
 
         // GET /health
         if method == "GET" && (path == "/health" || path == "/") {
-            let deviceId = (try? AgentIdentity.deviceID()) ?? "unknown"
-            let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.1.0\"}"
-            sendJsonResponse(fd, json: json)
-            return
+            if let origin = originHeader {
+                guard isAllowedOrigin(origin) else {
+                    sendResponse(fd, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                    return
+                }
+                let deviceId = (try? AgentIdentity.deviceID()) ?? "unknown"
+                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.1.0\"}"
+                sendJsonResponse(fd, json: json, status: 200, origin: origin)
+                return
+            } else {
+                let deviceId = (try? AgentIdentity.deviceID()) ?? "unknown"
+                let json = "{\"ok\":true,\"status\":\"READY\",\"device_id\":\"\(deviceId)\",\"version\":\"1.1.0\"}"
+                sendJsonResponse(fd, json: json, status: 200, origin: nil)
+                return
+            }
         }
 
         // POST /call
         if method == "POST" && path == "/call" {
+            // Strict Origin verification: browser cross-origin requests must be on the allowlist
+            guard let origin = originHeader, isAllowedOrigin(origin) else {
+                sendResponse(fd, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                return
+            }
+
             var requestId: String? = nil
 
             // 1. Check query parameter ?request_id=...
@@ -167,13 +219,13 @@ public final class LoopbackServer {
             guard let validReq = requestId?.trimmingCharacters(in: .whitespacesAndNewlines),
                   UUID(uuidString: validReq) != nil else {
                 let errJson = "{\"ok\":false,\"error\":\"INVALID_REQUEST_ID\"}"
-                sendJsonResponse(fd, json: errJson, status: 400)
+                sendJsonResponse(fd, json: errJson, status: 400, origin: origin)
                 return
             }
 
             // Success dispatch
             let json = "{\"ok\":true,\"status\":\"DISPATCHED\",\"request_id\":\"\(validReq)\"}"
-            sendJsonResponse(fd, json: json)
+            sendJsonResponse(fd, json: json, status: 200, origin: origin)
 
             // Trigger handler asynchronously
             if let handler = onCallRequest {
@@ -185,14 +237,18 @@ public final class LoopbackServer {
         }
 
         // 404 for unknown routes
-        sendJsonResponse(fd, json: "{\"ok\":false,\"error\":\"NOT_FOUND\"}", status: 404)
+        sendJsonResponse(fd, json: "{\"ok\":false,\"error\":\"NOT_FOUND\"}", status: 404, origin: originHeader)
     }
 
-    private func sendJsonResponse(_ fd: Int32, json: String, status: Int = 200) {
-        let statusText = status == 200 ? "OK" : (status == 400 ? "Bad Request" : (status == 404 ? "Not Found" : "Error"))
+    private func sendJsonResponse(_ fd: Int32, json: String, status: Int = 200, origin: String? = nil) {
+        let statusText = status == 200 ? "OK" : (status == 400 ? "Bad Request" : (status == 403 ? "Forbidden" : (status == 404 ? "Not Found" : "Error")))
         let data = json.data(using: .utf8) ?? Data()
+        var corsHeader = ""
+        if let o = origin {
+            corsHeader = "Access-Control-Allow-Origin: \(o)\r\nVary: Origin\r\n"
+        }
         let headers = "HTTP/1.1 \(status) \(statusText)\r\n" +
-            "Access-Control-Allow-Origin: *\r\n" +
+            corsHeader +
             "Content-Type: application/json; charset=utf-8\r\n" +
             "Content-Length: \(data.count)\r\n" +
             "Connection: close\r\n\r\n"

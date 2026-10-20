@@ -96,7 +96,7 @@ public final class OutboundCallManager {
                 return
             }
 
-            guard conv.hasVoiceCallButton, let buttonPos = conv.voiceCallButtonPos else {
+            guard conv.hasVoiceCallButton, conv.voiceCallButtonPos != nil else {
                 updateStatus(config: config, secret: secret, requestId: requestId, status: "FAILED", reason: "Cuộc gọi thoại không khả dụng cho liên hệ này.")
                 print("[Outbound] Voice call button not available.")
                 return
@@ -118,14 +118,14 @@ public final class OutboundCallManager {
             activeContext = context
             lock.unlock()
 
-            // Trigger Voice Call
-            print("[Outbound] Triggering voice call at (\(buttonPos.x), \(buttonPos.y))...")
-            let clicked = ZaloAutomation.shared.triggerVoiceCall(pos: buttonPos)
+            // Trigger Voice Call (dynamically locates and verifies live AX button)
+            print("[Outbound] Triggering voice call via verified AX element...")
+            let clicked = ZaloAutomation.shared.triggerVoiceCall()
             if clicked {
                 updateStatus(config: config, secret: secret, requestId: requestId, status: "CALL_TRIGGERED", reason: nil)
                 print("[Outbound] Call triggered successfully!")
             } else {
-                updateStatus(config: config, secret: secret, requestId: requestId, status: "FAILED", reason: "Không thể bấm nút gọi thoại.")
+                updateStatus(config: config, secret: secret, requestId: requestId, status: "FAILED", reason: "Không thể bấm nút gọi thoại tự động. Vui lòng bấm gọi thủ công.")
             }
 
         case .possibleMatch:

@@ -210,7 +210,6 @@ public final class ZaloAutomation {
 
     public func parseCandidates(mainWin: AXUIElement) -> [ZaloContactCandidate] {
         var candidates: [ZaloContactCandidate] = []
-        var seenNames = Set<String>()
 
         func collectItems(e: AXUIElement, depth: Int) {
             if depth > 10 { return }
@@ -242,10 +241,8 @@ public final class ZaloAutomation {
                 let fullName = textParts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
                 let invalidKeywords = ["Tin nhắn", "Xem tất cả", "Chung nhóm", "Tất cả", "Liên hệ", "File"]
                 if !fullName.isEmpty && !invalidKeywords.contains(where: { fullName.contains($0) }) {
-                    if !seenNames.contains(fullName) {
-                        seenNames.insert(fullName)
-                        candidates.append(ZaloContactCandidate(name: fullName, clickPoint: CGPoint(x: pt.x + 40, y: pt.y + sz.height / 2)))
-                    }
+                    // Do not deduplicate: retain every candidate so duplicate names yield possibleMatch
+                    candidates.append(ZaloContactCandidate(name: fullName, clickPoint: CGPoint(x: pt.x + 40, y: pt.y + sz.height / 2)))
                 }
             }
 
@@ -259,12 +256,17 @@ public final class ZaloAutomation {
         return candidates
     }
 
-    public func triggerVoiceCall(pos: CGPoint) -> Bool {
-        guard let (_, appAx) = activateZalo(), let _ = getMainWindow(appAx: appAx) else {
+    public func triggerVoiceCall() -> Bool {
+        guard let (_, appAx) = activateZalo(), let mainWin = getMainWindow(appAx: appAx) else {
             return false
         }
-        // Verify voice button is still at that position before clicking
-        click(at: pos)
+        // Dynamically locate and verify the live AX element before clicking
+        guard let conv = readActiveConversation(mainWin: mainWin),
+              conv.hasVoiceCallButton,
+              let buttonPos = conv.voiceCallButtonPos else {
+            return false
+        }
+        click(at: buttonPos)
         return true
     }
 }
