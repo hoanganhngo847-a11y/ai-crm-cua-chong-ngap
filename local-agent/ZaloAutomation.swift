@@ -67,13 +67,13 @@ public final class ZaloAutomation {
         var isStranger = false
 
         func traverse(e: AXUIElement, depth: Int) {
-            if depth > 12 { return }
+            if depth > 25 { return }
             var vRef: CFTypeRef?, dRef: CFTypeRef?
             AXUIElementCopyAttributeValue(e, kAXValueAttribute as CFString, &vRef)
             AXUIElementCopyAttributeValue(e, kAXDescriptionAttribute as CFString, &dRef)
 
-            let val = (vRef as? String) ?? ""
-            let desc = (dRef as? String) ?? ""
+            let val = ((vRef as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let desc = ((dRef as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
             // Chat input placeholder: "Nhập @, tin nhắn tới <Name>"
             if desc.hasPrefix("Nhập @, tin nhắn tới ") {
@@ -86,7 +86,6 @@ public final class ZaloAutomation {
             }
 
             if desc == "Cuộc gọi thoại" {
-                hasVoice = true
                 var posRef: CFTypeRef?, sizeRef: CFTypeRef?
                 AXUIElementCopyAttributeValue(e, kAXPositionAttribute as CFString, &posRef)
                 AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &sizeRef)
@@ -94,6 +93,7 @@ public final class ZaloAutomation {
                 if let p = posRef { AXValueGetValue(p as! AXValue, .cgPoint, &pt) }
                 if let s = sizeRef { AXValueGetValue(s as! AXValue, .cgSize, &sz) }
                 if sz.width > 0 && sz.height > 0 {
+                    hasVoice = true
                     voicePos = CGPoint(x: pt.x + sz.width / 2, y: pt.y + sz.height / 2)
                 }
             }
@@ -119,7 +119,7 @@ public final class ZaloAutomation {
     public func findSearchField(mainWin: AXUIElement) -> AXUIElement? {
         var result: AXUIElement?
         func traverse(e: AXUIElement, depth: Int) {
-            if result != nil || depth > 8 { return }
+            if result != nil || depth > 20 { return }
             var rRef: CFTypeRef?
             AXUIElementCopyAttributeValue(e, kAXRoleAttribute as CFString, &rRef)
             if (rRef as? String) == "AXTextField" {
@@ -154,19 +154,46 @@ public final class ZaloAutomation {
             return (.notFound, nil)
         }
 
+        // Focus search field
+        AXUIElementSetAttributeValue(searchField, kAXFocusedAttribute as CFString, true as CFTypeRef)
+        Thread.sleep(forTimeInterval: 0.1)
+
         // Clear and set query
         AXUIElementSetAttributeValue(searchField, kAXValueAttribute as CFString, "" as CFTypeRef)
         Thread.sleep(forTimeInterval: 0.1)
         AXUIElementSetAttributeValue(searchField, kAXValueAttribute as CFString, query as CFTypeRef)
-        Thread.sleep(forTimeInterval: 0.5)
+        Thread.sleep(forTimeInterval: 0.2)
 
-        // 2. Parse search candidates
+        // Submit search via Return key in Zalo Electron UI
+        let returnDown = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true)
+        let returnUp = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false)
+        returnDown?.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.05)
+        returnUp?.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.8)
+
+        // 2. Check if active conversation matches
+        let normExpected = normalizeName(expectedName)
+        if let active = readActiveConversation(mainWin: mainWin) {
+            let normActive = normalizeName(active.displayName)
+            if normActive == normExpected {
+                return (.verified, active)
+            }
+        }
+
+        // 3. Fallback: Parse search candidates list if Return did not auto-open
         let candidates = parseCandidates(mainWin: mainWin)
         if candidates.isEmpty {
+            // Re-check active conversation
+            if let active = readActiveConversation(mainWin: mainWin) {
+                let normActive = normalizeName(active.displayName)
+                if normActive == normExpected { return (.verified, active) }
+                if normActive.contains(normExpected) || normExpected.contains(normActive) { return (.possibleMatch, active) }
+                return (.mismatch, active)
+            }
             return (.notFound, nil)
         }
 
-        let normExpected = normalizeName(expectedName)
         let matching = candidates.filter { normalizeName($0.name) == normExpected }
 
         let chosenCandidate: ZaloContactCandidate
@@ -175,7 +202,6 @@ public final class ZaloAutomation {
         } else if matching.count > 1 {
             return (.possibleMatch, nil)
         } else {
-            // Check if there is a single candidate containing the expected name or query
             let partial = candidates.filter {
                 let n = normalizeName($0.name)
                 return n.contains(normExpected) || normExpected.contains(n)
@@ -193,7 +219,7 @@ public final class ZaloAutomation {
         click(at: chosenCandidate.clickPoint)
         Thread.sleep(forTimeInterval: 0.6)
 
-        // 3. Verify conversation header
+        // 4. Verify conversation header
         guard let active = readActiveConversation(mainWin: mainWin) else {
             return (.notFound, nil)
         }
