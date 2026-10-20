@@ -3,6 +3,16 @@
 <plist version="1.0"><dict>
     <key>CFBundleIdentifier</key><string>com.local.zalo-recorder</string>
     <key>CFBundleName</key><string>Zalo Recorder</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>CRM Zalo Outbound Call</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>crm-zalo</string>
+            </array>
+        </dict>
+    </array>
     <key>NSMicrophoneUsageDescription</key><string>Record the local side of your Zalo calls.</string>
     <key>NSScreenCaptureUsageDescription</key><string>Capture Zalo application audio for your call recordings. No video is saved.</string>
     <key>NSAudioCaptureUsageDescription</key><string>Record the remote side of your Zalo calls without changing your speakers.</string>

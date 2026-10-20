@@ -17,12 +17,15 @@ export interface RecordingMetadata {
   phone_if_visible: null; started_at: string; answered_at: string | null; ended_at: string;
   duration_seconds: number; recording_file: string;
   audio_validation: { remote_non_silent: boolean; local_non_silent: boolean };
+  crm_call_request_id?: string | null;
 }
 export function validateMetadata(input: unknown, deviceId: string, now = Date.now()): RecordingMetadata {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RecordingError('INVALID_METADATA');
   const m = input as Record<string, unknown>;
-  const keys = ['schema_version','source','local_call_id','device_id','agent_version','direction','remote_display_name','remote_identity_type','identity_confidence','phone_if_visible','started_at','answered_at','ended_at','duration_seconds','recording_file','audio_validation'];
-  if (Object.keys(m).some(key => !keys.includes(key)) || keys.some(key => !(key in m))) throw new RecordingError('INVALID_METADATA_FIELDS');
+  const requiredKeys = ['schema_version','source','local_call_id','device_id','agent_version','direction','remote_display_name','remote_identity_type','identity_confidence','phone_if_visible','started_at','answered_at','ended_at','duration_seconds','recording_file','audio_validation'];
+  const allowedKeys = [...requiredKeys, 'crm_call_request_id'];
+  if (Object.keys(m).some(key => !allowedKeys.includes(key)) || requiredKeys.some(key => !(key in m))) throw new RecordingError('INVALID_METADATA_FIELDS');
+  if (m.crm_call_request_id !== undefined && m.crm_call_request_id !== null && (typeof m.crm_call_request_id !== 'string' || !UUID.test(m.crm_call_request_id))) throw new RecordingError('INVALID_METADATA_IDENTITY');
   if (m.schema_version !== 1 || m.source !== 'ZALO_PERSONAL' || m.device_id !== deviceId || typeof m.local_call_id !== 'string' || !UUID.test(m.local_call_id)) throw new RecordingError('INVALID_METADATA_IDENTITY');
   if (!['INBOUND','OUTBOUND','UNKNOWN'].includes(String(m.direction)) || m.remote_identity_type !== 'DISPLAY_NAME_ONLY' || m.phone_if_visible !== null) throw new RecordingError('INVALID_METADATA_IDENTITY');
   if (m.remote_display_name !== null && (typeof m.remote_display_name !== 'string' || !m.remote_display_name.trim() || m.remote_display_name.length > 200 || /\p{Cc}/u.test(m.remote_display_name) || GENERIC.has(normalizeDisplayName(m.remote_display_name)))) throw new RecordingError('INVALID_DISPLAY_NAME');
@@ -35,7 +38,7 @@ export function validateMetadata(input: unknown, deviceId: string, now = Date.no
   if (typeof m.duration_seconds !== 'number' || !Number.isFinite(m.duration_seconds) || m.duration_seconds <= 0 || m.duration_seconds > 7200 || Math.abs((end-start)/1000-m.duration_seconds) > 2) throw new RecordingError('INVALID_DURATION');
   const v = m.audio_validation as Record<string, unknown> | null;
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== 2 || typeof v.remote_non_silent !== 'boolean' || typeof v.local_non_silent !== 'boolean') throw new RecordingError('INVALID_AUDIO_VALIDATION');
-  return {...Object.fromEntries(keys.map(key => [key, m[key]])),
+  return {...Object.fromEntries(allowedKeys.filter(key => key in m).map(key => [key, m[key]])),
     audio_validation:{remote_non_silent:v.remote_non_silent,local_non_silent:v.local_non_silent}} as unknown as RecordingMetadata;
 }
 

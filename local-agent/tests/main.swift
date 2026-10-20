@@ -243,4 +243,83 @@ try require(NativeCallCapture.isZalo(bundleID: "com.vng.zalo.ZaloCall"), "includ
 try require(!NativeCallCapture.isZalo(bundleID: "com.vng.zalofake"), "reject lookalike bundle prefix")
 try require(!NativeCallCapture.isZalo(bundleID: "com.google.Chrome"), "never fall back to all system audio")
 print("PASS: preroll alignment and app isolation")
+
+// Test ZaloAutomation normalization
+let auto = ZaloAutomation.shared
+try require(auto.normalizeName("Lương Thắng") == "luong thang", "ZaloAutomation normalizes diacritics")
+try require(auto.normalizeName("  Đặng   Văn   Lâm  ") == "dang van lam", "ZaloAutomation normalizes Đ and spaces")
+
+// Test LoopbackServer and OutboundContext
+let testPort: UInt16 = 48199
+let testServer = LoopbackServer(port: testPort)
+var receivedReq: String? = nil
+let testSem = DispatchSemaphore(value: 0)
+testServer.onCallRequest = { reqId in
+    receivedReq = reqId
+    testSem.signal()
+}
+try testServer.start()
+
+// Test GET /health
+let healthUrl = URL(string: "http://127.0.0.1:\(testPort)/health")!
+let healthData = try Data(contentsOf: healthUrl)
+let healthJson = try JSONSerialization.jsonObject(with: healthData) as! [String: Any]
+try require(healthJson["ok"] as? Bool == true, "LoopbackServer /health responds ok")
+
+// Test POST /call with forbidden Origin
+var forbiddenReq = URLRequest(url: URL(string: "http://127.0.0.1:\(testPort)/call")!)
+forbiddenReq.httpMethod = "POST"
+forbiddenReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+forbiddenReq.setValue("https://evil-attacker.com", forHTTPHeaderField: "Origin")
+forbiddenReq.httpBody = try JSONSerialization.data(withJSONObject: ["request_id": UUID().uuidString])
+var forbiddenStatusCode = 0
+let forbiddenSem = DispatchSemaphore(value: 0)
+URLSession.shared.dataTask(with: forbiddenReq) { _, resp, _ in
+    defer { forbiddenSem.signal() }
+    if let http = resp as? HTTPURLResponse { forbiddenStatusCode = http.statusCode }
+}.resume()
+_ = forbiddenSem.wait(timeout: .now() + 2.0)
+try require(forbiddenStatusCode == 403, "LoopbackServer rejects unauthorized Origin with 403 Forbidden")
+
+// Test OPTIONS with forbidden Origin
+var optionsReq = URLRequest(url: URL(string: "http://127.0.0.1:\(testPort)/call")!)
+optionsReq.httpMethod = "OPTIONS"
+optionsReq.setValue("https://evil-attacker.com", forHTTPHeaderField: "Origin")
+var optionsForbiddenStatusCode = 0
+let optionsSem = DispatchSemaphore(value: 0)
+URLSession.shared.dataTask(with: optionsReq) { _, resp, _ in
+    defer { optionsSem.signal() }
+    if let http = resp as? HTTPURLResponse { optionsForbiddenStatusCode = http.statusCode }
+}.resume()
+_ = optionsSem.wait(timeout: .now() + 2.0)
+try require(optionsForbiddenStatusCode == 403, "LoopbackServer rejects OPTIONS preflight from unauthorized Origin with 403")
+
+// Test POST /call with allowed Origin
+var postReq = URLRequest(url: URL(string: "http://127.0.0.1:\(testPort)/call")!)
+postReq.httpMethod = "POST"
+postReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+postReq.setValue("https://ai-crm-cua-chong-ngap.onrender.com", forHTTPHeaderField: "Origin")
+let sampleReqId = UUID().uuidString
+postReq.httpBody = try JSONSerialization.data(withJSONObject: ["request_id": sampleReqId])
+
+var postRespOk = false
+var postRespOrigin: String? = nil
+let postSem = DispatchSemaphore(value: 0)
+URLSession.shared.dataTask(with: postReq) { data, resp, _ in
+    defer { postSem.signal() }
+    if let http = resp as? HTTPURLResponse {
+        postRespOrigin = http.value(forHTTPHeaderField: "Access-Control-Allow-Origin")
+    }
+    guard let data = data,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+    postRespOk = (json["ok"] as? Bool == true)
+}.resume()
+_ = postSem.wait(timeout: .now() + 2.0)
+_ = testSem.wait(timeout: .now() + 2.0)
+try require(postRespOk, "LoopbackServer /call accepts request from allowed Origin")
+try require(postRespOrigin == "https://ai-crm-cua-chong-ngap.onrender.com", "LoopbackServer reflects specific allowed Origin")
+try require(receivedReq == sampleReqId, "LoopbackServer delivers request_id to handler")
+
+testServer.stop()
+print("PASS: ZaloAutomation normalization, LoopbackServer health, CORS allowlist & 403 reject, and call dispatch")
 print("ALL LOCAL AGENT REGRESSIONS PASSED")

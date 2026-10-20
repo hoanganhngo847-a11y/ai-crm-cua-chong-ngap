@@ -65,3 +65,39 @@ export async function revokeZaloDevice(deviceId: string) {
   const {error}=await createAdminClient().rpc('zalo_manage_device',{p_company:actor.companyId,p_actor:actor.userId,p_device:deviceId,p_name:'',p_hash:'',p_staff:null,p_revoke:true});
   if(error) throw new RecordingError('Không thể thu hồi thiết bị.',503);
 }
+
+export async function createZaloOutboundCall(customerId: string, deviceId?: string) {
+  const actor = await recordingActor();
+  if (!UUID.test(customerId) || (deviceId && !UUID.test(deviceId))) throw new RecordingError('INVALID_REQUEST');
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc('zalo_create_outbound_call_request', {
+    p_company: actor.companyId,
+    p_actor: actor.userId,
+    p_customer: customerId,
+    p_device: deviceId || null,
+  });
+  if (error || !data) throw new RecordingError('Không thể tạo yêu cầu cuộc gọi Zalo.', 503);
+  return data as {
+    request_id: string;
+    customer_id: string;
+    customer_name: string;
+    phone: string | null;
+    expected_display_name: string;
+    expires_at: string;
+  };
+}
+
+export async function getZaloOutboundCallStatus(requestId: string) {
+  const actor = await recordingActor();
+  if (!UUID.test(requestId)) throw new RecordingError('INVALID_REQUEST');
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('zalo_outbound_call_requests')
+    .select('id, status, failure_reason, expected_display_name, phone_normalized, created_at, claimed_at, completed_at')
+    .eq('company_id', actor.companyId)
+    .eq('id', requestId)
+    .maybeSingle();
+  if (error || !data) throw new RecordingError('NOT_FOUND', 404);
+  return data;
+}
+

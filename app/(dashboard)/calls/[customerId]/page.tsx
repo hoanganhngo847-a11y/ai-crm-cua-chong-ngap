@@ -9,6 +9,7 @@ import { getCallTranscriptAction } from '../../../actions/sensitive';
 import CallHistoryTable from '../components/CallHistoryTable';
 import CallAttemptTimeline from '../components/CallAttemptTimeline';
 import CallToCustomerButton from '../components/CallToCustomerButton';
+import ZaloCallButton from '../components/ZaloCallButton';
 import ZaloRecordingHistory from '../components/ZaloRecordingHistory';
 
 interface Props {
@@ -80,12 +81,18 @@ export default async function CustomerCallsPage({ params }: Props) {
 
           {/* Nút GỌI KHÁCH */}
           {(actor.role === 'BOSS_ADMIN' || actor.role === 'SALE') && (
-            <CallToCustomerButton
-              customerId={customerId}
-              customerCode={customerCode}
-              customerName={customerName}
-              provider={process.env.NEXT_PUBLIC_VOICE_PROVIDER || 'MANUAL'}
-            />
+            <div className="flex items-center gap-2">
+              <ZaloCallButton
+                customerId={customerId}
+                customerName={customerName}
+              />
+              <CallToCustomerButton
+                customerId={customerId}
+                customerCode={customerCode}
+                customerName={customerName}
+                provider={process.env.NEXT_PUBLIC_VOICE_PROVIDER || 'MANUAL'}
+              />
+            </div>
           )}
         </div>
       </div>

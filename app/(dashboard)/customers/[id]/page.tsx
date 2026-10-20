@@ -8,6 +8,7 @@ import { CustomerService, maskPhone } from '../../../../features/crm/services/cu
 import { InboxService } from '../../../../features/inbox/services/inbox.service';
 import CustomerTimeline from '../../../../features/crm/components/customer-timeline';
 import CustomerSurveyCard from '../../../../features/crm/components/customer-survey-card';
+import ZaloCallButton from '../../calls/components/ZaloCallButton';
 import { sanitizePhoneInText } from '../../../../features/crm/utils/phone-sanitizer';
 import type { CustomerTimelineEvent } from '../../../../features/inbox/types/inbox.types';
 import { resolveCustomerPrivateContactForTrustedOperation } from '../../../../lib/sensitive/customer-contact';
@@ -510,6 +511,20 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 </div>
                 <p className="text-[10px] text-slate-500 leading-tight">
                   Số điện thoại được gọi qua tổng đài mã hóa, không lộ số thật cho tài khoản Sale.
+                </p>
+              </div>
+
+              {/* Zalo Personal Click-to-Call */}
+              <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-900/50 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-300">Zalo Personal:</span>
+                  <ZaloCallButton
+                    customerId={customerData.id}
+                    customerName={customerData.name}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight">
+                  Gọi trực tiếp qua Zalo Desktop trên máy Mac có Agent, tự động ghi âm hai chiều.
                 </p>
               </div>
 

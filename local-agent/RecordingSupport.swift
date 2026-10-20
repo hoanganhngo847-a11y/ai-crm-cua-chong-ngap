@@ -64,6 +64,7 @@ struct CallMetadata: Encodable {
     let remote_timing: TrackStatistics
     let local_timing: TrackStatistics
     let audio_validation: AudioValidation
+    var crm_call_request_id: String? = nil
 
     // Explicit nulls distinguish unknown identity/answer timing from missing schema fields.
     func encode(to encoder: Encoder) throws {
@@ -81,6 +82,9 @@ struct CallMetadata: Encodable {
         try put("capture_method", capture_method); try put("capture_error", capture_error)
         try put("remote_timing", remote_timing); try put("local_timing", local_timing)
         try put("audio_validation", audio_validation)
+        if let reqId = crm_call_request_id {
+            try put("crm_call_request_id", reqId)
+        }
     }
 }
 

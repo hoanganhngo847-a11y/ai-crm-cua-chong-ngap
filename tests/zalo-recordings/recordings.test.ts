@@ -79,6 +79,76 @@ async function main() {
     await db.exec(`SELECT set_config('request.jwt.claim.sub','${tech}',false);`);
     assert.equal((await db.query('SELECT id FROM zalo_personal_calls')).rows.length,0);
     await db.exec('RESET ROLE');
+
+    // Outbound click-to-call flow tests
+    const outboundCustomer = randomUUID();
+    await db.query(`INSERT INTO customers(id,company_id,name,source,stage) VALUES($1,$2,'Nguyễn Văn Test','MANUAL','LEAD_NEW')`, [outboundCustomer, company]);
+    await db.query(`INSERT INTO private.customer_private_contacts(company_id,customer_id,raw_phone,normalized_phone,is_verified) VALUES($1,$2,'0987654321','+84987654321',true)`, [company, outboundCustomer]);
+    
+    // Unauthorized actor cannot create outbound request
+    const unauthReq = await h.client.rpc('zalo_create_outbound_call_request', {
+      p_company: company, p_actor: tech, p_customer: outboundCustomer
+    });
+    assert.ok(unauthReq.error);
+
+    // Authorized SALE creates outbound request
+    const createReq = await h.client.rpc('zalo_create_outbound_call_request', {
+      p_company: company, p_actor: sale, p_customer: outboundCustomer
+    });
+    assert.ifError(createReq.error);
+    const reqId = createReq.data.request_id;
+    assert.equal(createReq.data.customer_id, outboundCustomer);
+    assert.equal(createReq.data.expected_display_name, 'Nguyễn Văn Test');
+    assert.equal(createReq.data.phone, '+84987654321');
+
+    // Device claims the request
+    const claimReq = await h.client.rpc('zalo_claim_outbound_call_request', {
+      p_device: device, p_key_hash: sha256(secret), p_request_id: reqId
+    });
+    assert.ifError(claimReq.error);
+    assert.equal(claimReq.data.id, reqId);
+    assert.equal(claimReq.data.customer_id, outboundCustomer);
+
+    // Device updates status
+    const status1 = await h.client.rpc('zalo_update_outbound_call_status', {
+      p_device: device, p_key_hash: sha256(secret), p_request_id: reqId, p_status: 'OPENING_ZALO'
+    });
+    assert.ifError(status1.error);
+    const status2 = await h.client.rpc('zalo_update_outbound_call_status', {
+      p_device: device, p_key_hash: sha256(secret), p_request_id: reqId, p_status: 'CONTACT_VERIFIED'
+    });
+    assert.ifError(status2.error);
+    const status3 = await h.client.rpc('zalo_update_outbound_call_status', {
+      p_device: device, p_key_hash: sha256(secret), p_request_id: reqId, p_status: 'CALL_TRIGGERED'
+    });
+    assert.ifError(status3.error);
+
+    // Outbound recording uploads with crm_call_request_id
+    const outboundMeta = {
+      ...metadataFixture(device, 'Nguyễn Văn Test'),
+      direction: 'OUTBOUND' as const,
+      crm_call_request_id: reqId,
+    };
+    const outboundUpload = await upload(outboundMeta);
+    assert.equal(outboundUpload.duplicate, false);
+
+    // Verify direct attachment with EXACT matching_status and COMPLETED request status
+    const outboundCallRow = (await db.query<Record<string, unknown>>(
+      'SELECT customer_id, matching_status, outbound_request_id, identity_ambiguous FROM zalo_personal_calls WHERE id=$1',
+      [outboundUpload.call_id]
+    )).rows[0];
+    assert.equal(outboundCallRow.customer_id, outboundCustomer);
+    assert.equal(outboundCallRow.matching_status, 'EXACT');
+    assert.equal(outboundCallRow.outbound_request_id, reqId);
+    assert.equal(outboundCallRow.identity_ambiguous, false);
+
+    const completedReq = (await db.query<Record<string, unknown>>(
+      'SELECT status, completed_at FROM zalo_outbound_call_requests WHERE id=$1',
+      [reqId]
+    )).rows[0];
+    assert.equal(completedReq.status, 'COMPLETED');
+    assert.ok(completedReq.completed_at !== null);
+
     await db.query('UPDATE zalo_recording_devices SET active=false WHERE id=$1',[device]);
     await assert.rejects(upload(metadataFixture(device)),/DEVICE_UNAUTHORIZED/);
     assert.equal((await db.query<{n:number}>('SELECT count(*)::int n FROM voice_media_jobs')).rows[0].n,0);

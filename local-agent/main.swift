@@ -214,8 +214,18 @@ final class CallRecorder {
         } else {
             status = "WARNING_ONE_TRACK_SILENT"
         }
+        var effectiveDirection = direction
+        let outboundContext = OutboundCallManager.shared.currentOutboundContext(for: contact)
+        var crmCallRequestId: String? = nil
+        if let ctx = outboundContext {
+            effectiveDirection = .outbound
+            crmCallRequestId = ctx.requestId
+            OutboundCallManager.shared.clearActiveContext()
+            print("[Outbound] Associated recording with CRM request \(ctx.requestId) for customer '\(ctx.customerName)'")
+        }
+
         let iso = ISO8601DateFormatter()
-        let metadata = CallMetadata(id: callID, device_id: try AgentIdentity.deviceID(), direction: direction,
+        var metadata = CallMetadata(id: callID, device_id: try AgentIdentity.deviceID(), direction: effectiveDirection,
             started_at: iso.string(from: startedAt), ended_at: iso.string(from: end),
             duration_seconds: actualDuration, remote_display_name: contact,
             recording_path: recording.path,
@@ -227,6 +237,7 @@ final class CallRecorder {
                 local_non_silent: localLevels.nonSilent, duration: actualDuration,
                 remote_peak_db: remoteLevels.peak_db, remote_mean_db: remoteLevels.mean_db,
                 local_peak_db: localLevels.peak_db, local_mean_db: localLevels.mean_db, status: status))
+        metadata.crm_call_request_id = crmCallRequestId
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(metadata).write(to: output.appendingPathComponent(stem + ".json"), options: .atomic)
@@ -260,6 +271,7 @@ final class ZaloAgent {
     private var lockFD: Int32 = -1
     private var lastError: String?
     private var lastRoutingError: String?
+    private var loopbackServer: LoopbackServer?
 
     func start() throws {
         // Prevent two new agents from recording the same call.
@@ -282,6 +294,22 @@ final class ZaloAgent {
             print("[Permission] Accessibility is unavailable: caller name/direction may be unknown.")
         }
         RecordingUploadQueue.shared.start(recordings: URL(fileURLWithPath: Config.outputDirectory))
+
+        // Start loopback HTTP server for CRM web app
+        let server = LoopbackServer()
+        server.onCallRequest = { reqId in
+            OutboundCallManager.shared.executeOutboundCall(requestId: reqId)
+        }
+        do {
+            try server.start()
+            loopbackServer = server
+        } catch {
+            print("[LoopbackServer Warning] \(error.localizedDescription)")
+        }
+
+        // Register custom URL scheme handler
+        URLSchemeHandler.shared.register()
+
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in self?.tick() }
         tick()
         RunLoop.main.run()
@@ -387,9 +415,35 @@ final class ZaloAgent {
         guard !stopping else { return }
         stopping = true
         timer?.invalidate()
+        loopbackServer?.stop()
         print("[Shutdown] Closing native capture and finalizing active recording...")
         if state == .finalizing { return }
         if recorder != nil { finish() } else { exit(0) }
+    }
+}
+
+final class URLSchemeHandler: NSObject {
+    static let shared = URLSchemeHandler()
+
+    func register() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURL(event:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc func handleGetURL(event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        if let requestId = components.queryItems?.first(where: { $0.name == "request_id" })?.value {
+            print("[URLScheme] Received call request: \(requestId)")
+            DispatchQueue.global(qos: .userInitiated).async {
+                OutboundCallManager.shared.executeOutboundCall(requestId: requestId)
+            }
+        }
     }
 }
 
@@ -450,6 +504,23 @@ do {
     } else if CommandLine.arguments.contains("--repair-output") {
         try AudioManager.shared.repairLegacyOutput()
         print("Output: \(AudioManager.shared.defaultUID() ?? "unknown")")
+    } else if CommandLine.arguments.contains("--call") {
+        var requestId: String? = nil
+        let args = CommandLine.arguments
+        for i in 0..<args.count {
+            if (args[i] == "--call" || args[i] == "--request-id") && i + 1 < args.count {
+                let candidate = args[i + 1]
+                if !candidate.hasPrefix("-") && UUID(uuidString: candidate) != nil {
+                    requestId = candidate
+                }
+            }
+        }
+        guard let id = requestId else {
+            fputs("Usage: zalo-recorder --call <request_id>\n", stderr)
+            exit(1)
+        }
+        print("[CLI] Executing outbound call for request \(id)...")
+        OutboundCallManager.shared.executeOutboundCall(requestId: id)
     } else {
         try ZaloAgent().start()
     }

@@ -194,7 +194,7 @@ final class RecordingUploadQueue {
             guard size > 0, size <= 50 * 1024 * 1024 else { throw RecorderFailure(message: "Recording exceeds upload size limit.") }
             guard let json = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: entry.metadata_path))) as? [String: Any] else { throw RecorderFailure(message: "Invalid metadata.") }
             // Explicit allowlist: never transmit local paths, capture diagnostics, chat/session data.
-            let keys = ["schema_version", "source", "local_call_id", "device_id", "agent_version", "direction", "remote_display_name", "remote_identity_type", "identity_confidence", "phone_if_visible", "started_at", "answered_at", "ended_at", "duration_seconds", "recording_file"]
+            let keys = ["schema_version", "source", "local_call_id", "device_id", "agent_version", "direction", "remote_display_name", "remote_identity_type", "identity_confidence", "phone_if_visible", "started_at", "answered_at", "ended_at", "duration_seconds", "recording_file", "crm_call_request_id"]
             var metadata = json.filter { keys.contains($0.key) }
             let validation = json["audio_validation"] as? [String: Any] ?? [:]
             metadata["audio_validation"] = validation.filter { ["remote_non_silent", "local_non_silent"].contains($0.key) }
