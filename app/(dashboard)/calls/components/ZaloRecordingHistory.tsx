@@ -2,10 +2,24 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { linkZaloCustomer, listZaloCalls, playZaloRecording, searchZaloCustomers } from '../../../actions/zalo-recordings';
+import {
+  getZaloTranscription,
+  linkZaloCustomer,
+  listZaloCalls,
+  playZaloRecording,
+  retryZaloTranscription,
+  searchZaloCustomers,
+} from '../../../actions/zalo-recordings';
 
 type Call = Awaited<ReturnType<typeof listZaloCalls>>['items'][number];
 type Candidate = {id:string;name:string;customer_code:string};
+function formatTranscriptTime(ms: number): string {
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
 function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
   const [candidates,setCandidates]=useState<Candidate[]>([]);
   const [selected,setSelected]=useState('');
@@ -16,6 +30,13 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [audio,setAudio]=useState('');
+  const initialStatus = (call as { transcript_status?: string }).transcript_status || 'PENDING';
+  const [transcriptStatus, setTranscriptStatus] = useState<string>(initialStatus);
+  const [transcript, setTranscript] = useState<Awaited<ReturnType<typeof getZaloTranscription>> | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+
   const customer=(Array.isArray(call.customers)?call.customers[0]:call.customers) as {name:string;customer_code:string}|null;
   useEffect(()=>{
     if(call.customer_id) return;
@@ -26,6 +47,41 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
   async function perform(operation:()=>Promise<void>) {
     setBusy(true);setError('');
     try {await operation();} catch {setError('Thao tác chưa thành công. Vui lòng thử lại.');} finally {setBusy(false);}
+  }
+  async function toggleTranscript() {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    if (!transcript) {
+      setLoadingTranscript(true);
+      try {
+        const data = await getZaloTranscription(call.id);
+        setTranscript(data);
+        if (data?.status) setTranscriptStatus(data.status);
+        setExpanded(true);
+      } catch {
+        setError('Không thể tải nội dung bóc băng.');
+      } finally {
+        setLoadingTranscript(false);
+      }
+    } else {
+      setExpanded(true);
+    }
+  }
+  async function handleRetryTranscription() {
+    setRetryBusy(true);
+    setError('');
+    try {
+      await retryZaloTranscription(call.id);
+      setTranscriptStatus('PENDING');
+      setTranscript(null);
+      setExpanded(false);
+    } catch {
+      setError('Không thể yêu cầu thử lại bóc băng. Vui lòng thử lại sau.');
+    } finally {
+      setRetryBusy(false);
+    }
   }
   return <article className="rounded-xl border border-slate-700 bg-slate-900 p-4 space-y-3">
     <div className="flex justify-between flex-wrap gap-2">
@@ -57,6 +113,73 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
         <button disabled={busy || !newName.trim()} className="rounded bg-blue-700 px-3 text-sm disabled:opacity-50">Tạo và liên kết</button>
       </form>}
     </>}
+    <div className="pt-2 border-t border-slate-800 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400">Bóc băng:</span>
+          {transcriptStatus === 'COMPLETED' ? (
+            <span className="inline-flex items-center rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
+              Đã hoàn thành
+            </span>
+          ) : transcriptStatus === 'FAILED' ? (
+            <span className="inline-flex items-center rounded-full bg-red-950 px-2.5 py-0.5 text-xs font-medium text-red-400 border border-red-800">
+              Thất bại
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-amber-950 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
+              Đang xử lý…
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {transcriptStatus === 'COMPLETED' && (
+            <button
+              type="button"
+              disabled={loadingTranscript}
+              onClick={toggleTranscript}
+              className="text-xs text-blue-400 hover:text-blue-300 underline disabled:opacity-50"
+            >
+              {loadingTranscript ? 'Đang tải…' : expanded ? 'Ẩn nội dung' : 'Xem nội dung'}
+            </button>
+          )}
+          {transcriptStatus === 'FAILED' && (
+            <button
+              type="button"
+              disabled={busy || retryBusy}
+              onClick={handleRetryTranscription}
+              className="rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
+            >
+              {retryBusy ? 'Đang gửi…' : 'Thử lại'}
+            </button>
+          )}
+        </div>
+      </div>
+      {expanded && transcript && (
+        <div className="rounded-lg bg-slate-950/80 p-3 space-y-3 text-sm border border-slate-800 max-h-96 overflow-y-auto">
+          {transcript.utterances.length === 0 ? (
+            <p className="text-xs text-slate-400">Không có giọng nói được phát hiện.</p>
+          ) : (
+            transcript.utterances.map((u) => (
+              <div key={u.id || u.sequence} className="space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-mono text-slate-400">{formatTranscriptTime(u.start_ms)}</span>
+                  <span
+                    className={`font-semibold ${
+                      u.speaker_role === 'STAFF' ? 'text-blue-400' : 'text-emerald-400'
+                    }`}
+                  >
+                    {u.speaker_role === 'STAFF' ? 'Staff' : 'Customer'}
+                  </span>
+                </div>
+                <p className="text-slate-200 pl-2 border-l border-slate-700 text-sm whitespace-pre-wrap">
+                  {u.text}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
   </article>;
 }
