@@ -1,25 +1,20 @@
-# macOS Notarization & Code Signing Guide for Zalo Recorder
+# macOS Notarization & Developer ID Guide (OPTIONAL FUTURE PUBLIC DISTRIBUTION)
 
-This document details the production signing, notarization, and stapling procedure for `Zalo Recorder.app`.
+> [!NOTE]
+> **OPTIONAL FUTURE PUBLIC DISTRIBUTION ONLY**
+> 
+> This document details the Apple Developer Program, Developer ID signing, and Apple Notarization workflow.
+> **This is NOT required for internal company deployment.**
+> For company-internal staff Macs, use the zero-cost local code signing strategy documented in [LOCAL_SIGNING.md](LOCAL_SIGNING.md).
 
 ---
 
-## 1. Why Developer ID & Notarization are Required for TCC
+## 1. Context & Purpose (Public Distribution)
 
-On macOS (macOS 10.15 Catalina through macOS 15+ Sequoia):
-1. **Ad-Hoc Signing Invalidation**:
-   - Binaries signed ad-hoc (`codesign -s -`) have a designated requirement tied to the cryptographic code directory hash (`cdhash`).
-   - Every compilation or patch creates a new `cdhash`. macOS TCC (Transparency, Consent, and Control) treats each rebuild as a completely different, untrusted application.
-   - Consequently, ad-hoc builds continually lose Microphone, Screen Recording, and Accessibility approvals upon update.
-2. **Developer ID Stability**:
-   - When signed with a valid Apple Developer ID Application certificate (`Developer ID Application: Team Name (TEAM_ID)`), the designated requirement includes the Team Identifier and bundle identifier:
-     ```
-     identifier "com.local.zalo-recorder" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = TEAM_ID
-     ```
-   - This allows macOS TCC to persist user permissions across updates of `Zalo Recorder.app`.
-3. **Launchd / Unattended Background Agent Stability**:
-   - When launched non-interactively via `launchd` (`com.local.zalo-recorder.agent.plist`), the process cannot prompt interactive GUI dialogs reliably.
-   - Packaging as an `LSUIElement` application (`~/Applications/Zalo Recorder.app`) signed with a Developer ID ensures TCC grants granted once in System Settings persist across daemon reloads and system reboots.
+When distributing `Zalo Recorder.app` to external or unmanaged third-party macOS devices:
+1. **Gatekeeper Validation**: External macOS devices without pre-trusted local certificates require binaries to be notarized by Apple to bypass Gatekeeper quarantine (`spctl`).
+2. **Developer ID Stability**: Apple Developer ID certificates allow public installations to persist TCC permissions without requiring manual Keychain certificate installation.
+3. **Internal vs Public**: For internal machines where certificates can be generated in the local Keychain, use [LOCAL_SIGNING.md](LOCAL_SIGNING.md) instead.
 
 ---
 

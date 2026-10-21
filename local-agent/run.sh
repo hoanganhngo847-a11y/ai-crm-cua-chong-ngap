@@ -9,9 +9,111 @@ LOG_FILE="$LOG_DIR/agent.log"
 APP_NAME="Zalo Recorder.app"
 APP_DIR="$HOME/Applications/$APP_NAME"
 PACKAGE_OUTPUT_DIR="${PACKAGE_OUTPUT_DIR:-$DIR/build}"
+LOCAL_SIGNING_IDENTITY="${LOCAL_SIGNING_IDENTITY:-Zalo Recorder Local Signing}"
+
+find_local_signing_identity() {
+    security find-identity -p codesigning -v 2>/dev/null | grep "\"$LOCAL_SIGNING_IDENTITY\"" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true
+}
 
 find_developer_id_identity() {
     security find-identity -p codesigning -v 2>/dev/null | grep "Developer ID Application:" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true
+}
+
+get_designated_requirement() {
+    local target="$1"
+    if [ ! -e "$target" ]; then
+        echo ""
+        return 0
+    fi
+    codesign -d -r- "$target" 2>&1 | grep '^# designated =>' | sed 's/^# designated => //' | tr -d '\n'
+}
+
+compare_designated_requirements() {
+    local installed_app="$1"
+    local candidate_app="$2"
+
+    if [ ! -d "$installed_app" ]; then
+        echo "[Designated Requirement] No installed app found at '$installed_app'. First-time install."
+        return 0
+    fi
+
+    echo "Checking cryptographic designated requirement compatibility..."
+    local installed_req candidate_req
+    installed_req="$(get_designated_requirement "$installed_app")"
+    candidate_req="$(get_designated_requirement "$candidate_app")"
+
+    if [ -z "$installed_req" ]; then
+        echo "ERROR: Unable to extract designated requirement from installed app: $installed_app" >&2
+        return 1
+    fi
+    if [ -z "$candidate_req" ]; then
+        echo "ERROR: Unable to extract designated requirement from candidate app: $candidate_app" >&2
+        return 1
+    fi
+
+    # Fail closed if either requirement relies on ad-hoc cdhash
+    if [[ "$installed_req" == *"cdhash"* ]] || [[ "$candidate_req" == *"cdhash"* ]]; then
+        echo "ERROR: LOCAL_SIGNING_IDENTITY_MISMATCH" >&2
+        echo "Ad-hoc signed application detected (cdhash-dependent)." >&2
+        echo "Installed: $installed_req" >&2
+        echo "Candidate: $candidate_req" >&2
+        echo "Ad-hoc signatures do not preserve TCC permissions across builds." >&2
+        return 1
+    fi
+
+    # Cryptographic requirement verification via codesign -v -R
+    if ! codesign -v -R="$installed_req" "$candidate_app" 2>/dev/null; then
+        echo "ERROR: LOCAL_SIGNING_IDENTITY_MISMATCH" >&2
+        echo "Candidate app does NOT satisfy installed app's designated requirement!" >&2
+        echo "Installed requirement: $installed_req" >&2
+        echo "Candidate requirement: $candidate_req" >&2
+        echo "Update aborted to prevent TCC permission loss." >&2
+        return 1
+    fi
+
+    if [ "$installed_req" != "$candidate_req" ]; then
+        echo "ERROR: LOCAL_SIGNING_IDENTITY_MISMATCH" >&2
+        echo "Designated requirement string mismatch:" >&2
+        echo "Installed: $installed_req" >&2
+        echo "Candidate: $candidate_req" >&2
+        return 1
+    fi
+
+    echo "[OK] Designated requirements match. Update is cryptographically compatible."
+    return 0
+}
+
+setup_local_signing() {
+    echo "=== Zalo Recorder: Local Signing Identity Setup ==="
+    local existing
+    existing="$(find_local_signing_identity)"
+    if [ -n "$existing" ]; then
+        echo "[OK] Local signing identity already exists in Keychain:"
+        echo "     $existing"
+        security find-identity -p codesigning -v 2>/dev/null | grep "\"$LOCAL_SIGNING_IDENTITY\""
+        echo ""
+        echo "No action needed. You can now package using: ./local-agent/run.sh --package --local-release"
+        return 0
+    fi
+
+    echo "Identity '$LOCAL_SIGNING_IDENTITY' not found in Keychain."
+    echo ""
+    echo "To create this internal certificate on this Mac (one-time setup, no Apple Developer Program required):"
+    echo "------------------------------------------------------------------------------------------------------"
+    echo "1. Open 'Keychain Access' app (Applications > Utilities > Keychain Access)."
+    echo "2. From the menu bar, choose: Keychain Access > Certificate Assistant > Create a Certificate..."
+    echo "3. Fill in the following settings:"
+    echo "     - Name: $LOCAL_SIGNING_IDENTITY"
+    echo "     - Identity Type: Self Signed Root"
+    echo "     - Certificate Type: Code Signing"
+    echo "     - Keychain: login"
+    echo "4. Click 'Create' (and then 'Done')."
+    echo "------------------------------------------------------------------------------------------------------"
+    echo "Once created, verify by running:"
+    echo "     ./local-agent/run.sh --setup-local-signing"
+    echo ""
+    echo "For full details, lifecycle, and troubleshooting, see local-agent/LOCAL_SIGNING.md."
+    return 1
 }
 
 compile_agent() {
@@ -42,7 +144,7 @@ compile_agent() {
 }
 
 build_app_bundle() {
-    local mode="${1:-release}"
+    local mode="${1:-local-release}"
     local dest_dir="$PACKAGE_OUTPUT_DIR"
     local app_bundle="$dest_dir/$APP_NAME"
 
@@ -59,12 +161,58 @@ build_app_bundle() {
     cp "$DIR/zalo-recorder" "$app_bundle/Contents/MacOS/zalo-recorder"
     chmod 755 "$app_bundle/Contents/MacOS/zalo-recorder"
 
-    if [ "$mode" = "release" ]; then
+    if [ "$mode" = "local-release" ]; then
+        local identity
+        identity="$(find_local_signing_identity)"
+        if [ -z "$identity" ]; then
+            echo "ERROR: LOCAL_SIGNING_IDENTITY_MISSING" >&2
+            echo "Local signing identity '$LOCAL_SIGNING_IDENTITY' was not found in Keychain." >&2
+            echo "Local release mode fails closed and NEVER falls back to ad-hoc signing." >&2
+            echo "Run './local-agent/run.sh --setup-local-signing' or see local-agent/LOCAL_SIGNING.md for setup instructions." >&2
+            rm -rf "$app_bundle"
+            return 1
+        fi
+        echo "Signing with local identity: $identity..."
+        codesign --force --deep --options runtime --timestamp \
+            --entitlements "$DIR/entitlements.plist" \
+            --sign "$identity" \
+            "$app_bundle"
+        codesign --verify --deep --strict --verbose=2 "$app_bundle"
+
+        local bundle_id
+        bundle_id="$(defaults read "$app_bundle/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || true)"
+        if [ "$bundle_id" != "com.local.zalo-recorder" ]; then
+            echo "ERROR: Unexpected bundle identifier: '$bundle_id' (expected com.local.zalo-recorder)" >&2
+            rm -rf "$app_bundle"
+            return 1
+        fi
+
+        local req
+        req="$(get_designated_requirement "$app_bundle")"
+        echo "[Designated Requirement] $req"
+        echo "Successfully packaged and signed local release bundle: $app_bundle"
+
+    elif [ "$mode" = "dev" ] || [ "$mode" = "adhoc" ]; then
+        echo "================================================================================"
+        echo "WARNING: Building app bundle with AD-HOC signing (--dev)."
+        echo "WARNING: Ad-hoc signing ties TCC identity to CDHash."
+        echo "WARNING: DEV AD-HOC BUILDS DO NOT PROVIDE TCC PERSISTENCE."
+        echo "================================================================================"
+        codesign --force --deep \
+            --entitlements "$DIR/entitlements.plist" \
+            --sign - \
+            "$app_bundle"
+        codesign --verify --deep --strict --verbose=2 "$app_bundle"
+        echo "Successfully packaged ad-hoc development bundle: $app_bundle"
+
+    elif [ "$mode" = "release" ]; then
+        # Optional public distribution with Developer ID
         local identity
         identity="$(find_developer_id_identity)"
         if [ -z "$identity" ]; then
-            echo "ERROR: Developer ID Application signing identity is required for production packaging to ensure persistent TCC permissions. No valid Developer ID Application certificate found in Keychain." >&2
-            echo "See local-agent/NOTARIZATION.md for instructions on installing your Developer ID certificate." >&2
+            echo "ERROR: Developer ID Application signing identity is required for public release packaging." >&2
+            echo "For company-internal Macs without Apple Developer Program, use: --package --local-release" >&2
+            echo "See local-agent/LOCAL_SIGNING.md and local-agent/NOTARIZATION.md." >&2
             rm -rf "$app_bundle"
             return 1
         fi
@@ -74,38 +222,34 @@ build_app_bundle() {
             --sign "$identity" \
             "$app_bundle"
         codesign --verify --deep --strict --verbose=2 "$app_bundle"
-        echo "Successfully packaged and signed release bundle: $app_bundle"
-    elif [ "$mode" = "dev" ] || [ "$mode" = "adhoc" ]; then
-        echo "================================================================================"
-        echo "WARNING: Building app bundle with AD-HOC signing (--dev)."
-        echo "WARNING: Ad-hoc signing ties TCC identity to CDHash."
-        echo "WARNING: Permissions will NOT persist across builds!"
-        echo "================================================================================"
-        codesign --force --deep \
-            --entitlements "$DIR/entitlements.plist" \
-            --sign - \
-            "$app_bundle"
-        codesign --verify --deep --strict --verbose=2 "$app_bundle"
-        echo "Successfully packaged ad-hoc development bundle: $app_bundle"
+        echo "Successfully packaged Developer ID release bundle: $app_bundle"
     else
-        echo "ERROR: Unknown package mode '$mode'. Use --release or --dev." >&2
+        echo "ERROR: Unknown package mode '$mode'. Use --local-release or --dev." >&2
         return 1
     fi
 }
 
 install_agent() {
-    local mode="release"
-    if [ -z "$(find_developer_id_identity)" ]; then
-        echo "Note: No Developer ID found, falling back to --dev for install packaging."
-        mode="dev"
-    fi
+    local mode="${1:-local-release}"
     build_app_bundle "$mode"
+
+    local candidate="$PACKAGE_OUTPUT_DIR/$APP_NAME"
+
+    # Verify cryptographic compatibility before updating an existing app
+    if [ -d "$APP_DIR" ]; then
+        echo "Verifying update compatibility against currently installed app..."
+        if ! compare_designated_requirements "$APP_DIR" "$candidate"; then
+            echo "ERROR: Cannot install candidate app due to designated requirement incompatibility." >&2
+            echo "Update aborted. The existing app at '$APP_DIR' was NOT modified." >&2
+            return 1
+        fi
+    fi
 
     mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents" "$LOG_DIR"
     chmod 700 "$LOG_DIR"
 
     rm -rf "$APP_DIR"
-    cp -R "$PACKAGE_OUTPUT_DIR/$APP_NAME" "$APP_DIR"
+    cp -R "$candidate" "$APP_DIR"
 
     # Stop any existing process so LaunchAgent can bind the port and take lock
     launchctl bootout "gui/$UID/$PLIST_LABEL" 2>/dev/null || launchctl unload "$PLIST_PATH" 2>/dev/null || true
@@ -243,13 +387,32 @@ show_status() {
 
 # Main command dispatcher
 case "${1:-}" in
+    --setup-local-signing)
+        setup_local_signing
+        exit $?
+        ;;
+    --verify-update)
+        shift
+        if [ $# -lt 1 ]; then
+            echo "Usage: ./local-agent/run.sh --verify-update <candidate_app> [installed_app]" >&2
+            exit 1
+        fi
+        cand="$1"
+        inst="${2:-$APP_DIR}"
+        compare_designated_requirements "$inst" "$cand"
+        exit $?
+        ;;
     --package)
         shift
-        pkg_mode="release"
+        pkg_mode="local-release"
         while [ $# -gt 0 ]; do
             case "$1" in
                 --dev|--adhoc)
                     pkg_mode="dev"
+                    shift
+                    ;;
+                --local-release)
+                    pkg_mode="local-release"
                     shift
                     ;;
                 --release)
@@ -265,7 +428,7 @@ case "${1:-}" in
         exit $?
         ;;
     --install)
-        install_agent
+        install_agent "${2:-local-release}"
         exit 0
         ;;
     --uninstall)
