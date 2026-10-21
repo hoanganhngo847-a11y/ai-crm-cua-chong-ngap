@@ -5,8 +5,9 @@ import { RECORDING_BUCKET } from '../zalo-recordings/upload';
 import { splitStereoChannels, MAX_PROVIDER_AUDIO_BYTES, type SplitAudioOptions, type AudioChannelSplitResult } from './audio-splitter';
 import { logTranscriptionEvent } from './logger';
 import { mergeUtterances } from './merger';
-import { OpenAITranscriptionProvider, type TranscriptionProvider } from './provider';
-import type { ClaimedTranscriptionJob, RawUtteranceSegment } from './types';
+import { type TranscriptionProvider } from './provider';
+import { createTranscriptionProvider } from './provider-factory';
+import type { AudioTranscriptionOptions, ClaimedTranscriptionJob, RawUtteranceSegment } from './types';
 
 /**
  * Maximum total duration for a single cron invocation (4 minutes).
@@ -20,6 +21,9 @@ const MAX_WORKER_DURATION_MS = 4 * 60 * 1000;
  * Covers: download + ffmpeg split + 2x provider calls + DB persist.
  */
 const MAX_SINGLE_JOB_DURATION_MS = 3 * 60 * 1000;
+
+/** Cleanup allowance reserved for DB completion / failure persistence */
+const CLEANUP_ALLOWANCE_MS = 5_000;
 
 export function getTranscriptionRetryDelayMs(attempts: number): number {
   return Math.min(60 * 60 * 1000, 30_000 * 2 ** Math.max(0, attempts - 1));
@@ -35,8 +39,16 @@ export function getTranscriptionFailureOutcome(currentAttempts: number, maxAttem
 }
 
 export function sanitizeErrorCode(error: unknown): string {
-  if (error instanceof Error) {
-    const msg = error.message.trim();
+  const msg =
+    error instanceof Error
+      ? error.message.trim()
+      : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message.trim()
+        : typeof error === 'string'
+          ? error.trim()
+          : null;
+
+  if (msg) {
     if (/^[A-Z0-9_]{3,80}$/.test(msg)) {
       return msg;
     }
@@ -50,11 +62,23 @@ export function sanitizeErrorCode(error: unknown): string {
 }
 
 export function sanitizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
+  const rawMsg =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message
+        : typeof error === 'string'
+          ? error
+          : null;
+
+  if (rawMsg) {
     // Strip anything that looks like bearer tokens, API keys, or full local filesystem paths
-    const clean = error.message
+    const clean = rawMsg
       .replace(/Bearer\s+[A-Za-z0-9_\-.]+/gi, 'Bearer ***')
+      .replace(/x-goog-api-key[:=\s]+\S+/gi, 'x-goog-api-key: ***')
+      .replace(/key=[A-Za-z0-9_\-]+/gi, 'key=***')
       .replace(/sk-[A-Za-z0-9_\-]{20,}/gi, 'sk-***')
+      .replace(/\bAIza[0-9A-Za-z_\-]{20,}\b/g, 'AIza***')
       .replace(/\/[\w.\-]+(?:\/[\w.\-]+)+/g, '[path]');
     return clean.slice(0, 300);
   }
@@ -74,10 +98,50 @@ export function isPermanentError(errorCode: string): boolean {
     'ZALO_CALL_NOT_FOUND',
     'AUDIO_TOO_LARGE',
     'FFMPEG_UNAVAILABLE',
+    'GEMINI_NOT_CONFIGURED',
+    'GEMINI_AUTH_ERROR',
+    'GEMINI_INVALID_RESPONSE',
+    'GEMINI_TIMESTAMP_MISSING',
+    'GEMINI_AUDIO_TOO_LONG',
+    'INVALID_TRANSCRIPTION_PROVIDER',
+    'INVALID_TRANSCRIPTION_MODEL',
   ]);
   return permanentCodes.has(errorCode);
 }
 
+const ALLOWED_PROVIDERS = new Set(["OPENAI", "GEMINI", "MOCK"]);
+
+export function validateSafeIdentifier(id: string, maxLen = 32): string {
+  if (typeof id !== "string" || !id || id.length > maxLen) {
+    throw new Error("INVALID_TRANSCRIPTION_PROVIDER");
+  }
+  const trimmed = id.trim();
+  if (trimmed !== id || !ALLOWED_PROVIDERS.has(trimmed)) {
+    throw new Error("INVALID_TRANSCRIPTION_PROVIDER");
+  }
+  return trimmed;
+}
+
+export function validateSafeModelIdentifier(model: string, maxLen = 128): string {
+  if (typeof model !== "string" || !model || model.length > maxLen) {
+    throw new Error("INVALID_TRANSCRIPTION_MODEL");
+  }
+  // Valid model strings stay EXACT; no whitespace trim that changes used model.
+  if (model.trim() !== model) {
+    throw new Error("INVALID_TRANSCRIPTION_MODEL");
+  }
+  // Reject keys/tokens: prefix sk-, bearer, or AIza anywhere
+  if (/^(sk-|bearer)/i.test(model) || /AIza/i.test(model)) {
+    throw new Error("INVALID_TRANSCRIPTION_MODEL");
+  }
+  // Safe lowercase identifier pattern length<=128 e.g optionally models/ then [a-z][a-z0-9_.:-]* allowed
+  // Reject paths, whitespace, multiple slashes, uppercase
+  const safePattern = /^(?:models\/)?[a-z][a-z0-9_.:-]*$/;
+  if (!safePattern.test(model)) {
+    throw new Error("INVALID_TRANSCRIPTION_MODEL");
+  }
+  return model;
+}
 /** Enqueue transcription for a finalized Zalo personal recording. */
 export async function enqueueZaloTranscription(
   companyId: string,
@@ -123,29 +187,85 @@ export async function processZaloTranscriptionJob(
   options?: ProcessJobOptions
 ): Promise<void> {
   const admin = options?.client || createAdminClient();
-  const provider = options?.provider || new OpenAITranscriptionProvider();
   const splitFn = options?.splitAudioFn || splitStereoChannels;
-  const jobDeadline = Math.min(
-    Date.now() + MAX_SINGLE_JOB_DURATION_MS,
-    options?.deadline ?? (Date.now() + MAX_SINGLE_JOB_DURATION_MS)
-  );
-  const getRemainingMs = () => Math.max(0, jobDeadline - Date.now());
 
-  logTranscriptionEvent({
-    action: 'processing_started',
-    company_id: job.company_id,
-    call_id: job.call_id,
-    transcription_id: job.id,
-    provider: job.provider,
-    attempts: job.attempts,
-  });
+  const defaultDeadline = Date.now() + MAX_SINGLE_JOB_DURATION_MS;
+  const callerDeadline = options?.deadline;
+  const validatedDeadline =
+    typeof callerDeadline === 'number' && Number.isFinite(callerDeadline)
+      ? callerDeadline
+      : defaultDeadline;
+  const jobDeadline = Math.min(defaultDeadline, validatedDeadline);
+
+  const getRemainingMs = () => jobDeadline - Date.now();
+
+  let safeProvider: string | undefined;
+  let safeModel: string | undefined;
 
   try {
+    // Check deadline before any metadata or provider work
     if (getRemainingMs() <= 0) {
       throw new Error('TIMEOUT');
     }
 
-    // 1. Download original recording from private bucket with bounded cancellation timeout
+    // 0. Resolve provider inside try/catch so any invalid configuration fails gracefully in DB
+    const provider = options?.provider || createTranscriptionProvider();
+
+    // Validate safe identifiers for provider and model to prevent injection or leaking secrets
+    safeProvider = validateSafeIdentifier(provider.name, 32);
+
+    let rawModel = provider.model;
+    if (!rawModel && safeProvider === 'MOCK') {
+      rawModel = 'mock-model';
+    }
+    if (!rawModel) {
+      throw new Error('INVALID_TRANSCRIPTION_MODEL');
+    }
+    safeModel = validateSafeModelIdentifier(rawModel, 128);
+
+    // Re-verify deadline before metadata work
+    if (getRemainingMs() <= 0) {
+      throw new Error('TIMEOUT');
+    }
+
+    logTranscriptionEvent({
+      action: 'processing_started',
+      company_id: job.company_id,
+      call_id: job.call_id,
+      transcription_id: job.id,
+      provider: safeProvider,
+      model: safeModel,
+      attempts: job.attempts,
+    });
+
+    // Persist provider and model metadata BEFORE upload, fenced by company, call, lock_token, status, and active lease.
+    // Fails before consuming any provider quota if lock is lost.
+    const { data: metaData, error: metaError } = await admin.rpc(
+      'zalo_set_transcription_provider_metadata',
+      {
+        p_company: job.company_id,
+        p_transcription_id: job.id,
+        p_lock_token: job.lock_token,
+        p_provider: safeProvider,
+        p_model: safeModel,
+      }
+    );
+
+    if (metaError || metaData !== true) {
+      if (
+        metaError &&
+        typeof metaError.message === 'string' &&
+        metaError.message.includes('TRANSCRIPTION_LOCK_LOST')
+      ) {
+        throw new Error('TRANSCRIPTION_LOCK_LOST');
+      }
+      throw new Error('PERSIST_METADATA_FAILED');
+    }
+
+    // 1. Download original recording from Supabase private storage
+    if (getRemainingMs() <= 0) {
+      throw new Error('TIMEOUT');
+    }
     const downloadTimeout = Math.min(60_000, getRemainingMs());
     const { data: fileData, error: downloadError } = await admin.storage
       .from(RECORDING_BUCKET)
@@ -180,20 +300,31 @@ export async function processZaloTranscriptionJob(
     let staffSegments: RawUtteranceSegment[] = [];
     let detectedLanguage = job.language || 'vi';
 
+    // Duration in ms from validated audio_validation.duration (converted seconds -> ms)
+    const durationMs =
+      typeof job.audio_validation?.duration === 'number' &&
+      Number.isFinite(job.audio_validation.duration) &&
+      job.audio_validation.duration > 0
+        ? Math.round(job.audio_validation.duration * 1000)
+        : undefined;
+
     // 4. Transcribe Left (CUSTOMER) channel if not silent
     if (!split.customerSilent && split.customerAudio && split.customerAudio.length > 0) {
-      if (getRemainingMs() <= 0) {
+      if (getRemainingMs() <= CLEANUP_ALLOWANCE_MS) {
         throw new Error('TIMEOUT');
       }
-      const providerTimeout = Math.min(120_000, getRemainingMs());
+      const providerTimeout = Math.max(1_000, Math.min(120_000, getRemainingMs() - CLEANUP_ALLOWANCE_MS));
+      const providerOptions: AudioTranscriptionOptions = {
+        language: job.language,
+        signal: AbortSignal.timeout(providerTimeout),
+        duration_ms: durationMs,
+        deadline: jobDeadline,
+      };
       const custResult = await provider.transcribe(
         split.customerAudio,
         'customer_left.m4a',
-        'audio/mp4',
-        {
-          language: job.language,
-          signal: AbortSignal.timeout(providerTimeout),
-        }
+        'audio/m4a',
+        providerOptions
       );
       customerSegments = custResult.segments;
       if (custResult.language) detectedLanguage = custResult.language;
@@ -203,25 +334,29 @@ export async function processZaloTranscriptionJob(
         call_id: job.call_id,
         transcription_id: job.id,
         channel: 'LEFT',
-        provider: provider.name,
+        provider: safeProvider,
+        model: safeModel,
         utterances_count: customerSegments.length,
       });
     }
 
     // 5. Transcribe Right (STAFF) channel if not silent
     if (!split.staffSilent && split.staffAudio && split.staffAudio.length > 0) {
-      if (getRemainingMs() <= 0) {
+      if (getRemainingMs() <= CLEANUP_ALLOWANCE_MS) {
         throw new Error('TIMEOUT');
       }
-      const providerTimeout = Math.min(120_000, getRemainingMs());
+      const providerTimeout = Math.max(1_000, Math.min(120_000, getRemainingMs() - CLEANUP_ALLOWANCE_MS));
+      const providerOptions: AudioTranscriptionOptions = {
+        language: job.language,
+        signal: AbortSignal.timeout(providerTimeout),
+        duration_ms: durationMs,
+        deadline: jobDeadline,
+      };
       const staffResult = await provider.transcribe(
         split.staffAudio,
         'staff_right.m4a',
-        'audio/mp4',
-        {
-          language: job.language,
-          signal: AbortSignal.timeout(providerTimeout),
-        }
+        'audio/m4a',
+        providerOptions
       );
       staffSegments = staffResult.segments;
       if (staffResult.language) detectedLanguage = staffResult.language;
@@ -231,7 +366,8 @@ export async function processZaloTranscriptionJob(
         call_id: job.call_id,
         transcription_id: job.id,
         channel: 'RIGHT',
-        provider: provider.name,
+        provider: safeProvider,
+        model: safeModel,
         utterances_count: staffSegments.length,
       });
     }
@@ -265,6 +401,8 @@ export async function processZaloTranscriptionJob(
       company_id: job.company_id,
       call_id: job.call_id,
       transcription_id: job.id,
+      provider: safeProvider,
+      model: safeModel,
       utterances_count: merged.utterances.length,
       language: detectedLanguage,
     });
@@ -293,6 +431,8 @@ export async function processZaloTranscriptionJob(
       company_id: job.company_id,
       call_id: job.call_id,
       transcription_id: job.id,
+      provider: safeProvider,
+      model: safeModel,
       error_code: rawCode,
       attempts: outcome.attempts,
       next_run_at: nextRunAt || undefined,
@@ -340,7 +480,8 @@ export async function processDueZaloTranscriptionJobs(
     });
 
     if (error) {
-      throw new Error(`CLAIM_TRANSCRIPTION_JOBS_FAILED: ${error.message}`);
+      const sanitized = sanitizeErrorMessage(error);
+      throw new Error(`CLAIM_TRANSCRIPTION_JOBS_FAILED: ${sanitized}`);
     }
 
     const jobs = (data || []) as ClaimedTranscriptionJob[];
@@ -382,7 +523,8 @@ export async function retryZaloTranscriptionJob(
   });
 
   if (error || !data) {
-    throw new Error(error?.message || 'CANNOT_RETRY_TRANSCRIPTION');
+    const sanitized = sanitizeErrorMessage(error || new Error('CANNOT_RETRY_TRANSCRIPTION'));
+    throw new Error(sanitized);
   }
 
   const ret = data as { ok: boolean; status: string; transcription_id?: string };
