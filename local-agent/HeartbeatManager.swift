@@ -54,14 +54,12 @@ public final class HeartbeatManager {
     }
 
     public func collectHealthPayload() -> HeartbeatPayload {
-        let micAuth = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        let screenAuth = CGPreflightScreenCaptureAccess()
-        let axAuth = AXIsProcessTrusted()
+        let snap = PermissionManager.shared.snapshot()
 
         let permissions = HeartbeatPermissions(
-            microphone: micAuth,
-            screen_recording: screenAuth,
-            accessibility: axAuth
+            microphone: snap.microphone == .authorized,
+            screen_recording: snap.screenRecording,
+            accessibility: snap.accessibility
         )
 
         // Check if Zalo Desktop application is running
@@ -122,6 +120,7 @@ public final class HeartbeatManager {
         }
 
         let payload = collectHealthPayload()
+        print("[Heartbeat] Payload: mic=\(payload.permissions.microphone) screen=\(payload.permissions.screen_recording) ax=\(payload.permissions.accessibility) zalo=\(payload.zalo_running) loopback=\(payload.loopback_ready)")
         guard let jsonData = try? JSONEncoder().encode(payload) else {
             completion?(false, "Encode error")
             return
