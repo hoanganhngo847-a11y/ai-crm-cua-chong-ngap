@@ -25,14 +25,37 @@
 --        Gate 8: Controlled Single-Target Validation (strictly 1 new call)
 --        Gate 9: Enable Automated Scheduler (this script)
 --        Gate 10: Queue & Dispatch Monitoring
---   3. DEEP PREREQUISITE VALIDATION: Validates extension presence, helper function
+--   3. MANDATORY OPERATOR EXTERNAL PREFLIGHT REQUIREMENT:
+--      SQL running inside PostgreSQL CANNOT inspect external PostgREST / Data API
+--      configuration (pgrst.db_schemas). Therefore, before enabling this scheduler,
+--      the operator MUST externally verify that the PostgREST Data API refuses to serve
+--      the net schema by testing with the publishable/anon key:
+--
+--        curl -s -w "\nHTTP_STATUS: %{http_code}\n" \
+--          -H "apikey: ${SUPABASE_ANON_KEY}" \
+--          -H "Accept-Profile: net" \
+--          "${SUPABASE_URL}/rest/v1/http_request_queue?select=id&limit=0" | grep -E '(PGRST|HTTP_STATUS)'
+--
+--      Expected Output:
+--        {"code":"PGRST106","details":null,"hint":null,"message":"Invalid schema: net"}
+--        HTTP_STATUS: 406
+--
+--      SECURITY RULES FOR EXTERNAL PREFLIGHT:
+--        - Use publishable/anon key only (${SUPABASE_ANON_KEY}); never use service_role.
+--        - Query benign column (?select=id&limit=0); do NOT test sensitive columns (?select=headers).
+--        - Command prints HTTP status and the schema-denial response, zero API key values.
+--        - Schemas net, cron_internal, and vault must NEVER be exposed in the Data API
+--          (Supabase Studio -> Project Settings -> API -> Exposed schemas).
+--        - Re-verify this preflight check whenever API configurations or extensions are changed.
+--   4. DEEP PREREQUISITE VALIDATION: Validates extension presence, helper function
 --      ACLs, BOTH new claim RPCs (targeted claim 160000 + bulk lease recovery 160001),
 --      bulk wrapper behavior readiness via pg_get_functiondef (zero queue invocation),
+--      schema cron_internal isolation, anon/authenticated NOLOGIN, managed pg_net grants,
 --      and actual Vault configuration VALUES (valid HTTPS URL format and minimum secret strength).
---   4. ZERO SECRETS IN COMMAND: The cron command is strictly:
+--   5. ZERO SECRETS IN COMMAND: The cron command is strictly:
 --        SELECT cron_internal.invoke_zalo_transcription_cron();
 --      Zero bearer tokens, zero URLs, and zero headers are stored in cron.job.
---   5. IDEMPOTENT: If 'zalo-transcription-worker' is already registered, it is
+--   6. IDEMPOTENT: If 'zalo-transcription-worker' is already registered, it is
 --      unscheduled and cleanly recreated with the canonical configuration.
 -- ==============================================================================
 
@@ -138,7 +161,38 @@ BEGIN
     RAISE EXCEPTION 'SECURITY_VIOLATION: service_role has execute privilege on cron_internal.invoke_zalo_transcription_cron().';
   END IF;
 
-  -- 8. Validate Vault configuration VALUES (not merely row presence)
+  IF has_function_privilege('public', 'cron_internal.invoke_zalo_transcription_cron()', 'execute') THEN
+    RAISE EXCEPTION 'SECURITY_VIOLATION: public has execute privilege on cron_internal.invoke_zalo_transcription_cron().';
+  END IF;
+
+  -- 8. Verify private schema cron_internal isolation
+  IF has_schema_privilege('anon', 'cron_internal', 'usage')
+     OR has_schema_privilege('authenticated', 'cron_internal', 'usage')
+     OR has_schema_privilege('service_role', 'cron_internal', 'usage')
+     OR has_schema_privilege('public', 'cron_internal', 'usage') THEN
+    RAISE EXCEPTION 'SECURITY_VIOLATION: Unprivileged role has USAGE access on schema cron_internal.';
+  END IF;
+
+  -- 9. Verify untrusted database roles have NOLOGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_roles
+    WHERE rolname IN ('anon', 'authenticated')
+      AND rolcanlogin = true
+  ) THEN
+    RAISE EXCEPTION 'SECURITY_VIOLATION: Untrusted database role (anon or authenticated) has LOGIN privilege.';
+  END IF;
+
+  -- 10. Inspect pg_net effective privileges (informational safe notice, not a blanket raise)
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.table_privileges
+    WHERE table_schema = 'net'
+      AND grantee IN ('PUBLIC', 'anon', 'authenticated')
+  ) THEN
+    RAISE NOTICE 'MANAGED_EXTENSION_NOTICE: pg_net extension objects retain default managed privileges granted by supabase_admin (mitigated by PostgREST Data API exposure boundary and anon/authenticated NOLOGIN).';
+  END IF;
+
+  -- 11. Validate Vault configuration VALUES (not merely row presence)
   SELECT decrypted_secret INTO v_endpoint
   FROM vault.decrypted_secrets
   WHERE name = 'zalo_transcription_endpoint'
@@ -167,13 +221,13 @@ BEGIN
     RAISE EXCEPTION 'PREREQUISITE_FAILED: Vault entry zalo_transcription_cron_secret is missing, shorter than 16 characters, or contains newlines.';
   END IF;
 
-  -- 9. Idempotently unschedule existing job if present
+  -- 12. Idempotently unschedule existing job if present
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'zalo-transcription-worker') THEN
     PERFORM cron.unschedule('zalo-transcription-worker');
     RAISE NOTICE 'Existing job zalo-transcription-worker unscheduled for clean re-registration.';
   END IF;
 
-  -- 10. Schedule 1-minute recurring job with command-only helper call
+  -- 13. Schedule 1-minute recurring job with command-only helper call
   PERFORM cron.schedule(
     'zalo-transcription-worker',
     '* * * * *',
