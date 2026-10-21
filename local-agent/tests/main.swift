@@ -726,4 +726,94 @@ do {
     print("PASS: OutboundStatusSender deterministic tests")
 }
 
+do {
+    // 1. Permission Snapshot Unit Tests
+    let allGranted = PermissionSnapshot(microphone: .authorized, screenRecording: true, accessibility: true)
+    try require(allGranted.isAllGranted == true, "allGranted.isAllGranted must be true")
+    try require(allGranted.permissionsOk == true, "allGranted.permissionsOk must be true")
+
+    let micDenied = PermissionSnapshot(microphone: .denied, screenRecording: true, accessibility: true)
+    try require(micDenied.isAllGranted == false, "micDenied.isAllGranted must be false")
+
+    let screenDenied = PermissionSnapshot(microphone: .authorized, screenRecording: false, accessibility: true)
+    try require(screenDenied.isAllGranted == false, "screenDenied.isAllGranted must be false")
+
+    let axDenied = PermissionSnapshot(microphone: .authorized, screenRecording: true, accessibility: false)
+    try require(axDenied.isAllGranted == false, "axDenied.isAllGranted must be false")
+
+    let uninit = PermissionSnapshot(microphone: .notDetermined, screenRecording: false, accessibility: false)
+    try require(uninit.isAllGranted == false, "uninit.isAllGranted must be false")
+
+    // Passive inspection does not throw or crash
+    let currentSnap = PermissionManager.shared.snapshot()
+    try require([MicrophoneAuthorizationState.authorized, .denied, .restricted, .notDetermined].contains(currentSnap.microphone), "valid microphone state")
+
+    // 2. Heartbeat Collection (Zero interactive prompts)
+    let heartbeat = HeartbeatManager.shared.collectHealthPayload()
+    try require(heartbeat.agent_version == "1.2.0", "heartbeat version is 1.2.0")
+    try require(heartbeat.permissions.microphone == (currentSnap.microphone == .authorized), "heartbeat mic matches passive snapshot")
+    try require(heartbeat.permissions.screen_recording == currentSnap.screenRecording, "heartbeat screen matches passive snapshot")
+    try require(heartbeat.permissions.accessibility == currentSnap.accessibility, "heartbeat ax matches passive snapshot")
+
+    let hbData = try JSONEncoder().encode(heartbeat)
+    let decodedHb = try JSONDecoder().decode(HeartbeatPayload.self, from: hbData)
+    try require(decodedHb.agent_version == "1.2.0", "heartbeat JSON roundtrip")
+
+    print("PASS: PermissionManager snapshot logic and passive Heartbeat reporting")
+}
+
+do {
+    // Resolve agent directory for plist validation
+    let agentDir: URL
+    if CommandLine.arguments.count > 1 {
+        agentDir = URL(fileURLWithPath: CommandLine.arguments[1])
+    } else {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        if FileManager.default.fileExists(atPath: cwd.appendingPathComponent("Info.plist").path) {
+            agentDir = cwd
+        } else if FileManager.default.fileExists(atPath: cwd.appendingPathComponent("local-agent/Info.plist").path) {
+            agentDir = cwd.appendingPathComponent("local-agent")
+        } else {
+            agentDir = cwd
+        }
+    }
+
+    // 3. Info.plist Key Validation
+    let infoPlistURL = agentDir.appendingPathComponent("Info.plist")
+    guard let infoData = try? Data(contentsOf: infoPlistURL),
+          let infoDict = try? PropertyListSerialization.propertyList(from: infoData, options: [], format: nil) as? [String: Any] else {
+        throw RecorderFailure(message: "Failed to read and parse Info.plist at \(infoPlistURL.path)")
+    }
+
+    try require(infoDict["CFBundleIdentifier"] as? String == "com.local.zalo-recorder", "CFBundleIdentifier is com.local.zalo-recorder")
+    try require(infoDict["CFBundleExecutable"] as? String == "zalo-recorder", "CFBundleExecutable is zalo-recorder")
+    try require(infoDict["CFBundlePackageType"] as? String == "APPL", "CFBundlePackageType is APPL")
+    try require(infoDict["CFBundleShortVersionString"] as? String == "1.2.0", "CFBundleShortVersionString is 1.2.0")
+    try require(infoDict["LSUIElement"] as? Bool == true || infoDict["LSUIElement"] as? String == "1", "LSUIElement is true")
+    try require(infoDict["NSMicrophoneUsageDescription"] != nil, "NSMicrophoneUsageDescription is present")
+    try require(infoDict["NSScreenCaptureUsageDescription"] != nil, "NSScreenCaptureUsageDescription is present")
+    try require(infoDict["NSAudioCaptureUsageDescription"] != nil, "NSAudioCaptureUsageDescription is present")
+
+    // URL Scheme check
+    if let urlTypes = infoDict["CFBundleURLTypes"] as? [[String: Any]],
+       let firstType = urlTypes.first,
+       let schemes = firstType["CFBundleURLSchemes"] as? [String] {
+        try require(schemes.contains("crm-zalo"), "CFBundleURLSchemes contains crm-zalo")
+    } else {
+        throw RecorderFailure(message: "CFBundleURLSchemes crm-zalo missing in Info.plist")
+    }
+
+    // 4. Entitlements Validation
+    let entitlementsURL = agentDir.appendingPathComponent("entitlements.plist")
+    guard let entData = try? Data(contentsOf: entitlementsURL),
+          let entDict = try? PropertyListSerialization.propertyList(from: entData, options: [], format: nil) as? [String: Any] else {
+        throw RecorderFailure(message: "Failed to read and parse entitlements.plist at \(entitlementsURL.path)")
+    }
+
+    try require(entDict["com.apple.security.device.audio-input"] as? Bool == true, "audio-input entitlement is true")
+    try require(entDict["com.apple.security.app-sandbox"] == nil, "app-sandbox entitlement must be absent (non-sandboxed)")
+
+    print("PASS: Info.plist and entitlements.plist structure, permissions metadata, and security settings")
+}
+
 print("ALL LOCAL AGENT REGRESSIONS PASSED")

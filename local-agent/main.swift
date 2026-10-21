@@ -288,10 +288,10 @@ final class ZaloAgent {
         print("Zalo Recorder: native app-audio capture; no BlackHole/Multi-Output routing.")
         print("In Zalo Call, select a physical speaker/headphone or System Default, not Multi-Output/BlackHole.")
         print("Files: \(Config.outputDirectory)")
-        if !AXIsProcessTrusted() {
-            print("[Permission] Accessibility is unavailable: caller name/direction may be unknown. Prompting user...")
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let perm = PermissionManager.shared.snapshot()
+        if !perm.accessibility {
+            print("[Permission] Accessibility is ungranted: caller name/direction may be unknown. Run with --setup-permissions to configure.")
         }
         RecordingUploadQueue.shared.start(recordings: URL(fileURLWithPath: Config.outputDirectory))
 
@@ -502,6 +502,22 @@ do {
             sem.signal()
         }
         _ = sem.wait(timeout: .now() + 5)
+    } else if CommandLine.arguments.contains("--setup-permissions") {
+        print("=== Zalo Personal Recording Agent: Permission Setup ===")
+        print("Running bundle: \(Bundle.main.bundleIdentifier ?? "standalone-binary")")
+        print("Executable: \(Bundle.main.executablePath ?? CommandLine.arguments[0])")
+        let sem = DispatchSemaphore(value: 0)
+        var finalSnapshot: PermissionSnapshot?
+        PermissionManager.shared.performUserSetup { snapshot in
+            finalSnapshot = snapshot
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 10)
+        if let s = finalSnapshot, s.isAllGranted {
+            exit(0)
+        } else {
+            exit(1)
+        }
     } else if CommandLine.arguments.contains("--status") {
         let lockFD = open("/tmp/zalo-recorder-\(getuid()).lock", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         let isRunning = lockFD >= 0 && flock(lockFD, LOCK_EX | LOCK_NB) != 0
@@ -520,13 +536,11 @@ do {
         print("Agent Process: \(isRunning ? "RUNNING" : "STOPPED")")
 
         // Permissions summary
-        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        let screen = CGPreflightScreenCaptureAccess()
-        let ax = AXIsProcessTrusted()
+        let perm = PermissionManager.shared.snapshot()
         print("Permissions:")
-        print("  - Microphone: \(mic ? "GRANTED" : "DENIED")")
-        print("  - Screen Recording: \(screen ? "GRANTED" : "DENIED")")
-        print("  - Accessibility: \(ax ? "GRANTED" : "DENIED")")
+        print("  - Microphone: \(perm.microphone == .authorized ? "GRANTED" : "DENIED")")
+        print("  - Screen Recording: \(perm.screenRecording ? "GRANTED" : "DENIED")")
+        print("  - Accessibility: \(perm.accessibility ? "GRANTED" : "DENIED")")
 
         let probe = ZaloDetector.shared.probe()
         let runningApps = NSWorkspace.shared.runningApplications
@@ -563,9 +577,10 @@ do {
         print("Output: \(audio.defaultUID() ?? "unknown")")
         print("Input: \(audio.defaultUID(kAudioHardwarePropertyDefaultInputDevice) ?? "unknown")")
         print("Legacy route selected: \(audio.defaultUID() == Config.legacyOutputUID)")
-        print("Microphone authorization: \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
-        print("Screen capture preflight: \(CGPreflightScreenCaptureAccess())")
-        print("Accessibility: \(AXIsProcessTrusted())")
+        let perm = PermissionManager.shared.snapshot()
+        print("Microphone authorization: \(perm.microphone.rawValue)")
+        print("Screen capture preflight: \(perm.screenRecording)")
+        print("Accessibility: \(perm.accessibility)")
         let probe = ZaloDetector.shared.probe()
         print("Call window visible: \(probe.isActive)")
         print("Devices: \(audio.devices().compactMap { audio.uid(for: $0) }.joined(separator: ", "))")

@@ -54,14 +54,12 @@ public final class HeartbeatManager {
     }
 
     public func collectHealthPayload() -> HeartbeatPayload {
-        let micAuth = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        let screenAuth = CGPreflightScreenCaptureAccess()
-        let axAuth = AXIsProcessTrusted()
+        let snap = PermissionManager.shared.snapshot()
 
         let permissions = HeartbeatPermissions(
-            microphone: micAuth,
-            screen_recording: screenAuth,
-            accessibility: axAuth
+            microphone: snap.microphone == .authorized,
+            screen_recording: snap.screenRecording,
+            accessibility: snap.accessibility
         )
 
         // Check if Zalo Desktop application is running
