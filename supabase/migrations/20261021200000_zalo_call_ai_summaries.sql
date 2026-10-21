@@ -57,6 +57,10 @@ CREATE INDEX idx_zalo_call_ai_summaries_call
 CREATE INDEX idx_zalo_call_ai_summaries_tx
   ON public.zalo_call_ai_summaries (company_id, transcription_id);
 
+CREATE INDEX IF NOT EXISTS idx_zalo_call_transcriptions_reconcile
+  ON public.zalo_call_transcriptions (completed_at)
+  WHERE status = 'COMPLETED';
+
 -- 3. RLS policies and ACL
 ALTER TABLE public.zalo_call_ai_summaries ENABLE ROW LEVEL SECURITY;
 
@@ -630,11 +634,14 @@ REVOKE ALL ON FUNCTION public.zalo_retry_call_summary(uuid, uuid, uuid) FROM PUB
 GRANT EXECUTE ON FUNCTION public.zalo_retry_call_summary(uuid, uuid, uuid) TO service_role;
 
 -- 10. RPC: reconcile missing summaries for completed transcriptions
+-- Drops legacy lookback overload if present to prevent signature collisions
+DROP FUNCTION IF EXISTS public.zalo_reconcile_missing_call_summaries(integer, text, text, integer);
+
 CREATE OR REPLACE FUNCTION public.zalo_reconcile_missing_call_summaries(
   p_limit integer DEFAULT 10,
   p_provider text DEFAULT 'GEMINI',
   p_model text DEFAULT 'gemini-2.5-flash',
-  p_lookback_hours integer DEFAULT 168
+  p_since timestamptz DEFAULT NULL
 )
 RETURNS TABLE (
   reconciled_count integer
@@ -645,7 +652,6 @@ SET search_path = ''
 AS $$
 DECLARE
   v_limit integer;
-  v_lookback interval;
   v_item record;
   v_count integer := 0;
   v_summary_id uuid;
@@ -654,8 +660,14 @@ BEGIN
     RAISE EXCEPTION 'INVALID_ARGUMENTS';
   END IF;
 
+  -- Fail-closed safety invariant:
+  -- If p_since is NULL, reconciliation is a no-op to prevent unconstrained historical backfill.
+  IF p_since IS NULL THEN
+    RETURN QUERY SELECT 0;
+    RETURN;
+  END IF;
+
   v_limit := LEAST(GREATEST(COALESCE(p_limit, 10), 1), 50);
-  v_lookback := (GREATEST(COALESCE(p_lookback_hours, 168), 1) || ' hours')::interval;
 
   FOR v_item IN
     SELECT t.company_id, t.id AS transcription_id
@@ -664,7 +676,7 @@ BEGIN
       ON s.company_id = t.company_id AND s.transcription_id = t.id
     WHERE t.status = 'COMPLETED'
       AND s.id IS NULL
-      AND COALESCE(t.completed_at, t.created_at) >= clock_timestamp() - v_lookback
+      AND COALESCE(t.completed_at, t.created_at) >= p_since
     ORDER BY COALESCE(t.completed_at, t.created_at) ASC
     LIMIT v_limit
   LOOP
@@ -687,5 +699,5 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, integer) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, integer) TO service_role;
+REVOKE ALL ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, timestamptz) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, timestamptz) TO service_role;

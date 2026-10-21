@@ -391,6 +391,39 @@ async function runSummaryUnitTests() {
     assert.equal(resBadTxId.status, 400, 'Invalid transcription_id UUID must return 400');
     testPass('4.6: Invalid UUID parameters rejected with 400');
 
+    // 4.6b: Blocker 2 - Ambiguous targeted query validation (summary_id + transcription_id)
+    // 1. Unauthenticated request with both params fails with 401 (Auth checked first!)
+    const reqUnauthBoth = new NextRequest(
+      'http://localhost/api/cron/zalo-call-summary?summary_id=11111111-1111-1111-1111-111111111111&transcription_id=22222222-2222-2222-2222-222222222222',
+      { headers: { authorization: 'Bearer wrong-secret' } }
+    );
+    const resUnauthBoth = await summaryGetHandler(reqUnauthBoth);
+    assert.equal(resUnauthBoth.status, 401, 'Unauthenticated request with both params must return 401');
+    testPass('4.6b.1: Unauthenticated request with both targeted params returns 401 (auth checked before query validation)');
+
+    // 2. Authenticated request with both params fails with 400 and clear error message
+    let depsCalled = false;
+    const guardedDeps = {
+      processDue: async () => {
+        depsCalled = true;
+        return { claimed: 0, processed: 0, failed: 0 };
+      },
+      processTargeted: async () => {
+        depsCalled = true;
+        return { claimed: 0, processed: 0, failed: 0 };
+      },
+    };
+    const reqAuthBoth = new NextRequest(
+      'http://localhost/api/cron/zalo-call-summary?summary_id=11111111-1111-1111-1111-111111111111&transcription_id=22222222-2222-2222-2222-222222222222',
+      { headers: { authorization: `Bearer ${TEST_SECRET}` } }
+    );
+    const resAuthBoth = await handleZaloCallSummaryCron(reqAuthBoth, guardedDeps);
+    assert.equal(resAuthBoth.status, 400, 'Authenticated request with both params must return 400');
+    const authBothJson = await resAuthBoth.json();
+    assert.equal(authBothJson.error, 'Provide exactly one targeted identifier');
+    assert.equal(depsCalled, false, 'Worker service must not be invoked when both targeted params are supplied');
+    testPass('4.6b.2: Authenticated request with both targeted params returns 400 with worker not invoked');
+
     // 4.7: Mock dependency injection for targeted and bulk execution
     let bulkLimitCalled: number | null = null;
     let targetedCalled: { summaryId?: string; transcriptionId?: string } | null = null;
@@ -427,7 +460,21 @@ async function runSummaryUnitTests() {
     const targetedJson = await resTargeted.json();
     assert.equal(targetedJson.mode, 'TARGETED');
     assert.equal(targetedCalled ? (targetedCalled as { summaryId?: string }).summaryId : null, targetUuid);
-    testPass('4.8: Targeted mode dispatches to processTargeted without fallback to bulk');
+    assert.equal(targetedCalled ? (targetedCalled as { transcriptionId?: string }).transcriptionId : undefined, undefined);
+    testPass('4.8: Targeted mode with summary_id dispatches to processTargeted without fallback to bulk');
+
+    // Targeted mode with transcription_id
+    const targetTxUuid = '22222222-3333-4444-5555-666666666666';
+    const reqTargetedTx = new NextRequest(`http://localhost/api/cron/zalo-call-summary?transcription_id=${targetTxUuid}`, {
+      headers: { authorization: `Bearer ${TEST_SECRET}` },
+    });
+    const resTargetedTx = await handleZaloCallSummaryCron(reqTargetedTx, mockDeps);
+    assert.equal(resTargetedTx.status, 200);
+    const targetedTxJson = await resTargetedTx.json();
+    assert.equal(targetedTxJson.mode, 'TARGETED');
+    assert.equal(targetedCalled ? (targetedCalled as { transcriptionId?: string }).transcriptionId : null, targetTxUuid);
+    assert.equal(targetedCalled ? (targetedCalled as { summaryId?: string }).summaryId : undefined, undefined);
+    testPass('4.8b: Targeted mode with transcription_id dispatches to processTargeted without fallback to bulk');
 
     // POST method works identical to GET
     const reqPost = new NextRequest('http://localhost/api/cron/zalo-call-summary?limit=3', {

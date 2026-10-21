@@ -79,6 +79,7 @@ async function runSummaryAutomationTestSuite() {
     const saleA = randomUUID();
     const saleB = randomUUID();
     const customerA = randomUUID();
+    const customerB = randomUUID();
 
     // 1. Seed companies and users
     await db.query(
@@ -103,8 +104,10 @@ async function runSummaryAutomationTestSuite() {
     }
 
     await db.query(
-      `INSERT INTO customers(id, company_id, name, source, stage) VALUES($1, $2, 'Khách hàng A', 'ZALO', 'LEAD_NEW')`,
-      [customerA, companyA]
+      `INSERT INTO customers(id, company_id, name, source, stage) VALUES
+       ($1, $2, 'Khách hàng A', 'ZALO', 'LEAD_NEW'),
+       ($3, $4, 'Khách hàng B', 'ZALO', 'LEAD_NEW')`,
+      [customerA, companyA, customerB, companyB]
     );
 
     const deviceA = randomUUID();
@@ -123,6 +126,7 @@ async function runSummaryAutomationTestSuite() {
       const callId = randomUUID();
       const recPath = `company_${comp}/call_${callId}.m4a`;
       const devId = comp === companyA ? deviceA : deviceB;
+      const custId = comp === companyA ? customerA : customerB;
       const dummySha = 'b'.repeat(64);
 
       await db.query(
@@ -141,7 +145,7 @@ async function runSummaryAutomationTestSuite() {
           $8, $8, gen_random_uuid(), now() + interval '1 hour',
           'READY', $9
         )`,
-        [callId, comp, devId, staffUser, customerA, randomUUID(), recPath, dummySha, status]
+        [callId, comp, devId, staffUser, custId, randomUUID(), recPath, dummySha, status]
       );
 
       return { callId, recPath };
@@ -151,18 +155,23 @@ async function runSummaryAutomationTestSuite() {
     async function seedCompletedTranscription(
       comp: string,
       callId: string,
-      utterancesCount = 2
+      utterancesCount = 2,
+      completedAt?: Date | string
     ) {
       const txId = randomUUID();
+      const custId = comp === companyA ? customerA : customerB;
+      const completedAtVal = completedAt
+        ? (completedAt instanceof Date ? completedAt.toISOString() : completedAt)
+        : new Date().toISOString();
       await db.query(
         `INSERT INTO zalo_call_transcriptions(
           id, company_id, call_id, customer_id, status,
           provider, language, full_transcript, completed_at
         ) VALUES(
           $1, $2, $3, $4, 'COMPLETED',
-          'GEMINI', 'vi', 'Khách: Alo tôi cần tư vấn. Nhân viên: Dạ chào anh.', now()
+          'GEMINI', 'vi', 'Khách: Alo tôi cần tư vấn. Nhân viên: Dạ chào anh.', $5
         )`,
-        [txId, comp, callId, customerA]
+        [txId, comp, callId, custId, completedAtVal]
       );
 
       for (let i = 1; i <= utterancesCount; i++) {
@@ -864,81 +873,141 @@ async function runSummaryAutomationTestSuite() {
     testPass('Test 20: Follow-up time contract stores natural-language relative expression without DB cast failure');
 
     // ========================================================================
-    // TEST 21: Idempotent Enqueue Recovery & Reconciliation
+    // TEST 21: Production-Safe Reconciliation & Activation Boundary Guard
     // ========================================================================
-    console.log('--- Test 21: Idempotent Enqueue Recovery & Reconciliation ---');
-    // Step 1: Simulate transcription completing, but transient failure in enqueue
-    const { callId: callTransient } = await seedCall(companyA, saleA);
-    const txTransient = await seedCompletedTranscription(companyA, callTransient, 2);
+    console.log('--- Test 21: Production-Safe Reconciliation & Activation Boundary Guard ---');
+    const nowMs = Date.now();
+    const historicalCompletedAt = new Date(nowMs - 120_000); // 2 minutes ago (historical)
+    const activationCutoff = new Date(nowMs + 5_000); // Rollout boundary (ahead of prior tests)
+    const postCutoffCompletedAt = new Date(nowMs + 10_000); // Phase 2B new call after cutoff
 
-    // Verify transcription is COMPLETED
-    const txTransientRow = (
-      await db.query<{ status: string }>(
-        `SELECT status FROM zalo_call_transcriptions WHERE id = $1`,
-        [txTransient]
-      )
-    ).rows[0];
-    assert.equal(txTransientRow.status, 'COMPLETED');
+    // Seed historical transcriptions (Phase 2A baseline calls) completed before cutoff
+    const { callId: callHistA } = await seedCall(companyA, saleA);
+    const txHistA = await seedCompletedTranscription(companyA, callHistA, 2, historicalCompletedAt);
 
-    // Verify 0 summary rows exist initially
-    const countBefore = (
-      await db.query<{ count: string | number }>(
-        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
-        [companyA, txTransient]
-      )
-    ).rows[0].count;
-    assert.equal(Number(countBefore), 0);
+    const { callId: callHistB } = await seedCall(companyB, saleB);
+    const txHistB = await seedCompletedTranscription(companyB, callHistB, 2, historicalCompletedAt);
 
-    // Step 2: Run reconciliation
-    const reconciledCount = await reconcileMissingZaloCallSummaries(10, adminClient);
-    assert.ok(reconciledCount >= 1, 'Reconciliation should create at least 1 missing summary');
+    // Verify 0 summaries exist for historical transcriptions initially
+    const countHistABefore = Number((await db.query<{ count: string }>(
+      `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id IN ($1, $2)`,
+      [txHistA, txHistB]
+    )).rows[0].count);
+    assert.equal(countHistABefore, 0);
 
-    // Verify exactly one summary row was created for txTransient
-    const countAfter = (
-      await db.query<{ count: string | number }>(
-        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
-        [companyA, txTransient]
-      )
-    ).rows[0].count;
-    assert.equal(Number(countAfter), 1);
+    // Requirement 1: Historical transcription completed before activation boundary -> reconciliation KHÔNG tạo summary
+    const countNoCutoff = await reconcileMissingZaloCallSummaries(10, adminClient, { since: activationCutoff });
+    assert.equal(countNoCutoff, 0, 'Reconciliation must not create summary for historical transcriptions completed before cutoff');
 
-    const reconciledRow = (
-      await db.query<{ status: string; company_id: string; call_id: string }>(
-        `SELECT status, company_id, call_id FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
-        [txTransient]
-      )
-    ).rows[0];
-    assert.equal(reconciledRow.status, 'PENDING');
-    assert.equal(reconciledRow.company_id, companyA);
-    assert.equal(reconciledRow.call_id, callTransient);
+    const countHistAfter = Number((await db.query<{ count: string }>(
+      `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id IN ($1, $2)`,
+      [txHistA, txHistB]
+    )).rows[0].count);
+    assert.equal(countHistAfter, 0, 'Historical transcriptions must remain untouched by reconciliation');
+    testPass('Test 21.1: Historical transcriptions completed before activation boundary are NOT enqueued by reconciliation');
 
-    // Step 3: Idempotent re-run does not duplicate
-    const secondReconcileCount = await reconcileMissingZaloCallSummaries(10, adminClient);
-    assert.equal(secondReconcileCount, 0, 'Second reconciliation run creates 0 duplicates');
+    // Requirement 2: New transcription completed after activation boundary where enqueue failed -> reconciliation creates EXACTLY 1 summary
+    const { callId: callNewA } = await seedCall(companyA, saleA);
+    const txNewA = await seedCompletedTranscription(companyA, callNewA, 2, postCutoffCompletedAt);
 
-    const countSecond = (
-      await db.query<{ count: string | number }>(
-        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
-        [companyA, txTransient]
-      )
-    ).rows[0].count;
-    assert.equal(Number(countSecond), 1);
+    const reconciledNewCount = await reconcileMissingZaloCallSummaries(10, adminClient, { since: activationCutoff });
+    assert.equal(reconciledNewCount, 1, 'Reconciliation must create exactly 1 summary for post-cutoff transcription');
 
-    // Step 4: Worker claims and completes the reconciled job
-    const workerResult = await processDueZaloCallSummaryJobs(5, {
-      client: adminClient,
-      provider: new MockSummaryProvider(async () => validMockOutput),
-    });
-    assert.ok(workerResult.claimed >= 1);
+    const sumNewRow = (await db.query<{ status: string; company_id: string; call_id: string }>(
+      `SELECT status, company_id, call_id FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txNewA]
+    )).rows[0];
+    assert.equal(sumNewRow.status, 'PENDING');
+    assert.equal(sumNewRow.company_id, companyA);
+    assert.equal(sumNewRow.call_id, callNewA);
+    testPass('Test 21.2: New transcription completed after activation boundary is recovered by reconciliation');
 
-    const finalRow = (
-      await db.query<{ status: string }>(
-        `SELECT status FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
-        [txTransient]
-      )
-    ).rows[0];
-    assert.equal(finalRow.status, 'COMPLETED');
-    testPass('Test 21: Idempotent reconciliation recovers missing summary row and worker completes it');
+    // Requirement 3: Repeated reconciliation on already-enqueued transcription -> does NOT duplicate, count is 0
+    const secondReconcileCount = await reconcileMissingZaloCallSummaries(10, adminClient, { since: activationCutoff });
+    assert.equal(secondReconcileCount, 0, 'Second reconciliation run must create 0 duplicates');
+
+    const countNewAfterRepeat = Number((await db.query<{ count: string }>(
+      `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txNewA]
+    )).rows[0].count);
+    assert.equal(countNewAfterRepeat, 1, 'Summary row count must remain exactly 1 after repeated reconciliation');
+    testPass('Test 21.3: Repeated reconciliation is strictly idempotent and does not create duplicates');
+
+    // Requirement 4: Multiple tenants with missing summaries -> tenant isolation preserved
+    const { callId: callMultiA } = await seedCall(companyA, saleA);
+    const txMultiA = await seedCompletedTranscription(companyA, callMultiA, 2, postCutoffCompletedAt);
+
+    const { callId: callMultiB } = await seedCall(companyB, saleB);
+    const txMultiB = await seedCompletedTranscription(companyB, callMultiB, 2, postCutoffCompletedAt);
+
+    const multiTenantReconcileCount = await reconcileMissingZaloCallSummaries(10, adminClient, { since: activationCutoff });
+    assert.equal(multiTenantReconcileCount, 2, 'Reconciliation must recover missing summaries across multiple tenants');
+
+    const rowTenantA = (await db.query<{ company_id: string; status: string }>(
+      `SELECT company_id, status FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txMultiA]
+    )).rows[0];
+    assert.equal(rowTenantA.company_id, companyA);
+    assert.equal(rowTenantA.status, 'PENDING');
+
+    const rowTenantB = (await db.query<{ company_id: string; status: string }>(
+      `SELECT company_id, status FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txMultiB]
+    )).rows[0];
+    assert.equal(rowTenantB.company_id, companyB);
+    assert.equal(rowTenantB.status, 'PENDING');
+    testPass('Test 21.4: Multi-tenant reconciliation preserves strict tenant isolation and assigns correct company_id');
+
+    // Requirement 5: Bulk scheduler run (processDueZaloCallSummaryJobs) -> does NOT touch historical rows
+    const originalCutoffEnv = process.env.SUMMARY_ACTIVATION_CUTOFF;
+    process.env.SUMMARY_ACTIVATION_CUTOFF = activationCutoff.toISOString();
+    try {
+      const bulkResult = await processDueZaloCallSummaryJobs(10, {
+        client: adminClient,
+        provider: new MockSummaryProvider(async () => validMockOutput),
+      });
+      assert.ok(bulkResult.claimed >= 3, 'Bulk worker processes the 3 pending post-cutoff jobs');
+      assert.equal(bulkResult.failed, 0);
+
+      // Verify historical rows (txHistA, txHistB) STILL have NO summary
+      const countHistAfterBulk = Number((await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id IN ($1, $2)`,
+        [txHistA, txHistB]
+      )).rows[0].count);
+      assert.equal(countHistAfterBulk, 0, 'Bulk scheduler must never touch or backfill historical transcriptions');
+      testPass('Test 21.5: Bulk scheduler run processes due jobs without scanning or creating summaries for historical rows');
+    } finally {
+      process.env.SUMMARY_ACTIVATION_CUTOFF = originalCutoffEnv;
+    }
+
+    // Requirement 6: Targeted recovery on explicit transcription_id for a specific historical transcription
+    // Processes ONLY that requested ID, without triggering bulk backfill of other historical records
+    const targetedHistResult = await processTargetedZaloCallSummaryJob(
+      { transcriptionId: txHistA },
+      {
+        client: adminClient,
+        provider: new MockSummaryProvider(async () => validMockOutput),
+      }
+    );
+    assert.equal(targetedHistResult.claimed, 1);
+    assert.equal(targetedHistResult.processed, 1);
+    assert.equal(targetedHistResult.failed, 0);
+
+    // Verify txHistA has a COMPLETED summary
+    const sumHistARow = (await db.query<{ status: string; company_id: string }>(
+      `SELECT status, company_id FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txHistA]
+    )).rows[0];
+    assert.equal(sumHistARow.status, 'COMPLETED');
+    assert.equal(sumHistARow.company_id, companyA);
+
+    // Verify txHistB (the other historical transcription) STILL has NO summary (no bulk backfill triggered)
+    const countHistBAfter = Number((await db.query<{ count: string }>(
+      `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+      [txHistB]
+    )).rows[0].count);
+    assert.equal(countHistBAfter, 0, 'Other historical transcriptions must not be touched by targeted recovery');
+    testPass('Test 21.6: Targeted recovery on explicit historical transcription_id processes only requested ID without bulk backfill');
   } finally {
     await harness.close();
   }

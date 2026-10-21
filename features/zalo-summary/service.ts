@@ -47,6 +47,7 @@ const KNOWN_SAFE_SUMMARY_ERROR_CODES = new Set([
   'SUMMARY_FAILED',
   'TRANSCRIPTION_NOT_FOUND',
   'FORBIDDEN',
+  'AMBIGUOUS_TARGET',
 ]);
 
 export function sanitizeSummaryErrorCode(error: unknown): string {
@@ -113,6 +114,7 @@ export function isPermanentSummaryError(errorCode: string): boolean {
     'EXPIRED_LEASE_MAX_ATTEMPTS',
     'TRANSCRIPTION_NOT_FOUND',
     'FORBIDDEN',
+    'AMBIGUOUS_TARGET',
   ]);
   return permanentCodes.has(errorCode);
 }
@@ -161,21 +163,62 @@ export async function enqueueZaloCallSummary(
 }
 
 /**
+ * Resolves the activation cutoff boundary for Phase 2B summary reconciliation.
+ * Reconciles only transcriptions completed at or after this boundary.
+ *
+ * Configured via process.env.SUMMARY_ACTIVATION_CUTOFF.
+ * If unset or invalid, returns null (fails closed to protect historical Phase 2A records).
+ */
+export function resolveSummaryCutoff(): string | null {
+  const raw = process.env.SUMMARY_ACTIVATION_CUTOFF;
+  if (!raw || !raw.trim()) {
+    return null;
+  }
+  const parsed = new Date(raw.trim());
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+/**
  * Reconciles completed transcriptions that lack an AI summary row (e.g. transient enqueue failure).
- * Bounded by limit and lookback window. Idempotent: safe against duplicate runs.
+ * Bounded by limit and an explicit activation cutoff boundary (p_since).
+ * If since is not provided or resolved from SUMMARY_ACTIVATION_CUTOFF, returns 0 (fails closed).
+ * Idempotent: safe against duplicate runs.
  */
 export async function reconcileMissingZaloCallSummaries(
   limit = 10,
   client?: SupabaseClient,
-  lookbackHours = 168
+  options?: { since?: Date | string | null }
 ): Promise<number> {
   const admin = client || createAdminClient();
   const config = resolveSummaryConfig();
+
+  let sinceIso: string | null = null;
+  if (options && 'since' in options) {
+    if (options.since instanceof Date) {
+      sinceIso = options.since.toISOString();
+    } else if (typeof options.since === 'string' && options.since.trim()) {
+      const d = new Date(options.since.trim());
+      if (!Number.isNaN(d.getTime())) {
+        sinceIso = d.toISOString();
+      }
+    }
+  } else {
+    sinceIso = resolveSummaryCutoff();
+  }
+
+  // Safety guard: do not run bulk reconciliation without an explicit activation cutoff
+  if (!sinceIso) {
+    return 0;
+  }
+
   const { data, error } = await admin.rpc('zalo_reconcile_missing_call_summaries', {
     p_limit: limit,
     p_provider: config.provider,
     p_model: config.model,
-    p_lookback_hours: lookbackHours,
+    p_since: sinceIso,
   });
 
   if (error) {
@@ -351,7 +394,11 @@ export async function processZaloCallSummaryJob(
  */
 export async function processDueZaloCallSummaryJobs(
   limit = 10,
-  options?: ProcessSummaryJobOptions & { lockedBy?: string; leaseSeconds?: number }
+  options?: ProcessSummaryJobOptions & {
+    lockedBy?: string;
+    leaseSeconds?: number;
+    reconciliationSince?: Date | string | null;
+  }
 ): Promise<{ claimed: number; processed: number; failed: number }> {
   const startTime = Date.now();
 
@@ -401,9 +448,11 @@ export async function processDueZaloCallSummaryJobs(
   let failed = 0;
 
   try {
-    // Reconcile missing summary jobs for recently completed transcriptions (best-effort recovery)
+    // Reconcile missing summary jobs for completed transcriptions at or after the activation boundary (best-effort recovery)
     try {
-      await reconcileMissingZaloCallSummaries(limit, admin);
+      await reconcileMissingZaloCallSummaries(limit, admin, {
+        since: options?.reconciliationSince,
+      });
     } catch {
       // Non-fatal to bulk worker execution
     }
@@ -510,6 +559,20 @@ export async function processTargetedZaloCallSummaryJob(
       error_code: 'INVALID_TRANSCRIPTION_ID',
     });
     throw new Error('INVALID_TRANSCRIPTION_ID');
+  }
+
+  if (rawSummaryId && rawTxId) {
+    logSummaryWorkerInvocation({
+      action: 'invocation_failed',
+      mode: 'TARGETED',
+      target_id: undefined,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: 0,
+      error_code: 'AMBIGUOUS_TARGET',
+    });
+    throw new Error('Provide exactly one targeted identifier');
   }
 
   if (!rawSummaryId && !rawTxId) {

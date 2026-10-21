@@ -79,6 +79,16 @@ export async function handleZaloCallSummaryCron(
     }
   }
 
+  const hasSummaryId = searchParams.has('summary_id');
+  const hasTranscriptionId = searchParams.has('transcription_id');
+
+  if (hasSummaryId && hasTranscriptionId) {
+    return NextResponse.json(
+      { error: 'Provide exactly one targeted identifier' },
+      { status: 400 }
+    );
+  }
+
   let limit = 10;
   if (searchParams.has('limit')) {
     const rawLimit = searchParams.get('limit') ?? '';
@@ -92,7 +102,7 @@ export async function handleZaloCallSummaryCron(
   }
 
   let summaryId: string | undefined;
-  if (searchParams.has('summary_id')) {
+  if (hasSummaryId) {
     const rawId = searchParams.get('summary_id') ?? '';
     if (!UUID_REGEX.test(rawId)) {
       return NextResponse.json(
@@ -104,7 +114,7 @@ export async function handleZaloCallSummaryCron(
   }
 
   let transcriptionId: string | undefined;
-  if (searchParams.has('transcription_id')) {
+  if (hasTranscriptionId) {
     const rawId = searchParams.get('transcription_id') ?? '';
     if (!UUID_REGEX.test(rawId)) {
       return NextResponse.json(
@@ -117,9 +127,15 @@ export async function handleZaloCallSummaryCron(
 
   // 3. Execution
   try {
-    if (summaryId || transcriptionId) {
+    if (summaryId) {
       const runner = deps?.processTargeted || processTargetedZaloCallSummaryJob;
-      const result = await runner({ summaryId, transcriptionId });
+      const result = await runner({ summaryId });
+      return NextResponse.json({ ok: true, mode: 'TARGETED', ...result });
+    }
+
+    if (transcriptionId) {
+      const runner = deps?.processTargeted || processTargetedZaloCallSummaryJob;
+      const result = await runner({ transcriptionId });
       return NextResponse.json({ ok: true, mode: 'TARGETED', ...result });
     }
 
