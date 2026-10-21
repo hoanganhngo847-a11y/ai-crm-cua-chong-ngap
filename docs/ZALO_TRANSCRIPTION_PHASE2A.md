@@ -36,7 +36,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> **Claim Mode Contract:** The automated recurring scheduler triggers bulk processing via `zalo_claim_transcription_jobs`. The bulk RPC delegates individual claims to `zalo_claim_transcription_job`; controlled single-target validation calls that RPC directly (Gate 8 via `?transcription_id=`). The scheduler is currently staged and inactive (disabled) until Gate 9 execution.
+> **Claim Mode Contract:** The automated recurring scheduler triggers bulk processing via `zalo_claim_transcription_jobs`. The bulk RPC delegates individual claims to `zalo_claim_transcription_job`; controlled single-target validation calls that RPC directly (Gate 8 via `?transcription_id=`). A fresh installation remains inactive until Gate 9 execution. See [production acceptance](./ZALO_TRANSCRIPTION_PHASE2A_ACCEPTANCE.md) for the dated rollout result.
 
 ---
 
@@ -78,14 +78,42 @@ The scheduler is managed through three dedicated SQL files located in `docs/sql/
    - Transactionally enables `pg_cron` and `pg_net` extensions and configures hardened private schema `cron_internal`.
    - Creates bounded table `cron_internal.zalo_transcription_dispatch_history` and sanitized view `cron_internal.zalo_transcription_dispatch_status` (pending requests yield `has_error = NULL`).
    - Creates helper function `cron_internal.invoke_zalo_transcription_cron()` with `SECURITY DEFINER SET search_path = ''`. Includes all expired `PROCESSING` leases and due `PENDING` jobs with remaining attempt budget.
-   - Revokes execution from `PUBLIC`, `anon`, `authenticated`, and `service_role`; grants strictly to `postgres`.
-   - Hardens `net` schema and tables (`net.http_request_queue`, `net._http_response`), revoking table and column privileges from untrusted roles with strict abort on error.
+   - Revokes execution from `PUBLIC`, `anon`, `authenticated`, and `service_role`; grants to `postgres` and `supabase_admin` when present.
+   - Attempts defense-in-depth revocation on `net`; managed owner grants can remain. Validates private `cron_internal` isolation and `anon`/`authenticated` NOLOGIN, and reports retained managed grants without claiming a zero ACL.
    - **Important:** Setup leaves the recurring scheduler uncreated.
 2. `docs/sql/zalo-transcription-scheduler-enable.sql`:
-   - Validates prerequisites: extensions installed, BOTH new migrations applied in order (targeted claim `public.zalo_claim_transcription_job` and bulk lease recovery `public.zalo_claim_transcription_jobs`), validates bulk wrapper behavior via `pg_get_functiondef` without queue invocation, helper function ACLs enforced, and Vault configuration **VALUES** are valid (HTTPS endpoint ending in `/api/cron/zalo-transcription`, secret >= 16 chars).
+   - Requires the external API preflight below, validates private schema isolation and NOLOGIN, and checks prerequisites: extensions installed, BOTH new migrations applied in order (targeted claim `public.zalo_claim_transcription_job` and bulk lease recovery `public.zalo_claim_transcription_jobs`), validates bulk wrapper behavior via `pg_get_functiondef` without queue invocation, helper function ACLs enforced, and Vault configuration **VALUES** are valid (HTTPS endpoint ending in `/api/cron/zalo-transcription`, secret >= 16 chars).
    - Idempotently registers `zalo-transcription-worker` running `* * * * *` with command `SELECT cron_internal.invoke_zalo_transcription_cron();`.
 3. `docs/sql/zalo-transcription-scheduler-disable.sql`:
    - Idempotently unschedules strictly `zalo-transcription-worker`, leaving all other jobs intact.
+
+### Managed Supabase permissions and external preflight
+
+Hosted `pg_net` objects are owned by `supabase_admin`. A nonsuperuser `postgres` session cannot revoke that owner's grants; PostgreSQL can emit warnings and leave PUBLIC privileges intact. The SQL reports these retained managed grants. It does not claim that REVOKE always removes them. Metadata inspection uses `information_schema.table_privileges`, since `role_table_grants` omits PUBLIC grants.
+
+The [official Supabase permissions guide](https://supabase.com/docs/guides/database/extensions/pg_net#permissions) explains the supported client-access boundary: `net` is excluded from the Data API and `anon`/`authenticated` are NOLOGIN roles. The scheduler's private schema, function, and monitoring objects additionally deny client roles and `service_role`.
+
+Before enable, verify the actual API boundary using only the public publishable/anon key. Do not add `net`, `cron_internal`, or `vault` to exposed schemas. An administrator SQL session does not reliably prove the active external PostgREST configuration. Recheck after API configuration or extension changes.
+
+```bash
+# Supply SUPABASE_URL and SUPABASE_ANON_KEY securely; do not print key values.
+node --input-type=module <<'JS'
+const base = process.env.SUPABASE_URL;
+const key = process.env.SUPABASE_ANON_KEY;
+if (!base || !key) throw new Error('Public API configuration required');
+for (const schema of ['net', 'cron_internal', 'vault']) {
+  const response = await fetch(`${base}/rest/v1/http_request_queue?select=id&limit=0`, {
+    headers: { apikey: key, 'Accept-Profile': schema },
+    signal: AbortSignal.timeout(20000),
+  });
+  const result = await response.json();
+  console.log(JSON.stringify({ schema, status: response.status, code: result.code }));
+  if (response.status !== 406 || result.code !== 'PGRST106') process.exitCode = 1;
+}
+JS
+```
+
+Expected: all three schemas return HTTP 406 / PGRST106, command exit 0. This probe requests only `id` with `limit=0`; it never queries secret-bearing headers or response content. Private schema permissions and NOLOGIN assertions must also pass. Retained managed `net` grants alone are not an API-exposure finding.
 
 ### Supabase Vault Configuration Guide
 Configure exact named secrets in the Supabase Dashboard Vault UI (**Project Settings -> Vault -> Add new secret**):
@@ -168,7 +196,7 @@ Ensure all CI checks on the feature branch are green.
 Add `zalo_transcription_endpoint` and `zalo_transcription_cron_secret` in the Supabase Dashboard Vault UI.
 
 #### Gate 7: Operations Setup SQL
-Execute `docs/sql/zalo-transcription-scheduler-setup.sql` in Supabase SQL Editor. Run the post-setup inspection queries to confirm isolation. The cron job remains uncreated.
+Execute `docs/sql/zalo-transcription-scheduler-setup.sql` in Supabase SQL Editor. Check private schema isolation and NOLOGIN. Retained managed `net` grants are informational, not a claim that REVOKE succeeded. Fresh setup creates no recurring job; reapplying setup does not disable an existing schedule.
 
 #### Gate 8: Controlled Single-Target Validation
 > [!IMPORTANT]
@@ -195,10 +223,10 @@ Execute `docs/sql/zalo-transcription-scheduler-setup.sql` in Supabase SQL Editor
    - Targeted job transitioned: `status = 'COMPLETED'`, `provider = 'GEMINI'`, `model = 'gemini-3.5-transcribe'`, `utterances > 0`.
    - Stereo mapping verified: Left channel = `CUSTOMER`, Right channel = `STAFF`.
    - Linked call in `zalo_personal_calls` has `transcript_status = 'COMPLETED'`.
-   - Audio file in Supabase Storage (`zalo-personal-recordings`) is intact and unmodified.
+   - Audio file in Supabase Storage (`zalo-call-recordings`) is intact and unmodified.
 
 #### Gate 9: Enable Automated Scheduler
-Execute `docs/sql/zalo-transcription-scheduler-enable.sql` in Supabase SQL Editor. Confirm registration in `cron.job`:
+Run the mandatory external API preflight above and require all three PGRST106 denials. Then execute `docs/sql/zalo-transcription-scheduler-enable.sql` in Supabase SQL Editor. Confirm registration in `cron.job`:
 ```sql
 SELECT jobid, jobname, schedule, active, command
 FROM cron.job

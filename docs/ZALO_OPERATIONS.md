@@ -96,4 +96,4 @@ Nội dung gốc của tin gửi đi nằm trong `private.zalo_outbound_payloads
   - Scheduler định kỳ gọi chế độ bulk (`zalo_claim_transcription_jobs`).
   - Bulk dùng targeted RPC nội bộ cho từng claim; `?transcription_id=` chọn trực tiếp đúng một job khi kiểm thử có kiểm soát.
 - Snapshot baseline hàng đợi: Ghi nhận 2 job COMPLETED tại thời điểm kiểm tra ngày 2026-10-21 (không retry/sửa 2 job này; kiểm thử trên đúng 1 cuộc gọi mới).
-- Trạng thái vận hành: Scheduler hiện tại chưa được kích hoạt/bật trên production (cần tuân thủ trình tự Gate 1 -> Gate 10 trước khi enable).
+- Nghiệm thu production ngày 2026-10-21: PR #67 đã deploy; scheduler `zalo-transcription-worker` active mỗi phút. Controlled test mới COMPLETED với Gemini, 15 utterances; hai job baseline giữ nguyên. Chi tiết tại [ZALO_TRANSCRIPTION_PHASE2A_ACCEPTANCE.md](./ZALO_TRANSCRIPTION_PHASE2A_ACCEPTANCE.md).
