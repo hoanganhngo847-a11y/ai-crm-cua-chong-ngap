@@ -73,12 +73,14 @@ The following environment variables are strictly server-only and must never be e
 #### 1. Pure FFmpeg Runtime Preflight (No External Provider Calls, Zero Credits)
 To verify ffmpeg binary readiness on Render Linux without touching the job queue or spending OpenAI credits, run a pure preflight probe:
 ```bash
-node -e "const { validateFfmpeg } = require('./features/zalo-transcription/audio-splitter'); console.log('FFmpeg OK:', validateFfmpeg());"
+node -e "const fs = require('node:fs'); const cp = require('node:child_process'); try { const bin = process.env.FFMPEG_PATH || require('ffmpeg-static'); if (!bin) throw new Error('FFMPEG_UNAVAILABLE'); fs.accessSync(bin, fs.constants.X_OK); const out = cp.execFileSync(bin, ['-version'], { timeout: 5000 }).toString('utf-8'); const match = out.match(/ffmpeg version (\S+)/); console.log('FFmpeg OK:', JSON.stringify({ path: bin, version: match ? match[1] : 'unknown' })); } catch { console.error('FFMPEG_UNAVAILABLE'); process.exit(1); }"
 ```
 This pure preflight verifies:
-- File existence via `existsSync(binaryPath)`
-- Execution permissions via `execFileSync(binaryPath, ['-version'])` with a 5,000 ms timeout
+- File existence and executable permissions via `accessSync(bin, fs.constants.X_OK)`
+- Project-managed binary path via `require('ffmpeg-static')` (or explicit `FFMPEG_PATH` override)
+- Execution permissions via `execFileSync(bin, ['-version'], { timeout: 5000 })` with a 5,000 ms timeout
 - Output matching `/ffmpeg version (\S+)/`
+- Sanitizes missing binary or validation failure as `FFMPEG_UNAVAILABLE`
 
 ---
 
@@ -168,7 +170,7 @@ flowchart TD
 5. **Render Auto-Deployment:** Allow Render build and deployment to complete successfully.
 6. **Pure FFmpeg Runtime Preflight (Zero Credits Spent):** Execute the pure preflight command in Render environment (or run test suite) to verify `ffmpeg-static` binary execution and version without calling external APIs or claiming jobs:
    ```bash
-   node -e "const { validateFfmpeg } = require('./features/zalo-transcription/audio-splitter'); console.log(validateFfmpeg());"
+   node -e "const fs = require('node:fs'); const cp = require('node:child_process'); try { const bin = process.env.FFMPEG_PATH || require('ffmpeg-static'); if (!bin) throw new Error('FFMPEG_UNAVAILABLE'); fs.accessSync(bin, fs.constants.X_OK); const out = cp.execFileSync(bin, ['-version'], { timeout: 5000 }).toString('utf-8'); const match = out.match(/ffmpeg version (\S+)/); console.log('FFmpeg OK:', JSON.stringify({ path: bin, version: match ? match[1] : 'unknown' })); } catch { console.error('FFMPEG_UNAVAILABLE'); process.exit(1); }"
    ```
 7. **Separately Authorized Single Real OpenAI Call:**
    - Verify that all historical recordings remain in `NOT_STARTED` and the queue has 0 unverified jobs.
