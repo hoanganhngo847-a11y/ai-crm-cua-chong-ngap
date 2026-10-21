@@ -201,6 +201,21 @@ async function runSummaryAutomationTestSuite() {
       return txId;
     }
 
+    const validMockOutput: CallSummaryStructuredOutput = {
+      summary: 'Khách hàng muốn tìm hiểu gói sản phẩm và đã đồng ý nhận tài liệu qua Zalo.',
+      customer_needs: ['Tìm hiểu sản phẩm', 'Nhận tài liệu'],
+      objections: ['Đang so sánh đối thủ'],
+      next_actions: ['Gửi file tài liệu', 'Liên hệ lại vào ngày mai'],
+      lead_temperature: 'WARM',
+      follow_up: {
+        required: true,
+        suggested_time: '2026-10-22 14:00',
+        reason: 'Khách yêu cầu gửi tài liệu trước khi thảo luận chi tiết',
+      },
+      key_points: ['Cuộc gọi nhã nhặn', 'Khách có nhu cầu thực'],
+      confidence: 'HIGH',
+    };
+
     // ========================================================================
     // TEST 1: COMPLETED transcription enqueue summary exactly once
     // ========================================================================
@@ -235,9 +250,10 @@ async function runSummaryAutomationTestSuite() {
     testPass('Test 1: COMPLETED transcription enqueues summary job in PENDING state');
 
     // ========================================================================
-    // TEST 2: Duplicate transcription completion does NOT duplicate summary
+    // TEST 2: Duplicate Enqueue Idempotency & State Preservation Across All States
+    // Invariant: parent.summary_status === child.status, child state preserved
     // ========================================================================
-    console.log('--- Test 2: Duplicate completion idempotency ---');
+    console.log('--- Test 2.1: Duplicate enqueue idempotency on PENDING summary ---');
     const summaryId1Dup = await enqueueZaloCallSummary(companyA, tx1, adminClient);
     assert.equal(summaryId1Dup, summaryId1, 'Duplicate enqueue returns the same summary ID');
 
@@ -248,7 +264,271 @@ async function runSummaryAutomationTestSuite() {
       )
     ).rows[0].count;
     assert.equal(Number(totalSummariesTx1), 1, 'Exactly one summary row exists per transcription');
-    testPass('Test 2: Duplicate completion does not create duplicate summary rows');
+
+    const childRowPending = (
+      await db.query<{ status: string; attempts: number; lock_token: string | null; lease_expires_at: string | null }>(
+        `SELECT status, attempts, lock_token, lease_expires_at FROM zalo_call_ai_summaries WHERE id = $1`,
+        [summaryId1]
+      )
+    ).rows[0];
+    assert.equal(childRowPending.status, 'PENDING');
+    assert.equal(childRowPending.attempts, 0);
+    assert.equal(childRowPending.lock_token, null);
+    assert.equal(childRowPending.lease_expires_at, null);
+
+    const parentCallPending = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [call1]
+      )
+    ).rows[0];
+    assert.equal(parentCallPending.summary_status, 'PENDING');
+    assert.equal(parentCallPending.summary_status, childRowPending.status, 'Parent summary_status matches child status');
+    testPass('Test 2.1: Duplicate enqueue on PENDING summary preserves status, ID, attempts, and parent sync');
+
+    console.log('--- Test 2.2: Duplicate enqueue idempotency on PROCESSING summary ---');
+    const { callId: callProc } = await seedCall(companyA, saleA);
+    const txProc = await seedCompletedTranscription(companyA, callProc, 2);
+    const sumProcId = await enqueueZaloCallSummary(companyA, txProc, adminClient);
+
+    const claimedProc = (
+      await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA,
+        p_summary_id: sumProcId,
+        p_locked_by: 'worker_test_proc',
+        p_lease_seconds: 300,
+      })
+    ).data as ClaimedSummaryJob[];
+    assert.equal(claimedProc.length, 1);
+
+    const childProcBefore = (
+      await db.query<{
+        status: string;
+        attempts: number;
+        lock_token: string;
+        locked_by: string;
+        lease_expires_at: string;
+      }>(
+        `SELECT status, attempts, lock_token, locked_by, lease_expires_at FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumProcId]
+      )
+    ).rows[0];
+    assert.equal(childProcBefore.status, 'PROCESSING');
+    assert.equal(childProcBefore.attempts, 0);
+    assert.ok(childProcBefore.lock_token);
+    assert.equal(childProcBefore.locked_by, 'worker_test_proc');
+
+    const parentProcBefore = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callProc]
+      )
+    ).rows[0];
+    assert.equal(parentProcBefore.summary_status, 'PROCESSING');
+
+    // Duplicate enqueue while PROCESSING!
+    const sumProcDup = await enqueueZaloCallSummary(companyA, txProc, adminClient);
+    assert.equal(sumProcDup, sumProcId, 'Duplicate enqueue returns same summary ID');
+
+    const totalSummariesProc = Number((
+      await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txProc]
+      )
+    ).rows[0].count);
+    assert.equal(totalSummariesProc, 1, 'Exactly one summary row exists');
+
+    const childProcAfter = (
+      await db.query<{
+        status: string;
+        attempts: number;
+        lock_token: string;
+        locked_by: string;
+        lease_expires_at: string;
+      }>(
+        `SELECT status, attempts, lock_token, locked_by, lease_expires_at FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumProcId]
+      )
+    ).rows[0];
+    assert.equal(childProcAfter.status, 'PROCESSING', 'Child status must remain PROCESSING');
+    assert.equal(childProcAfter.attempts, childProcBefore.attempts, 'Attempts must not change');
+    assert.equal(childProcAfter.lock_token, childProcBefore.lock_token, 'Lock token must not be lost');
+    assert.equal(childProcAfter.locked_by, childProcBefore.locked_by, 'Locked by must not change');
+    assert.equal(
+      new Date(childProcAfter.lease_expires_at).toISOString(),
+      new Date(childProcBefore.lease_expires_at).toISOString(),
+      'Lease must not change'
+    );
+
+    const parentProcAfter = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callProc]
+      )
+    ).rows[0];
+    assert.equal(parentProcAfter.summary_status, 'PROCESSING', 'Parent summary_status must NOT be reset to PENDING');
+    assert.equal(parentProcAfter.summary_status, childProcAfter.status, 'Parent summary_status matches child status');
+    testPass('Test 2.2: Duplicate enqueue on PROCESSING summary does NOT lose lock or reset parent status');
+
+    console.log('--- Test 2.3: Duplicate enqueue idempotency on FAILED summary ---');
+    const { callId: callFail } = await seedCall(companyA, saleA);
+    const txFail = await seedCompletedTranscription(companyA, callFail, 2);
+    const sumFailId = await enqueueZaloCallSummary(companyA, txFail, adminClient);
+
+    const claimedFail = (
+      await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA,
+        p_summary_id: sumFailId,
+        p_locked_by: 'worker_test_fail',
+        p_lease_seconds: 300,
+      })
+    ).data as ClaimedSummaryJob[];
+    assert.equal(claimedFail.length, 1);
+
+    const failRes = await adminClient.rpc('zalo_fail_call_summary', {
+      p_company: companyA,
+      p_summary_id: sumFailId,
+      p_lock_token: claimedFail[0].lock_token,
+      p_error_code: 'TEST_TERMINAL_FAIL',
+      p_error_message: 'Unrecoverable mock failure',
+      p_terminal: true,
+    });
+    assert.equal(failRes.error, null);
+
+    const childFailBefore = (
+      await db.query<{
+        status: string;
+        attempts: number;
+        error_code: string;
+        error_message: string;
+      }>(
+        `SELECT status, attempts, error_code, error_message FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumFailId]
+      )
+    ).rows[0];
+    assert.equal(childFailBefore.status, 'FAILED');
+    assert.equal(childFailBefore.error_code, 'TEST_TERMINAL_FAIL');
+
+    const parentFailBefore = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callFail]
+      )
+    ).rows[0];
+    assert.equal(parentFailBefore.summary_status, 'FAILED');
+
+    // Duplicate enqueue on FAILED!
+    const sumFailDup = await enqueueZaloCallSummary(companyA, txFail, adminClient);
+    assert.equal(sumFailDup, sumFailId, 'Duplicate enqueue returns same summary ID');
+
+    const totalSummariesFail = Number((
+      await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txFail]
+      )
+    ).rows[0].count);
+    assert.equal(totalSummariesFail, 1, 'Exactly one summary row exists');
+
+    const childFailAfter = (
+      await db.query<{
+        status: string;
+        attempts: number;
+        error_code: string;
+        error_message: string;
+      }>(
+        `SELECT status, attempts, error_code, error_message FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumFailId]
+      )
+    ).rows[0];
+    assert.equal(childFailAfter.status, 'FAILED', 'Child status must remain FAILED (no automatic retry)');
+    assert.equal(childFailAfter.attempts, childFailBefore.attempts, 'Attempts must not change');
+    assert.equal(childFailAfter.error_code, 'TEST_TERMINAL_FAIL', 'Error code must not be cleared');
+
+    const parentFailAfter = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callFail]
+      )
+    ).rows[0];
+    assert.equal(parentFailAfter.summary_status, 'FAILED', 'Parent summary_status must NOT be reset to PENDING');
+    assert.equal(parentFailAfter.summary_status, childFailAfter.status, 'Parent summary_status matches child status');
+    testPass('Test 2.3: Duplicate enqueue on FAILED summary does NOT auto-retry and preserves parent status');
+
+    console.log('--- Test 2.4: Duplicate enqueue idempotency on COMPLETED summary ---');
+    const { callId: callComp } = await seedCall(companyA, saleA);
+    const txComp = await seedCompletedTranscription(companyA, callComp, 2);
+    const sumCompId = await enqueueZaloCallSummary(companyA, txComp, adminClient);
+
+    const claimedComp = (
+      await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA,
+        p_summary_id: sumCompId,
+        p_locked_by: 'worker_test_comp',
+        p_lease_seconds: 300,
+      })
+    ).data as ClaimedSummaryJob[];
+    assert.equal(claimedComp.length, 1);
+
+    await processZaloCallSummaryJob(claimedComp[0], {
+      client: adminClient,
+      provider: new MockSummaryProvider(async () => validMockOutput),
+    });
+
+    const childCompBefore = (
+      await db.query<{
+        status: string;
+        summary: string;
+        completed_at: string;
+      }>(
+        `SELECT status, summary, completed_at FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumCompId]
+      )
+    ).rows[0];
+    assert.equal(childCompBefore.status, 'COMPLETED');
+    assert.ok(childCompBefore.completed_at);
+
+    const parentCompBefore = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callComp]
+      )
+    ).rows[0];
+    assert.equal(parentCompBefore.summary_status, 'COMPLETED');
+
+    // Duplicate enqueue on COMPLETED!
+    const sumCompDup = await enqueueZaloCallSummary(companyA, txComp, adminClient);
+    assert.equal(sumCompDup, sumCompId, 'Duplicate enqueue returns same summary ID');
+
+    const totalSummariesComp = Number((
+      await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txComp]
+      )
+    ).rows[0].count);
+    assert.equal(totalSummariesComp, 1, 'Exactly one summary row exists');
+
+    const childCompAfter = (
+      await db.query<{
+        status: string;
+        summary: string;
+        completed_at: string;
+      }>(
+        `SELECT status, summary, completed_at FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumCompId]
+      )
+    ).rows[0];
+    assert.equal(childCompAfter.status, 'COMPLETED', 'Child status must remain COMPLETED');
+    assert.equal(childCompAfter.summary, childCompBefore.summary, 'Summary text must be untouched');
+
+    const parentCompAfter = (
+      await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callComp]
+      )
+    ).rows[0];
+    assert.equal(parentCompAfter.summary_status, 'COMPLETED', 'Parent summary_status must remain COMPLETED');
+    assert.equal(parentCompAfter.summary_status, childCompAfter.status, 'Parent summary_status matches child status');
+    testPass('Test 2.4: Duplicate enqueue on COMPLETED summary leaves summary row and parent COMPLETED unchanged');
 
     // ========================================================================
     // TEST 3: Transcription NOT completed cannot be enqueued or claimed
@@ -334,21 +614,6 @@ async function runSummaryAutomationTestSuite() {
       })
     ).data as ClaimedSummaryJob[];
     assert.equal(claimedValid.length, 1);
-
-    const validMockOutput: CallSummaryStructuredOutput = {
-      summary: 'Khách hàng muốn tìm hiểu gói sản phẩm và đã đồng ý nhận tài liệu qua Zalo.',
-      customer_needs: ['Tìm hiểu sản phẩm', 'Nhận tài liệu'],
-      objections: ['Đang so sánh đối thủ'],
-      next_actions: ['Gửi file tài liệu', 'Liên hệ lại vào ngày mai'],
-      lead_temperature: 'WARM',
-      follow_up: {
-        required: true,
-        suggested_time: '2026-10-22 14:00',
-        reason: 'Khách yêu cầu gửi tài liệu trước khi thảo luận chi tiết',
-      },
-      key_points: ['Cuộc gọi nhã nhặn', 'Khách có nhu cầu thực'],
-      confidence: 'HIGH',
-    };
 
     const validProvider = new MockSummaryProvider(async () => validMockOutput);
 
@@ -1008,6 +1273,109 @@ async function runSummaryAutomationTestSuite() {
     )).rows[0].count);
     assert.equal(countHistBAfter, 0, 'Other historical transcriptions must not be touched by targeted recovery');
     testPass('Test 21.6: Targeted recovery on explicit historical transcription_id processes only requested ID without bulk backfill');
+
+    // ========================================================================
+    // TEST 22: Production Bulk Cron Reconciliation via SUMMARY_ACTIVATION_CUTOFF
+    // (Simulates exact production path where processDueZaloCallSummaryJobs is invoked
+    // WITHOUT options.reconciliationSince)
+    // ========================================================================
+    console.log('--- Test 22: Production Bulk Cron Reconciliation via SUMMARY_ACTIVATION_CUTOFF ---');
+    const origCutoffEnv = process.env.SUMMARY_ACTIVATION_CUTOFF;
+    const test22NowMs = Date.now();
+    const test22Cutoff = new Date(test22NowMs + 5_000);
+    const test22HistCompletedAt = new Date(test22NowMs - 60_000); // 1 min before cutoff
+    const test22PostCutoffCompletedAt = new Date(test22NowMs + 15_000); // after cutoff
+
+    process.env.SUMMARY_ACTIVATION_CUTOFF = test22Cutoff.toISOString();
+
+    try {
+      // 1. Seed historical transcription (completed BEFORE cutoff, NO summary row created)
+      const { callId: callProdHist } = await seedCall(companyA, saleA);
+      const txProdHist = await seedCompletedTranscription(companyA, callProdHist, 2, test22HistCompletedAt);
+
+      // 2. Seed new post-cutoff transcription (completed AFTER cutoff, NO summary row created, simulating transient enqueue failure)
+      const { callId: callProdNew } = await seedCall(companyA, saleA);
+      const txProdNew = await seedCompletedTranscription(companyA, callProdNew, 2, test22PostCutoffCompletedAt);
+
+      // Verify neither has a summary initially
+      const countBefore = Number((await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id IN ($1, $2)`,
+        [txProdHist, txProdNew]
+      )).rows[0].count);
+      assert.equal(countBefore, 0, 'No summary rows exist before bulk cron');
+
+      // 3. Call processDueZaloCallSummaryJobs WITHOUT options.reconciliationSince (exact production cron bulk path!)
+      const bulkCronResult = await processDueZaloCallSummaryJobs(10, {
+        client: adminClient,
+        provider: new MockSummaryProvider(async () => validMockOutput),
+      });
+
+      // Verify the post-cutoff job was reconciled, claimed, and processed to completion
+      assert.ok(bulkCronResult.claimed >= 1, 'Reconciliation enqueued and bulk worker claimed the post-cutoff job');
+      assert.ok(bulkCronResult.processed >= 1, 'Bulk worker processed the post-cutoff job');
+      assert.equal(bulkCronResult.failed, 0);
+
+      // Verify new post-cutoff transcription summary is COMPLETED
+      const newSummaryRows = (await db.query<{
+        id: string;
+        status: string;
+        company_id: string;
+        call_id: string;
+      }>(
+        `SELECT id, status, company_id, call_id FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txProdNew]
+      )).rows;
+      assert.equal(newSummaryRows.length, 1, 'Exactly one summary row exists for post-cutoff transcription');
+      assert.equal(newSummaryRows[0].status, 'COMPLETED');
+      assert.equal(newSummaryRows[0].company_id, companyA);
+
+      // Verify parent call summary_status is COMPLETED
+      const parentCallNew = (await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callProdNew]
+      )).rows[0];
+      assert.equal(parentCallNew.summary_status, 'COMPLETED');
+
+      // Verify historical pre-cutoff transcription STILL has NO summary row
+      const histSummaryRows = (await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txProdHist]
+      )).rows[0].count;
+      assert.equal(Number(histSummaryRows), 0, 'Historical pre-cutoff transcription must NOT be reconciled or have any summary row');
+
+      const parentCallHist = (await db.query<{ summary_status: string }>(
+        `SELECT summary_status FROM zalo_personal_calls WHERE id = $1`,
+        [callProdHist]
+      )).rows[0];
+      assert.equal(parentCallHist.summary_status, 'NOT_STARTED');
+
+      // 4. Repeated bulk run: verify no duplicate summary rows created
+      const repeatBulkResult = await processDueZaloCallSummaryJobs(10, {
+        client: adminClient,
+        provider: new MockSummaryProvider(async () => validMockOutput),
+      });
+      assert.equal(repeatBulkResult.failed, 0);
+
+      const newSummaryRowsAfterRepeat = (await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txProdNew]
+      )).rows[0].count;
+      assert.equal(Number(newSummaryRowsAfterRepeat), 1, 'Repeated bulk run must remain strictly idempotent (exactly 1 row)');
+
+      const histSummaryRowsAfterRepeat = (await db.query<{ count: string }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txProdHist]
+      )).rows[0].count;
+      assert.equal(Number(histSummaryRowsAfterRepeat), 0, 'Historical transcription still has 0 rows after repeated bulk run');
+
+      testPass('Test 22: Production bulk cron reconciliation activates via process.env.SUMMARY_ACTIVATION_CUTOFF without reconciliationSince option');
+    } finally {
+      if (origCutoffEnv === undefined) {
+        delete process.env.SUMMARY_ACTIVATION_CUTOFF;
+      } else {
+        process.env.SUMMARY_ACTIVATION_CUTOFF = origCutoffEnv;
+      }
+    }
   } finally {
     await harness.close();
   }

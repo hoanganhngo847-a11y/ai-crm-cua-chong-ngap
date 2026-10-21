@@ -556,6 +556,119 @@ async function runPgConcurrencySuite() {
     assert.equal(untouchedRow.lock_token, null);
     testPass(7, 'NULL or mismatched p_company returns 0; row remains PENDING and unmutated');
 
+    // ------------------------------------------------------------------------
+    // TEST 8: Native PostgreSQL duplicate enqueue idempotency across all 4 states
+    // Invariant: parent.summary_status === child.status, child state preserved
+    // ------------------------------------------------------------------------
+    // 8.1: PENDING
+    const { callId: c81, txId: t81, sumId: s81 } = seedTestCallAndTranscription('Test 8.1 PENDING');
+    const enq81 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT public.zalo_enqueue_call_summary('${companyA}', '${t81}', 'GEMINI', 'gemini-2.5-flash') AS id;`
+    )[0].id;
+    assert.equal(enq81, s81);
+    const p81 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT summary_status FROM public.zalo_personal_calls WHERE id = '${c81}';`
+    )[0].summary_status;
+    assert.equal(p81, 'PENDING');
+
+    // 8.2: PROCESSING
+    const { callId: c82, txId: t82, sumId: s82 } = seedTestCallAndTranscription('Test 8.2 PROCESSING');
+    const claim82 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT id, lock_token FROM public.zalo_claim_call_summary_job('${companyA}', '${s82}', 'worker_82', 300);`
+    )[0];
+    assert.ok(claim82.lock_token);
+    const enq82 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT public.zalo_enqueue_call_summary('${companyA}', '${t82}', 'GEMINI', 'gemini-2.5-flash') AS id;`
+    )[0].id;
+    assert.equal(enq82, s82);
+    const row82 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT status, lock_token, locked_by FROM public.zalo_call_ai_summaries WHERE id = '${s82}';`
+    )[0];
+    assert.equal(row82.status, 'PROCESSING');
+    assert.equal(row82.lock_token, claim82.lock_token);
+    assert.equal(row82.locked_by, 'worker_82');
+    const p82 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT summary_status FROM public.zalo_personal_calls WHERE id = '${c82}';`
+    )[0].summary_status;
+    assert.equal(p82, 'PROCESSING', 'Parent summary_status must match child PROCESSING after duplicate enqueue');
+
+    // 8.3: FAILED
+    const { callId: c83, txId: t83, sumId: s83 } = seedTestCallAndTranscription('Test 8.3 FAILED');
+    const claim83 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT id, lock_token FROM public.zalo_claim_call_summary_job('${companyA}', '${s83}', 'worker_83', 300);`
+    )[0];
+    execPsqlSync(
+      container,
+      ephDbName,
+      `SELECT public.zalo_fail_call_summary('${companyA}', '${s83}', '${claim83.lock_token}', 'TEST_FAIL', 'Fail reason', true);`
+    );
+    const enq83 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT public.zalo_enqueue_call_summary('${companyA}', '${t83}', 'GEMINI', 'gemini-2.5-flash') AS id;`
+    )[0].id;
+    assert.equal(enq83, s83);
+    const row83 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT status, attempts, error_code FROM public.zalo_call_ai_summaries WHERE id = '${s83}';`
+    )[0];
+    assert.equal(row83.status, 'FAILED');
+    assert.equal(row83.error_code, 'TEST_FAIL');
+    const p83 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT summary_status FROM public.zalo_personal_calls WHERE id = '${c83}';`
+    )[0].summary_status;
+    assert.equal(p83, 'FAILED', 'Parent summary_status must match child FAILED after duplicate enqueue');
+
+    // 8.4: COMPLETED
+    const { callId: c84, txId: t84, sumId: s84 } = seedTestCallAndTranscription('Test 8.4 COMPLETED');
+    const claim84 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT id, lock_token FROM public.zalo_claim_call_summary_job('${companyA}', '${s84}', 'worker_84', 300);`
+    )[0];
+    execPsqlSync(
+      container,
+      ephDbName,
+      `SELECT public.zalo_complete_call_summary('${companyA}', '${s84}', '${claim84.lock_token}', 'Test summary', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'WARM', false, NULL, NULL, 'HIGH', 'GEMINI', 'gemini-2.5-flash');`
+    );
+    const enq84 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT public.zalo_enqueue_call_summary('${companyA}', '${t84}', 'GEMINI', 'gemini-2.5-flash') AS id;`
+    )[0].id;
+    assert.equal(enq84, s84);
+    const row84 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT status, summary FROM public.zalo_call_ai_summaries WHERE id = '${s84}';`
+    )[0];
+    assert.equal(row84.status, 'COMPLETED');
+    assert.equal(row84.summary, 'Test summary');
+    const p84 = queryJsonSync<any[]>(
+      container,
+      ephDbName,
+      `SELECT summary_status FROM public.zalo_personal_calls WHERE id = '${c84}';`
+    )[0].summary_status;
+    assert.equal(p84, 'COMPLETED', 'Parent summary_status must match child COMPLETED after duplicate enqueue');
+    testPass(8, 'Native PostgreSQL duplicate enqueue is idempotent and maintains parent.summary_status == child.status across PENDING/PROCESSING/FAILED/COMPLETED');
+
   } finally {
     execPsqlSync(container, 'postgres', `DROP DATABASE IF EXISTS "${ephDbName}" WITH (FORCE);`);
     console.log(`\n[pg-concurrency] Cleanup completed: ephemeral database "${ephDbName}" dropped cleanly.`);

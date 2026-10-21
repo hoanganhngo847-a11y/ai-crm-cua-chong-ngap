@@ -94,6 +94,7 @@ AS $$
 DECLARE
   v_tx public.zalo_call_transcriptions;
   v_summary_id uuid;
+  v_summary_status text;
   v_provider text;
   v_model text;
 BEGIN
@@ -140,20 +141,17 @@ BEGIN
     COALESCE(p_prompt_version, 'v1'),
     now()
   )
-  ON CONFLICT (company_id, transcription_id) DO UPDATE
-    SET updated_at = public.zalo_call_ai_summaries.updated_at
-    WHERE public.zalo_call_ai_summaries.status IN ('PENDING', 'FAILED')
-  RETURNING id INTO v_summary_id;
+  ON CONFLICT (company_id, transcription_id) DO NOTHING;
 
-  IF v_summary_id IS NULL THEN
-    SELECT id INTO v_summary_id
-    FROM public.zalo_call_ai_summaries
-    WHERE company_id = p_company AND transcription_id = p_transcription_id;
+  SELECT id, status INTO v_summary_id, v_summary_status
+  FROM public.zalo_call_ai_summaries
+  WHERE company_id = p_company AND transcription_id = p_transcription_id;
+
+  IF v_summary_id IS NOT NULL AND v_summary_status IS NOT NULL THEN
+    UPDATE public.zalo_personal_calls
+    SET summary_status = v_summary_status
+    WHERE id = v_tx.call_id AND company_id = p_company;
   END IF;
-
-  UPDATE public.zalo_personal_calls
-  SET summary_status = 'PENDING'
-  WHERE id = v_tx.call_id AND company_id = p_company AND summary_status <> 'COMPLETED';
 
   RETURN v_summary_id;
 END;

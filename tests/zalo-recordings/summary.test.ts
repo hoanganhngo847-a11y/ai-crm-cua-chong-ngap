@@ -44,6 +44,8 @@ import {
   isPermanentSummaryError,
   getSummaryRetryDelayMs,
   getSummaryFailureOutcome,
+  resolveSummaryCutoff,
+  reconcileMissingZaloCallSummaries,
 } from '../../features/zalo-summary/service';
 import type { SummaryUtterance } from '../../features/zalo-summary/types';
 
@@ -312,9 +314,101 @@ async function runSummaryUnitTests() {
 
     testPass('3.5: Dynamic provider and model resolution (GEMINI/OPENAI/fail-closed) verified');
   } finally {
-    process.env.SUMMARY_PROVIDER = originalSummaryProvider;
-    process.env.GEMINI_SUMMARY_MODEL = originalGeminiModel;
-    process.env.OPENAI_SUMMARY_MODEL = originalOpenAiModel;
+    if (originalSummaryProvider === undefined) delete process.env.SUMMARY_PROVIDER;
+    else process.env.SUMMARY_PROVIDER = originalSummaryProvider;
+
+    if (originalGeminiModel === undefined) delete process.env.GEMINI_SUMMARY_MODEL;
+    else process.env.GEMINI_SUMMARY_MODEL = originalGeminiModel;
+
+    if (originalOpenAiModel === undefined) delete process.env.OPENAI_SUMMARY_MODEL;
+    else process.env.OPENAI_SUMMARY_MODEL = originalOpenAiModel;
+  }
+
+  // 3.6: Cutoff environment resolution (valid/empty/whitespace/invalid/undefined)
+  const origCutoffEnv = process.env.SUMMARY_ACTIVATION_CUTOFF;
+  try {
+    delete process.env.SUMMARY_ACTIVATION_CUTOFF;
+    assert.equal(resolveSummaryCutoff(), null, 'Unset cutoff env returns null');
+
+    process.env.SUMMARY_ACTIVATION_CUTOFF = '';
+    assert.equal(resolveSummaryCutoff(), null, 'Empty cutoff env returns null');
+
+    process.env.SUMMARY_ACTIVATION_CUTOFF = '   ';
+    assert.equal(resolveSummaryCutoff(), null, 'Whitespace cutoff env returns null');
+
+    process.env.SUMMARY_ACTIVATION_CUTOFF = 'not-a-valid-date';
+    assert.equal(resolveSummaryCutoff(), null, 'Invalid date string returns null');
+
+    process.env.SUMMARY_ACTIVATION_CUTOFF = '2026-10-21T20:00:00Z';
+    assert.equal(resolveSummaryCutoff(), '2026-10-21T20:00:00.000Z', 'Valid ISO cutoff returns normalized ISO');
+    testPass('3.6: SUMMARY_ACTIVATION_CUTOFF env resolution (null on missing/invalid, parsed on valid) verified');
+
+    // 3.7: reconcileMissingZaloCallSummaries option semantics:
+    // - explicit null -> 0 (fail closed, no RPC call)
+    // - explicit invalid string -> 0 (fail closed, no RPC call)
+    // - unset env + undefined since -> 0 (fail closed, no RPC call)
+    let mockRpcCalled = false;
+    let mockRpcParams: { p_since?: unknown; [key: string]: unknown } | null = null;
+    const getLastRpcParams = () => mockRpcParams;
+    const fakeClient = {
+      rpc: async (_fn: string, params: Record<string, unknown>) => {
+        mockRpcCalled = true;
+        mockRpcParams = params;
+        return { data: [{ reconciled_count: 5 }], error: null };
+      },
+    } as unknown as Parameters<typeof reconcileMissingZaloCallSummaries>[1];
+
+    // Explicit null disables reconciliation
+    mockRpcCalled = false;
+    const resNull = await reconcileMissingZaloCallSummaries(10, fakeClient, { since: null });
+    assert.equal(resNull, 0);
+    assert.equal(mockRpcCalled, false, 'Explicit since: null must return 0 without calling RPC');
+
+    // Explicit invalid date disables reconciliation
+    mockRpcCalled = false;
+    const resInvalidDate = await reconcileMissingZaloCallSummaries(10, fakeClient, { since: 'not-a-date' });
+    assert.equal(resInvalidDate, 0);
+    assert.equal(mockRpcCalled, false, 'Explicit invalid date must return 0 without calling RPC');
+
+    // Unset env and no since option -> fails closed with 0
+    delete process.env.SUMMARY_ACTIVATION_CUTOFF;
+    mockRpcCalled = false;
+    const resNoEnv = await reconcileMissingZaloCallSummaries(10, fakeClient);
+    assert.equal(resNoEnv, 0);
+    assert.equal(mockRpcCalled, false, 'Missing env and options must return 0 without calling RPC');
+
+    // Unset env and { since: undefined } -> fails closed with 0
+    mockRpcCalled = false;
+    const resUndefSinceNoEnv = await reconcileMissingZaloCallSummaries(10, fakeClient, { since: undefined });
+    assert.equal(resUndefSinceNoEnv, 0);
+    assert.equal(mockRpcCalled, false, 'Missing env and { since: undefined } must return 0 without calling RPC');
+
+    // Valid env and { since: undefined } -> uses env cutoff!
+    process.env.SUMMARY_ACTIVATION_CUTOFF = '2026-10-21T20:00:00Z';
+    mockRpcCalled = false;
+    const resUndefSinceWithEnv = await reconcileMissingZaloCallSummaries(10, fakeClient, { since: undefined });
+    assert.equal(resUndefSinceWithEnv, 5);
+    assert.equal(mockRpcCalled, true);
+    assert.equal(getLastRpcParams()?.p_since, '2026-10-21T20:00:00.000Z', 'since: undefined must fall back to SUMMARY_ACTIVATION_CUTOFF env');
+
+    // Valid env and no options passed -> uses env cutoff!
+    mockRpcCalled = false;
+    const resNoOptionsWithEnv = await reconcileMissingZaloCallSummaries(10, fakeClient);
+    assert.equal(resNoOptionsWithEnv, 5);
+    assert.equal(mockRpcCalled, true);
+    assert.equal(getLastRpcParams()?.p_since, '2026-10-21T20:00:00.000Z', 'Omitted options must fall back to SUMMARY_ACTIVATION_CUTOFF env');
+
+    // Explicit valid string overrides env
+    mockRpcCalled = false;
+    const resExplicitOverride = await reconcileMissingZaloCallSummaries(10, fakeClient, { since: '2026-10-25T12:00:00Z' });
+    assert.equal(resExplicitOverride, 5);
+    assert.equal(mockRpcCalled, true);
+    assert.equal(getLastRpcParams()?.p_since, '2026-10-25T12:00:00.000Z', 'Explicit valid since overrides env');
+
+    testPass('3.7: reconcileMissingZaloCallSummaries options semantics (undefined fallback, null disabled, explicit override) verified');
+  } finally {
+    if (origCutoffEnv === undefined) delete process.env.SUMMARY_ACTIVATION_CUTOFF;
+    else process.env.SUMMARY_ACTIVATION_CUTOFF = origCutoffEnv;
   }
 
   // ==========================================================================

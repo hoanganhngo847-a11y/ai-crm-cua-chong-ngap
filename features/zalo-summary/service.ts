@@ -196,7 +196,11 @@ export async function reconcileMissingZaloCallSummaries(
   const config = resolveSummaryConfig();
 
   let sinceIso: string | null = null;
-  if (options && 'since' in options) {
+  if (options && 'since' in options && options.since !== undefined) {
+    if (options.since === null) {
+      // Explicit null disables reconciliation (fail-closed semantics)
+      return 0;
+    }
     if (options.since instanceof Date) {
       sinceIso = options.since.toISOString();
     } else if (typeof options.since === 'string' && options.since.trim()) {
@@ -204,6 +208,10 @@ export async function reconcileMissingZaloCallSummaries(
       if (!Number.isNaN(d.getTime())) {
         sinceIso = d.toISOString();
       }
+    }
+    if (!sinceIso) {
+      // Explicit invalid date string provided -> fail closed
+      return 0;
     }
   } else {
     sinceIso = resolveSummaryCutoff();
@@ -450,9 +458,13 @@ export async function processDueZaloCallSummaryJobs(
   try {
     // Reconcile missing summary jobs for completed transcriptions at or after the activation boundary (best-effort recovery)
     try {
-      await reconcileMissingZaloCallSummaries(limit, admin, {
-        since: options?.reconciliationSince,
-      });
+      if (options?.reconciliationSince !== undefined) {
+        await reconcileMissingZaloCallSummaries(limit, admin, {
+          since: options.reconciliationSince,
+        });
+      } else {
+        await reconcileMissingZaloCallSummaries(limit, admin);
+      }
     } catch {
       // Non-fatal to bulk worker execution
     }
