@@ -28,6 +28,9 @@ export async function POST(request: Request) {
       if (error.message?.includes('ZALO_REQUEST_EXPIRED')) throw new RecordingError('REQUEST_EXPIRED', 410);
       if (error.message?.includes('ZALO_REQUEST_ALREADY_CLAIMED')) throw new RecordingError('REQUEST_ALREADY_CLAIMED', 409);
       if (error.message?.includes('ZALO_REQUEST_NOT_FOUND')) throw new RecordingError('REQUEST_NOT_FOUND', 404);
+      if (error.message?.includes('ZALO_REQUEST_DEVICE_MISMATCH') || error.message?.includes('ZALO_REQUEST_STAFF_MISMATCH')) {
+        throw new RecordingError('REQUEST_MISMATCH', 403);
+      }
       throw new RecordingError('CLAIM_UNAVAILABLE', 503);
     }
 

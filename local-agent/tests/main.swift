@@ -330,4 +330,400 @@ try require(receivedReq == sampleReqId, "LoopbackServer delivers request_id to h
 
 testServer.stop()
 print("PASS: ZaloAutomation normalization, LoopbackServer health, CORS allowlist & 403 reject, and call dispatch")
+
+// MARK: - OutboundStateHelper Pure Unit Tests
+do {
+    // 1. Exact normalized early bind
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        let req1 = UUID().uuidString
+        let ctx1 = PendingOutboundContext(
+            requestId: req1,
+            customerId: "cust-1",
+            customerName: "Nguyen Van A",
+            expectedDisplayName: "Lương Thắng",
+            phoneNormalized: "0901234567",
+            triggeredAt: t0
+        )
+        try require(helper.beginExecution(requestId: req1, now: t0), "beginExecution succeeds when idle")
+        try require(!helper.beginExecution(requestId: "req-overlap", now: t0), "overlapping beginExecution rejected")
+        try require(helper.stagePending(context: ctx1), "stagePending succeeds for executing request")
+        try require(!helper.beginExecution(requestId: "req-overlap-pending", now: t0), "beginExecution rejected while pendingContext active")
+
+        let bound = helper.bindSession(callID: "call-1", observedContactName: "  lương   thắng  ", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(5))
+        try require(bound?.requestId == req1, "exact normalized equality binds pending context")
+        helper.releaseSession(callID: "call-1")
+    }
+
+    // 2. Unknown later resolves same session; duplicate consume rejected
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 2000)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-2",
+            customerName: "Nguyen Van B",
+            expectedDisplayName: "Nguyen Van B",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        try require(helper.beginExecution(requestId: req, now: t0), "begin req")
+        try require(helper.stagePending(context: ctx), "stage ctx")
+
+        let callID = "call-defer"
+        try require(helper.bindSession(callID: callID, observedContactName: nil, direction: .unknown, sessionStartedAt: t0, now: t0.addingTimeInterval(2)) == nil,
+                    "unknown contact name defers binding without clearing pending")
+        let bound = helper.bindSession(callID: callID, observedContactName: "Nguyen Van B", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(4))
+        try require(bound?.requestId == req, "unknown name later resolves to same session")
+
+        try require(helper.bindSession(callID: "call-other", observedContactName: "Nguyen Van B", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(6)) == nil,
+                    "duplicate consumption prohibited; pending was consumed")
+        helper.releaseSession(callID: "call-defer")
+        helper.releaseSession(callID: "call-other")
+    }
+
+    // 3. Substring & customer-name fallback rejected
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 3000)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-3",
+            customerName: "Nguyen Van A",
+            expectedDisplayName: "Lương Thắng",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        try require(helper.bindSession(callID: "call-sub", observedContactName: "Thắng", direction: .outbound, sessionStartedAt: t0, now: t0) == nil,
+                    "substring contact name rejected")
+        try require(helper.bindSession(callID: "call-fallback", observedContactName: "Nguyen Van A", direction: .outbound, sessionStartedAt: t0, now: t0) == nil,
+                    "customerName fallback rejected when expectedDisplayName is specific")
+        helper.releaseSession(callID: "call-sub")
+        helper.releaseSession(callID: "call-fallback")
+    }
+
+    // 4. Inbound / mismatch cannot later requalify & invalidates pending on competing call
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 4000)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-4",
+            customerName: "Tran Van C",
+            expectedDisplayName: "Tran Van C",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        let inboundCall = "call-inbound"
+        try require(helper.bindSession(callID: inboundCall, observedContactName: "Tran Van C", direction: .inbound, sessionStartedAt: t0, now: t0) == nil,
+                    "inbound call rejected from binding outbound request")
+        try require(helper.bindSession(callID: inboundCall, observedContactName: "Tran Van C", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(2)) == nil,
+                    "ineligible inbound session cannot later requalify")
+        helper.releaseSession(callID: inboundCall)
+    }
+
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 4500)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-4b",
+            customerName: "Tran Van C",
+            expectedDisplayName: "Tran Van C",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        let mismatchCall = "call-mismatch"
+        try require(helper.bindSession(callID: mismatchCall, observedContactName: "Different Name", direction: .outbound, sessionStartedAt: t0, now: t0) == nil,
+                    "mismatched contact name rejected")
+        try require(helper.bindSession(callID: mismatchCall, observedContactName: "Tran Van C", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(2)) == nil,
+                    "ineligible mismatched session cannot later requalify")
+        helper.releaseSession(callID: mismatchCall)
+    }
+
+    // 5. Already-bound late contradiction invalidates
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 5000)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-5",
+            customerName: "Le Van D",
+            expectedDisplayName: "Le Van D",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        let callID = "call-bound-contradict"
+        let bound = helper.bindSession(callID: callID, observedContactName: "Le Van D", direction: .unknown, sessionStartedAt: t0, now: t0.addingTimeInterval(2))
+        try require(bound?.requestId == req, "initial binding succeeds")
+
+        try require(helper.bindSession(callID: callID, observedContactName: nil, direction: .unknown, sessionStartedAt: t0, now: t0.addingTimeInterval(3))?.requestId == req,
+                    "unknown name does not erase valid binding")
+
+        try require(helper.bindSession(callID: callID, observedContactName: "Le Van D", direction: .inbound, sessionStartedAt: t0, now: t0.addingTimeInterval(4)) == nil,
+                    "late inbound contradiction invalidates bound context")
+
+        try require(helper.bindSession(callID: callID, observedContactName: "Le Van D", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(5)) == nil,
+                    "invalidated session cannot re-bind")
+        helper.releaseSession(callID: callID)
+    }
+
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 5500)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-5b",
+            customerName: "Le Van D",
+            expectedDisplayName: "Le Van D",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        let callID = "call-bound-mismatch"
+        _ = helper.bindSession(callID: callID, observedContactName: "Le Van D", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(2))
+
+        try require(helper.bindSession(callID: callID, observedContactName: "Someone Else", direction: .outbound, sessionStartedAt: t0, now: t0.addingTimeInterval(4)) == nil,
+                    "late mismatched contact name invalidates bound context")
+        helper.releaseSession(callID: callID)
+    }
+
+    // 6. Pre-existing call cannot claim later outbound context
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 6000)
+        let req = UUID().uuidString
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-6",
+            customerName: "Pham E",
+            expectedDisplayName: "Pham E",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: req, now: t0)
+        _ = helper.stagePending(context: ctx)
+
+        let olderCall = "call-older"
+        let olderStart = t0.addingTimeInterval(-10)
+        try require(helper.bindSession(callID: olderCall, observedContactName: "Pham E", direction: .outbound, sessionStartedAt: olderStart, now: t0) == nil,
+                    "older session started before trigger cannot claim outbound context")
+        helper.releaseSession(callID: olderCall)
+    }
+
+    // 7. Expiry with no window recovers & live bound call past 120s retained
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 7000)
+        let reqExpired = UUID().uuidString
+        let ctxExpired = PendingOutboundContext(
+            requestId: reqExpired,
+            customerId: "cust-7",
+            customerName: "Hoang F",
+            expectedDisplayName: "Hoang F",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.beginExecution(requestId: reqExpired, now: t0)
+        _ = helper.stagePending(context: ctxExpired)
+
+        let reqNew = UUID().uuidString
+        try require(helper.beginExecution(requestId: reqNew, now: t0.addingTimeInterval(121)),
+                    "expired pending with no active recording permits new execution")
+
+        let ctxNew = PendingOutboundContext(
+            requestId: reqNew,
+            customerId: "cust-7b",
+            customerName: "Hoang F",
+            expectedDisplayName: "Hoang F",
+            phoneNormalized: nil,
+            triggeredAt: t0.addingTimeInterval(121)
+        )
+        _ = helper.stagePending(context: ctxNew)
+
+        let callLive = "call-live"
+        let bound = helper.bindSession(callID: callLive, observedContactName: "Hoang F", direction: .outbound, sessionStartedAt: t0.addingTimeInterval(121), now: t0.addingTimeInterval(125))
+        try require(bound?.requestId == reqNew, "bind new call")
+
+        let past120 = t0.addingTimeInterval(121 + 300)
+        let retained = helper.bindSession(callID: callLive, observedContactName: "Hoang F", direction: .outbound, sessionStartedAt: t0.addingTimeInterval(121), now: past120)
+        try require(retained?.requestId == reqNew, "live bound call past 120s is retained and not expired")
+        helper.releaseSession(callID: callLive)
+    }
+
+    // 8. Trigger failure / cancellation clears execution
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 8000)
+        let req = UUID().uuidString
+        try require(helper.beginExecution(requestId: req, now: t0), "begin execution")
+        helper.cancelExecution(requestId: req)
+        try require(helper.beginExecution(requestId: req, now: t0), "can begin again after cancellation")
+
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-8",
+            customerName: "Vu G",
+            expectedDisplayName: "Vu G",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.stagePending(context: ctx)
+        helper.clearPending(matching: req)
+        try require(helper.bindSession(callID: "call-cleared", observedContactName: "Vu G", direction: .outbound, sessionStartedAt: t0, now: t0) == nil,
+                    "cleared pending cannot be bound")
+        helper.releaseSession(callID: "call-cleared")
+    }
+
+    // 9. Active call blocks overlap & stale release does not clear current session
+    do {
+        let helper = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 9000)
+        let req = UUID().uuidString
+        _ = helper.beginExecution(requestId: req, now: t0)
+        let ctx = PendingOutboundContext(
+            requestId: req,
+            customerId: "cust-9",
+            customerName: "Do H",
+            expectedDisplayName: "Do H",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        _ = helper.stagePending(context: ctx)
+        _ = helper.bindSession(callID: "call-current", observedContactName: "Do H", direction: .outbound, sessionStartedAt: t0, now: t0)
+
+        try require(!helper.beginExecution(requestId: "req-blocked", now: t0), "active session blocks new execution")
+
+        helper.releaseSession(callID: "call-stale-other")
+        try require(!helper.beginExecution(requestId: "req-still-blocked", now: t0), "stale release of unknown call does not unblock")
+
+        helper.releaseSession(callID: "call-current")
+        try require(helper.beginExecution(requestId: "req-unblocked", now: t0), "releasing current session unblocks execution")
+    }
+}
+do {
+        // a) beginExecution -> bindSession with direction .inbound while no pending -> stagePending false -> cancelExecution/release -> new begin succeeds
+        let helperA = OutboundStateHelper()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        try require(helperA.beginExecution(requestId: "req-a1", now: t0), "beginExecution req-a1 succeeds")
+        let boundInbound = helperA.bindSession(
+            callID: "call-inbound",
+            observedContactName: "Customer A",
+            direction: .inbound,
+            sessionStartedAt: t0,
+            now: t0
+        )
+        try require(boundInbound == nil, "inbound bindSession returns nil")
+        let pendingA = PendingOutboundContext(
+            requestId: "req-a1",
+            customerId: "cust-1",
+            customerName: "Customer A",
+            expectedDisplayName: "Customer A",
+            phoneNormalized: nil,
+            triggeredAt: t0
+        )
+        try require(!helperA.stagePending(context: pendingA), "stagePending must fail when active and ineligible sessions overlap")
+        helperA.cancelExecution(requestId: "req-a1")
+        helperA.releaseSession(callID: "call-inbound")
+        try require(helperA.beginExecution(requestId: "req-a2", now: t0), "new beginExecution succeeds after cleanup")
+
+        // b) stage pending -> bind older session at fixed now -> release older -> new same-name session can't consume stale cleared pending
+        let helperB = OutboundStateHelper()
+        let tTrigger = Date(timeIntervalSince1970: 2000)
+        try require(helperB.beginExecution(requestId: "req-b1", now: tTrigger), "beginExecution req-b1 succeeds")
+        let pendingB = PendingOutboundContext(
+            requestId: "req-b1",
+            customerId: "cust-2",
+            customerName: "Customer B",
+            expectedDisplayName: "Customer B",
+            phoneNormalized: nil,
+            triggeredAt: tTrigger
+        )
+        try require(helperB.stagePending(context: pendingB), "stagePending req-b1 succeeds")
+        let tOlder = Date(timeIntervalSince1970: 1990)
+        let tNow = Date(timeIntervalSince1970: 2005)
+        let boundOlder = helperB.bindSession(
+            callID: "call-older",
+            observedContactName: "Customer B",
+            direction: .outbound,
+            sessionStartedAt: tOlder,
+            now: tNow
+        )
+        try require(boundOlder == nil, "older session does not bind")
+        helperB.releaseSession(callID: "call-older")
+        let tNew = Date(timeIntervalSince1970: 2010)
+        let boundNew = helperB.bindSession(
+            callID: "call-new",
+            observedContactName: "Customer B",
+            direction: .outbound,
+            sessionStartedAt: tNew,
+            now: tNew
+        )
+        try require(boundNew == nil, "new session cannot bind after pending context was cleared by older session")
+
+        // c) concurrentPerform 16 on same fresh helper beginExecution fixedDate; NSLock winnercount exactly 1
+        let helperC = OutboundStateHelper()
+        let tFixed = Date(timeIntervalSince1970: 3000)
+        let countLock = NSLock()
+        var winnerCount = 0
+        DispatchQueue.concurrentPerform(iterations: 16) { i in
+            if helperC.beginExecution(requestId: "req-c-\(i)", now: tFixed) {
+                countLock.lock()
+                winnerCount += 1
+                countLock.unlock()
+            }
+        }
+        try require(winnerCount == 1, "exactly 1 winner out of 16 concurrent beginExecution calls")
+
+}
+print("PASS: OutboundStateHelper pure state machine & deterministic binding constraints")
+do {
+    let testCases: [(name: String, responses: [(statusCode: Int?, ok: Bool)], expectedCalls: Int, expectedOk: Bool)] = [
+        ("200 true success 1 call", [(200, true)], 1, true),
+        ("200 false malformed 1 call", [(200, false)], 1, false),
+        ("503 false then 200 true success 2 calls", [(503, false), (200, true)], 2, true),
+        ("nil false then 200 true success 2 calls", [(nil, false), (200, true)], 2, true),
+        ("429 false then 200 true success 2 calls", [(429, false), (200, true)], 2, true),
+        ("403 false no retry 1 call", [(403, false)], 1, false),
+        ("409 false no retry 1 call", [(409, false)], 1, false),
+        ("two transients false 2 calls bounded", [(503, false), (503, false)], 2, false),
+        ("201 true success 1 call", [(201, true)], 1, true),
+        ("500 true rejected without 2xx retry 2 calls false", [(500, true), (500, true)], 2, false)
+    ]
+
+    for tc in testCases {
+        var callCount = 0
+        let outcome = OutboundStatusSender.shared.send {
+            defer { callCount += 1 }
+            let item = callCount < tc.responses.count ? tc.responses[callCount] : tc.responses.last!
+            return (statusCode: item.statusCode, ok: item.ok)
+        }
+        try require(outcome == tc.expectedOk, "\(tc.name): expected outcome \(tc.expectedOk) got \(outcome)")
+        try require(callCount == tc.expectedCalls, "\(tc.name): expected calls \(tc.expectedCalls) got \(callCount)")
+    }
+
+    print("PASS: OutboundStatusSender deterministic tests")
+}
+
 print("ALL LOCAL AGENT REGRESSIONS PASSED")

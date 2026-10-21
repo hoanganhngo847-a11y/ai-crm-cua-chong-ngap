@@ -124,10 +124,15 @@ async function main() {
     assert.ifError(status3.error);
 
     // Outbound recording uploads with crm_call_request_id
+    const nowOutbound = Date.now();
     const outboundMeta = {
       ...metadataFixture(device, 'Nguyễn Văn Test'),
       direction: 'OUTBOUND' as const,
       crm_call_request_id: reqId,
+      started_at: new Date(nowOutbound - 2000).toISOString(),
+      answered_at: new Date(nowOutbound - 2000).toISOString(),
+      ended_at: new Date(nowOutbound).toISOString(),
+      duration_seconds: 2,
     };
     const outboundUpload = await upload(outboundMeta);
     assert.equal(outboundUpload.duplicate, false);

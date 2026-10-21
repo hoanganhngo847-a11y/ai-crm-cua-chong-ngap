@@ -190,13 +190,13 @@ export async function createZaloOutboundCall(customerId: string, deviceId?: stri
     p_device: deviceId || null,
   });
   if (error || !data) throw new RecordingError('Không thể tạo yêu cầu cuộc gọi Zalo.', 503);
-  return data as {
-    request_id: string;
-    customer_id: string;
-    customer_name: string;
-    phone: string | null;
-    expected_display_name: string;
-    expires_at: string;
+  const raw = data as Record<string, unknown>;
+  return {
+    request_id: String(raw.request_id),
+    customer_id: String(raw.customer_id),
+    customer_name: String(raw.customer_name ?? ''),
+    expected_display_name: String(raw.expected_display_name ?? ''),
+    expires_at: String(raw.expires_at),
   };
 }
 
@@ -204,13 +204,27 @@ export async function getZaloOutboundCallStatus(requestId: string) {
   const actor = await recordingActor();
   if (!UUID.test(requestId)) throw new RecordingError('INVALID_REQUEST');
   const admin = createAdminClient();
-  const { data, error } = await admin
+  let query = admin
     .from('zalo_outbound_call_requests')
-    .select('id, status, failure_reason, expected_display_name, phone_normalized, created_at, claimed_at, completed_at')
+    .select('id, customer_id, staff_user_id, status, failure_reason, expected_display_name, created_at, claimed_at, completed_at')
     .eq('company_id', actor.companyId)
-    .eq('id', requestId)
-    .maybeSingle();
+    .eq('id', requestId);
+
+  if (actor.role === 'SALE') {
+    query = query.eq('staff_user_id', actor.userId);
+  }
+
+  const { data, error } = await query.maybeSingle();
   if (error || !data) throw new RecordingError('NOT_FOUND', 404);
-  return data;
+  return {
+    id: data.id as string,
+    customer_id: data.customer_id as string,
+    status: data.status as string,
+    failure_reason: data.failure_reason as string | null,
+    expected_display_name: data.expected_display_name as string | null,
+    created_at: data.created_at as string,
+    claimed_at: data.claimed_at as string | null,
+    completed_at: data.completed_at as string | null,
+  };
 }
 

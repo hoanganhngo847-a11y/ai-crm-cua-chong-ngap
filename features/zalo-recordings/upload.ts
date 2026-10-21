@@ -37,6 +37,11 @@ export async function uploadRecording(request: Request, admin: SupabaseClient) {
   if(reserveError) {
     if(reserveError.code==='42501') throw new RecordingError('DEVICE_UNAUTHORIZED',401);
     if(reserveError.message?.includes('IDEMPOTENCY_CONFLICT')) throw new RecordingError('IDEMPOTENCY_CONFLICT',409);
+    if(reserveError.message?.includes('ZALO_REQUEST_EXPIRED')) throw new RecordingError('REQUEST_EXPIRED',410);
+    if(reserveError.message?.includes('ZALO_REQUEST_REUSED')) throw new RecordingError('REQUEST_REUSED',409);
+    if(reserveError.message?.includes('ZALO_REQUEST_NOT_FOUND')) throw new RecordingError('REQUEST_NOT_FOUND',404);
+    if(reserveError.message?.includes('ZALO_REQUEST_DEVICE_MISMATCH') || reserveError.message?.includes('ZALO_REQUEST_STAFF_MISMATCH')) throw new RecordingError('REQUEST_MISMATCH',403);
+    if(reserveError.message?.includes('ZALO_REQUEST_DIRECTION_MISMATCH') || reserveError.message?.includes('ZALO_REQUEST_UNCLAIMED') || reserveError.message?.includes('ZALO_REQUEST_FAILED') || reserveError.message?.includes('ZALO_REQUEST_INVALID_STATE') || reserveError.message?.includes('ZALO_REQUEST_INVALID') || reserveError.message?.includes('ZALO_REQUEST_TIMING_INVALID')) throw new RecordingError('INVALID_REQUEST_ASSOCIATION',400);
     throw new RecordingError('RESERVATION_UNAVAILABLE',503);
   }
   if(!reserved) throw new RecordingError('RESERVATION_UNAVAILABLE',503);
@@ -50,6 +55,10 @@ export async function uploadRecording(request: Request, admin: SupabaseClient) {
     if(readError || !existing || existing.size!==bytes.length || sha256(Buffer.from(await existing.arrayBuffer()))!==checksum) throw new RecordingError('STORAGE_UNAVAILABLE',503);
   }
   const {data:finished,error:finishError}=await admin.rpc('zalo_finish_recording',{p_device:device,p_key_hash:hash,p_call:reserved.call_id,p_lease:reserved.lease});
-  if(finishError || !finished) throw new RecordingError('FINALIZATION_UNAVAILABLE',503);
+  if(finishError || !finished) {
+    if(finishError?.code==='42501') throw new RecordingError('DEVICE_UNAUTHORIZED',401);
+    if(finishError?.message?.includes('ZALO_REQUEST_')) throw new RecordingError('INVALID_REQUEST_ASSOCIATION',400);
+    throw new RecordingError('FINALIZATION_UNAVAILABLE',503);
+  }
   return {ok:true,duplicate:!!finished.duplicate,call_id:finished.call_id,recording_id:finished.recording_id};
 }
