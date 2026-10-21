@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { RECORDING_BUCKET } from '../zalo-recordings/upload';
 import { splitStereoChannels, MAX_PROVIDER_AUDIO_BYTES, type SplitAudioOptions, type AudioChannelSplitResult } from './audio-splitter';
-import { logTranscriptionEvent } from './logger';
+import { logTranscriptionEvent, logWorkerInvocation } from './logger';
 import { mergeUtterances } from './merger';
 import { type TranscriptionProvider } from './provider';
 import { createTranscriptionProvider } from './provider-factory';
@@ -38,27 +38,86 @@ export function getTranscriptionFailureOutcome(currentAttempts: number, maxAttem
   };
 }
 
+const KNOWN_SAFE_ERROR_CODES = new Set([
+  // Provider: OpenAI
+  "TRANSCRIPTION_NOT_CONFIGURED",
+  "TRANSCRIPTION_TIMEOUT",
+  "TRANSCRIPTION_NETWORK_ERROR",
+  "TRANSCRIPTION_PROVIDER_AUTH_ERROR",
+  "TRANSCRIPTION_RATE_LIMITED",
+  "TRANSCRIPTION_PROVIDER_UNAVAILABLE",
+  "TRANSCRIPTION_INVALID_RESPONSE",
+  // Provider: Gemini
+  "GEMINI_NOT_CONFIGURED",
+  "GEMINI_TIMEOUT",
+  "GEMINI_AUTH_ERROR",
+  "GEMINI_RATE_LIMITED",
+  "GEMINI_PROVIDER_UNAVAILABLE",
+  "GEMINI_INVALID_RESPONSE",
+  "GEMINI_AUDIO_TOO_LONG",
+  "GEMINI_TIMESTAMP_MISSING",
+  // Audio & media
+  "AUDIO_TOO_LARGE",
+  "AUDIO_PROCESSING_ERROR",
+  "AUDIO_SPLIT_FAILED",
+  "AUDIO_CORRUPTED",
+  "INVALID_AUDIO_FORMAT",
+  "FFMPEG_UNAVAILABLE",
+  "RECORDING_NOT_FOUND",
+  // Common classifications
+  "PROVIDER_AUTH_ERROR",
+  "RATE_LIMITED",
+  "TIMEOUT",
+  // Service & Database
+  "TRANSCRIPTION_LOCK_LOST",
+  "ZALO_CALL_NOT_FOUND",
+  "INVALID_TRANSCRIPTION_PROVIDER",
+  "INVALID_TRANSCRIPTION_MODEL",
+  "INVALID_PAYLOAD",
+  "PERSIST_METADATA_FAILED",
+  "PERSIST_TRANSCRIPTION_FAILED",
+  "CLAIM_TRANSCRIPTION_JOBS_FAILED",
+  "CLAIM_TRANSCRIPTION_JOB_FAILED",
+  "CLAIM_FAILED",
+  "DATABASE_ERROR",
+  "INVALID_LIMIT",
+  "INVALID_TRANSCRIPTION_ID",
+  "TARGET_NOT_CLAIMABLE",
+  "TARGET_NOT_FOUND",
+  "CANNOT_ENQUEUE_TRANSCRIPTION",
+  "CANNOT_RETRY_TRANSCRIPTION",
+  "EXPIRED_LEASE_MAX_ATTEMPTS",
+  "TRANSCRIPTION_FAILED",
+  "WORKER_ERROR",
+]);
+
 export function sanitizeErrorCode(error: unknown): string {
   const msg =
     error instanceof Error
       ? error.message.trim()
-      : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
+      : error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string"
         ? (error as { message: string }).message.trim()
-        : typeof error === 'string'
+        : typeof error === "string"
           ? error.trim()
           : null;
 
   if (msg) {
-    if (/^[A-Z0-9_]{3,80}$/.test(msg)) {
+    if (KNOWN_SAFE_ERROR_CODES.has(msg)) {
       return msg;
     }
-    if (/auth|unauthorized|forbidden|401|403/i.test(msg)) return 'PROVIDER_AUTH_ERROR';
-    if (/rate|429/i.test(msg)) return 'RATE_LIMITED';
-    if (/timeout|aborted/i.test(msg)) return 'TIMEOUT';
-    if (/not found|404/i.test(msg)) return 'RECORDING_NOT_FOUND';
-    if (/corrupt|invalid format|aac|audio/i.test(msg)) return 'AUDIO_PROCESSING_ERROR';
+    // Prevent arbitrary uppercase secret from turning into a safe error code
+    if (/secret|token|key|password|bearer|aiza|sk-/i.test(msg)) {
+      if (/auth|unauthorized|forbidden|401|403|bearer/i.test(msg)) return "PROVIDER_AUTH_ERROR";
+      return "TRANSCRIPTION_FAILED";
+    }
+    // Strict finite fallbacks only - no prefix wildcard
+    if (/auth|unauthorized|forbidden|401|403/i.test(msg)) return "PROVIDER_AUTH_ERROR";
+    if (/rate|429/i.test(msg)) return "RATE_LIMITED";
+    if (/timeout|aborted/i.test(msg)) return "TIMEOUT";
+    if (/not found|404/i.test(msg)) return "RECORDING_NOT_FOUND";
+    if (/corrupt|invalid format|aac|audio/i.test(msg)) return "AUDIO_PROCESSING_ERROR";
   }
-  return 'TRANSCRIPTION_FAILED';
+  return "TRANSCRIPTION_FAILED";
 }
 
 export function sanitizeErrorMessage(error: unknown): string {
@@ -105,6 +164,9 @@ export function isPermanentError(errorCode: string): boolean {
     'GEMINI_AUDIO_TOO_LONG',
     'INVALID_TRANSCRIPTION_PROVIDER',
     'INVALID_TRANSCRIPTION_MODEL',
+    'CLAIM_TRANSCRIPTION_JOB_FAILED',
+    'INVALID_LIMIT',
+    'INVALID_TRANSCRIPTION_ID',
   ]);
   return permanentCodes.has(errorCode);
 }
@@ -458,57 +520,335 @@ export async function processZaloTranscriptionJob(
 export async function processDueZaloTranscriptionJobs(
   limit = 10,
   options?: ProcessJobOptions & { lockedBy?: string; leaseSeconds?: number }
-): Promise<{ processed: number; failed: number }> {
-  const admin = options?.client || createAdminClient();
+): Promise<{ claimed: number; processed: number; failed: number }> {
+  const startTime = Date.now();
+
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10) {
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "BULK",
+      limit: typeof limit === "number" ? limit : undefined,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: 0,
+      error_code: "INVALID_LIMIT",
+    });
+    throw new Error("INVALID_LIMIT");
+  }
+
+  logWorkerInvocation({
+    action: "invocation_started",
+    mode: "BULK",
+    limit,
+  });
+
+  let admin: SupabaseClient;
+  try {
+    admin = options?.client || createAdminClient();
+  } catch {
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "BULK",
+      limit,
+      claimed: 0,
+      processed: 0,
+      failed: 0,
+      duration_ms: 0,
+      error_code: "DATABASE_ERROR",
+    });
+    throw new Error("DATABASE_ERROR");
+  }
+
   const lockedBy = options?.lockedBy || `worker_${process.pid || 1}`;
   const leaseSeconds = options?.leaseSeconds || 300;
   const workerDeadline = Date.now() + MAX_WORKER_DURATION_MS;
 
+  let claimed = 0;
   let processed = 0;
   let failed = 0;
 
-  while (processed + failed < limit) {
-    if (Date.now() >= workerDeadline) {
-      break;
+  try {
+    while (claimed < limit) {
+      if (Date.now() >= workerDeadline) {
+        break;
+      }
+
+      // Claim 1 immediately processable job at a time
+      const { data, error } = await admin.rpc("zalo_claim_transcription_jobs", {
+        p_limit: 1,
+        p_locked_by: lockedBy,
+        p_lease_seconds: leaseSeconds,
+      });
+
+      if (error) {
+        const sanitized = sanitizeErrorMessage(error);
+        throw new Error(`CLAIM_TRANSCRIPTION_JOBS_FAILED: ${sanitized}`);
+      }
+
+      const jobs = (data || []) as ClaimedTranscriptionJob[];
+      if (jobs.length === 0) {
+        // Queue is drained
+        break;
+      }
+
+      const job = jobs[0];
+      claimed++;
+      try {
+        await processZaloTranscriptionJob(job, {
+          ...options,
+          client: admin,
+          deadline: workerDeadline,
+        });
+        processed++;
+      } catch {
+        failed++;
+      }
     }
 
-    // Claim 1 immediately processable job at a time
-    const { data, error } = await admin.rpc('zalo_claim_transcription_jobs', {
-      p_limit: 1,
+    logWorkerInvocation({
+      action: "invocation_completed",
+      mode: "BULK",
+      limit,
+      claimed,
+      processed,
+      failed,
+      duration_ms: Date.now() - startTime,
+    });
+
+    return { claimed, processed, failed };
+  } catch (err) {
+    const safeCode =
+      err instanceof Error && err.message === "INVALID_LIMIT"
+        ? "INVALID_LIMIT"
+        : "CLAIM_FAILED";
+
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "BULK",
+      limit,
+      claimed,
+      processed,
+      failed,
+      duration_ms: Date.now() - startTime,
+      error_code: safeCode,
+    });
+
+    throw err;
+  }
+}
+
+/**
+ * Claim and process a single targeted Zalo transcription job.
+ *
+ * Guarantees:
+ * - Strictly claims only the requested transcription ID; never falls back to bulk
+ * - Validates UUID format and server-derived tenant isolation
+ * - Restricts lease reclamation strictly to the targeted job
+ * - Enforces caller / worker deadlines and fresh lease
+ * - Missing or not-due job returns zero { claimed: 0, processed: 0, failed: 0 }
+ */
+export async function processTargetedZaloTranscriptionJob(
+  transcriptionId: string,
+  options?: ProcessJobOptions & { companyId?: string; lockedBy?: string; leaseSeconds?: number }
+): Promise<{ claimed: number; processed: number; failed: number }> {
+  const startTime = Date.now();
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (typeof transcriptionId !== "string" || !UUID_REGEX.test(transcriptionId)) {
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "TARGETED",
+      target_id: undefined,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: 0,
+      error_code: "INVALID_TRANSCRIPTION_ID",
+    });
+    throw new Error("INVALID_TRANSCRIPTION_ID");
+  }
+
+  logWorkerInvocation({
+    action: "invocation_started",
+    mode: "TARGETED",
+    target_id: transcriptionId,
+  });
+
+  let admin: SupabaseClient;
+  try {
+    admin = options?.client || createAdminClient();
+  } catch {
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "TARGETED",
+      target_id: transcriptionId,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: 0,
+      error_code: "DATABASE_ERROR",
+    });
+    throw new Error("DATABASE_ERROR");
+  }
+
+  const lockedBy = options?.lockedBy || `worker_targeted_${process.pid || 1}`;
+  const leaseSeconds = options?.leaseSeconds || 300;
+  const workerDeadline = Date.now() + MAX_WORKER_DURATION_MS;
+
+  // 1. Service-side company_id derivation
+  let companyId: string;
+  try {
+    const { data: jobRow, error: lookupError } = await admin
+      .from("zalo_call_transcriptions")
+      .select("company_id")
+      .eq("id", transcriptionId)
+      .maybeSingle();
+
+    if (lookupError) {
+      logWorkerInvocation({
+        action: "invocation_failed",
+        mode: "TARGETED",
+        target_id: transcriptionId,
+        claimed_count: 0,
+        processed_count: 0,
+        failed_count: 0,
+        duration_ms: Date.now() - startTime,
+        error_code: "DATABASE_ERROR",
+      });
+      throw new Error("DATABASE_ERROR");
+    }
+
+    if (!jobRow || !jobRow.company_id) {
+      // Missing job: returns zero claimed, processed, failed
+      logWorkerInvocation({
+        action: "invocation_completed",
+        mode: "TARGETED",
+        target_id: transcriptionId,
+        claimed: 0,
+        processed: 0,
+        failed: 0,
+        duration_ms: Date.now() - startTime,
+      });
+      return { claimed: 0, processed: 0, failed: 0 };
+    }
+
+    if (options?.companyId && options.companyId !== jobRow.company_id) {
+      logWorkerInvocation({
+        action: "invocation_completed",
+        mode: "TARGETED",
+        target_id: transcriptionId,
+        claimed: 0,
+        processed: 0,
+        failed: 0,
+        duration_ms: Date.now() - startTime,
+      });
+      return { claimed: 0, processed: 0, failed: 0 };
+    }
+
+    companyId = jobRow.company_id;
+  } catch (err) {
+    if (err instanceof Error && err.message === "DATABASE_ERROR") {
+      throw err;
+    }
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "TARGETED",
+      target_id: transcriptionId,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: Date.now() - startTime,
+      error_code: "DATABASE_ERROR",
+    });
+    throw new Error("DATABASE_ERROR");
+  }
+
+  // 2. Call targeted claim RPC with both company and transcription ID
+  let jobs: ClaimedTranscriptionJob[] = [];
+  try {
+    const { data, error: claimError } = await admin.rpc("zalo_claim_transcription_job", {
+      p_company: companyId,
+      p_transcription_id: transcriptionId,
       p_locked_by: lockedBy,
       p_lease_seconds: leaseSeconds,
     });
 
-    if (error) {
-      const sanitized = sanitizeErrorMessage(error);
-      throw new Error(`CLAIM_TRANSCRIPTION_JOBS_FAILED: ${sanitized}`);
-    }
-
-    const jobs = (data || []) as ClaimedTranscriptionJob[];
-    if (jobs.length === 0) {
-      // Queue is drained
-      break;
-    }
-
-    const job = jobs[0];
-    try {
-      await processZaloTranscriptionJob(job, {
-        ...options,
-        client: admin,
-        deadline: workerDeadline,
+    if (claimError) {
+      logWorkerInvocation({
+        action: "invocation_failed",
+        mode: "TARGETED",
+        target_id: transcriptionId,
+        claimed_count: 0,
+        processed_count: 0,
+        failed_count: 0,
+        duration_ms: Date.now() - startTime,
+        error_code: "CLAIM_FAILED",
       });
-      processed++;
-    } catch {
-      failed++;
+      const sanitized = sanitizeErrorMessage(claimError);
+      throw new Error(`CLAIM_TRANSCRIPTION_JOB_FAILED: ${sanitized}`);
     }
+
+    jobs = (data || []) as ClaimedTranscriptionJob[];
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("CLAIM_TRANSCRIPTION_JOB_FAILED")) {
+      throw err;
+    }
+    logWorkerInvocation({
+      action: "invocation_failed",
+      mode: "TARGETED",
+      target_id: transcriptionId,
+      claimed_count: 0,
+      processed_count: 0,
+      failed_count: 0,
+      duration_ms: Date.now() - startTime,
+      error_code: "CLAIM_FAILED",
+    });
+    throw new Error("CLAIM_FAILED");
   }
 
-  return { processed, failed };
+  if (jobs.length === 0) {
+    // Target could not be claimed (not due, active lease, mismatched tenant, call not ready, etc.)
+    logWorkerInvocation({
+      action: "invocation_completed",
+      mode: "TARGETED",
+      target_id: transcriptionId,
+      claimed: 0,
+      processed: 0,
+      failed: 0,
+      duration_ms: Date.now() - startTime,
+    });
+    return { claimed: 0, processed: 0, failed: 0 };
+  }
+
+  const job = jobs[0];
+  let processed = 0;
+  let failed = 0;
+
+  try {
+    await processZaloTranscriptionJob(job, {
+      ...options,
+      client: admin,
+      deadline: workerDeadline,
+    });
+    processed = 1;
+  } catch {
+    failed = 1;
+  }
+
+  const result = { claimed: 1, processed, failed };
+  logWorkerInvocation({
+    action: "invocation_completed",
+    mode: "TARGETED",
+    target_id: transcriptionId,
+    claimed: 1,
+    processed,
+    failed,
+    duration_ms: Date.now() - startTime,
+  });
+
+  return result;
 }
 
-/**
- * Retry a failed transcription job for an authorized actor (BOSS_ADMIN or owning SALE).
- */
 export async function retryZaloTranscriptionJob(
   companyId: string,
   actorId: string,

@@ -79,3 +79,21 @@ Nội dung gốc của tin gửi đi nằm trong `private.zalo_outbound_payloads
 - `public.care_campaigns`: thêm unique index một phần cho campaign `PERIODIC_SCHEDULE`.
 - `vercel.json`: thêm cron `/api/cron/zalo-care`.
 - `package.json`: thêm devDependency `@electric-sql/pglite` và script `test:zalo:db`, bỏ `test:zalo:inbox`.
+
+## 7. Bóc băng cuộc gọi Zalo (Phase 2A Automation & Targeted Worker)
+
+- Tài liệu vận hành chi tiết: [ZALO_TRANSCRIPTION_PHASE2A.md](./ZALO_TRANSCRIPTION_PHASE2A.md).
+- Kiến trúc Dual Provider (OpenAI Whisper & Google Gemini): [ZALO_TRANSCRIPTION_DUAL_PROVIDER.md](./ZALO_TRANSCRIPTION_DUAL_PROVIDER.md).
+- Migration RPC: Áp dụng theo đúng thứ tự 2 migration mới:
+  1. `supabase/migrations/20261021160000_zalo_targeted_transcription_claim.sql` (targeted claim RPC)
+  2. `supabase/migrations/20261021160001_zalo_bulk_transcription_lease_recovery.sql` (bulk lease recovery wrapper)
+  - Không chạy lại các migration baseline cũ (`20261021120000`, `20261021150000`).
+- Operations SQL:
+  - Setup: `docs/sql/zalo-transcription-scheduler-setup.sql` (transactional, private schema `cron_internal`, helper function kiểm tra việc cần làm, hardened ACLs; chưa kích hoạt cron).
+  - Enable: `docs/sql/zalo-transcription-scheduler-enable.sql` (kiểm tra chặt chẽ prerequisites cả 2 migration, Vault config và đặt lịch `* * * * *`).
+  - Disable: `docs/sql/zalo-transcription-scheduler-disable.sql` (unschedule khẩn cấp khi cần).
+- Endpoint worker: `/api/cron/zalo-transcription` (hỗ trợ `?transcription_id=<uuid>` cho targeted test và `?limit=1..10` cho bulk, auth `Bearer $CRON_SECRET`).
+  - Scheduler định kỳ gọi chế độ bulk (`zalo_claim_transcription_jobs`).
+  - Bulk dùng targeted RPC nội bộ cho từng claim; `?transcription_id=` chọn trực tiếp đúng một job khi kiểm thử có kiểm soát.
+- Snapshot baseline hàng đợi: Ghi nhận 2 job COMPLETED tại thời điểm kiểm tra ngày 2026-10-21 (không retry/sửa 2 job này; kiểm thử trên đúng 1 cuộc gọi mới).
+- Trạng thái vận hành: Scheduler hiện tại chưa được kích hoạt/bật trên production (cần tuân thủ trình tự Gate 1 -> Gate 10 trước khi enable).

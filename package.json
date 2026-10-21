@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx --conditions=react-server tests/zalo-recordings/heartbeat.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-hardening.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-regressions.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription.test.ts && tsx --conditions=react-server tests/zalo-recordings/gemini-provider.test.ts && tsx --conditions=react-server tests/zalo-recordings/dual-provider.test.ts",
-    "test:zalo-recordings:db": "tsx --conditions=react-server tests/zalo-recordings/supabase.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-db.test.ts",
+    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx --conditions=react-server tests/zalo-recordings/heartbeat.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-hardening.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-regressions.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription.test.ts && tsx --conditions=react-server tests/zalo-recordings/gemini-provider.test.ts && tsx --conditions=react-server tests/zalo-recordings/dual-provider.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription-automation.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription-bulk-recovery.test.ts",
+    "test:zalo-transcription:automation": "tsx --conditions=react-server tests/zalo-recordings/transcription-automation.test.ts",
+    "test:zalo-recordings:db": "tsx --conditions=react-server tests/zalo-recordings/supabase.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-db.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription-pg-concurrency.test.ts",
+    "test:zalo-transcription:pg-concurrency": "tsx --conditions=react-server tests/zalo-recordings/transcription-pg-concurrency.test.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -62,7 +64,8 @@
     "test:all": "npm run test:auth && npm run test:security && npm run test:crm && npm run test:inbox",
     "test": "npm run test:auth && npm run test:security && npm run test:survey",
     "test:voice:business": "node --conditions=react-server --import tsx tests/voice/business-call-db.test.ts",
-    "test:voice:unit": "node --conditions=react-server tests/run-voice-tests.cjs --unit"
+    "test:voice:unit": "node --conditions=react-server tests/run-voice-tests.cjs --unit",
+    "test:zalo-transcription:bulk-recovery": "tsx --conditions=react-server tests/zalo-recordings/transcription-bulk-recovery.test.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",

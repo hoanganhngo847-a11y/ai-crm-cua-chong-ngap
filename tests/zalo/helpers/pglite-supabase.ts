@@ -16,7 +16,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-const PLATFORM_STUBS = `
+export const PLATFORM_STUBS = `
 CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
 CREATE ROLE supabase_auth_admin NOLOGIN; CREATE ROLE authenticator NOLOGIN;
 CREATE SCHEMA auth; CREATE SCHEMA storage; CREATE SCHEMA extensions;
