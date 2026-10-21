@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
+  getZaloCallSummary,
   getZaloTranscription,
   linkZaloCustomer,
   listZaloCalls,
   playZaloRecording,
+  retryZaloCallSummaryAction,
   retryZaloTranscription,
   searchZaloCustomers,
 } from '../../../actions/zalo-recordings';
@@ -36,6 +38,13 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
   const [expanded, setExpanded] = useState(false);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
+
+  const initialSummaryStatus = (call as { summary_status?: string }).summary_status || 'NOT_STARTED';
+  const [summaryStatus, setSummaryStatus] = useState<string>(initialSummaryStatus);
+  const [summary, setSummary] = useState<Awaited<ReturnType<typeof getZaloCallSummary>> | null>(null);
+  const [expandedSummary, setExpandedSummary] = useState(false);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [retrySummaryBusy, setRetrySummaryBusy] = useState(false);
 
   const customer=(Array.isArray(call.customers)?call.customers[0]:call.customers) as {name:string;customer_code:string}|null;
   useEffect(()=>{
@@ -81,6 +90,41 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
       setError('Không thể yêu cầu thử lại bóc băng. Vui lòng thử lại sau.');
     } finally {
       setRetryBusy(false);
+    }
+  }
+  async function toggleSummary() {
+    if (expandedSummary) {
+      setExpandedSummary(false);
+      return;
+    }
+    if (!summary) {
+      setLoadingSummary(true);
+      try {
+        const data = await getZaloCallSummary(call.id);
+        setSummary(data);
+        if (data?.status) setSummaryStatus(data.status);
+        setExpandedSummary(true);
+      } catch {
+        setError('Không thể tải tóm tắt AI.');
+      } finally {
+        setLoadingSummary(false);
+      }
+    } else {
+      setExpandedSummary(true);
+    }
+  }
+  async function handleRetrySummary() {
+    setRetrySummaryBusy(true);
+    setError('');
+    try {
+      await retryZaloCallSummaryAction(call.id);
+      setSummaryStatus('PENDING');
+      setSummary(null);
+      setExpandedSummary(false);
+    } catch {
+      setError('Không thể yêu cầu thử lại tóm tắt AI. Vui lòng thử lại sau.');
+    } finally {
+      setRetrySummaryBusy(false);
     }
   }
   return <article className="rounded-xl border border-slate-700 bg-slate-900 p-4 space-y-3">
@@ -176,6 +220,141 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
                 </p>
               </div>
             ))
+          )}
+        </div>
+      )}
+    </div>
+    <div className="pt-2 border-t border-slate-800 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400">AI Summary:</span>
+          {summaryStatus === 'COMPLETED' ? (
+            <span className="inline-flex items-center rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
+              Đã hoàn thành
+            </span>
+          ) : summaryStatus === 'FAILED' ? (
+            <span className="inline-flex items-center rounded-full bg-red-950 px-2.5 py-0.5 text-xs font-medium text-red-400 border border-red-800">
+              Thất bại
+            </span>
+          ) : summaryStatus === 'PROCESSING' ? (
+            <span className="inline-flex items-center rounded-full bg-blue-950 px-2.5 py-0.5 text-xs font-medium text-blue-400 border border-blue-800">
+              Đang phân tích…
+            </span>
+          ) : summaryStatus === 'PENDING' ? (
+            <span className="inline-flex items-center rounded-full bg-amber-950 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
+              Đang chờ xử lý…
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-slate-400 border border-slate-700">
+              Chưa bắt đầu
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {summaryStatus === 'COMPLETED' && (
+            <button
+              type="button"
+              disabled={loadingSummary}
+              onClick={toggleSummary}
+              className="text-xs text-blue-400 hover:text-blue-300 underline disabled:opacity-50"
+            >
+              {loadingSummary ? 'Đang tải…' : expandedSummary ? 'Ẩn tóm tắt' : 'Xem tóm tắt'}
+            </button>
+          )}
+          {summaryStatus === 'FAILED' && (
+            <button
+              type="button"
+              disabled={busy || retrySummaryBusy}
+              onClick={handleRetrySummary}
+              className="rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
+            >
+              {retrySummaryBusy ? 'Đang gửi…' : 'Thử lại'}
+            </button>
+          )}
+        </div>
+      </div>
+      {expandedSummary && summary && summary.status === 'COMPLETED' && (
+        <div className="rounded-lg bg-slate-950/80 p-3 space-y-3 text-sm border border-slate-800">
+          <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-slate-800 text-xs">
+            {summary.lead_temperature && (
+              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium border ${
+                summary.lead_temperature === 'HOT'
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                  : summary.lead_temperature === 'WARM'
+                  ? 'bg-amber-950/80 text-amber-300 border-amber-800'
+                  : 'bg-slate-800 text-slate-300 border-slate-700'
+              }`}>
+                Nhiệt độ lead: <strong>{summary.lead_temperature}</strong>
+              </span>
+            )}
+            {summary.confidence && (
+              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium border ${
+                summary.confidence === 'HIGH'
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                  : summary.confidence === 'MEDIUM'
+                  ? 'bg-amber-950/80 text-amber-300 border-amber-800'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}>
+                Độ tin cậy: <strong>{summary.confidence}</strong>
+              </span>
+            )}
+          </div>
+          {summary.summary && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tóm tắt</h4>
+              <p className="text-slate-200 text-sm whitespace-pre-wrap">{summary.summary}</p>
+            </div>
+          )}
+          {Array.isArray(summary.key_points) && summary.key_points.length > 0 && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Điểm chính</h4>
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
+                {summary.key_points.map((kp: string, idx: number) => (
+                  <li key={idx}>{kp}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Array.isArray(summary.customer_needs) && summary.customer_needs.length > 0 && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Nhu cầu khách hàng</h4>
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
+                {summary.customer_needs.map((item: string, idx: number) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Array.isArray(summary.objections) && summary.objections.length > 0 && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Phản đối / Băn khoăn</h4>
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
+                {summary.objections.map((item: string, idx: number) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Array.isArray(summary.next_actions) && summary.next_actions.length > 0 && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Việc cần làm tiếp (Gợi ý AI)</h4>
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
+                {summary.next_actions.map((item: string, idx: number) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {summary.follow_up_required && (
+            <div className="rounded border border-amber-800/60 bg-amber-950/30 p-2 space-y-1 text-xs">
+              <span className="font-semibold text-amber-300">Cần liên hệ lại (Follow-up):</span>
+              {summary.follow_up_suggested_at && (
+                <p className="text-slate-300">Thời gian: {summary.follow_up_suggested_at}</p>
+              )}
+              {summary.follow_up_reason && (
+                <p className="text-slate-300">Lý do: {summary.follow_up_reason}</p>
+              )}
+            </div>
           )}
         </div>
       )}
