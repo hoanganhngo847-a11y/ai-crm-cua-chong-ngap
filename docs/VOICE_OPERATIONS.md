@@ -123,3 +123,14 @@ The legacy COMPLETED-event recording import fallback also requires the recording
 Recording, media import, transcription and domain-specific intake extraction still require
 separate end-to-end acceptance. The existing door/flood intake extractor is technical debt;
 this integration does not change it into any other business domain.
+
+## Zalo Personal Call Transcription & Phase 2A Scheduler Operations
+
+Hệ thống ghi âm và chuyển lời cuộc gọi Zalo cá nhân hoạt động độc lập với hotline PSTN:
+- **Phase 1 Pipeline:** Chi tiết luồng stereo (Left=Khách, Right=Sale) và ffmpeg split tại [ZALO_TRANSCRIPTION_PHASE1.md](./ZALO_TRANSCRIPTION_PHASE1.md).
+- **Dual Provider Architecture:** Cấu hình Gemini 3.5 Transcribe & OpenAI Whisper tại [ZALO_TRANSCRIPTION_DUAL_PROVIDER.md](./ZALO_TRANSCRIPTION_DUAL_PROVIDER.md).
+- **Phase 2A Automated Scheduler Runbook:** Hướng dẫn vận hành bộ lập lịch 1 phút bằng Supabase pg_cron + pg_net + Vault (không tốn chi phí hạ tầng mới/gói dịch vụ riêng; chi phí tính theo tài nguyên DB và quota provider hiện có; không dùng Render Cron hay web timers) tại [ZALO_TRANSCRIPTION_PHASE2A.md](./ZALO_TRANSCRIPTION_PHASE2A.md).
+- **Operations SQL Scripts:**
+  - Setup: [zalo-transcription-scheduler-setup.sql](./sql/zalo-transcription-scheduler-setup.sql)
+  - Enable: [zalo-transcription-scheduler-enable.sql](./sql/zalo-transcription-scheduler-enable.sql)
+  - Disable: [zalo-transcription-scheduler-disable.sql](./sql/zalo-transcription-scheduler-disable.sql)

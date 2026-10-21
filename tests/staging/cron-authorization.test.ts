@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { GET as responseSlaWorker } from '../../app/api/cron/response-sla-worker/route';
 import { GET as voiceScheduler } from '../../app/api/cron/voice-scheduler/route';
 import { GET as zaloCare } from '../../app/api/cron/zalo-care/route';
+import { GET as zaloTranscription } from '../../app/api/cron/zalo-transcription/route';
 
 console.log('================================================================');
 console.log('STARTING CRON ENDPOINT AUTHORIZATION VERIFICATION');
@@ -28,6 +29,7 @@ async function runCronAuthorizationSuite() {
     { name: 'response-sla-worker', path: '/api/cron/response-sla-worker', handler: responseSlaWorker },
     { name: 'voice-scheduler', path: '/api/cron/voice-scheduler', handler: voiceScheduler },
     { name: 'zalo-care', path: '/api/cron/zalo-care', handler: zaloCare },
+    { name: 'zalo-transcription', path: '/api/cron/zalo-transcription', handler: zaloTranscription },
   ];
 
   const TEST_SECRET = 'staging-cron-secret-fail-closed-test-471038291048';
