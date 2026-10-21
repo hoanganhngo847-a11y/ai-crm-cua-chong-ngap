@@ -93,35 +93,30 @@ public final class PermissionManager {
     }
 
     /// Deliberate user-operated permission setup workflow.
-    /// Interactively prompts for ungranted permissions and outputs clear System Settings guidance.
+    /// Interactively prompts for permissions and outputs clear System Settings guidance.
     public func performUserSetup(completion: @escaping (PermissionSnapshot) -> Void) {
         print("=== Zalo Recorder Permission Setup ===")
         print("Initiating explicit permission requests for macOS...")
 
-        // 1. Accessibility
-        let axBefore = currentAccessibilityState()
-        if !axBefore {
-            print("[1/3] Prompting Accessibility permission...")
-            _ = requestAccessibilityAccess()
-        } else {
-            print("[1/3] Accessibility: already GRANTED.")
-        }
+        // 1. Accessibility: prompt macOS to register the bundle in System Settings
+        print("[1/3] Requesting Accessibility authorization...")
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
 
         // 2. Screen & System Audio
-        let screenBefore = currentScreenRecordingState()
-        if !screenBefore {
-            print("[2/3] Prompting Screen & System Audio Recording permission...")
-            _ = requestScreenRecordingAccess()
-        } else {
-            print("[2/3] Screen Recording: already GRANTED.")
+        print("[2/3] Requesting Screen & System Audio Recording authorization...")
+        if #available(macOS 11.0, *) {
+            _ = CGRequestScreenCaptureAccess()
         }
 
         // 3. Microphone
-        print("[3/3] Checking Microphone authorization...")
-        requestMicrophoneAccess { micState in
-            let finalSnapshot = self.snapshot()
-            self.printGuidance(snapshot: finalSnapshot)
-            completion(finalSnapshot)
+        print("[3/3] Requesting Microphone authorization...")
+        AVCaptureDevice.requestAccess(for: .audio) { _ in
+            DispatchQueue.main.async {
+                let finalSnapshot = self.snapshot()
+                self.printGuidance(snapshot: finalSnapshot)
+                completion(finalSnapshot)
+            }
         }
     }
 

@@ -32,7 +32,7 @@ echo "PASS: local signing identity discovery and guidance verified"
 
 # 3.2. Local Release packaging fails closed if local identity missing
 set +e
-LOCAL_REL_OUT="$(PACKAGE_OUTPUT_DIR="$TMP_PKG/local-release" bash "$DIR/run.sh" --package --local-release 2>&1)"
+LOCAL_REL_OUT="$(LOCAL_SIGNING_IDENTITY="MissingLocalSigningIdentity" PACKAGE_OUTPUT_DIR="$TMP_PKG/local-release" bash "$DIR/run.sh" --package --local-release 2>&1)"
 LOCAL_REL_STATUS=$?
 set -e
 if [ $LOCAL_REL_STATUS -eq 0 ]; then
@@ -81,7 +81,7 @@ echo "PASS: dev mode remains explicitly ad-hoc with valid app bundle structure"
 
 # 3.4. Designated requirement extraction & comparison tests
 # Extract requirement from dev app (should be cdhash)
-DEV_REQ="$(codesign -d -r- "$DEV_APP" 2>&1 | grep '^# designated =>' | sed 's/^# designated => //')"
+DEV_REQ="$(codesign -d -r- "$DEV_APP" 2>&1 | grep -E '^#? ?designated =>' | sed -E 's/^#? ?designated => //')"
 if [[ "$DEV_REQ" != *"cdhash"* ]]; then
     echo "ERROR: Expected cdhash in ad-hoc dev bundle requirement: $DEV_REQ" >&2
     exit 1

@@ -25,7 +25,7 @@ get_designated_requirement() {
         echo ""
         return 0
     fi
-    codesign -d -r- "$target" 2>&1 | grep '^# designated =>' | sed 's/^# designated => //' | tr -d '\n'
+    codesign -d -r- "$target" 2>&1 | grep -E '^#? ?designated =>' | sed -E 's/^#? ?designated => //' | tr -d '\n'
 }
 
 compare_designated_requirements() {

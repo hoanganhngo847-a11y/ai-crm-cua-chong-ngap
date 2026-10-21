@@ -120,6 +120,7 @@ public final class HeartbeatManager {
         }
 
         let payload = collectHealthPayload()
+        print("[Heartbeat] Payload: mic=\(payload.permissions.microphone) screen=\(payload.permissions.screen_recording) ax=\(payload.permissions.accessibility) zalo=\(payload.zalo_running) loopback=\(payload.loopback_ready)")
         guard let jsonData = try? JSONEncoder().encode(payload) else {
             completion?(false, "Encode error")
             return
