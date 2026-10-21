@@ -4,7 +4,7 @@ import { createAdminClient } from '../../lib/supabase/admin';
 import { logSummaryEvent, logSummaryWorkerInvocation } from './logger';
 import { SUMMARY_PROMPT_VERSION } from './prompt';
 import type { SummaryProvider } from './types';
-import { createSummaryProvider } from './provider-factory';
+import { createSummaryProvider, resolveSummaryConfig } from './provider-factory';
 import type { ClaimedSummaryJob } from './types';
 
 /** Maximum duration for an entire worker invocation (4 minutes) */
@@ -120,16 +120,28 @@ export function isPermanentSummaryError(errorCode: string): boolean {
 /**
  * Enqueue AI summary for a completed transcription.
  * Idempotent: safe against duplicate calls.
+ *
+ * Resolves provider and model from explicit options or active environment config (SUMMARY_PROVIDER, etc.)
+ * Validates provider before persisting and passes provider + model explicitly to RPC.
  */
 export async function enqueueZaloCallSummary(
   companyId: string,
   transcriptionId: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: { provider?: string; model?: string; promptVersion?: string }
 ): Promise<string> {
   const admin = client || createAdminClient();
+  const config = resolveSummaryConfig({
+    provider: options?.provider,
+    model: options?.model,
+  });
+
   const { data, error } = await admin.rpc('zalo_enqueue_call_summary', {
     p_company: companyId,
     p_transcription_id: transcriptionId,
+    p_provider: config.provider,
+    p_model: config.model,
+    p_prompt_version: options?.promptVersion || SUMMARY_PROMPT_VERSION,
   });
 
   if (error || !data) {
@@ -141,9 +153,55 @@ export async function enqueueZaloCallSummary(
     company_id: companyId,
     transcription_id: transcriptionId,
     summary_id: String(data),
+    provider: config.provider,
+    model: config.model,
   });
 
   return String(data);
+}
+
+/**
+ * Reconciles completed transcriptions that lack an AI summary row (e.g. transient enqueue failure).
+ * Bounded by limit and lookback window. Idempotent: safe against duplicate runs.
+ */
+export async function reconcileMissingZaloCallSummaries(
+  limit = 10,
+  client?: SupabaseClient,
+  lookbackHours = 168
+): Promise<number> {
+  const admin = client || createAdminClient();
+  const config = resolveSummaryConfig();
+  const { data, error } = await admin.rpc('zalo_reconcile_missing_call_summaries', {
+    p_limit: limit,
+    p_provider: config.provider,
+    p_model: config.model,
+    p_lookback_hours: lookbackHours,
+  });
+
+  if (error) {
+    logSummaryEvent({
+      action: 'reconciliation_failed',
+      error_code: 'SUMMARY_RECONCILIATION_FAILED',
+    });
+    return 0;
+  }
+
+  const count = Array.isArray(data) && data.length > 0
+    ? Number((data[0] as { reconciled_count?: unknown }).reconciled_count || 0)
+    : typeof data === 'number'
+      ? data
+      : 0;
+
+  if (count > 0) {
+    logSummaryEvent({
+      action: 'summary_reconciled',
+      reconciled_count: count,
+      provider: config.provider,
+      model: config.model,
+    });
+  }
+
+  return count;
 }
 
 export interface ProcessSummaryJobOptions {
@@ -228,7 +286,7 @@ export async function processZaloCallSummaryJob(
         p_key_points: structuredOutput.key_points,
         p_lead_temperature: structuredOutput.lead_temperature,
         p_follow_up_required: structuredOutput.follow_up.required,
-        p_follow_up_suggested_at: structuredOutput.follow_up.suggested_time,
+        p_follow_up_suggested_time: structuredOutput.follow_up.suggested_time,
         p_follow_up_reason: structuredOutput.follow_up.reason,
         p_confidence: structuredOutput.confidence,
         p_provider: providerName,
@@ -343,6 +401,13 @@ export async function processDueZaloCallSummaryJobs(
   let failed = 0;
 
   try {
+    // Reconcile missing summary jobs for recently completed transcriptions (best-effort recovery)
+    try {
+      await reconcileMissingZaloCallSummaries(limit, admin);
+    } catch {
+      // Non-fatal to bulk worker execution
+    }
+
     while (claimed < limit) {
       if (Date.now() >= workerDeadline) break;
 
@@ -480,8 +545,8 @@ export async function processTargetedZaloCallSummaryJob(
   const workerDeadline = Date.now() + MAX_WORKER_DURATION_MS;
 
   // Resolve summary row (and companyId)
-  let resolvedSummaryId: string;
-  let companyId: string;
+  let resolvedSummaryId: string | undefined;
+  let companyId: string | undefined;
 
   try {
     let query = admin.from('zalo_call_ai_summaries').select('id, company_id');
@@ -508,6 +573,43 @@ export async function processTargetedZaloCallSummaryJob(
     }
 
     if (!row || !row.id || !row.company_id) {
+      if (rawTxId) {
+        // Targeted recovery: if transcription is COMPLETED but summary is missing, auto-enqueue
+        const { data: tx } = await admin
+          .from('zalo_call_transcriptions')
+          .select('id, company_id, status')
+          .eq('id', rawTxId)
+          .maybeSingle();
+
+        if (tx && tx.status === 'COMPLETED') {
+          try {
+            const enqueuedId = await enqueueZaloCallSummary(tx.company_id, tx.id, admin);
+            resolvedSummaryId = enqueuedId;
+            companyId = tx.company_id;
+          } catch {
+            // Non-fatal, fall through to 0 claimed
+          }
+        }
+      }
+
+      if (!resolvedSummaryId || !companyId) {
+        logSummaryWorkerInvocation({
+          action: 'invocation_completed',
+          mode: 'TARGETED',
+          target_id: targetId,
+          claimed_count: 0,
+          processed_count: 0,
+          failed_count: 0,
+          duration_ms: Date.now() - startTime,
+        });
+        return { claimed: 0, processed: 0, failed: 0 };
+      }
+    } else {
+      resolvedSummaryId = row.id;
+      companyId = row.company_id;
+    }
+
+    if (options?.companyId && options.companyId !== companyId) {
       logSummaryWorkerInvocation({
         action: 'invocation_completed',
         mode: 'TARGETED',
@@ -519,25 +621,13 @@ export async function processTargetedZaloCallSummaryJob(
       });
       return { claimed: 0, processed: 0, failed: 0 };
     }
-
-    if (options?.companyId && options.companyId !== row.company_id) {
-      logSummaryWorkerInvocation({
-        action: 'invocation_completed',
-        mode: 'TARGETED',
-        target_id: targetId,
-        claimed_count: 0,
-        processed_count: 0,
-        failed_count: 0,
-        duration_ms: Date.now() - startTime,
-      });
-      return { claimed: 0, processed: 0, failed: 0 };
-    }
-
-    resolvedSummaryId = row.id;
-    companyId = row.company_id;
   } catch (err) {
     if (err instanceof Error && err.message === 'DATABASE_ERROR') throw err;
     throw new Error('DATABASE_ERROR');
+  }
+
+  if (!resolvedSummaryId || !companyId) {
+    return { claimed: 0, processed: 0, failed: 0 };
   }
 
   // Claim single targeted summary job

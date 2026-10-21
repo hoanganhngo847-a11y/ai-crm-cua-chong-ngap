@@ -16,7 +16,7 @@ CREATE TABLE public.zalo_call_ai_summaries (
   call_id uuid NOT NULL,
   transcription_id uuid NOT NULL REFERENCES public.zalo_call_transcriptions(id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
-  provider text NOT NULL DEFAULT 'GEMINI',
+  provider text NOT NULL,
   model text NOT NULL,
   prompt_version text NOT NULL DEFAULT 'v1',
   summary text,
@@ -26,7 +26,7 @@ CREATE TABLE public.zalo_call_ai_summaries (
   key_points jsonb NOT NULL DEFAULT '[]'::jsonb,
   lead_temperature text CHECK (lead_temperature IS NULL OR lead_temperature IN ('HOT', 'WARM', 'COLD')),
   follow_up_required boolean NOT NULL DEFAULT false,
-  follow_up_suggested_at timestamptz,
+  follow_up_suggested_time text,
   follow_up_reason text,
   confidence text CHECK (confidence IS NULL OR confidence IN ('LOW', 'MEDIUM', 'HIGH')),
   attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 10),
@@ -78,8 +78,8 @@ CREATE POLICY zalo_call_ai_summaries_read ON public.zalo_call_ai_summaries
 CREATE OR REPLACE FUNCTION public.zalo_enqueue_call_summary(
   p_company uuid,
   p_transcription_id uuid,
-  p_provider text DEFAULT 'GEMINI',
-  p_model text DEFAULT 'gemini-2.5-flash',
+  p_provider text,
+  p_model text,
   p_prompt_version text DEFAULT 'v1'
 )
 RETURNS uuid
@@ -90,8 +90,17 @@ AS $$
 DECLARE
   v_tx public.zalo_call_transcriptions;
   v_summary_id uuid;
+  v_provider text;
+  v_model text;
 BEGIN
-  IF p_company IS NULL OR p_transcription_id IS NULL THEN
+  IF p_company IS NULL OR p_transcription_id IS NULL OR p_provider IS NULL OR p_model IS NULL THEN
+    RAISE EXCEPTION 'INVALID_ARGUMENTS';
+  END IF;
+
+  v_provider := trim(p_provider);
+  v_model := trim(p_model);
+
+  IF v_provider = '' OR v_model = '' THEN
     RAISE EXCEPTION 'INVALID_ARGUMENTS';
   END IF;
 
@@ -122,8 +131,8 @@ BEGIN
     v_tx.call_id,
     v_tx.id,
     'PENDING',
-    COALESCE(p_provider, 'GEMINI'),
-    COALESCE(p_model, 'gemini-2.5-flash'),
+    v_provider,
+    v_model,
     COALESCE(p_prompt_version, 'v1'),
     now()
   )
@@ -409,7 +418,7 @@ CREATE OR REPLACE FUNCTION public.zalo_complete_call_summary(
   p_key_points jsonb,
   p_lead_temperature text,
   p_follow_up_required boolean,
-  p_follow_up_suggested_at timestamptz,
+  p_follow_up_suggested_time text,
   p_follow_up_reason text,
   p_confidence text,
   p_provider text,
@@ -446,7 +455,7 @@ BEGIN
       key_points = COALESCE(p_key_points, '[]'::jsonb),
       lead_temperature = p_lead_temperature,
       follow_up_required = COALESCE(p_follow_up_required, false),
-      follow_up_suggested_at = p_follow_up_suggested_at,
+      follow_up_suggested_time = p_follow_up_suggested_time,
       follow_up_reason = p_follow_up_reason,
       confidence = p_confidence,
       provider = COALESCE(p_provider, provider),
@@ -485,8 +494,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.zalo_complete_call_summary(uuid, uuid, uuid, text, jsonb, jsonb, jsonb, jsonb, text, boolean, timestamptz, text, text, text, text, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.zalo_complete_call_summary(uuid, uuid, uuid, text, jsonb, jsonb, jsonb, jsonb, text, boolean, timestamptz, text, text, text, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.zalo_complete_call_summary(uuid, uuid, uuid, text, jsonb, jsonb, jsonb, jsonb, text, boolean, text, text, text, text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.zalo_complete_call_summary(uuid, uuid, uuid, text, jsonb, jsonb, jsonb, jsonb, text, boolean, text, text, text, text, text, text) TO service_role;
 
 -- 8. RPC: fail summary
 CREATE OR REPLACE FUNCTION public.zalo_fail_call_summary(
@@ -619,3 +628,64 @@ $$;
 
 REVOKE ALL ON FUNCTION public.zalo_retry_call_summary(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.zalo_retry_call_summary(uuid, uuid, uuid) TO service_role;
+
+-- 10. RPC: reconcile missing summaries for completed transcriptions
+CREATE OR REPLACE FUNCTION public.zalo_reconcile_missing_call_summaries(
+  p_limit integer DEFAULT 10,
+  p_provider text DEFAULT 'GEMINI',
+  p_model text DEFAULT 'gemini-2.5-flash',
+  p_lookback_hours integer DEFAULT 168
+)
+RETURNS TABLE (
+  reconciled_count integer
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_limit integer;
+  v_lookback interval;
+  v_item record;
+  v_count integer := 0;
+  v_summary_id uuid;
+BEGIN
+  IF p_provider IS NULL OR trim(p_provider) = '' OR p_model IS NULL OR trim(p_model) = '' THEN
+    RAISE EXCEPTION 'INVALID_ARGUMENTS';
+  END IF;
+
+  v_limit := LEAST(GREATEST(COALESCE(p_limit, 10), 1), 50);
+  v_lookback := (GREATEST(COALESCE(p_lookback_hours, 168), 1) || ' hours')::interval;
+
+  FOR v_item IN
+    SELECT t.company_id, t.id AS transcription_id
+    FROM public.zalo_call_transcriptions t
+    LEFT JOIN public.zalo_call_ai_summaries s
+      ON s.company_id = t.company_id AND s.transcription_id = t.id
+    WHERE t.status = 'COMPLETED'
+      AND s.id IS NULL
+      AND COALESCE(t.completed_at, t.created_at) >= clock_timestamp() - v_lookback
+    ORDER BY COALESCE(t.completed_at, t.created_at) ASC
+    LIMIT v_limit
+  LOOP
+    BEGIN
+      v_summary_id := public.zalo_enqueue_call_summary(
+        v_item.company_id,
+        v_item.transcription_id,
+        trim(p_provider),
+        trim(p_model)
+      );
+      IF v_summary_id IS NOT NULL THEN
+        v_count := v_count + 1;
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      -- Best effort per row, do not fail entire reconciliation batch
+    END;
+  END LOOP;
+
+  RETURN QUERY SELECT v_count;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.zalo_reconcile_missing_call_summaries(integer, text, text, integer) TO service_role;

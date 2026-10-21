@@ -33,6 +33,9 @@ import {
   mapGeminiSummaryError,
 } from '../../features/zalo-summary/gemini-summary-provider';
 import {
+  resolveSummaryConfig,
+} from '../../features/zalo-summary/provider-factory';
+import {
   mapOpenAiSummaryError,
 } from '../../features/zalo-summary/openai-summary-provider';
 import {
@@ -151,6 +154,48 @@ async function runSummaryUnitTests() {
   assert.throws(() => validateCallSummaryOutput({ ...validSample, follow_up: { required: true, suggested_time: 12345 } }), /SUMMARY_INVALID_RESPONSE/);
   testPass('1.8: Malformed follow_up rejected');
 
+  // 1.9: follow_up.suggested_time contract: natural language string, ISO string, and null are all valid
+  const naturalLanguageTime = validateCallSummaryOutput({
+    ...validSample,
+    follow_up: {
+      required: true,
+      suggested_time: 'Sáng thứ 2 tuần tới',
+      reason: 'Khách bận công tác cuối tuần',
+    },
+  });
+  assert.equal(naturalLanguageTime.follow_up.suggested_time, 'Sáng thứ 2 tuần tới');
+
+  const isoTime = validateCallSummaryOutput({
+    ...validSample,
+    follow_up: {
+      required: true,
+      suggested_time: '2026-10-26T09:00:00Z',
+      reason: 'Khách hẹn giờ chính xác',
+    },
+  });
+  assert.equal(isoTime.follow_up.suggested_time, '2026-10-26T09:00:00Z');
+
+  const unrequiredNullTime = validateCallSummaryOutput({
+    ...validSample,
+    follow_up: {
+      required: false,
+      suggested_time: null,
+      reason: null,
+    },
+  });
+  assert.equal(unrequiredNullTime.follow_up.suggested_time, null);
+  assert.equal(unrequiredNullTime.follow_up.required, false);
+
+  assert.throws(
+    () => validateCallSummaryOutput({ ...validSample, follow_up: { required: true, suggested_time: 12345 } }),
+    /SUMMARY_INVALID_RESPONSE/
+  );
+  assert.throws(
+    () => validateCallSummaryOutput({ ...validSample, follow_up: { required: true, suggested_time: false } }),
+    /SUMMARY_INVALID_RESPONSE/
+  );
+  testPass('1.9: follow_up.suggested_time accepts natural language, ISO, and null without cast error');
+
   // ==========================================================================
   // SECTION 2: Prompt Construction & Utterance Formatter
   // ==========================================================================
@@ -233,6 +278,44 @@ async function runSummaryUnitTests() {
   assert.equal(outcomeTerminal.attempts, 3);
   assert.equal(outcomeTerminal.terminal, true);
   testPass('3.4: Exponential backoff and retry outcomes verified');
+
+  // 3.5: Summary Provider & Model resolution tests
+  const originalSummaryProvider = process.env.SUMMARY_PROVIDER;
+  const originalGeminiModel = process.env.GEMINI_SUMMARY_MODEL;
+  const originalOpenAiModel = process.env.OPENAI_SUMMARY_MODEL;
+
+  try {
+    // Default GEMINI
+    delete process.env.SUMMARY_PROVIDER;
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    const defaultCfg = resolveSummaryConfig();
+    assert.equal(defaultCfg.provider, 'GEMINI');
+    assert.equal(defaultCfg.model, 'gemini-2.5-flash');
+
+    // GEMINI with custom model
+    process.env.SUMMARY_PROVIDER = 'GEMINI';
+    process.env.GEMINI_SUMMARY_MODEL = 'gemini-custom-model-x';
+    const geminiCustomCfg = resolveSummaryConfig();
+    assert.equal(geminiCustomCfg.provider, 'GEMINI');
+    assert.equal(geminiCustomCfg.model, 'gemini-custom-model-x');
+
+    // OPENAI with custom model
+    process.env.SUMMARY_PROVIDER = 'OPENAI';
+    process.env.OPENAI_SUMMARY_MODEL = 'gpt-4o-custom';
+    const openaiCustomCfg = resolveSummaryConfig();
+    assert.equal(openaiCustomCfg.provider, 'OPENAI');
+    assert.equal(openaiCustomCfg.model, 'gpt-4o-custom');
+
+    // Invalid provider fails closed
+    process.env.SUMMARY_PROVIDER = 'CLAUDE_UNKNOWN';
+    assert.throws(() => resolveSummaryConfig(), /SUMMARY_PROVIDER_NOT_CONFIGURED/);
+
+    testPass('3.5: Dynamic provider and model resolution (GEMINI/OPENAI/fail-closed) verified');
+  } finally {
+    process.env.SUMMARY_PROVIDER = originalSummaryProvider;
+    process.env.GEMINI_SUMMARY_MODEL = originalGeminiModel;
+    process.env.OPENAI_SUMMARY_MODEL = originalOpenAiModel;
+  }
 
   // ==========================================================================
   // SECTION 4: Worker Route HTTP Authentication & Query Validation Tests

@@ -348,8 +348,8 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
           {summary.follow_up_required && (
             <div className="rounded border border-amber-800/60 bg-amber-950/30 p-2 space-y-1 text-xs">
               <span className="font-semibold text-amber-300">Cần liên hệ lại (Follow-up):</span>
-              {summary.follow_up_suggested_at && (
-                <p className="text-slate-300">Thời gian: {summary.follow_up_suggested_at}</p>
+              {summary.follow_up_suggested_time && (
+                <p className="text-slate-300">Thời gian: {summary.follow_up_suggested_time}</p>
               )}
               {summary.follow_up_reason && (
                 <p className="text-slate-300">Lý do: {summary.follow_up_reason}</p>

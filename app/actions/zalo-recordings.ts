@@ -94,7 +94,7 @@ export async function getZaloCallSummary(callId: string) {
   const admin = createAdminClient();
   const { data: summary, error: sumError } = await admin
     .from('zalo_call_ai_summaries')
-    .select('id,company_id,call_id,transcription_id,status,provider,model,prompt_version,summary,customer_needs,objections,next_actions,key_points,lead_temperature,follow_up_required,follow_up_suggested_at,follow_up_reason,confidence,created_at,completed_at,error_code')
+    .select('id,company_id,call_id,transcription_id,status,provider,model,prompt_version,summary,customer_needs,objections,next_actions,key_points,lead_temperature,follow_up_required,follow_up_suggested_time,follow_up_reason,confidence,created_at,completed_at,error_code')
     .eq('company_id', actor.companyId)
     .eq('call_id', call.id)
     .maybeSingle();
@@ -110,7 +110,7 @@ export async function getZaloCallSummary(callId: string) {
       key_points: [],
       lead_temperature: null,
       follow_up_required: false,
-      follow_up_suggested_at: null,
+      follow_up_suggested_time: null,
       follow_up_reason: null,
       confidence: null,
     };

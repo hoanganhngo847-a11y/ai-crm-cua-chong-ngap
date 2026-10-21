@@ -3,6 +3,9 @@ import 'server-only';
 export interface SummaryLogPayload {
   action:
     | 'summary_enqueued'
+    | 'summary_enqueue_failed'
+    | 'summary_reconciled'
+    | 'reconciliation_failed'
     | 'processing_started'
     | 'summary_completed'
     | 'retry_scheduled'
@@ -16,6 +19,7 @@ export interface SummaryLogPayload {
   model?: string;
   error_code?: string;
   attempts?: number;
+  reconciled_count?: number;
   next_run_at?: string;
   is_terminal?: boolean;
   duration_ms?: number;
@@ -45,6 +49,7 @@ export function logSummaryEvent(payload: SummaryLogPayload): void {
     provider: payload.provider,
     model: payload.model,
     attempts: payload.attempts,
+    reconciled_count: payload.reconciled_count,
     error_code: payload.error_code,
     next_run_at: payload.next_run_at,
     is_terminal: payload.is_terminal,
@@ -60,6 +65,7 @@ export function logSummaryEvent(payload: SummaryLogPayload): void {
     sanitized.provider ? `provider=${sanitized.provider}` : null,
     sanitized.model ? `model=${sanitized.model}` : null,
     sanitized.error_code ? `error_code=${sanitized.error_code}` : null,
+    sanitized.reconciled_count !== undefined ? `reconciled_count=${sanitized.reconciled_count}` : null,
     sanitized.attempts !== undefined ? `attempts=${sanitized.attempts}` : null,
   ]
     .filter(Boolean)

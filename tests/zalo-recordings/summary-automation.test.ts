@@ -31,6 +31,7 @@ import {
   processDueZaloCallSummaryJobs,
   processTargetedZaloCallSummaryJob,
   retryZaloCallSummary,
+  reconcileMissingZaloCallSummaries,
 } from '../../features/zalo-summary/service';
 import type {
   CallSummaryStructuredOutput,
@@ -156,10 +157,10 @@ async function runSummaryAutomationTestSuite() {
       await db.query(
         `INSERT INTO zalo_call_transcriptions(
           id, company_id, call_id, customer_id, status,
-          provider, language, full_transcript
+          provider, language, full_transcript, completed_at
         ) VALUES(
           $1, $2, $3, $4, 'COMPLETED',
-          'GEMINI', 'vi', 'Khách: Alo tôi cần tư vấn. Nhân viên: Dạ chào anh.'
+          'GEMINI', 'vi', 'Khách: Alo tôi cần tư vấn. Nhân viên: Dạ chào anh.', now()
         )`,
         [txId, comp, callId, customerA]
       );
@@ -432,8 +433,8 @@ async function runSummaryAutomationTestSuite() {
     await assert.rejects(
       async () =>
         db.query(
-          `INSERT INTO zalo_call_ai_summaries(company_id, call_id, transcription_id, model, lead_temperature)
-           VALUES($1, $2, $3, 'm', 'LUKEWARM')`,
+          `INSERT INTO zalo_call_ai_summaries(company_id, call_id, transcription_id, provider, model, lead_temperature)
+           VALUES($1, $2, $3, 'GEMINI', 'm', 'LUKEWARM')`,
           [companyA, callValid, randomUUID()]
         ),
       /check constraint/i,
@@ -444,8 +445,8 @@ async function runSummaryAutomationTestSuite() {
     await assert.rejects(
       async () =>
         db.query(
-          `INSERT INTO zalo_call_ai_summaries(company_id, call_id, transcription_id, model, confidence)
-           VALUES($1, $2, $3, 'm', 'VERY_CONFIDENT')`,
+          `INSERT INTO zalo_call_ai_summaries(company_id, call_id, transcription_id, provider, model, confidence)
+           VALUES($1, $2, $3, 'GEMINI', 'm', 'VERY_CONFIDENT')`,
           [companyA, callValid, randomUUID()]
         ),
       /check constraint/i,
@@ -711,6 +712,233 @@ async function runSummaryAutomationTestSuite() {
     assert.ok(bulkResult.claimed >= 1, 'Bulk worker claimed at least 1 job');
     assert.equal(bulkResult.failed, 0, 'Bulk worker processed without failures');
     testPass('Test 18: Bulk worker successfully claims and processes due summary queue');
+
+    // ========================================================================
+    // TEST 19: Provider & Model dynamic environment resolution on enqueue
+    // ========================================================================
+    console.log('--- Test 19: Provider & Model dynamic environment resolution ---');
+    const origSummaryProvider = process.env.SUMMARY_PROVIDER;
+    const origGeminiModel = process.env.GEMINI_SUMMARY_MODEL;
+    const origOpenAiModel = process.env.OPENAI_SUMMARY_MODEL;
+
+    try {
+      // 19.1: SUMMARY_PROVIDER=GEMINI, GEMINI_SUMMARY_MODEL=model-A
+      process.env.SUMMARY_PROVIDER = 'GEMINI';
+      process.env.GEMINI_SUMMARY_MODEL = 'gemini-custom-model-A';
+      const { callId: callModelA } = await seedCall(companyA, saleA);
+      const txModelA = await seedCompletedTranscription(companyA, callModelA, 1);
+      const sumIdModelA = await enqueueZaloCallSummary(companyA, txModelA, adminClient);
+
+      const rowModelA = (
+        await db.query<{ provider: string; model: string }>(
+          `SELECT provider, model FROM zalo_call_ai_summaries WHERE id = $1`,
+          [sumIdModelA]
+        )
+      ).rows[0];
+      assert.equal(rowModelA.provider, 'GEMINI');
+      assert.equal(rowModelA.model, 'gemini-custom-model-A');
+
+      // 19.2: Change model to model-B -> new job uses model-B
+      process.env.GEMINI_SUMMARY_MODEL = 'gemini-custom-model-B';
+      const { callId: callModelB } = await seedCall(companyA, saleA);
+      const txModelB = await seedCompletedTranscription(companyA, callModelB, 1);
+      const sumIdModelB = await enqueueZaloCallSummary(companyA, txModelB, adminClient);
+
+      const rowModelB = (
+        await db.query<{ provider: string; model: string }>(
+          `SELECT provider, model FROM zalo_call_ai_summaries WHERE id = $1`,
+          [sumIdModelB]
+        )
+      ).rows[0];
+      assert.equal(rowModelB.provider, 'GEMINI');
+      assert.equal(rowModelB.model, 'gemini-custom-model-B');
+
+      // 19.3: SUMMARY_PROVIDER=OPENAI -> new job writes OPENAI + OpenAI model
+      process.env.SUMMARY_PROVIDER = 'OPENAI';
+      process.env.OPENAI_SUMMARY_MODEL = 'gpt-4o-custom-2026';
+      const { callId: callOpenAI } = await seedCall(companyA, saleA);
+      const txOpenAI = await seedCompletedTranscription(companyA, callOpenAI, 1);
+      const sumIdOpenAI = await enqueueZaloCallSummary(companyA, txOpenAI, adminClient);
+
+      const rowOpenAI = (
+        await db.query<{ provider: string; model: string }>(
+          `SELECT provider, model FROM zalo_call_ai_summaries WHERE id = $1`,
+          [sumIdOpenAI]
+        )
+      ).rows[0];
+      assert.equal(rowOpenAI.provider, 'OPENAI');
+      assert.equal(rowOpenAI.model, 'gpt-4o-custom-2026');
+
+      // 19.4: Invalid provider fails closed without mutating DB
+      process.env.SUMMARY_PROVIDER = 'CLAUDE_UNSUPPORTED';
+      const { callId: callInvalid } = await seedCall(companyA, saleA);
+      const txInvalid = await seedCompletedTranscription(companyA, callInvalid, 1);
+
+      await assert.rejects(
+        async () => enqueueZaloCallSummary(companyA, txInvalid, adminClient),
+        /SUMMARY_PROVIDER_NOT_CONFIGURED/
+      );
+
+      // Verify transcription still COMPLETED and 0 summary rows created
+      const txInvalidStatus = (
+        await db.query<{ status: string }>(
+          `SELECT status FROM zalo_call_transcriptions WHERE id = $1`,
+          [txInvalid]
+        )
+      ).rows[0].status;
+      assert.equal(txInvalidStatus, 'COMPLETED', 'Invalid provider must never alter transcription COMPLETED');
+
+      const noRows = (
+        await db.query<{ count: string | number }>(
+          `SELECT count(*) FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+          [txInvalid]
+        )
+      ).rows[0].count;
+      assert.equal(Number(noRows), 0);
+
+      testPass('Test 19: Dynamic provider and model environment resolution verified on enqueue');
+    } finally {
+      if (origSummaryProvider === undefined) delete process.env.SUMMARY_PROVIDER;
+      else process.env.SUMMARY_PROVIDER = origSummaryProvider;
+
+      if (origGeminiModel === undefined) delete process.env.GEMINI_SUMMARY_MODEL;
+      else process.env.GEMINI_SUMMARY_MODEL = origGeminiModel;
+
+      if (origOpenAiModel === undefined) delete process.env.OPENAI_SUMMARY_MODEL;
+      else process.env.OPENAI_SUMMARY_MODEL = origOpenAiModel;
+    }
+
+    // ========================================================================
+    // TEST 20: Follow-up Time Contract (Natural language, ISO, null, unrequired)
+    // ========================================================================
+    console.log('--- Test 20: Follow-up Time Contract end-to-end ---');
+    const { callId: callTimeContract } = await seedCall(companyA, saleA);
+    const txTimeContract = await seedCompletedTranscription(companyA, callTimeContract, 2);
+    const sumIdTimeContract = await enqueueZaloCallSummary(companyA, txTimeContract, adminClient);
+
+    const claimedTime = (
+      await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA,
+        p_summary_id: sumIdTimeContract,
+      })
+    ).data as ClaimedSummaryJob[];
+    assert.equal(claimedTime.length, 1);
+
+    // Natural language Vietnamese relative time
+    const naturalTimeOutput: CallSummaryStructuredOutput = {
+      summary: 'Khách hàng hẹn gọi lại vào sáng thứ 2 tuần tới sau khi trao đổi với gia đình.',
+      customer_needs: ['Tư vấn chi phí'],
+      objections: ['Cần hỏi ý kiến gia đình'],
+      next_actions: ['Liên hệ lại sáng thứ 2'],
+      lead_temperature: 'WARM',
+      follow_up: {
+        required: true,
+        suggested_time: 'Sáng thứ 2 tuần tới',
+        reason: 'Khách cần bàn bạc với gia đình vào cuối tuần',
+      },
+      key_points: ['Khách thiện chí'],
+      confidence: 'MEDIUM',
+    };
+
+    await processZaloCallSummaryJob(claimedTime[0], {
+      client: adminClient,
+      provider: new MockSummaryProvider(async () => naturalTimeOutput),
+    });
+
+    const persistedTime = (
+      await db.query<{
+        status: string;
+        follow_up_required: boolean;
+        follow_up_suggested_time: string | null;
+        follow_up_reason: string | null;
+      }>(
+        `SELECT status, follow_up_required, follow_up_suggested_time, follow_up_reason FROM zalo_call_ai_summaries WHERE id = $1`,
+        [sumIdTimeContract]
+      )
+    ).rows[0];
+
+    assert.equal(persistedTime.status, 'COMPLETED');
+    assert.equal(persistedTime.follow_up_required, true);
+    assert.equal(persistedTime.follow_up_suggested_time, 'Sáng thứ 2 tuần tới');
+    assert.equal(persistedTime.follow_up_reason, 'Khách cần bàn bạc với gia đình vào cuối tuần');
+    testPass('Test 20: Follow-up time contract stores natural-language relative expression without DB cast failure');
+
+    // ========================================================================
+    // TEST 21: Idempotent Enqueue Recovery & Reconciliation
+    // ========================================================================
+    console.log('--- Test 21: Idempotent Enqueue Recovery & Reconciliation ---');
+    // Step 1: Simulate transcription completing, but transient failure in enqueue
+    const { callId: callTransient } = await seedCall(companyA, saleA);
+    const txTransient = await seedCompletedTranscription(companyA, callTransient, 2);
+
+    // Verify transcription is COMPLETED
+    const txTransientRow = (
+      await db.query<{ status: string }>(
+        `SELECT status FROM zalo_call_transcriptions WHERE id = $1`,
+        [txTransient]
+      )
+    ).rows[0];
+    assert.equal(txTransientRow.status, 'COMPLETED');
+
+    // Verify 0 summary rows exist initially
+    const countBefore = (
+      await db.query<{ count: string | number }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txTransient]
+      )
+    ).rows[0].count;
+    assert.equal(Number(countBefore), 0);
+
+    // Step 2: Run reconciliation
+    const reconciledCount = await reconcileMissingZaloCallSummaries(10, adminClient);
+    assert.ok(reconciledCount >= 1, 'Reconciliation should create at least 1 missing summary');
+
+    // Verify exactly one summary row was created for txTransient
+    const countAfter = (
+      await db.query<{ count: string | number }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txTransient]
+      )
+    ).rows[0].count;
+    assert.equal(Number(countAfter), 1);
+
+    const reconciledRow = (
+      await db.query<{ status: string; company_id: string; call_id: string }>(
+        `SELECT status, company_id, call_id FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txTransient]
+      )
+    ).rows[0];
+    assert.equal(reconciledRow.status, 'PENDING');
+    assert.equal(reconciledRow.company_id, companyA);
+    assert.equal(reconciledRow.call_id, callTransient);
+
+    // Step 3: Idempotent re-run does not duplicate
+    const secondReconcileCount = await reconcileMissingZaloCallSummaries(10, adminClient);
+    assert.equal(secondReconcileCount, 0, 'Second reconciliation run creates 0 duplicates');
+
+    const countSecond = (
+      await db.query<{ count: string | number }>(
+        `SELECT count(*) FROM zalo_call_ai_summaries WHERE company_id = $1 AND transcription_id = $2`,
+        [companyA, txTransient]
+      )
+    ).rows[0].count;
+    assert.equal(Number(countSecond), 1);
+
+    // Step 4: Worker claims and completes the reconciled job
+    const workerResult = await processDueZaloCallSummaryJobs(5, {
+      client: adminClient,
+      provider: new MockSummaryProvider(async () => validMockOutput),
+    });
+    assert.ok(workerResult.claimed >= 1);
+
+    const finalRow = (
+      await db.query<{ status: string }>(
+        `SELECT status FROM zalo_call_ai_summaries WHERE transcription_id = $1`,
+        [txTransient]
+      )
+    ).rows[0];
+    assert.equal(finalRow.status, 'COMPLETED');
+    testPass('Test 21: Idempotent reconciliation recovers missing summary row and worker completes it');
   } finally {
     await harness.close();
   }
