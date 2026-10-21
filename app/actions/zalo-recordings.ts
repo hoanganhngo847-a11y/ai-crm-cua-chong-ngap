@@ -5,18 +5,88 @@ import { createAdminClient } from '../../lib/supabase/admin';
 import { recordingActor, authorizedRecording } from '../../features/zalo-recordings/access';
 import { RecordingError, sha256, UUID } from '../../features/zalo-recordings/metadata';
 import { RECORDING_BUCKET } from '../../features/zalo-recordings/upload';
+import { retryZaloTranscriptionJob } from '../../features/zalo-transcription/service';
 
 export async function listZaloCalls(page = 1, customerId?: string) {
   const actor=await recordingActor();
   if(!Number.isInteger(page) || page<1 || page>10000 || (customerId && !UUID.test(customerId))) throw new RecordingError('INVALID_FILTER');
   let query=createAdminClient().from('zalo_personal_calls')
-    .select('id,customer_id,remote_display_name,direction,started_at,duration_seconds,recording_status,matching_status,identity_ambiguous,customers(name,customer_code)',{count:'exact'})
+    .select('id,customer_id,remote_display_name,direction,started_at,duration_seconds,recording_status,transcript_status,matching_status,identity_ambiguous,customers(name,customer_code)',{count:'exact'})
     .eq('company_id',actor.companyId).eq('recording_status','READY').order('started_at',{ascending:false}).range((page-1)*20,page*20-1);
   if(actor.role==='SALE') query=query.eq('staff_user_id',actor.userId);
   if(customerId) query=query.eq('customer_id',customerId);
   const {data,error,count}=await query;
   if(error) throw new RecordingError('Không thể tải cuộc gọi Zalo. Kiểm tra migration và kết nối.',503);
   return {items:data || [],total:count || 0,page};
+}
+export async function getZaloTranscription(callId: string) {
+  const { actor, call } = await authorizedRecording(callId);
+  const admin = createAdminClient();
+  const { data: transcription, error: txError } = await admin
+    .from('zalo_call_transcriptions')
+    .select('id,company_id,call_id,customer_id,status,provider,language,raw_channel_layout,channels_silent,started_at,completed_at,error_code,full_transcript,created_at')
+    .eq('company_id', actor.companyId)
+    .eq('call_id', call.id)
+    .maybeSingle();
+
+  if (txError) throw new RecordingError('Không thể tải trạng thái bóc băng.', 503);
+  if (!transcription) {
+    return {
+      status: (call as { transcript_status?: string }).transcript_status || 'NOT_STARTED',
+      utterances: [],
+      full_transcript: null,
+    };
+  }
+
+  let utterances: Array<{
+    id: string;
+    sequence: number;
+    speaker_role: 'STAFF' | 'CUSTOMER';
+    channel: 'LEFT' | 'RIGHT';
+    start_ms: number;
+    end_ms: number;
+    text: string;
+    confidence: number | null;
+  }> = [];
+
+  if (transcription.status === 'COMPLETED') {
+    const { data: utts, error: uttsError } = await admin
+      .from('zalo_call_transcript_utterances')
+      .select('id,sequence,speaker_role,channel,start_ms,end_ms,text,confidence')
+      .eq('transcription_id', transcription.id)
+      .eq('company_id', actor.companyId)
+      .order('sequence', { ascending: true });
+
+    if (uttsError) throw new RecordingError('Không thể tải nội dung bóc băng.', 503);
+    utterances = (utts || []) as typeof utterances;
+
+    await admin.from('audit_logs').insert({
+      company_id: actor.companyId,
+      user_id: actor.userId,
+      action: 'ZALO_TRANSCRIPTION_VIEW',
+      resource_type: 'ZALO_CALL',
+      resource_id: call.id,
+      customer_id: call.customer_id,
+      result: 'SUCCESS',
+      metadata: { transcription_id: transcription.id },
+    });
+  }
+
+  return {
+    ...transcription,
+    utterances,
+  };
+}
+export async function retryZaloTranscription(callId: string) {
+  const { actor, call } = await authorizedRecording(callId);
+  const admin = createAdminClient();
+  try {
+    const result = await retryZaloTranscriptionJob(actor.companyId, actor.userId, call.id, admin);
+    return result;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Không thể thử lại bóc băng.';
+    throw new RecordingError(msg, 500);
+  }
 }
 export async function searchZaloCustomers(callId: string, search: string | null = null) {
   const {actor}=await authorizedRecording(callId);

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx --conditions=react-server tests/zalo-recordings/heartbeat.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-hardening.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-regressions.test.ts",
+    "test:zalo-recordings": "tsx --conditions=react-server tests/zalo-recordings/recordings.test.ts && tsx --conditions=react-server tests/zalo-recordings/heartbeat.test.ts && tsx tests/zalo-recordings/client-boundary.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-hardening.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-regressions.test.ts && tsx --conditions=react-server tests/zalo-recordings/transcription.test.ts",
     "test:zalo-recordings:db": "tsx --conditions=react-server tests/zalo-recordings/supabase.test.ts && tsx --conditions=react-server tests/zalo-recordings/outbound-context-db.test.ts",
     "dev": "next dev",
     "build": "next build",
@@ -67,6 +67,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.116.0",
+    "ffmpeg-static": "5.3.0",
     "next": "16.3.5",
     "openai": "^7.20.0",
     "pdf-lib": "^1.17.1",
