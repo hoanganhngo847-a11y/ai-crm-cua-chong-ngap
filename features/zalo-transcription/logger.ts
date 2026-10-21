@@ -16,6 +16,7 @@ export interface StructuredTranscriptionLogContext {
   transcription_id?: string;
   channel?: 'LEFT' | 'RIGHT';
   provider?: string;
+  model?: string;
   language?: string;
   duration_ms?: number;
   utterances_count?: number;
@@ -29,6 +30,16 @@ export interface StructuredTranscriptionLogContext {
  * Structured logger for Zalo transcription pipeline.
  * Explicitly guards against logging raw/full transcript text, phone numbers, or provider tokens.
  */
+function sanitizeLogSafeIdentifier(val?: string, maxLen = 64): string | undefined {
+  if (!val || typeof val !== 'string') return undefined;
+  const trimmed = val.trim();
+  if (/^(?:AIza|sk-|Bearer)/i.test(trimmed)) return 'sanitized';
+  if (/^[a-zA-Z0-9_\-.:/]{1,64}$/.test(trimmed) && trimmed.length <= maxLen) {
+    return trimmed;
+  }
+  return 'sanitized';
+}
+
 export function logTranscriptionEvent(context: StructuredTranscriptionLogContext): void {
   // Construct safe payload with strictly whitelisted metadata
   const payload = {
@@ -40,7 +51,8 @@ export function logTranscriptionEvent(context: StructuredTranscriptionLogContext
     recording_id: context.recording_id ?? context.call_id,
     transcription_id: context.transcription_id,
     channel: context.channel,
-    provider: context.provider,
+    provider: sanitizeLogSafeIdentifier(context.provider, 32),
+    model: sanitizeLogSafeIdentifier(context.model, 64),
     language: context.language,
     duration_ms: context.duration_ms,
     utterances_count: context.utterances_count,

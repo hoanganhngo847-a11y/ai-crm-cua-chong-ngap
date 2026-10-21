@@ -4,6 +4,7 @@ import { MAX_PROVIDER_AUDIO_BYTES } from './audio-splitter';
 
 export interface TranscriptionProvider {
   name: string;
+  readonly model?: string;
   transcribe(
     audioBuffer: Buffer,
     fileName: string,
@@ -29,8 +30,8 @@ export interface TranscriptionProvider {
  */
 export class OpenAITranscriptionProvider implements TranscriptionProvider {
   public readonly name = 'OPENAI';
+  public readonly model: string;
   private readonly apiKey?: string;
-  private readonly model: string;
 
   constructor(options?: { apiKey?: string; model?: string }) {
     this.apiKey = options?.apiKey || process.env.OPENAI_API_KEY;
@@ -179,12 +180,18 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
  * Never performs network requests or spends credits.
  */
 export class MockTranscriptionProvider implements TranscriptionProvider {
-  public readonly name = 'MOCK';
+  public readonly name: string;
+  public readonly model?: string;
   private responses = new Map<string, AudioTranscriptionResult>();
   private defaultResponse: (fileName: string, opts?: AudioTranscriptionOptions) => AudioTranscriptionResult;
   public calls: Array<{ fileName: string; mimeType: string; size: number; options?: AudioTranscriptionOptions }> = [];
 
-  constructor(defaultResponse?: (fileName: string, opts?: AudioTranscriptionOptions) => AudioTranscriptionResult) {
+  constructor(
+    defaultResponse?: (fileName: string, opts?: AudioTranscriptionOptions) => AudioTranscriptionResult,
+    options?: { name?: string; model?: string }
+  ) {
+    this.name = options?.name || 'MOCK';
+    this.model = options?.model !== undefined ? options.model : 'mock-model';
     this.defaultResponse =
       defaultResponse ||
       ((fileName) => ({

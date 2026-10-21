@@ -22,6 +22,8 @@ export interface AudioTranscriptionOptions {
   prompt?: string;
   temperature?: number;
   signal?: AbortSignal;
+  duration_ms?: number;
+  deadline?: number;
 }
 
 export interface ZaloUtteranceInput {
@@ -50,6 +52,7 @@ export interface ZaloCallTranscription {
   customer_id: string | null;
   status: TranscriptionStatus;
   provider: string;
+  model?: string | null;
   language: string;
   raw_channel_layout: string;
   channels_silent: { left?: boolean; right?: boolean };
@@ -75,6 +78,7 @@ export interface ClaimedTranscriptionJob {
   call_id: string;
   customer_id: string | null;
   provider: string;
+  model?: string | null;
   language: string;
   raw_channel_layout: string;
   attempts: number;
