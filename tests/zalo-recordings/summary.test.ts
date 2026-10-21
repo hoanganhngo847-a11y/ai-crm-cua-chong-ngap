@@ -518,6 +518,80 @@ async function runSummaryUnitTests() {
     assert.equal(depsCalled, false, 'Worker service must not be invoked when both targeted params are supplied');
     testPass('4.6b.2: Authenticated request with both targeted params returns 400 with worker not invoked');
 
+    // Each rejected control query must call neither worker, for GET and POST.
+    const id = '11111111-2222-3333-4444-555555555555';
+    const rejectedQueries = [
+      ['unknown key', 'foo=bar'],
+      ['misspelled transcription ID', `transcriptionid=${id}`],
+      ['summary alias', `summary=${id}`],
+      ['summary ID mixed with limit', `summary_id=${id}&limit=1`],
+      ['transcription ID mixed with limit', `transcription_id=${id}&limit=1`],
+      ['summary ID mixed with empty limit', `summary_id=${id}&limit=`],
+      ['transcription ID mixed with empty limit', `transcription_id=${id}&limit=`],
+      ['both targeted IDs', `summary_id=${id}&transcription_id=${id}`],
+      ['duplicate limit', 'limit=1&limit=2'],
+      ['duplicate summary ID', `summary_id=${id}&summary_id=${id}`],
+      ['duplicate transcription ID', `transcription_id=${id}&transcription_id=${id}`],
+      ['unknown key alongside valid target', `summary_id=${id}&foo=bar`],
+    ];
+    for (const [label, query] of rejectedQueries) {
+      for (const method of ['GET', 'POST']) {
+        for (const auth of ['valid', 'wrong', 'missing']) {
+          const calls: string[] = [];
+          const response = await handleZaloCallSummaryCron(new NextRequest(
+            `http://localhost/api/cron/zalo-call-summary?${query}`,
+            {
+              method,
+              headers: auth === 'missing' ? {} : {
+                authorization: `Bearer ${auth === 'valid' ? TEST_SECRET : 'wrong-secret'}`,
+              },
+            }
+          ), {
+            processDue: async () => {
+              calls.push('bulk');
+              return { claimed: 0, processed: 0, failed: 0 };
+            },
+            processTargeted: async () => {
+              calls.push('targeted');
+              return { claimed: 0, processed: 0, failed: 0 };
+            },
+          });
+          assert.equal(response.status, auth === 'valid' ? 400 : 401, `${method} ${label}: auth first, then validation`);
+          assert.deepEqual(calls, [], `${method} ${label}: neither worker may run (${auth} auth)`);
+        }
+      }
+      testPass(`4.6c: ${label} fails closed; wrong/missing auth returns 401; neither worker called (GET/POST)`);
+    }
+
+    // All four valid contracts must dispatch exactly once to the intended worker.
+    for (const [query, expectedCall] of [
+      ['', { bulk: 10 }],
+      ['limit=1', { bulk: 1 }],
+      [`summary_id=${id}`, { targeted: { summaryId: id } }],
+      [`transcription_id=${id}`, { targeted: { transcriptionId: id } }],
+    ] as const) {
+      for (const method of ['GET', 'POST']) {
+        const calls: unknown[] = [];
+        const response = await handleZaloCallSummaryCron(new NextRequest(
+          `http://localhost/api/cron/zalo-call-summary${query ? `?${query}` : ''}`,
+          { method, headers: { authorization: `Bearer ${TEST_SECRET}` } }
+        ), {
+          processDue: async (limit) => {
+            calls.push({ bulk: limit });
+            return { claimed: 1, processed: 1, failed: 0 };
+          },
+          processTargeted: async (target) => {
+            calls.push({ targeted: target });
+            return { claimed: 1, processed: 1, failed: 0 };
+          },
+        });
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).mode, 'bulk' in expectedCall ? 'BULK' : 'TARGETED');
+        assert.deepEqual(calls, [expectedCall], `${method}: exactly one intended worker, no fallback`);
+      }
+      testPass(`4.6d: ${query || 'no params'} dispatches exactly once to intended worker (GET/POST)`);
+    }
+
     // 4.7: Mock dependency injection for targeted and bulk execution
     let bulkLimitCalled: number | null = null;
     let targetedCalled: { summaryId?: string; transcriptionId?: string } | null = null;

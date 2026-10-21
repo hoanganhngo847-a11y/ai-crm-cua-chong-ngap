@@ -1376,6 +1376,146 @@ async function runSummaryAutomationTestSuite() {
         process.env.SUMMARY_ACTIVATION_CUTOFF = origCutoffEnv;
       }
     }
+    // Round 4: exercise persisted failure state through the real worker and SQL RPC.
+    // Keep pre-existing fixtures out of this scheduler proof, without enabling reconciliation.
+    await db.query(`UPDATE zalo_call_ai_summaries
+      SET next_run_at = now() + interval '1 day', lease_expires_at = now() + interval '1 day'
+      WHERE status IN ('PENDING', 'PROCESSING')`);
+
+    async function immutableSnapshot(callId: string, txId: string) {
+      return {
+        recording: (await db.query(`SELECT recording_status, recording_path, recording_bytes,
+          recording_sha256, transcript_status FROM zalo_personal_calls WHERE id = $1`, [callId])).rows,
+        transcript: (await db.query<{ status: string }>(`SELECT * FROM zalo_call_transcriptions WHERE id = $1`, [txId])).rows,
+        utterances: (await db.query(`SELECT * FROM zalo_call_transcript_utterances
+          WHERE transcription_id = $1 ORDER BY sequence`, [txId])).rows,
+      };
+    }
+    async function failureState(summaryId: string) {
+      return (await db.query<{
+        status: string; parent_status: string; attempts: number; next_run_at: Date;
+        error_code: string | null; lock_token: string | null; locked_by: string | null;
+        locked_at: Date | null; lease_expires_at: Date | null;
+      }>(`SELECT s.*, c.summary_status AS parent_status
+        FROM zalo_call_ai_summaries s JOIN zalo_personal_calls c ON c.id = s.call_id
+        AND c.company_id = s.company_id WHERE s.id = $1`, [summaryId])).rows[0];
+    }
+    async function claimForFailure(summaryId: string) {
+      const before = await failureState(summaryId);
+      assert.equal(before.status, 'PENDING');
+      assert.equal(before.parent_status, 'PENDING');
+      const { data, error } = await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA, p_summary_id: summaryId,
+      });
+      assert.ifError(error);
+      assert.equal(data.length, 1);
+      const processing = await failureState(summaryId);
+      assert.equal(processing.status, 'PROCESSING');
+      assert.equal(processing.parent_status, 'PROCESSING');
+      assert.ok(processing.lock_token);
+      assert.ok(processing.lease_expires_at);
+      return data[0] as ClaimedSummaryJob;
+    }
+    function assertClearedLocks(state: Awaited<ReturnType<typeof failureState>>) {
+      assert.equal(state.lock_token, null);
+      assert.equal(state.locked_by, null);
+      assert.equal(state.locked_at, null);
+      assert.equal(state.lease_expires_at, null);
+    }
+
+    for (const errorCode of ['SUMMARY_PROVIDER_TIMEOUT', 'SUMMARY_PROVIDER_RATE_LIMITED']) {
+      const { callId } = await seedCall(companyA, saleA);
+      const txId = await seedCompletedTranscription(companyA, callId);
+      const summaryId = await enqueueZaloCallSummary(companyA, txId, adminClient);
+      const snapshot = await immutableSnapshot(callId, txId);
+      assert.equal(snapshot.transcript[0].status, 'COMPLETED');
+      const job = await claimForFailure(summaryId);
+      const retryProvider = new MockSummaryProvider(async () => {
+        const processing = await failureState(summaryId);
+        assert.equal(processing.status, 'PROCESSING');
+        assert.equal(processing.parent_status, 'PROCESSING');
+        throw new Error(errorCode);
+      });
+      const failureStarted = Date.now();
+      await assert.rejects(processZaloCallSummaryJob(job, {
+        client: adminClient, provider: retryProvider,
+      }), new RegExp(errorCode));
+      let retry = await failureState(summaryId);
+      assert.equal(retry.status, 'PENDING');
+      assert.equal(retry.parent_status, 'PENDING');
+      assert.equal(retry.attempts, 1);
+      assert.equal(retry.error_code, errorCode);
+      assert.ok(new Date(retry.next_run_at).getTime() >= failureStarted + 30_000);
+      assertClearedLocks(retry);
+      assert.deepEqual(await immutableSnapshot(callId, txId), snapshot);
+
+      // The scheduler cannot reclaim a retry before next_run_at.
+      const notDue = await processDueZaloCallSummaryJobs(1, {
+        client: adminClient, provider: retryProvider, reconciliationSince: null,
+      });
+      assert.equal(notDue.claimed, 0);
+      assert.deepEqual(await failureState(summaryId), retry);
+
+      // Advance only the fixture due time; the scheduler claims with a fresh token.
+      await db.query(`UPDATE zalo_call_ai_summaries SET next_run_at = now() - interval '1 second'
+        WHERE id = $1`, [summaryId]);
+      const secondFailureStarted = Date.now();
+      const retryRun = await processDueZaloCallSummaryJobs(1, {
+        client: adminClient, provider: retryProvider, reconciliationSince: null,
+      });
+      assert.equal(retryRun.claimed, 1);
+      assert.equal(retryRun.failed, 1);
+      retry = await failureState(summaryId);
+      assert.equal(retry.status, 'PENDING');
+      assert.equal(retry.parent_status, 'PENDING');
+      assert.equal(retry.attempts, 2, 'Retry must increment, never reset attempts');
+      assert.equal(retry.error_code, errorCode);
+      assert.ok(new Date(retry.next_run_at).getTime() >= secondFailureStarted + 60_000, 'Exponential backoff preserved');
+      assertClearedLocks(retry);
+      assert.deepEqual(await immutableSnapshot(callId, txId), snapshot);
+
+      await db.query(`UPDATE zalo_call_ai_summaries SET next_run_at = now() - interval '1 second'
+        WHERE id = $1`, [summaryId]);
+      const recovery = await processDueZaloCallSummaryJobs(1, {
+        client: adminClient, provider: new MockSummaryProvider(async () => validMockOutput),
+        reconciliationSince: null,
+      });
+      assert.equal(recovery.claimed, 1);
+      assert.equal(recovery.processed, 1);
+      assert.equal((await failureState(summaryId)).status, 'COMPLETED');
+      assert.equal((await failureState(summaryId)).parent_status, 'COMPLETED');
+      assert.deepEqual(await immutableSnapshot(callId, txId), snapshot);
+      testPass(`Test 23: ${errorCode} syncs child/parent PENDING, preserves backoff/immutability, and scheduler recovers only when due`);
+    }
+
+    for (const terminalCause of ['permanent provider error', 'attempt exhaustion']) {
+      const { callId } = await seedCall(companyA, saleA);
+      const txId = await seedCompletedTranscription(companyA, callId);
+      const summaryId = await enqueueZaloCallSummary(companyA, txId, adminClient);
+      const exhausted = terminalCause === 'attempt exhaustion';
+      if (exhausted) {
+        await db.query(`UPDATE zalo_call_ai_summaries SET attempts = 2, max_attempts = 3 WHERE id = $1`, [summaryId]);
+      }
+      const snapshot = await immutableSnapshot(callId, txId);
+      const job = await claimForFailure(summaryId);
+      const errorCode = exhausted ? 'SUMMARY_PROVIDER_TIMEOUT' : 'SUMMARY_PROVIDER_AUTH_ERROR';
+      await assert.rejects(processZaloCallSummaryJob(job, {
+        client: adminClient, provider: new MockSummaryProvider(async () => { throw new Error(errorCode); }),
+      }), new RegExp(errorCode));
+      const failed = await failureState(summaryId);
+      assert.equal(failed.status, 'FAILED');
+      assert.equal(failed.parent_status, 'FAILED');
+      assert.equal(failed.attempts, exhausted ? 3 : 1);
+      assert.equal(failed.error_code, errorCode);
+      assertClearedLocks(failed);
+      assert.deepEqual(await immutableSnapshot(callId, txId), snapshot);
+      const { data, error } = await adminClient.rpc('zalo_claim_call_summary_job', {
+        p_company: companyA, p_summary_id: summaryId,
+      });
+      assert.ifError(error);
+      assert.deepEqual(data, [], 'Terminal failure must not be automatically reclaimed');
+      testPass(`Test 24: ${terminalCause} syncs child/parent FAILED and preserves transcripts/recordings`);
+    }
   } finally {
     await harness.close();
   }

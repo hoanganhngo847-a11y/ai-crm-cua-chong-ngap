@@ -669,6 +669,86 @@ async function runPgConcurrencySuite() {
     assert.equal(p84, 'COMPLETED', 'Parent summary_status must match child COMPLETED after duplicate enqueue');
     testPass(8, 'Native PostgreSQL duplicate enqueue is idempotent and maintains parent.summary_status == child.status across PENDING/PROCESSING/FAILED/COMPLETED');
 
+    // Round 4: native PostgreSQL retryable and terminal failure state matrix.
+    for (const terminal of [false, true]) {
+      const { callId, txId, sumId } = seedTestCallAndTranscription(`Test failure terminal ${terminal}`);
+      const state = () => queryJsonSync<any[]>(container, ephDbName,
+        `SELECT s.*, c.summary_status AS parent_status FROM public.zalo_call_ai_summaries s
+         JOIN public.zalo_personal_calls c ON c.id = s.call_id AND c.company_id = s.company_id
+         WHERE s.id = '${sumId}'`)[0];
+      const snapshot = () => ({
+        recording: queryJsonSync(container, ephDbName,
+          `SELECT recording_status, recording_path, recording_bytes, recording_sha256, transcript_status
+           FROM public.zalo_personal_calls WHERE id = '${callId}'`),
+        transcript: queryJsonSync(container, ephDbName,
+          `SELECT * FROM public.zalo_call_transcriptions WHERE id = '${txId}'`),
+        utterances: queryJsonSync(container, ephDbName,
+          `SELECT * FROM public.zalo_call_transcript_utterances WHERE transcription_id = '${txId}' ORDER BY sequence`),
+      });
+      const immutableBefore = snapshot();
+      assert.equal(state().status, 'PENDING');
+      assert.equal(state().parent_status, 'PENDING');
+      const claim = queryJsonSync<any[]>(container, ephDbName,
+        `SELECT * FROM public.zalo_claim_call_summary_job('${companyA}', '${sumId}', 'failure_worker', 300)`)[0];
+      assert.ok(claim.lock_token);
+      assert.equal(state().status, 'PROCESSING');
+      assert.equal(state().parent_status, 'PROCESSING');
+      const nextRun = new Date(Date.now() + 120_000).toISOString();
+      const errorCode = terminal ? 'SUMMARY_PROVIDER_AUTH_ERROR' : 'SUMMARY_PROVIDER_TIMEOUT';
+      const result = queryJsonSync<any[]>(container, ephDbName,
+        `SELECT public.zalo_fail_call_summary('${companyA}', '${sumId}', '${claim.lock_token}',
+          '${errorCode}', 'Synthetic provider failure', ${terminal}, '${nextRun}') AS ok`)[0];
+      assert.equal(result.ok, true);
+      const failed = state();
+      assert.equal(failed.status, terminal ? 'FAILED' : 'PENDING');
+      assert.equal(failed.parent_status, failed.status);
+      assert.equal(failed.attempts, 1);
+      assert.equal(failed.error_code, errorCode);
+      assert.equal(failed.error_message, 'Synthetic provider failure');
+      for (const key of ['lock_token', 'locked_by', 'locked_at', 'lease_expires_at']) {
+        assert.equal(failed[key], null, `${key} must be cleared`);
+      }
+      assert.deepEqual(snapshot(), immutableBefore);
+      assert.equal(immutableBefore.transcript[0].status, 'COMPLETED');
+
+      if (!terminal) {
+        assert.equal(new Date(failed.next_run_at).toISOString(), nextRun, 'Explicit retry timing must persist exactly');
+        assert.ok(new Date(failed.next_run_at).getTime() > Date.now());
+        const notDue = queryJsonSync<any[]>(container, ephDbName,
+          `SELECT id FROM public.zalo_claim_call_summary_jobs(10, 'before_due', 300)`);
+        assert.ok(!notDue.some(row => row.id === sumId));
+        assert.deepEqual(state(), failed, 'Scheduler must not touch a retry before due');
+        execPsqlSync(container, ephDbName,
+          `UPDATE public.zalo_call_ai_summaries SET next_run_at = now() - interval '1 second' WHERE id = '${sumId}'`);
+        const due = queryJsonSync<any[]>(container, ephDbName,
+          `SELECT id, lock_token FROM public.zalo_claim_call_summary_jobs(10, 'after_due', 300)`);
+        const reclaimed = due.find(row => row.id === sumId);
+        assert.ok(reclaimed, 'Bulk scheduler must reclaim the retry when due');
+        assert.notEqual(reclaimed.lock_token, claim.lock_token);
+        assert.equal(state().attempts, 1, 'Claim must not reset attempts');
+        assert.equal(state().status, 'PROCESSING');
+        assert.equal(state().parent_status, 'PROCESSING');
+      } else {
+        const terminalClaim = queryJsonSync<any[]>(container, ephDbName,
+          `SELECT id FROM public.zalo_claim_call_summary_job('${companyA}', '${sumId}', 'terminal_worker', 300)`);
+        assert.deepEqual(terminalClaim, [], 'FAILED summary must not be automatically reclaimed');
+        assert.deepEqual(state(), failed);
+      }
+      assert.deepEqual(snapshot(), immutableBefore);
+      testPass(terminal ? 10 : 9, `Native PostgreSQL failure terminal=${terminal} synchronizes parent/child, preserves retry metadata and immutable recording/transcript`);
+    }
+
+    // The replacement RPC retains the original service-only execution boundary.
+    const permissions = queryJsonSync<any[]>(container, ephDbName,
+      `SELECT r.role, has_function_privilege(r.role,
+        'public.zalo_fail_call_summary(uuid,uuid,uuid,text,text,boolean,timestamptz)', 'EXECUTE') AS allowed
+       FROM (VALUES ('anon'), ('authenticated'), ('service_role')) r(role)`);
+    assert.deepEqual(permissions, [
+      { role: 'anon', allowed: false },
+      { role: 'authenticated', allowed: false },
+      { role: 'service_role', allowed: true },
+    ]);
+
   } finally {
     execPsqlSync(container, 'postgres', `DROP DATABASE IF EXISTS "${ephDbName}" WITH (FORCE);`);
     console.log(`\n[pg-concurrency] Cleanup completed: ephemeral database "${ephDbName}" dropped cleanly.`);

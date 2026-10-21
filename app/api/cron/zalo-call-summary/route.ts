@@ -13,7 +13,8 @@ export const dynamic = 'force-dynamic';
  * Processes due call summary jobs asynchronously:
  * - Targeted mode: ?summary_id=<uuid> OR ?transcription_id=<uuid>
  *   (Strictly claims only that single job; NO bulk fallback)
- * - Bulk mode: ?limit=1..10 (default 10)
+ * - Bulk mode: ?limit=1..10 (default 10), with no targeted identifier
+ * - Unknown, duplicate, or mixed bulk/targeted query parameters are rejected
  *
  * Authentication:
  *   Authorization: Bearer $CRON_SECRET
@@ -25,6 +26,7 @@ export const dynamic = 'force-dynamic';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_LIMIT_REGEX = /^(?:[1-9]|10)$/;
+const ALLOWED_QUERY_KEYS = new Set(['limit', 'summary_id', 'transcription_id']);
 
 function constantTimeEqual(a: string, b: string): boolean {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -71,6 +73,12 @@ export async function handleZaloCallSummaryCron(
   const { searchParams } = new URL(request.url);
 
   for (const key of searchParams.keys()) {
+    if (!ALLOWED_QUERY_KEYS.has(key)) {
+      return NextResponse.json(
+        { error: 'Unknown query parameter' },
+        { status: 400 }
+      );
+    }
     if (searchParams.getAll(key).length > 1) {
       return NextResponse.json(
         { error: 'Duplicate query parameter' },
@@ -85,6 +93,13 @@ export async function handleZaloCallSummaryCron(
   if (hasSummaryId && hasTranscriptionId) {
     return NextResponse.json(
       { error: 'Provide exactly one targeted identifier' },
+      { status: 400 }
+    );
+  }
+
+  if ((hasSummaryId || hasTranscriptionId) && searchParams.has('limit')) {
+    return NextResponse.json(
+      { error: 'Targeted identifiers cannot be combined with limit' },
       { status: 400 }
     );
   }
