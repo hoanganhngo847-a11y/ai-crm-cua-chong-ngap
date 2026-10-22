@@ -271,7 +271,7 @@ BEGIN
         error_code = p_error_code,
         brain_turn_id = p_brain_turn_id,
         available_at = v_now + (v_backoff_seconds * interval '1 second'),
-        completed_at = CASE WHEN d.attempts >= 5 THEN v_now ELSE NULL END,
+        completed_at = v_now,
         locked_at = NULL,
         lock_token = NULL,
         updated_at = v_now

@@ -42,7 +42,7 @@ export function createBrainService(options: BrainServiceOptions): BrainService {
       const input = validateUntrustedInput(raw);
       if (!options || typeof options.resolveContext !== 'function') throw new BrainBoundaryError('BRAIN_INVALID_CONTEXT');
       const budget = options.timeoutMs ?? (input.latency === 'REALTIME' ? 1500 : 5000);
-      if (!Number.isFinite(budget) || budget < 1 || budget > 10000) throw new BrainBoundaryError('BRAIN_INVALID_CONTEXT');
+      if (!Number.isFinite(budget) || budget < 1 || budget > 30000) throw new BrainBoundaryError('BRAIN_INVALID_CONTEXT');
       const deadline = started + budget;
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {

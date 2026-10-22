@@ -208,7 +208,7 @@ test('missing resolver and absent provider fail closed with canonical errors', a
   assert.equal((await make(undefined, async () => { throw new Error(canary); }).handleBrainTurn(input())).errorCode, 'BRAIN_INVALID_CONTEXT');
 });
 
-for (const timeoutMs of [0, -1, NaN, Infinity, 10001]) {
+for (const timeoutMs of [0, -1, NaN, Infinity, 30001]) {
   test(`invalid timeout budget ${timeoutMs} fails closed`, async () => {
     assert.equal((await make(undefined, resolve, timeoutMs).handleBrainTurn(input())).errorCode, 'BRAIN_INVALID_CONTEXT');
   });
