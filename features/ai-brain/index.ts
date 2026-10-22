@@ -7,3 +7,8 @@ export * from './context-supabase';
 export * from './javis-provider';
 export * from './mock-provider';
 export * from './service';
+export {
+  processDueAiBrainShadowRuns,
+  type ShadowWorkerResult,
+  type ShadowWorkerOptions,
+} from './shadow-worker';

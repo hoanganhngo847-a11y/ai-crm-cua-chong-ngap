@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -6,6 +7,19 @@ export interface MigrationIntegrityResult {
   valid: boolean;
   errors: string[];
   filesCount: number;
+}
+
+export interface MigrationGitGuardOptions {
+  cwd?: string;
+  baseRef?: string;
+  migrationsRelPath?: string;
+}
+
+export interface MigrationGitGuardResult {
+  valid: boolean;
+  errors: string[];
+  mergeBase?: string;
+  changes: string[];
 }
 
 /**
@@ -108,4 +122,128 @@ export function verifyFilesystemMigrations(
   return verifyMigrationIntegrity(files, (filename) => {
     return fs.readFileSync(path.join(migrationsDir, filename), 'utf8');
   });
+}
+
+/**
+ * Validates that migration history is strictly append-only relative to the git baseline
+ * (by default, `origin/main` via `git merge-base HEAD origin/main`).
+ *
+ * Rules:
+ * - Compares committed + working changes against the git merge-base commit.
+ * - Uses `--no-renames` so renamed migrations appear as deletion + addition.
+ * - Only additive ('A') files following the canonical timestamp_sql pattern are allowed.
+ * - Any modification ('M'), deletion ('D'), or rename of a baseline migration is rejected,
+ *   even if committed earlier on the feature branch.
+ * - Fails closed if the baseline ref is unavailable (no silent fallback to HEAD).
+ */
+export function verifyMigrationGitGuard(
+  options?: MigrationGitGuardOptions
+): MigrationGitGuardResult {
+  const cwd = options?.cwd || process.cwd();
+  const baseRef = options?.baseRef || process.env.MIGRATION_BASE_REF || 'origin/main';
+  const migrationsRelPath = (options?.migrationsRelPath || 'supabase/migrations').replace(/\\/g, '/');
+
+  let mergeBase: string;
+  try {
+    mergeBase = execFileSync('git', ['merge-base', 'HEAD', baseRef], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      valid: false,
+      errors: [`Git baseline "${baseRef}" is unavailable or has no merge-base with HEAD: ${msg}`],
+      changes: [],
+    };
+  }
+
+  if (!mergeBase) {
+    return {
+      valid: false,
+      errors: [`Failed to determine git merge-base between HEAD and "${baseRef}"`],
+      changes: [],
+    };
+  }
+
+  let diffOutput: string;
+  try {
+    diffOutput = execFileSync(
+      'git',
+      ['diff', '--no-renames', '--name-status', mergeBase, '--', migrationsRelPath],
+      {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    ).trim();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      valid: false,
+      errors: [`Failed to run git diff against merge-base "${mergeBase}": ${msg}`],
+      mergeBase,
+      changes: [],
+    };
+  }
+
+  let untrackedOutput = '';
+  try {
+    untrackedOutput = execFileSync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard', '--', migrationsRelPath],
+      {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    ).trim();
+  } catch {
+    // untracked file listing is best-effort alongside git diff
+  }
+
+  const changeLines = diffOutput
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const untrackedLines = untrackedOutput
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((f) => `A\t${f}`);
+
+  const allChanges = [...changeLines, ...untrackedLines];
+  const errors: string[] = [];
+
+  const escapedRelPath = migrationsRelPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const validMigrationPattern = new RegExp(`^${escapedRelPath}/\\d{14}_[a-z0-9_]+\\.sql$`);
+
+  for (const line of allChanges) {
+    const parts = line.split(/\t+/);
+    const status = parts[0]?.trim();
+    const rawPath = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
+    const filePath = rawPath.replace(/\\/g, '/');
+
+    if (status !== 'A') {
+      errors.push(
+        `Disallowed migration modification (${status}) on "${filePath}". Existing migrations are immutable and cannot be modified or deleted.`
+      );
+      continue;
+    }
+
+    if (!validMigrationPattern.test(filePath)) {
+      errors.push(
+        `Added migration "${filePath}" does not match canonical naming pattern (${migrationsRelPath}/YYYYMMDDHHMMSS_name.sql).`
+      );
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    mergeBase,
+    changes: allChanges,
+  };
 }
