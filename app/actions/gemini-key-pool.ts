@@ -26,7 +26,16 @@ export async function getGeminiKeyPoolState() {
     .select('id,label,enabled,cooldown_until,last_used_at,last_success_at,last_error_code,consecutive_rate_limits,created_at')
     .order('created_at', { ascending: true });
   if (error) throw new Error('Không thể tải Gemini key pool.');
-  return data || [];
+
+  const now = Date.now();
+  return (data || []).map((item) => ({
+    ...item,
+    cooldown_active: Boolean(
+      item.enabled &&
+      item.cooldown_until &&
+      new Date(item.cooldown_until).getTime() > now
+    ),
+  }));
 }
 
 export async function addGeminiApiKeys(formData: FormData) {
@@ -93,9 +102,12 @@ export async function toggleGeminiApiKey(formData: FormData) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Gemini key ID không hợp lệ.');
 
   const admin = createAdminClient();
+  const patch = enabled
+    ? { enabled: true, cooldown_until: null, updated_at: new Date().toISOString() }
+    : { enabled: false, updated_at: new Date().toISOString() };
   const { error } = await admin
     .from('gemini_api_key_pool')
-    .update({ enabled, cooldown_until: enabled ? null : undefined, updated_at: new Date().toISOString() })
+    .update(patch)
     .eq('id', id);
   if (error) throw new Error('Không thể cập nhật trạng thái API key.');
 
