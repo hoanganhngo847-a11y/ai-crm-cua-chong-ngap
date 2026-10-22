@@ -25,6 +25,7 @@ jobs:
         with:
           version: latest
       - run: npm ci
+      - run: npm run test:ai-brain
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
