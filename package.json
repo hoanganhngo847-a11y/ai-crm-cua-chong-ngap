@@ -68,7 +68,7 @@
     "test:voice:business": "node --conditions=react-server --import tsx tests/voice/business-call-db.test.ts",
     "test:voice:unit": "node --conditions=react-server tests/run-voice-tests.cjs --unit",
     "test:zalo-transcription:bulk-recovery": "tsx --conditions=react-server tests/zalo-recordings/transcription-bulk-recovery.test.ts",
-    "test:ai-brain": "tsx --conditions=react-server --test tests/ai-brain/contract.test.ts"
+    "test:ai-brain": "tsx --conditions=react-server --test tests/ai-brain/contract.test.ts tests/ai-brain/javis-provider.test.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",
