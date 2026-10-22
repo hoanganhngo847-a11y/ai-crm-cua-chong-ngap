@@ -137,7 +137,7 @@ export function createBrainContextGateway(dataSource: BrainContextDataSource): B
               case 'search_company_knowledge':
                 return succeeded(call.name, await dataSource.searchCompanyKnowledge(scope, call.arguments.query));
               default: {
-                const exhaustive: never = call;
+                const exhaustive: never = call.name;
                 void exhaustive;
                 return failed(null, 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED');
               }
