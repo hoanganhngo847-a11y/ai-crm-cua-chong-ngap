@@ -4,6 +4,7 @@ import { ALLOWED_BRAIN_CHANNELS } from './contracts';
 import {
   BRAIN_CONTEXT_TOOL_NAMES,
   type BrainContextDataSource,
+  type BrainContextErrorCode,
   type BrainContextGateway,
   type BrainContextScope,
   type BrainContextSession,
@@ -65,8 +66,7 @@ function validateToolCall(raw: unknown): BrainContextToolCall | null {
   return Object.freeze({ name: input.name as BrainContextToolName, arguments: Object.freeze({}) });
 }
 
-function failed(tool: BrainContextToolName | null, errorCode: BrainContextToolResult extends infer _T ?
-  'BRAIN_CONTEXT_INVALID_SCOPE' | 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED' | 'BRAIN_CONTEXT_NOT_FOUND' | 'BRAIN_CONTEXT_UNAVAILABLE' : never): BrainContextToolResult {
+function failed(tool: BrainContextToolName | null, errorCode: BrainContextErrorCode): BrainContextToolResult {
   return Object.freeze({ ok: false, tool, errorCode });
 }
 
