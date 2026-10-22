@@ -26,6 +26,7 @@ jobs:
           version: latest
       - run: npm ci
       - run: npm run test:ai-brain
+      - run: npx tsx --conditions=react-server --test tests/ai-brain/context-gateway.test.ts
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
