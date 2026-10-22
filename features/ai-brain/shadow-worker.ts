@@ -186,9 +186,12 @@ async function processClaim(
     return 'skipped';
   }
 
+  const rawTimeout = process.env.SHADOW_TIMEOUT_MS ? parseInt(process.env.SHADOW_TIMEOUT_MS, 10) : 10000;
+  const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 1000 && rawTimeout <= 10000 ? rawTimeout : 10000;
+
   const service = createBrainService({
     provider,
-    timeoutMs: 5000,
+    timeoutMs,
     resolveContext: async (selector) => {
       if (
         selector.customerId !== eligible.context.customerId ||
