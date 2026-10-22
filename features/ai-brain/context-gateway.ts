@@ -14,6 +14,7 @@ import {
 } from './context-contracts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const FROZEN_CONTEXT_TOOLS: readonly BrainContextToolName[] = Object.freeze([...BRAIN_CONTEXT_TOOL_NAMES]);
 
 function plainRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -90,7 +91,7 @@ export function createBrainContextGateway(dataSource: BrainContextDataSource): B
       }
 
       return Object.freeze({
-        tools: BRAIN_CONTEXT_TOOL_NAMES,
+        tools: FROZEN_CONTEXT_TOOLS,
         async execute(rawCall: unknown): Promise<BrainContextToolResult> {
           const call = validateToolCall(rawCall);
           if (!call) return failed(null, 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED');
