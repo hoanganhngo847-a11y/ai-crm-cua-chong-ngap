@@ -76,7 +76,6 @@ function validateToolCall(raw: unknown): BrainContextToolCall | null {
 
   if (Object.prototype.hasOwnProperty.call(input, 'arguments')) {
     const args = plainRecord(input.arguments);
-    // All non-search tools accept an exact empty object only. Authority and row limits remain server-owned.
     if (!args || Object.keys(args).length !== 0) return null;
   }
   return Object.freeze({
@@ -136,14 +135,8 @@ export function createBrainContextGateway(dataSource: BrainContextDataSource): B
                 return succeeded(call.name, await dataSource.getCustomerMemory(scope));
               case 'search_company_knowledge':
                 return succeeded(call.name, await dataSource.searchCompanyKnowledge(scope, call.arguments.query));
-              default: {
-                const exhaustive: never = call.name;
-                void exhaustive;
-                return failed(null, 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED');
-              }
             }
           } catch {
-            // DB/provider details must never cross the context boundary.
             return failed(call.name, 'BRAIN_CONTEXT_UNAVAILABLE');
           }
         },
