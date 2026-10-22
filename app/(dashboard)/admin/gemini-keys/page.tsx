@@ -1,4 +1,5 @@
 import React from 'react';
+import { connection } from 'next/server';
 import {
   addGeminiApiKeys,
   deleteGeminiApiKey,
@@ -7,6 +8,7 @@ import {
 } from '../../../actions/gemini-key-pool';
 
 export default async function GeminiKeysPage() {
+  await connection();
   const keys = await getGeminiKeyPoolState();
   const ready = keys.filter((item) => item.enabled && !item.cooldown_active).length;
 
