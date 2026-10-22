@@ -30,7 +30,7 @@ CREATE TABLE public.ai_brain_shadow_runs (
   company_id uuid NOT NULL,
   customer_id uuid NOT NULL,
   conversation_id uuid NOT NULL,
-  source_interaction_id uuid NOT NULL REFERENCES public.interactions(id) ON DELETE RESTRICT,
+  source_interaction_id uuid NOT NULL,
   channel text NOT NULL CHECK (channel IN ('MESSENGER', 'ZALO')),
   status text NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'SKIPPED', 'FAILED')),
@@ -62,6 +62,10 @@ CREATE TABLE public.ai_brain_shadow_runs (
     FOREIGN KEY (company_id, customer_id, conversation_id)
     REFERENCES public.conversations(company_id, customer_id, id)
     ON DELETE RESTRICT,
+  CONSTRAINT fk_ai_brain_shadow_runs_source_interaction
+    FOREIGN KEY (company_id, conversation_id, source_interaction_id)
+    REFERENCES public.interactions(company_id, conversation_id, id)
+    ON DELETE RESTRICT,
   CONSTRAINT uq_ai_brain_shadow_runs_source UNIQUE (source_interaction_id),
   CHECK (jsonb_typeof(tools_used) = 'array'),
   CHECK (jsonb_typeof(source_references) = 'array'),
@@ -78,6 +82,9 @@ CREATE TABLE public.ai_brain_shadow_runs (
 CREATE INDEX idx_ai_brain_shadow_runs_due
   ON public.ai_brain_shadow_runs (status, available_at, created_at)
   WHERE status IN ('PENDING', 'FAILED');
+CREATE INDEX idx_ai_brain_shadow_runs_stale_processing
+  ON public.ai_brain_shadow_runs (locked_at, attempts)
+  WHERE status = 'PROCESSING';
 CREATE INDEX idx_ai_brain_shadow_runs_scope
   ON public.ai_brain_shadow_runs (company_id, customer_id, conversation_id, created_at DESC);
 CREATE INDEX idx_ai_brain_shadow_runs_channel
@@ -95,7 +102,7 @@ CREATE OR REPLACE FUNCTION public.enqueue_ai_brain_shadow_run()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = ''
 AS $$
 DECLARE
   v_channel text;
@@ -106,7 +113,7 @@ BEGIN
      OR NEW.conversation_id IS NULL
      OR NEW.sanitization_status <> 'SUCCEEDED'
      OR NEW.sanitized_content IS NULL
-     OR btrim(NEW.sanitized_content) = '' THEN
+     OR NEW.sanitized_content !~ '[^[:space:]]' THEN
     RETURN NEW;
   END IF;
 
@@ -161,23 +168,40 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = ''
 AS $$
 BEGIN
   IF p_lock_token IS NULL OR p_limit IS NULL OR p_limit < 1 OR p_limit > 10 THEN
     RAISE EXCEPTION 'INVALID_REQUEST';
   END IF;
 
+  WITH expired_final AS (
+    SELECT r.id
+    FROM public.ai_brain_shadow_runs r
+    WHERE r.status = 'PROCESSING'
+      AND r.locked_at < now() - interval '5 minutes'
+      AND r.attempts >= 5
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE public.ai_brain_shadow_runs r
+  SET status = 'FAILED',
+      error_code = 'BRAIN_TIMEOUT',
+      completed_at = now(),
+      locked_at = NULL,
+      lock_token = NULL,
+      updated_at = now()
+  FROM expired_final ef
+  WHERE r.id = ef.id;
+
   RETURN QUERY
   WITH candidates AS (
     SELECT r.id
     FROM public.ai_brain_shadow_runs r
     WHERE (
-      r.status = 'PENDING'
-      OR (
-        r.status = 'FAILED'
-        AND r.attempts < 5
+      (
+        r.status IN ('PENDING', 'FAILED')
         AND r.available_at <= now()
+        AND r.attempts < 5
       )
       OR (
         r.status = 'PROCESSING'
@@ -230,7 +254,7 @@ CREATE OR REPLACE FUNCTION public.finish_ai_brain_shadow_run(
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = ''
 AS $$
 DECLARE
   v_updated integer;
@@ -265,7 +289,8 @@ BEGIN
       updated_at = now()
   WHERE id = p_id
     AND status = 'PROCESSING'
-    AND lock_token = p_lock_token;
+    AND lock_token = p_lock_token
+    AND locked_at > now() - interval '5 minutes';
 
   GET DIAGNOSTICS v_updated = ROW_COUNT;
   RETURN v_updated = 1;
