@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '../../lib/supabase/admin';
 
 const MAX_POOL_KEYS = 30;
@@ -65,12 +66,13 @@ export function decryptGeminiApiKey(row: Pick<ClaimedEncryptedKey, 'ciphertext' 
 }
 
 async function markResult(
+  client: SupabaseClient,
   keyId: string,
   result: 'SUCCESS' | 'RATE_LIMITED' | 'AUTH_ERROR' | 'ERROR',
   errorCode?: string
 ): Promise<void> {
   try {
-    await createAdminClient().rpc('gemini_pool_mark_result', {
+    await client.rpc('gemini_pool_mark_result', {
       p_key_id: keyId,
       p_result: result,
       p_error_code: errorCode || null,
@@ -86,13 +88,14 @@ export async function runWithGeminiKeyPool<T>(options: {
   fallbackKey?: string;
   rateLimitCode: string;
   authErrorCode: string;
+  client?: SupabaseClient;
 }): Promise<T> {
   if (!isGeminiKeyPoolEnabled()) {
     if (!options.fallbackKey) throw new Error('GEMINI_NOT_CONFIGURED');
     return options.invoke(options.fallbackKey);
   }
 
-  const admin = createAdminClient();
+  const admin = options.client || createAdminClient();
   const { count, error: countError } = await admin
     .from('gemini_api_key_pool')
     .select('id', { count: 'exact', head: true })
@@ -124,28 +127,28 @@ export async function runWithGeminiKeyPool<T>(options: {
     try {
       apiKey = decryptGeminiApiKey(claimed);
     } catch {
-      await markResult(claimed.key_id, 'AUTH_ERROR', 'GEMINI_KEY_DECRYPT_FAILED');
+      await markResult(admin, claimed.key_id, 'AUTH_ERROR', 'GEMINI_KEY_DECRYPT_FAILED');
       continue;
     }
 
     try {
       const result = await options.invoke(apiKey);
-      await markResult(claimed.key_id, 'SUCCESS');
+      await markResult(admin, claimed.key_id, 'SUCCESS');
       return result;
     } catch (err: unknown) {
       lastError = err;
       const code = err instanceof Error ? err.message : '';
 
       if (code === options.rateLimitCode) {
-        await markResult(claimed.key_id, 'RATE_LIMITED', code);
+        await markResult(admin, claimed.key_id, 'RATE_LIMITED', code);
         continue;
       }
       if (code === options.authErrorCode) {
-        await markResult(claimed.key_id, 'AUTH_ERROR', code);
+        await markResult(admin, claimed.key_id, 'AUTH_ERROR', code);
         continue;
       }
 
-      await markResult(claimed.key_id, 'ERROR', code || 'GEMINI_PROVIDER_ERROR');
+      await markResult(admin, claimed.key_id, 'ERROR', code || 'GEMINI_PROVIDER_ERROR');
       throw err;
     }
   }
