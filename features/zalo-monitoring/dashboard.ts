@@ -91,6 +91,15 @@ function toPipelineStatus(value: unknown): PipelineStageStatus {
     : 'NOT_STARTED';
 }
 
+function laterIso(current: string | null, candidate: unknown): string | null {
+  if (typeof candidate !== 'string') return current;
+  const candidateMs = new Date(candidate).getTime();
+  if (!Number.isFinite(candidateMs)) return current;
+  if (!current) return candidate;
+  const currentMs = new Date(current).getTime();
+  return !Number.isFinite(currentMs) || candidateMs > currentMs ? candidate : current;
+}
+
 export function safePipelineErrorCode(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const normalized = value.trim();
@@ -112,7 +121,7 @@ export function aggregatePipelineStatuses(rows: StatusSource[]) {
 }
 
 export async function getZaloAiPipelineDashboard(companyId: string): Promise<ZaloAiPipelineDashboard> {
-  if (!/^[0-9a-f-]{36}$/i.test(companyId)) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) {
     throw new Error('INVALID_COMPANY');
   }
 
@@ -123,7 +132,7 @@ export async function getZaloAiPipelineDashboard(companyId: string): Promise<Zal
   const [windowResult, recentResult] = await Promise.all([
     admin
       .from('zalo_personal_calls')
-      .select('recording_status,transcript_status,summary_status')
+      .select('started_at,recording_status,transcript_status,summary_status')
       .eq('company_id', companyId)
       .gte('started_at', windowStart)
       .order('started_at', { ascending: false })
@@ -205,8 +214,8 @@ export async function getZaloAiPipelineDashboard(companyId: string): Promise<Zal
           ready += 1;
         }
 
-        if (item.last_used_at && (!lastUsedAt || item.last_used_at > lastUsedAt)) lastUsedAt = item.last_used_at;
-        if (item.last_success_at && (!lastSuccessAt || item.last_success_at > lastSuccessAt)) lastSuccessAt = item.last_success_at;
+        lastUsedAt = laterIso(lastUsedAt, item.last_used_at);
+        lastSuccessAt = laterIso(lastSuccessAt, item.last_success_at);
       }
 
       geminiPool = {
