@@ -88,10 +88,15 @@ export async function runWithGeminiKeyPool<T>(options: {
   fallbackKey?: string;
   rateLimitCode: string;
   authErrorCode: string;
+  notConfiguredCode?: string;
+  unavailableCode?: string;
   client?: SupabaseClient;
 }): Promise<T> {
+  const notConfiguredCode = options.notConfiguredCode || 'GEMINI_NOT_CONFIGURED';
+  const unavailableCode = options.unavailableCode || 'GEMINI_PROVIDER_UNAVAILABLE';
+
   if (!isGeminiKeyPoolEnabled()) {
-    if (!options.fallbackKey) throw new Error('GEMINI_NOT_CONFIGURED');
+    if (!options.fallbackKey) throw new Error(notConfiguredCode);
     return options.invoke(options.fallbackKey);
   }
 
@@ -101,11 +106,11 @@ export async function runWithGeminiKeyPool<T>(options: {
     .select('id', { count: 'exact', head: true })
     .eq('enabled', true);
 
-  if (countError) throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
+  if (countError) throw new Error(unavailableCode);
 
   // Backwards-compatible fallback until the first pool key is saved.
   if (!count) {
-    if (!options.fallbackKey) throw new Error('GEMINI_NOT_CONFIGURED');
+    if (!options.fallbackKey) throw new Error(notConfiguredCode);
     return options.invoke(options.fallbackKey);
   }
 
@@ -117,7 +122,7 @@ export async function runWithGeminiKeyPool<T>(options: {
     const { data, error } = await admin.rpc('gemini_pool_claim_key', {
       p_exclude: exclude,
     });
-    if (error) throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
+    if (error) throw new Error(unavailableCode);
 
     const claimed = (Array.isArray(data) ? data[0] : data) as ClaimedEncryptedKey | null;
     if (!claimed?.key_id) break;
