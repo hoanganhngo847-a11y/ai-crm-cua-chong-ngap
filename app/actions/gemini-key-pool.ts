@@ -6,6 +6,7 @@ import { createAdminClient } from '../../lib/supabase/admin';
 import { encryptGeminiApiKey } from '../../features/gemini-key-pool/service';
 
 const MAX_KEYS = 30;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function requirePoolAdmin() {
   const actor = await getActorContext();
@@ -64,23 +65,34 @@ export async function addGeminiApiKeys(formData: FormData) {
     throw new Error(`Pool tối đa ${MAX_KEYS} key. Hiện đã có ${count || 0} key.`);
   }
 
-  let offset = count || 0;
-  for (const key of keys) {
+  const encryptedEntries = keys.map((key, index) => {
     const encrypted = encryptGeminiApiKey(key);
-    const label = `${labelPrefix} ${String(offset + 1).padStart(2, '0')}`;
-    const { error } = await admin.from('gemini_api_key_pool').insert({
-      label,
+    return {
+      label: `${labelPrefix} ${String((count || 0) + index + 1).padStart(2, '0')}`,
       ciphertext: encrypted.ciphertext,
       iv: encrypted.iv,
       auth_tag: encrypted.authTag,
       fingerprint: encrypted.fingerprint,
       created_by: actor.userId,
-    });
-    if (error) {
-      if (error.code === '23505') throw new Error('Có API key đã tồn tại trong pool.');
-      throw new Error('Không thể lưu API key vào pool.');
-    }
-    offset += 1;
+    };
+  });
+
+  const fingerprints = encryptedEntries.map((entry) => entry.fingerprint);
+  const { data: existing, error: existingError } = await admin
+    .from('gemini_api_key_pool')
+    .select('fingerprint')
+    .in('fingerprint', fingerprints);
+  if (existingError) throw new Error('Không thể kiểm tra API key trùng lặp.');
+  if ((existing || []).length > 0) {
+    throw new Error('Có API key đã tồn tại trong pool.');
+  }
+
+  const { error: insertError } = await admin
+    .from('gemini_api_key_pool')
+    .insert(encryptedEntries);
+  if (insertError) {
+    if (insertError.code === '23505') throw new Error('Có API key đã tồn tại trong pool.');
+    throw new Error('Không thể lưu API key vào pool.');
   }
 
   await admin.from('audit_logs').insert({
@@ -99,7 +111,7 @@ export async function toggleGeminiApiKey(formData: FormData) {
   const actor = await requirePoolAdmin();
   const id = String(formData.get('id') || '');
   const enabled = String(formData.get('enabled') || '') === 'true';
-  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Gemini key ID không hợp lệ.');
+  if (!UUID.test(id)) throw new Error('Gemini key ID không hợp lệ.');
 
   const admin = createAdminClient();
   const patch = enabled
@@ -127,7 +139,7 @@ export async function toggleGeminiApiKey(formData: FormData) {
 export async function deleteGeminiApiKey(formData: FormData) {
   const actor = await requirePoolAdmin();
   const id = String(formData.get('id') || '');
-  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Gemini key ID không hợp lệ.');
+  if (!UUID.test(id)) throw new Error('Gemini key ID không hợp lệ.');
 
   const admin = createAdminClient();
   const { error } = await admin.from('gemini_api_key_pool').delete().eq('id', id);
