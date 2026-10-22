@@ -48,9 +48,10 @@ export const ALLOWED_BRAIN_DECISIONS: readonly BrainDecision[] = [
   'ERROR',
 ] as const;
 
-export type BrainDelivery = 'DRAFT_ONLY';
+export type BrainDelivery = 'DRAFT_ONLY' | 'LIVE_SEND';
 export const ALLOWED_BRAIN_DELIVERIES: readonly BrainDelivery[] = [
   'DRAFT_ONLY',
+  'LIVE_SEND',
 ] as const;
 
 export type BrainErrorCode =
@@ -123,6 +124,7 @@ export interface BrainServerContext {
   readonly permissionProfile: BrainCapability;
   readonly conversationState: BrainConversationState;
   readonly allowDrafts: boolean;
+  readonly deliveryMode?: BrainDelivery;
   readonly traceId: string;
 }
 
