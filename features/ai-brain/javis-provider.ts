@@ -140,8 +140,19 @@ export class JavisBrainProvider implements BrainProvider {
     };
   }
 
+  async #request(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.#fetch(url, init);
+    } catch {
+      // fetch/network exceptions often embed hostnames, DNS details or proxy text. Collapse them
+      // before they cross the adapter boundary. BrainService still distinguishes deadline aborts
+      // through its own AbortSignal state and maps those to BRAIN_TIMEOUT.
+      throw new JavisAdapterError();
+    }
+  }
+
   async runTurn(request: BrainTurnRequest, options: { signal: AbortSignal }): Promise<BrainProposal> {
-    const response = await this.#fetch(`${this.#baseUrl}${TURN_PATH}`, {
+    const response = await this.#request(`${this.#baseUrl}${TURN_PATH}`, {
       method: 'POST',
       headers: this.#headers(true),
       body: JSON.stringify(request),
@@ -154,7 +165,7 @@ export class JavisBrainProvider implements BrainProvider {
 
   /** Explicit readiness probe for deployment/operations. No CRM payload is sent. */
   async checkHealth(options: { signal: AbortSignal }): Promise<JavisBrainHealth> {
-    const response = await this.#fetch(`${this.#baseUrl}${HEALTH_PATH}`, {
+    const response = await this.#request(`${this.#baseUrl}${HEALTH_PATH}`, {
       method: 'GET',
       headers: this.#headers(false),
       signal: options.signal,
