@@ -28,6 +28,12 @@ interface EligibleShadowInput {
   context: BrainServerContext;
 }
 
+/**
+ * Documented stable server-owned workload actor ID for AI Brain shadow execution.
+ * Standard UUID representing the background shadow worker workload identity across tenants.
+ */
+export const SHADOW_WORKLOAD_ACTOR_ID = '00000000-0000-4000-8000-0000000000a1';
+
 export interface ShadowWorkerResult {
   claimed: number;
   completed: number;
@@ -113,7 +119,7 @@ async function loadEligibleInput(client: SupabaseClient, claim: ShadowClaim): Pr
       conversationId: conversation.id,
       channel: claim.channel as BrainChannel,
       modality: 'TEXT',
-      caller: Object.freeze({ actorId: 'ai-brain-shadow-worker', actorType: 'WORKLOAD' }),
+      caller: Object.freeze({ actorId: SHADOW_WORKLOAD_ACTOR_ID, actorType: 'WORKLOAD' }),
       permissionProfile: 'READ_ONLY',
       conversationState: state,
       allowDrafts: state !== 'AI_PAUSED',
@@ -151,44 +157,6 @@ async function finish(
   if (error || data !== true) throw new Error('SHADOW_FINISH_FENCED');
 }
 
-async function finishUnavailable(client: SupabaseClient, claim: ShadowClaim, lockToken: string): Promise<void> {
-  const now = randomUUID();
-  const result: BrainTurnResult = Object.freeze({
-    version: 'v1',
-    turnId: now,
-    traceId: randomUUID(),
-    decision: 'ERROR',
-    confidence: 0,
-    handoverRequired: true,
-    provider: 'system',
-    model: 'none',
-    toolsUsed: [],
-    memoryReferences: [],
-    sourceReferences: [],
-    errorCode: 'BRAIN_UNAVAILABLE',
-    latencyMs: 0,
-    audit: Object.freeze({
-      companyId: claim.company_id,
-      customerId: claim.customer_id,
-      conversationId: claim.conversation_id,
-      channel: claim.channel,
-      modality: 'TEXT',
-      turnId: now,
-      traceId: randomUUID(),
-      provider: 'system',
-      model: 'none',
-      latencyMs: 0,
-      decision: 'ERROR',
-      handoverRequired: true,
-      toolsUsed: [],
-      memoryReferences: [],
-      sourceReferences: [],
-      errorCode: 'BRAIN_UNAVAILABLE',
-    }),
-  });
-  await finish(client, claim, lockToken, 'FAILED', result);
-}
-
 async function processClaim(
   client: SupabaseClient,
   claim: ShadowClaim,
@@ -216,10 +184,6 @@ async function processClaim(
   if (!eligible) {
     await finish(client, claim, lockToken, 'SKIPPED');
     return 'skipped';
-  }
-  if (!provider) {
-    await finishUnavailable(client, claim, lockToken);
-    return 'failed';
   }
 
   const service = createBrainService({
