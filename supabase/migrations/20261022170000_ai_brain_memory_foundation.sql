@@ -46,7 +46,7 @@ CREATE TRIGGER trg_ai_company_knowledge_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 ALTER TABLE public.ai_company_knowledge ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.ai_company_knowledge FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.ai_company_knowledge FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON public.ai_company_knowledge TO service_role;
 
 CREATE TABLE public.ai_customer_memories (
@@ -120,7 +120,7 @@ CREATE TRIGGER trg_ai_customer_memories_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 ALTER TABLE public.ai_customer_memories ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.ai_customer_memories FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.ai_customer_memories FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON public.ai_customer_memories TO service_role;
 
 COMMENT ON TABLE public.ai_company_knowledge IS
