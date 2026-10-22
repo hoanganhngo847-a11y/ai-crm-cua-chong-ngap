@@ -4,6 +4,8 @@ export type TranscriptionLogAction =
   | 'transcription_reserved'
   | 'processing_started'
   | 'provider_completed'
+  | 'channel_checkpoint_saved'
+  | 'channel_checkpoint_reused'
   | 'persisted'
   | 'failed'
   | 'retry_scheduled';
