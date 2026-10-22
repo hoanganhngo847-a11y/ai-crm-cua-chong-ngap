@@ -8,8 +8,7 @@ import {
 
 export default async function GeminiKeysPage() {
   const keys = await getGeminiKeyPoolState();
-  const now = Date.now();
-  const ready = keys.filter((item) => item.enabled && (!item.cooldown_until || new Date(item.cooldown_until).getTime() <= now)).length;
+  const ready = keys.filter((item) => item.enabled && !item.cooldown_active).length;
 
   return (
     <div className="space-y-6">
@@ -44,7 +43,7 @@ export default async function GeminiKeysPage() {
         {keys.length === 0 ? <div className="p-6 text-sm text-slate-500">Chưa có credential nào.</div> : (
           <div className="divide-y divide-slate-800">
             {keys.map((item) => {
-              const cooling = Boolean(item.cooldown_until && new Date(item.cooldown_until).getTime() > now);
+              const cooling = item.cooldown_active;
               return (
                 <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
                   <div>
