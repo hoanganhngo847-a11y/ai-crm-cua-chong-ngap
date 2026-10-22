@@ -154,6 +154,44 @@ async function main() {
     assert.deepEqual(exhausted.marks.map((item) => item.result), ['RATE_LIMITED', 'RATE_LIMITED']);
     pass('all rate-limited entries fail closed with canonical error');
 
+    const summaryCase = makeClient([
+      { id: '77777777-7777-7777-7777-777777777777', apiKey: 'pool-summary-one-abcdefghijklmnopqrstuvwxyz' },
+      { id: '88888888-8888-8888-8888-888888888888', apiKey: 'pool-summary-two-abcdefghijklmnopqrstuvwxyz' },
+    ]);
+    const summarySeen: string[] = [];
+    const summaryResult = await runWithGeminiKeyPool({
+      client: summaryCase.client,
+      rateLimitCode: 'SUMMARY_PROVIDER_RATE_LIMITED',
+      authErrorCode: 'SUMMARY_PROVIDER_AUTH_ERROR',
+      notConfiguredCode: 'SUMMARY_PROVIDER_NOT_CONFIGURED',
+      unavailableCode: 'SUMMARY_PROVIDER_UNAVAILABLE',
+      invoke: async (key) => {
+        summarySeen.push(key);
+        if (key.includes('one')) throw new Error('SUMMARY_PROVIDER_RATE_LIMITED');
+        return 'summary-success';
+      },
+    });
+    assert.equal(summaryResult, 'summary-success');
+    assert.deepEqual(summarySeen, [
+      'pool-summary-one-abcdefghijklmnopqrstuvwxyz',
+      'pool-summary-two-abcdefghijklmnopqrstuvwxyz',
+    ]);
+    assert.deepEqual(summaryCase.marks.map((item) => item.result), ['RATE_LIMITED', 'SUCCESS']);
+    pass('summary 429 preserves summary error contract and rotates to next entry');
+
+    process.env.GEMINI_POOL_ENABLED = 'false';
+    await assert.rejects(
+      () => runWithGeminiKeyPool({
+        rateLimitCode: 'SUMMARY_PROVIDER_RATE_LIMITED',
+        authErrorCode: 'SUMMARY_PROVIDER_AUTH_ERROR',
+        notConfiguredCode: 'SUMMARY_PROVIDER_NOT_CONFIGURED',
+        unavailableCode: 'SUMMARY_PROVIDER_UNAVAILABLE',
+        invoke: async () => 'never',
+      }),
+      /SUMMARY_PROVIDER_NOT_CONFIGURED/
+    );
+    pass('summary pool preserves SUMMARY_PROVIDER_NOT_CONFIGURED when no fallback exists');
+
     console.log(`ALL ${passed} GEMINI KEY POOL TESTS PASSED`);
   } finally {
     if (originalEnabled === undefined) delete process.env.GEMINI_POOL_ENABLED;
