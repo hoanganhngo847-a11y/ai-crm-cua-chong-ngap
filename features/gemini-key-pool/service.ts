@@ -22,9 +22,9 @@ interface ClaimedEncryptedKey {
 
 function masterKey(): Buffer {
   const raw = process.env.GEMINI_POOL_MASTER_KEY_B64;
-  if (!raw) throw new Error('GEMINI_KEY_POOL_NOT_CONFIGURED');
+  if (!raw) throw new Error('GEMINI_NOT_CONFIGURED');
   const key = Buffer.from(raw, 'base64');
-  if (key.length !== 32) throw new Error('GEMINI_KEY_POOL_NOT_CONFIGURED');
+  if (key.length !== 32) throw new Error('GEMINI_NOT_CONFIGURED');
   return key;
 }
 
@@ -88,7 +88,7 @@ export async function runWithGeminiKeyPool<T>(options: {
   authErrorCode: string;
 }): Promise<T> {
   if (!isGeminiKeyPoolEnabled()) {
-    if (!options.fallbackKey) throw new Error('GEMINI_KEY_POOL_NOT_CONFIGURED');
+    if (!options.fallbackKey) throw new Error('GEMINI_NOT_CONFIGURED');
     return options.invoke(options.fallbackKey);
   }
 
@@ -98,11 +98,11 @@ export async function runWithGeminiKeyPool<T>(options: {
     .select('id', { count: 'exact', head: true })
     .eq('enabled', true);
 
-  if (countError) throw new Error('GEMINI_KEY_POOL_UNAVAILABLE');
+  if (countError) throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
 
   // Backwards-compatible fallback until the first pool key is saved.
   if (!count) {
-    if (!options.fallbackKey) throw new Error('GEMINI_KEY_POOL_EMPTY');
+    if (!options.fallbackKey) throw new Error('GEMINI_NOT_CONFIGURED');
     return options.invoke(options.fallbackKey);
   }
 
@@ -114,7 +114,7 @@ export async function runWithGeminiKeyPool<T>(options: {
     const { data, error } = await admin.rpc('gemini_pool_claim_key', {
       p_exclude: exclude,
     });
-    if (error) throw new Error('GEMINI_KEY_POOL_UNAVAILABLE');
+    if (error) throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
 
     const claimed = (Array.isArray(data) ? data[0] : data) as ClaimedEncryptedKey | null;
     if (!claimed?.key_id) break;
