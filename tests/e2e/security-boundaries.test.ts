@@ -34,6 +34,7 @@ import type { SalesStyleOutput } from '../../shared/contracts/sales-style';
 import { cleanupCompanyFixtures } from '../helpers/fixture-cleanup';
 import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 import { scanClientBoundaries, scanPrivateQueries } from '../helpers/client-boundary-scan';
+import { verifyMigrationGitGuard } from './verify-migration-integrity';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 const SUPABASE_ANON_KEY =
@@ -734,9 +735,13 @@ export async function runSecurityBoundariesGate(): Promise<void> {
 
     for (const p of protectedPaths) {
       if (p === 'supabase/migrations') {
-        const changes = execSync('git diff HEAD --name-status -- supabase/migrations', { cwd: process.cwd(), encoding: 'utf8' }).trim();
-        const immutable = changes.split('\n').filter(Boolean).every(line => /^A\s+supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/.test(line));
-        assert(immutable, 'Section 27: Existing migrations unchanged; only additive migration files permitted');
+        const guardResult = verifyMigrationGitGuard();
+        assert(
+          guardResult.valid,
+          `Section 27: Existing migrations unchanged; only additive migration files permitted${
+            guardResult.errors.length > 0 ? `: ${guardResult.errors.join('; ')}` : ''
+          }`
+        );
         continue;
       }
       const diffOut = execSync(`git diff HEAD -- ${p}`, { cwd: process.cwd(), encoding: 'utf8' }).trim();
