@@ -21,7 +21,9 @@ export interface JavisBrainConfig {
   readonly port: number;
   readonly host: string;
   readonly authToken: string;
-  readonly geminiApiKey: string;
+  readonly runtimeBaseUrl?: string;
+  readonly runtimeInternalToken?: string;
+  readonly geminiApiKey?: string;
   readonly model: string;
   readonly maxConcurrency: number;
   readonly standardDeadlineMs: number;
