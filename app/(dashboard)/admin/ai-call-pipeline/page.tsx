@@ -83,7 +83,10 @@ export default async function AiCallPipelinePage() {
     return <div className="rounded-xl border border-red-900 bg-red-950/30 p-6 text-red-300">Không xác định được doanh nghiệp.</div>;
   }
 
-  await requireBossAdmin(actor.companyId, { requireAal2: false });
+  // Defense in depth: require AAL2 here before any service-role monitoring read.
+  // The parent Admin layout also enforces MFA navigation, but page authorization
+  // must not depend on render ordering between layouts and child Server Components.
+  await requireBossAdmin(actor.companyId);
 
   let dashboard;
   try {
