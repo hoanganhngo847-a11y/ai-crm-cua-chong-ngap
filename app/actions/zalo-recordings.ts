@@ -6,12 +6,13 @@ import { recordingActor, authorizedRecording } from '../../features/zalo-recordi
 import { RecordingError, sha256, UUID } from '../../features/zalo-recordings/metadata';
 import { RECORDING_BUCKET } from '../../features/zalo-recordings/upload';
 import { retryZaloTranscriptionJob } from '../../features/zalo-transcription/service';
+import { retryZaloCallSummary as retrySummaryService } from '../../features/zalo-summary/service';
 
 export async function listZaloCalls(page = 1, customerId?: string) {
   const actor=await recordingActor();
   if(!Number.isInteger(page) || page<1 || page>10000 || (customerId && !UUID.test(customerId))) throw new RecordingError('INVALID_FILTER');
   let query=createAdminClient().from('zalo_personal_calls')
-    .select('id,customer_id,remote_display_name,direction,started_at,duration_seconds,recording_status,transcript_status,matching_status,identity_ambiguous,customers(name,customer_code)',{count:'exact'})
+    .select('id,customer_id,remote_display_name,direction,started_at,duration_seconds,recording_status,transcript_status,summary_status,matching_status,identity_ambiguous,customers(name,customer_code)',{count:'exact'})
     .eq('company_id',actor.companyId).eq('recording_status','READY').order('started_at',{ascending:false}).range((page-1)*20,page*20-1);
   if(actor.role==='SALE') query=query.eq('staff_user_id',actor.userId);
   if(customerId) query=query.eq('customer_id',customerId);
@@ -85,6 +86,74 @@ export async function retryZaloTranscription(callId: string) {
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Không thể thử lại bóc băng.';
+    throw new RecordingError(msg, 500);
+  }
+}
+export async function getZaloCallSummary(callId: string) {
+  const { actor, call } = await authorizedRecording(callId);
+  const admin = createAdminClient();
+  const { data: summary, error: sumError } = await admin
+    .from('zalo_call_ai_summaries')
+    .select('id,company_id,call_id,transcription_id,status,provider,model,prompt_version,summary,customer_needs,objections,next_actions,key_points,lead_temperature,follow_up_required,follow_up_suggested_time,follow_up_reason,confidence,created_at,completed_at,error_code')
+    .eq('company_id', actor.companyId)
+    .eq('call_id', call.id)
+    .maybeSingle();
+
+  if (sumError) throw new RecordingError('Không thể tải tóm tắt AI.', 503);
+  if (!summary) {
+    return {
+      status: (call as { summary_status?: string }).summary_status || 'NOT_STARTED',
+      summary: null,
+      customer_needs: [],
+      objections: [],
+      next_actions: [],
+      key_points: [],
+      lead_temperature: null,
+      follow_up_required: false,
+      follow_up_suggested_time: null,
+      follow_up_reason: null,
+      confidence: null,
+    };
+  }
+
+  if (summary.status === 'COMPLETED') {
+    await admin.from('audit_logs').insert({
+      company_id: actor.companyId,
+      user_id: actor.userId,
+      action: 'ZALO_CALL_SUMMARY_VIEW',
+      resource_type: 'ZALO_CALL',
+      resource_id: call.id,
+      customer_id: call.customer_id,
+      result: 'SUCCESS',
+      metadata: { summary_id: summary.id },
+    });
+  }
+
+  return {
+    ...summary,
+    // Failsafe: never leak internal error codes/messages to client
+    error_code: summary.status === 'FAILED' ? 'SUMMARY_FAILED' : null,
+  };
+}
+export async function retryZaloCallSummaryAction(callId: string) {
+  const { actor, call } = await authorizedRecording(callId);
+  const admin = createAdminClient();
+  const { data: summary, error: lookupErr } = await admin
+    .from('zalo_call_ai_summaries')
+    .select('id')
+    .eq('company_id', actor.companyId)
+    .eq('call_id', call.id)
+    .maybeSingle();
+
+  if (lookupErr || !summary) {
+    throw new RecordingError('Không tìm thấy tóm tắt để thử lại.', 404);
+  }
+
+  try {
+    const success = await retrySummaryService(actor.companyId, actor.userId, summary.id, admin);
+    return { ok: success };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Không thể thử lại tóm tắt AI.';
     throw new RecordingError(msg, 500);
   }
 }

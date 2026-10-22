@@ -8,6 +8,8 @@ import { mergeUtterances } from './merger';
 import { type TranscriptionProvider } from './provider';
 import { createTranscriptionProvider } from './provider-factory';
 import type { AudioTranscriptionOptions, ClaimedTranscriptionJob, RawUtteranceSegment } from './types';
+import { enqueueZaloCallSummary } from '../zalo-summary/service';
+import { logSummaryEvent } from '../zalo-summary/logger';
 
 /**
  * Maximum total duration for a single cron invocation (4 minutes).
@@ -468,6 +470,20 @@ export async function processZaloTranscriptionJob(
       utterances_count: merged.utterances.length,
       language: detectedLanguage,
     });
+
+    // Best-effort idempotent auto-enqueue of AI summary job; non-fatal to transcription completion
+    try {
+      await enqueueZaloCallSummary(job.company_id, job.id, admin);
+    } catch {
+      logSummaryEvent({
+        action: 'summary_enqueue_failed',
+        company_id: job.company_id,
+        call_id: job.call_id,
+        transcription_id: job.id,
+        error_code: 'SUMMARY_ENQUEUE_FAILED',
+      });
+      // Intentionally suppressed: failure to enqueue summary must not affect transcription COMPLETED status
+    }
   } catch (err: unknown) {
     const rawCode = sanitizeErrorCode(err);
     const sanitizedMsg = sanitizeErrorMessage(err);
