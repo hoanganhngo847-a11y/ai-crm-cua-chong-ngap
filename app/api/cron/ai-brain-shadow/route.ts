@@ -24,7 +24,7 @@ export async function handleAiBrainShadowCron(
   request: NextRequest,
   deps: AiBrainShadowRouteDeps = {},
 ): Promise<NextResponse> {
-  const secret = process.env.CRON_SECRET;
+  const secret = process.env.CRON_SECRET?.trim();
   if (!secret) {
     console.error('[cron/ai-brain-shadow] CRON_SECRET is not configured');
     return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
