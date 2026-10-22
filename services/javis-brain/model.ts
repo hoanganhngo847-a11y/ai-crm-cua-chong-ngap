@@ -310,18 +310,30 @@ export interface JavisRuntimeBackendOptions {
 export function parseJavisProposalText(rawText: string): unknown {
   const trimmed = rawText.trim();
 
+  const normalizeProposalObj = (val: unknown): unknown => {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const rec = { ...(val as Record<string, unknown>) };
+      if (!rec.decision && typeof rec.action === 'string') {
+        rec.decision = rec.action;
+        delete rec.action;
+      }
+      return rec;
+    }
+    return val;
+  };
+
   // 1. Markdown code block extraction
   const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
   const jsonCandidate = codeBlockMatch ? codeBlockMatch[1].trim() : trimmed;
 
   // 2. Direct JSON or embedded JSON object
   try {
-    return JSON.parse(jsonCandidate);
+    return normalizeProposalObj(JSON.parse(jsonCandidate));
   } catch {
-    const jsonMatch = /(\{[\s\S]*"decision"[\s\S]*\})/.exec(trimmed);
+    const jsonMatch = /(\{[\s\S]*"(?:decision|action)"[\s\S]*\})/.exec(trimmed);
     if (jsonMatch) {
       try {
-        return JSON.parse(jsonMatch[1]);
+        return normalizeProposalObj(JSON.parse(jsonMatch[1]));
       } catch {}
     }
   }
@@ -388,7 +400,7 @@ export class JavisRuntimeBackend implements ModelBackend {
     const underlyingFetch = this.customFetch || globalThis.fetch;
     const callerSignal = options.signal;
 
-    const prompt = `${JAVIS_BRAIN_SYSTEM_INSTRUCTION}\n\nCustomer inquiry:\n${inputText}\n\nReturn strictly valid JSON only:`;
+    const prompt = `${JAVIS_BRAIN_SYSTEM_INSTRUCTION}\n\nCustomer inquiry:\n${inputText}\n\nReturn strictly valid JSON only with {"decision": "RESPOND" | "HANDOVER" | "NO_REPLY", "confidence": number, "draft": string}:`;
     const formBody = new URLSearchParams({
       message: prompt,
       session: 'crm_shadow_readonly',
