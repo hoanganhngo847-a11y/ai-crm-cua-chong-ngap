@@ -7,6 +7,7 @@ import { logTranscriptionEvent, logWorkerInvocation } from './logger';
 import { mergeUtterances } from './merger';
 import { type TranscriptionProvider } from './provider';
 import { createTranscriptionProvider } from './provider-factory';
+import { createResumableTranscriptionProvider } from './resumable-provider';
 import type { AudioTranscriptionOptions, ClaimedTranscriptionJob, RawUtteranceSegment } from './types';
 import { enqueueZaloCallSummary } from '../zalo-summary/service';
 import { logSummaryEvent } from '../zalo-summary/logger';
@@ -27,16 +28,27 @@ const MAX_SINGLE_JOB_DURATION_MS = 3 * 60 * 1000;
 /** Cleanup allowance reserved for DB completion / failure persistence */
 const CLEANUP_ALLOWANCE_MS = 5_000;
 
-export function getTranscriptionRetryDelayMs(attempts: number): number {
-  return Math.min(60 * 60 * 1000, 30_000 * 2 ** Math.max(0, attempts - 1));
+const RATE_LIMIT_ERROR_CODES = new Set([
+  'GEMINI_RATE_LIMITED',
+  'TRANSCRIPTION_RATE_LIMITED',
+  'RATE_LIMITED',
+]);
+
+export function getTranscriptionRetryDelayMs(attempts: number, errorCode?: string): number {
+  const baseDelayMs = errorCode && RATE_LIMIT_ERROR_CODES.has(errorCode) ? 75_000 : 30_000;
+  return Math.min(60 * 60 * 1000, baseDelayMs * 2 ** Math.max(0, attempts - 1));
 }
 
-export function getTranscriptionFailureOutcome(currentAttempts: number, maxAttempts: number) {
+export function getTranscriptionFailureOutcome(
+  currentAttempts: number,
+  maxAttempts: number,
+  errorCode?: string
+) {
   const attempts = currentAttempts + 1;
   return {
     attempts,
     terminal: attempts >= maxAttempts,
-    nextRunDelayMs: getTranscriptionRetryDelayMs(attempts),
+    nextRunDelayMs: getTranscriptionRetryDelayMs(attempts, errorCode),
   };
 }
 
@@ -77,6 +89,8 @@ const KNOWN_SAFE_ERROR_CODES = new Set([
   "INVALID_TRANSCRIPTION_MODEL",
   "INVALID_PAYLOAD",
   "PERSIST_METADATA_FAILED",
+  "LOAD_CHANNEL_CHECKPOINT_FAILED",
+  "PERSIST_CHANNEL_CHECKPOINT_FAILED",
   "PERSIST_TRANSCRIPTION_FAILED",
   "CLAIM_TRANSCRIPTION_JOBS_FAILED",
   "CLAIM_TRANSCRIPTION_JOB_FAILED",
@@ -326,6 +340,15 @@ export async function processZaloTranscriptionJob(
       throw new Error('PERSIST_METADATA_FAILED');
     }
 
+    // Load durable channel checkpoints only after provider/model metadata and lease are fenced.
+    const resumableProvider = await createResumableTranscriptionProvider({
+      client: admin,
+      job,
+      provider,
+      safeProvider,
+      safeModel,
+    });
+
     // 1. Download original recording from Supabase private storage
     if (getRemainingMs() <= 0) {
       throw new Error('TIMEOUT');
@@ -384,7 +407,7 @@ export async function processZaloTranscriptionJob(
         duration_ms: durationMs,
         deadline: jobDeadline,
       };
-      const custResult = await provider.transcribe(
+      const custResult = await resumableProvider.transcribe(
         split.customerAudio,
         'customer_left.m4a',
         'audio/m4a',
@@ -416,7 +439,7 @@ export async function processZaloTranscriptionJob(
         duration_ms: durationMs,
         deadline: jobDeadline,
       };
-      const staffResult = await provider.transcribe(
+      const staffResult = await resumableProvider.transcribe(
         split.staffAudio,
         'staff_right.m4a',
         'audio/m4a',
@@ -488,7 +511,7 @@ export async function processZaloTranscriptionJob(
     const rawCode = sanitizeErrorCode(err);
     const sanitizedMsg = sanitizeErrorMessage(err);
     const permanent = isPermanentError(rawCode);
-    const outcome = getTranscriptionFailureOutcome(job.attempts, job.max_attempts);
+    const outcome = getTranscriptionFailureOutcome(job.attempts, job.max_attempts, rawCode);
     const isTerminal = permanent || outcome.terminal;
     const nextRunAt = isTerminal
       ? null
