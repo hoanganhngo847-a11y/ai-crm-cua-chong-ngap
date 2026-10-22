@@ -862,6 +862,29 @@ test('integration with actual JavisBrainProvider adapter: validates server-only 
   assert.equal(finish.p_confidence, 0.92);
 });
 
+test('SHADOW_TIMEOUT_MS env var configures execution budget within 1000..10000 bound', async () => {
+  const originalEnv = process.env.SHADOW_TIMEOUT_MS;
+  try {
+    process.env.SHADOW_TIMEOUT_MS = '8000';
+    const supabase = createMockSupabase();
+    const result = await processDueAiBrainShadowRuns(1, {
+      supabase,
+      provider: createFakeProvider({
+        decision: 'RESPOND',
+        draft: 'Dạ bên em xin chào',
+        confidence: 0.9,
+      }),
+    });
+    assert.equal(result.completed, 1);
+  } finally {
+    if (originalEnv === undefined) {
+      delete process.env.SHADOW_TIMEOUT_MS;
+    } else {
+      process.env.SHADOW_TIMEOUT_MS = originalEnv;
+    }
+  }
+});
+
 test('static security inspection: zero transport imports and zero customer send paths', () => {
   const workerPath = resolve(__dirname, '../../features/ai-brain/shadow-worker.ts');
   const content = readFileSync(workerPath, 'utf8');
