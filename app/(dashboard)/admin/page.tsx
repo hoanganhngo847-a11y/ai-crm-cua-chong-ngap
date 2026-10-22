@@ -46,6 +46,14 @@ export default async function AdminDashboardPage() {
         <a href="/admin/analytics" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở Dashboard →</a>
       </div>
 
+      <div className="p-6 bg-slate-900 border border-cyan-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-bold text-white">AI Call Pipeline</h2>
+          <p className="text-xs text-slate-400 mt-1 max-w-2xl">Theo dõi read-only luồng Recording → Transcription → AI Summary, lỗi canonical và trạng thái Gemini pool mà không cần vào Supabase/Render.</p>
+        </div>
+        <a href="/admin/ai-call-pipeline" className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở AI Pipeline →</a>
+      </div>
+
       <div className="p-6 bg-slate-900 border border-emerald-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-bold text-white">Gemini Pool</h2>
