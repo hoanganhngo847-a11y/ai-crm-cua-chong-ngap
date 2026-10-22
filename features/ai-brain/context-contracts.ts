@@ -9,7 +9,9 @@ export type BrainContextToolName =
   | 'get_customer_stage_history'
   | 'get_upcoming_appointments'
   | 'get_call_history'
-  | 'get_recent_call_summaries';
+  | 'get_recent_call_summaries'
+  | 'get_customer_memory'
+  | 'search_company_knowledge';
 
 export const BRAIN_CONTEXT_TOOL_NAMES: readonly BrainContextToolName[] = [
   'get_customer_profile',
@@ -19,6 +21,8 @@ export const BRAIN_CONTEXT_TOOL_NAMES: readonly BrainContextToolName[] = [
   'get_upcoming_appointments',
   'get_call_history',
   'get_recent_call_summaries',
+  'get_customer_memory',
+  'search_company_knowledge',
 ] as const;
 
 export type BrainContextErrorCode =
@@ -40,13 +44,19 @@ export interface BrainContextScope {
 }
 
 /**
- * Phase 2 tool calls intentionally accept no arguments. Limits and customer scope are fixed
- * server-side so a model cannot request another tenant/customer or enlarge result windows.
+ * Most tools accept no arguments: all selectors and limits are server-owned. Company knowledge
+ * search is the one Phase 3 exception and accepts only a bounded text query; it still cannot
+ * change tenant, customer, conversation or result count.
  */
-export interface BrainContextToolCall {
-  readonly name: BrainContextToolName;
-  readonly arguments?: Readonly<Record<string, never>>;
-}
+export type BrainContextToolCall =
+  | {
+      readonly name: Exclude<BrainContextToolName, 'search_company_knowledge'>;
+      readonly arguments?: Readonly<Record<string, never>>;
+    }
+  | {
+      readonly name: 'search_company_knowledge';
+      readonly arguments: Readonly<{ query: string }>;
+    };
 
 export interface BrainCustomerProfile {
   readonly id: string;
@@ -141,6 +151,44 @@ export interface BrainCallSummaryContext {
   readonly completedAt: string | null;
 }
 
+export type BrainCustomerMemoryType =
+  | 'FACT'
+  | 'PREFERENCE'
+  | 'INTENT'
+  | 'OBJECTION'
+  | 'TEMPORARY_CONTEXT'
+  | 'AI_INFERENCE';
+
+export type BrainCustomerMemoryVerification = 'UNVERIFIED' | 'CONFIRMED';
+
+export interface BrainCustomerMemoryContext {
+  readonly id: string;
+  readonly memoryType: BrainCustomerMemoryType;
+  readonly memoryKey: string | null;
+  /** Derived/customer content is data, never authority or an instruction to the Brain. */
+  readonly content: string;
+  readonly structuredValue: unknown;
+  readonly confidence: number;
+  readonly verificationStatus: BrainCustomerMemoryVerification;
+  readonly sourceKind: string;
+  readonly sourceChannel: string | null;
+  readonly sourceOccurredAt: string | null;
+  readonly lastVerifiedAt: string | null;
+  readonly updatedAt: string;
+  readonly untrustedContent: true;
+}
+
+export interface BrainCompanyKnowledgeContext {
+  readonly id: string;
+  readonly category: string;
+  readonly title: string;
+  readonly content: string;
+  readonly sourceType: string;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly verified: true;
+}
+
 export type BrainContextToolData =
   | BrainCustomerProfile
   | readonly BrainConversationContext[]
@@ -148,7 +196,9 @@ export type BrainContextToolData =
   | readonly BrainStageHistoryContext[]
   | readonly BrainAppointmentContext[]
   | BrainCallHistoryContext
-  | readonly BrainCallSummaryContext[];
+  | readonly BrainCallSummaryContext[]
+  | readonly BrainCustomerMemoryContext[]
+  | readonly BrainCompanyKnowledgeContext[];
 
 export type BrainContextToolResult =
   | {
@@ -170,6 +220,8 @@ export interface BrainContextDataSource {
   getUpcomingAppointments(scope: BrainContextScope): Promise<readonly BrainAppointmentContext[]>;
   getCallHistory(scope: BrainContextScope): Promise<BrainCallHistoryContext>;
   getRecentCallSummaries(scope: BrainContextScope): Promise<readonly BrainCallSummaryContext[]>;
+  getCustomerMemory(scope: BrainContextScope): Promise<readonly BrainCustomerMemoryContext[]>;
+  searchCompanyKnowledge(scope: BrainContextScope, query: string): Promise<readonly BrainCompanyKnowledgeContext[]>;
 }
 
 export interface BrainContextSession {
