@@ -29,6 +29,7 @@ jobs:
       - run: npx tsx --conditions=react-server --test tests/ai-brain/context-gateway.test.ts
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
+      - run: npx tsx --conditions=react-server --test tests/ai-brain/memory-db.test.ts
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm run test:zalo-recordings
       - run: npm run test:zalo-recordings:db

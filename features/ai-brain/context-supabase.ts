@@ -5,9 +5,13 @@ import type {
   BrainAppointmentContext,
   BrainCallHistoryContext,
   BrainCallSummaryContext,
+  BrainCompanyKnowledgeContext,
   BrainContextDataSource,
   BrainContextScope,
   BrainConversationContext,
+  BrainCustomerMemoryContext,
+  BrainCustomerMemoryType,
+  BrainCustomerMemoryVerification,
   BrainCustomerProfile,
   BrainInteractionContext,
   BrainStageHistoryContext,
@@ -16,10 +20,16 @@ import type {
 const MAX_SHORT_TEXT = 512;
 const MAX_MESSAGE_TEXT = 2_000;
 const MAX_SUMMARY_TEXT = 3_000;
+const MAX_MEMORY_TEXT = 4_000;
+const MAX_KNOWLEDGE_TEXT = 12_000;
 const MAX_JSON_STRING = 1_000;
 const MAX_JSON_ARRAY = 20;
 const MAX_JSON_KEYS = 32;
 const MAX_JSON_DEPTH = 4;
+const ALLOWED_MEMORY_TYPES: readonly BrainCustomerMemoryType[] = [
+  'FACT', 'PREFERENCE', 'INTENT', 'OBJECTION', 'TEMPORARY_CONTEXT', 'AI_INFERENCE',
+];
+const ALLOWED_MEMORY_VERIFICATION: readonly BrainCustomerMemoryVerification[] = ['UNVERIFIED', 'CONFIRMED'];
 
 function text(value: unknown, max = MAX_SHORT_TEXT): string {
   return typeof value === 'string' ? value.slice(0, max) : '';
@@ -43,6 +53,24 @@ function safeJson(value: unknown, depth = 0): unknown {
     return output;
   }
   return null;
+}
+
+function memoryType(value: unknown): BrainCustomerMemoryType {
+  return typeof value === 'string' && ALLOWED_MEMORY_TYPES.includes(value as BrainCustomerMemoryType)
+    ? value as BrainCustomerMemoryType
+    : 'AI_INFERENCE';
+}
+
+function memoryVerification(value: unknown): BrainCustomerMemoryVerification {
+  return typeof value === 'string' && ALLOWED_MEMORY_VERIFICATION.includes(value as BrainCustomerMemoryVerification)
+    ? value as BrainCustomerMemoryVerification
+    : 'UNVERIFIED';
+}
+
+function confidence(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(1, parsed));
 }
 
 function failClosed(error: unknown): never {
@@ -245,6 +273,59 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
         followUpReason: nullableText(row.follow_up_reason, 1_000),
         confidence: nullableText(row.confidence, 64),
         completedAt: nullableText(row.completed_at, 64),
+      })));
+    },
+
+    async getCustomerMemory(scope: BrainContextScope): Promise<readonly BrainCustomerMemoryContext[]> {
+      const admin = createAdminClient();
+      const { data, error } = await admin
+        .from('ai_customer_memories')
+        .select('id,memory_type,memory_key,content,structured_value,confidence,verification_status,source_kind,source_channel,source_occurred_at,last_verified_at,updated_at')
+        .eq('company_id', scope.companyId)
+        .eq('customer_id', scope.customerId)
+        .eq('lifecycle_status', 'ACTIVE')
+        .neq('verification_status', 'REJECTED')
+        .order('updated_at', { ascending: false })
+        .limit(30);
+      if (error) failClosed(error);
+      return Object.freeze((data || []).map((row) => Object.freeze({
+        id: String(row.id),
+        memoryType: memoryType(row.memory_type),
+        memoryKey: nullableText(row.memory_key, 120),
+        content: text(row.content, MAX_MEMORY_TEXT),
+        structuredValue: safeJson(row.structured_value),
+        confidence: confidence(row.confidence),
+        verificationStatus: memoryVerification(row.verification_status),
+        sourceKind: text(row.source_kind, 64),
+        sourceChannel: nullableText(row.source_channel, 64),
+        sourceOccurredAt: nullableText(row.source_occurred_at, 64),
+        lastVerifiedAt: nullableText(row.last_verified_at, 64),
+        updatedAt: String(row.updated_at),
+        untrustedContent: true as const,
+      })));
+    },
+
+    async searchCompanyKnowledge(scope: BrainContextScope, query: string): Promise<readonly BrainCompanyKnowledgeContext[]> {
+      const admin = createAdminClient();
+      const { data, error } = await admin
+        .from('ai_company_knowledge')
+        .select('id,category,title,content,source_type,version,updated_at')
+        .eq('company_id', scope.companyId)
+        .eq('verification_status', 'VERIFIED')
+        .eq('lifecycle_status', 'ACTIVE')
+        .textSearch('search_document', query, { type: 'websearch', config: 'simple' })
+        .order('updated_at', { ascending: false })
+        .limit(12);
+      if (error) failClosed(error);
+      return Object.freeze((data || []).map((row) => Object.freeze({
+        id: String(row.id),
+        category: text(row.category, 64),
+        title: text(row.title, 300),
+        content: text(row.content, MAX_KNOWLEDGE_TEXT),
+        sourceType: text(row.source_type, 64),
+        version: Number(row.version || 1),
+        updatedAt: String(row.updated_at),
+        verified: true as const,
       })));
     },
   });

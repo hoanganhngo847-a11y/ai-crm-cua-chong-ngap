@@ -27,7 +27,7 @@ function scope(overrides: Partial<BrainContextScope> = {}): BrainContextScope {
   };
 }
 
-function fakeSource(log: BrainContextScope[] = []): BrainContextDataSource {
+function fakeSource(log: BrainContextScope[] = [], knowledgeQueries: string[] = []): BrainContextDataSource {
   const capture = <T>(s: BrainContextScope, value: T): T => {
     log.push(s);
     return value;
@@ -50,6 +50,11 @@ function fakeSource(log: BrainContextScope[] = []): BrainContextDataSource {
     async getUpcomingAppointments(s) { return capture(s, []); },
     async getCallHistory(s) { return capture(s, { phone: [], zalo: [] }); },
     async getRecentCallSummaries(s) { return capture(s, []); },
+    async getCustomerMemory(s) { return capture(s, []); },
+    async searchCompanyKnowledge(s, query) {
+      knowledgeQueries.push(query);
+      return capture(s, []);
+    },
   };
 }
 
@@ -76,6 +81,7 @@ for (const malicious of [
   { name: 'get_customer_profile', arguments: { customerId: customerB } },
   { name: 'get_recent_interactions', arguments: { limit: 999999 } },
   { name: 'get_recent_interactions', arguments: { conversationId: conversationB } },
+  { name: 'get_customer_memory', arguments: { customerId: customerB } },
   { name: 'get_all_customers', arguments: {} },
   { name: 'delete_customer', arguments: {} },
 ]) {
@@ -91,6 +97,29 @@ for (const malicious of [
   });
 }
 
+for (const maliciousSearch of [
+  { name: 'search_company_knowledge', arguments: {} },
+  { name: 'search_company_knowledge', arguments: { query: '' } },
+  { name: 'search_company_knowledge', arguments: { query: 'x', companyId: companyB } },
+  { name: 'search_company_knowledge', arguments: { query: 'x', customerId: customerB } },
+  { name: 'search_company_knowledge', arguments: { query: 'x', limit: 999999 } },
+  { name: 'search_company_knowledge', arguments: { query: 'x'.repeat(301) } },
+  { name: 'search_company_knowledge', arguments: { query: 'hello\u0000world' } },
+]) {
+  test('knowledge search accepts query text only and rejects authority/limit injection', async () => {
+    const log: BrainContextScope[] = [];
+    const queries: string[] = [];
+    const result = await createBrainContextGateway(fakeSource(log, queries)).bind(scope()).execute(maliciousSearch);
+    assert.deepEqual(result, {
+      ok: false,
+      tool: null,
+      errorCode: 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED',
+    });
+    assert.equal(log.length, 0);
+    assert.equal(queries.length, 0);
+  });
+}
+
 test('empty arguments are accepted but trusted scope remains server-owned', async () => {
   const log: BrainContextScope[] = [];
   const trusted = scope();
@@ -102,6 +131,20 @@ test('empty arguments are accepted but trusted scope remains server-owned', asyn
   assert.equal(log.length, 1);
   assert.deepEqual(log[0], trusted);
   assert.ok(Object.isFrozen(log[0]));
+});
+
+test('knowledge search trims query and preserves trusted scope', async () => {
+  const log: BrainContextScope[] = [];
+  const queries: string[] = [];
+  const trusted = scope();
+  const result = await createBrainContextGateway(fakeSource(log, queries)).bind(trusted).execute({
+    name: 'search_company_knowledge',
+    arguments: { query: '  học phí Đức  ' },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(queries, ['học phí Đức']);
+  assert.equal(log.length, 1);
+  assert.deepEqual(log[0], trusted);
 });
 
 test('sessions for different tenants/customers do not share scope', async () => {
@@ -128,7 +171,10 @@ test('every allowlisted tool receives exactly the bound scope', async () => {
   const log: BrainContextScope[] = [];
   const session = createBrainContextGateway(fakeSource(log)).bind(scope());
   for (const name of BRAIN_CONTEXT_TOOL_NAMES) {
-    const result = await session.execute({ name });
+    const call = name === 'search_company_knowledge'
+      ? { name, arguments: { query: 'knowledge' } }
+      : { name };
+    const result = await session.execute(call);
     assert.equal(result.ok, true, name);
   }
   assert.equal(log.length, BRAIN_CONTEXT_TOOL_NAMES.length);

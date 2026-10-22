@@ -15,6 +15,7 @@ import {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FROZEN_CONTEXT_TOOLS: readonly BrainContextToolName[] = Object.freeze([...BRAIN_CONTEXT_TOOL_NAMES]);
+const MAX_KNOWLEDGE_QUERY = 300;
 
 function plainRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -59,12 +60,28 @@ function validateToolCall(raw: unknown): BrainContextToolCall | null {
   if (typeof input.name !== 'string' || !BRAIN_CONTEXT_TOOL_NAMES.includes(input.name as BrainContextToolName)) {
     return null;
   }
+
+  if (input.name === 'search_company_knowledge') {
+    if (!Object.prototype.hasOwnProperty.call(input, 'arguments')) return null;
+    const args = plainRecord(input.arguments);
+    if (!args || Object.keys(args).length !== 1 || !Object.prototype.hasOwnProperty.call(args, 'query')) return null;
+    if (typeof args.query !== 'string') return null;
+    const query = args.query.trim();
+    if (query.length < 1 || query.length > MAX_KNOWLEDGE_QUERY || /[\u0000-\u001f\u007f]/.test(query)) return null;
+    return Object.freeze({
+      name: 'search_company_knowledge' as const,
+      arguments: Object.freeze({ query }),
+    });
+  }
+
   if (Object.prototype.hasOwnProperty.call(input, 'arguments')) {
     const args = plainRecord(input.arguments);
-    // Phase 2 accepts an exact empty object only. companyId/customerId/limit cannot come from the model.
     if (!args || Object.keys(args).length !== 0) return null;
   }
-  return Object.freeze({ name: input.name as BrainContextToolName, arguments: Object.freeze({}) });
+  return Object.freeze({
+    name: input.name as Exclude<BrainContextToolName, 'search_company_knowledge'>,
+    arguments: Object.freeze({}),
+  });
 }
 
 function failed(tool: BrainContextToolName | null, errorCode: BrainContextErrorCode): BrainContextToolResult {
@@ -114,14 +131,12 @@ export function createBrainContextGateway(dataSource: BrainContextDataSource): B
                 return succeeded(call.name, await dataSource.getCallHistory(scope));
               case 'get_recent_call_summaries':
                 return succeeded(call.name, await dataSource.getRecentCallSummaries(scope));
-              default: {
-                const exhaustive: never = call.name;
-                void exhaustive;
-                return failed(null, 'BRAIN_CONTEXT_TOOL_NOT_ALLOWED');
-              }
+              case 'get_customer_memory':
+                return succeeded(call.name, await dataSource.getCustomerMemory(scope));
+              case 'search_company_knowledge':
+                return succeeded(call.name, await dataSource.searchCompanyKnowledge(scope, call.arguments.query));
             }
           } catch {
-            // DB/provider details must never cross the context boundary.
             return failed(call.name, 'BRAIN_CONTEXT_UNAVAILABLE');
           }
         },
