@@ -1,6 +1,6 @@
 import 'server-only';
 import type { SummaryProvider } from './types';
-import { GeminiSummaryProvider } from './gemini-summary-provider';
+import { PooledGeminiSummaryProvider } from './pooled-gemini-summary-provider';
 import { OpenAISummaryProvider } from './openai-summary-provider';
 
 export const DEFAULT_GEMINI_SUMMARY_MODEL = 'gemini-2.5-flash';
@@ -45,6 +45,7 @@ export function resolveSummaryConfig(options?: {
 
   throw new Error('SUMMARY_PROVIDER_NOT_CONFIGURED');
 }
+
 export function createSummaryProvider(options?: {
   provider?: string;
   model?: string;
@@ -57,7 +58,7 @@ export function createSummaryProvider(options?: {
   });
 
   if (config.provider === 'GEMINI') {
-    return new GeminiSummaryProvider({
+    return new PooledGeminiSummaryProvider({
       apiKey: options?.apiKey,
       model: config.model,
       fetch: options?.fetch,
