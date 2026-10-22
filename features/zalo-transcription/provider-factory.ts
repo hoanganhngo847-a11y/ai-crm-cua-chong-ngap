@@ -1,7 +1,7 @@
 import 'server-only';
 import type { TranscriptionProvider } from './provider';
 import { OpenAITranscriptionProvider } from './provider';
-import { GeminiTranscriptionProvider } from './gemini-provider';
+import { PooledGeminiTranscriptionProvider } from './pooled-gemini-provider';
 
 /**
  * Valid transcription provider identifiers.
@@ -39,7 +39,6 @@ export function validateProviderType(provider: string): TranscriptionProviderTyp
 export function resolveProviderType(): TranscriptionProviderType {
   const envProvider = process.env.TRANSCRIPTION_PROVIDER;
   if (envProvider === undefined) {
-    // Default to OPENAI only when undefined for backwards compatibility
     return 'OPENAI';
   }
   return validateProviderType(envProvider);
@@ -50,7 +49,7 @@ export function resolveProviderType(): TranscriptionProviderType {
  *
  * Each provider is independently configured via its own env vars:
  * - OPENAI: OPENAI_API_KEY, OPENAI_TRANSCRIPTION_MODEL
- * - GEMINI: GEMINI_API_KEY, GEMINI_TRANSCRIPTION_MODEL
+ * - GEMINI: GEMINI_API_KEY/Gemini key pool, GEMINI_TRANSCRIPTION_MODEL
  *
  * No fallback: if GEMINI is selected and fails, it fails as GEMINI.
  * It does NOT silently try OpenAI.
@@ -65,7 +64,7 @@ export function createTranscriptionProvider(
 
   switch (type) {
     case 'GEMINI':
-      return new GeminiTranscriptionProvider();
+      return new PooledGeminiTranscriptionProvider();
     case 'OPENAI':
       return new OpenAITranscriptionProvider();
     default: {
