@@ -70,7 +70,10 @@
     "test:zalo-transcription:bulk-recovery": "tsx --conditions=react-server tests/zalo-recordings/transcription-bulk-recovery.test.ts",
     "test:ai-brain": "tsx --conditions=react-server --test tests/ai-brain/contract.test.ts tests/ai-brain/javis-provider.test.ts tests/ai-brain/context-gateway.test.ts tests/ai-brain/shadow-worker.test.ts tests/ai-brain/shadow-cron.test.ts",
     "test:ai-brain:shadow": "tsx --conditions=react-server --test tests/ai-brain/shadow-worker.test.ts tests/ai-brain/shadow-cron.test.ts",
-    "test:ai-brain:shadow-db": "tsx --conditions=react-server --test tests/ai-brain/shadow-db.test.ts"
+    "test:ai-brain:shadow-db": "tsx --conditions=react-server --test tests/ai-brain/shadow-db.test.ts",
+    "build:javis-brain": "tsc -p tsconfig.javis-brain.json",
+    "start:javis-brain": "node --conditions=react-server .javis-brain/services/javis-brain/main.js",
+    "test:javis-brain": "tsx --conditions=react-server --test tests/javis-brain/server.test.ts tests/javis-brain/e2e.test.ts tests/javis-brain/model.test.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",
