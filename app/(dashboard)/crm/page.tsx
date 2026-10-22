@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
+import CustomerList from '../../../features/crm/components/customer-list';
 
 export default async function CrmDashboardPage() {
   const actor = await getActorContext();
@@ -9,7 +10,7 @@ export default async function CrmDashboardPage() {
     redirect('/login');
   }
 
-  // Chặn Kỹ thuật viên (Chỉ BOSS_ADMIN và SALE được truy cập CRM)
+  // Chặn Kỹ thuật viên (chỉ BOSS_ADMIN và SALE được truy cập CRM).
   if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
     return (
       <div className="p-8 max-w-xl mx-auto text-center space-y-4">
@@ -34,26 +35,8 @@ export default async function CrmDashboardPage() {
     );
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">CRM Khách Hàng &amp; Bán Hàng</h1>
-        <p className="text-sm text-slate-400">
-          Màn hình quản lý khách hàng 360, cơ hội bán hàng và theo dõi chốt đơn.
-        </p>
-      </div>
-
-      <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="font-semibold text-white">Ngữ cảnh Thành viên Hợp lệ</div>
-          <span className="px-2.5 py-1 rounded bg-blue-900/40 border border-blue-700/50 text-blue-300 font-mono text-xs">
-            {actor?.role}
-          </span>
-        </div>
-        <p className="text-sm text-slate-300">
-          Chào mừng <strong className="text-white">{actor?.fullName}</strong>. Bạn đã được ủy quyền làm việc trên dữ liệu khách hàng của doanh nghiệp theo chính sách Zero-Phone Exposure (không lộ số điện thoại).
-        </p>
-      </div>
-    </div>
-  );
+  // CRM chính dùng cùng màn hình Customer 360 đã có phân quyền dữ liệu theo vai trò:
+  // - BOSS_ADMIN: số điện thoại thật (có audit bắt buộc ở API).
+  // - SALE: chỉ nhận số đã che.
+  return <CustomerList userRole={actor.role} userFullName={actor.fullName} />;
 }
