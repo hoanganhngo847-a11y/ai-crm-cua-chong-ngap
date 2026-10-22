@@ -88,7 +88,7 @@ async function createAuthenticatedFixtureClient() {
   assert.ifError(created.error);
   assert.ok(created.data.user?.id);
 
-  const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const client = createClient(url!, anonKey!, { auth: { persistSession: false, autoRefreshToken: false } });
   const signedIn = await client.auth.signInWithPassword({ email, password });
   assert.ifError(signedIn.error);
   assert.ok(signedIn.data.session);
