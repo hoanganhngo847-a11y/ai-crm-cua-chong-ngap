@@ -1,7 +1,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import type {
-  BrainContextSelector, BrainErrorCode, BrainServerContext, BrainService,
+  BrainContextSelector, BrainDelivery, BrainErrorCode, BrainServerContext, BrainService,
   BrainServiceOptions, BrainTurnAudit, BrainTurnRequest, BrainTurnResult,
 } from './contracts';
 import {
@@ -96,10 +96,14 @@ export function createBrainService(options: BrainServiceOptions): BrainService {
       try { proposalRaw = await bounded(() => provider.runTurn(request, { signal: controller.signal })); }
       catch { throw new BrainBoundaryError(controller.signal.aborted ? 'BRAIN_TIMEOUT' : 'BRAIN_PROVIDER_ERROR'); }
       const proposal = validateProviderProposal(proposalRaw);
+      const deliveryMode: BrainDelivery =
+        context?.deliveryMode === 'LIVE_SEND' && context.channel === 'ZALO'
+          ? 'LIVE_SEND'
+          : 'DRAFT_ONLY';
       return finish({
         decision: proposal.decision, confidence: proposal.confidence,
         handoverRequired: proposal.decision === 'HANDOVER', handoverReason: proposal.handoverReason,
-        ...(proposal.decision === 'RESPOND' ? { delivery: 'DRAFT_ONLY' as const, draft: proposal.draft } : {}),
+        ...(proposal.decision === 'RESPOND' ? { delivery: deliveryMode, draft: proposal.draft } : {}),
       });
     } catch (error: unknown) {
       const code: BrainErrorCode = controller.signal.aborted ? 'BRAIN_TIMEOUT' :

@@ -1,8 +1,8 @@
 import 'server-only';
 import {
-  ALLOWED_ACTOR_TYPES, ALLOWED_BRAIN_CHANNELS, ALLOWED_BRAIN_LATENCIES,
+  ALLOWED_ACTOR_TYPES, ALLOWED_BRAIN_CHANNELS, ALLOWED_BRAIN_DELIVERIES, ALLOWED_BRAIN_LATENCIES,
   ALLOWED_BRAIN_MODALITIES, ALLOWED_CONVERSATION_STATES,
-  type BrainContextSelector, type BrainErrorCode, type BrainProposal,
+  type BrainContextSelector, type BrainDelivery, type BrainErrorCode, type BrainProposal,
   type BrainProviderDescriptor, type BrainServerContext, type BrainUntrustedInput,
 } from './contracts';
 
@@ -80,11 +80,15 @@ export function validateServerContext(raw: unknown, selector: BrainContextSelect
   if (p.permissionProfile !== 'READ_ONLY') deny('BRAIN_POLICY_DENIED');
   const conversationState = member(p.conversationState, ALLOWED_CONVERSATION_STATES, code);
   if (typeof p.allowDrafts !== 'boolean') deny(code);
+  let deliveryMode: BrainDelivery | undefined;
+  if (p.deliveryMode !== undefined) {
+    deliveryMode = member(p.deliveryMode, ALLOWED_BRAIN_DELIVERIES, code);
+  }
   return deepFreeze({
     companyId: p.companyId, customerId: selector.customerId, conversationId: selector.conversationId,
     channel: selector.channel, modality: selector.modality, sessionId: selector.sessionId,
     caller: { actorId: caller.actorId, actorType }, permissionProfile: 'READ_ONLY',
-    conversationState, allowDrafts: p.allowDrafts, traceId: p.traceId,
+    conversationState, allowDrafts: p.allowDrafts, deliveryMode, traceId: p.traceId,
   });
 }
 export function validateProviderDescriptor(raw: unknown): BrainProviderDescriptor {

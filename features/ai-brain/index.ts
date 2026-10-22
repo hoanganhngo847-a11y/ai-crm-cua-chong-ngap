@@ -12,3 +12,10 @@ export {
   type ShadowWorkerResult,
   type ShadowWorkerOptions,
 } from './shadow-worker';
+export {
+  LIVE_ZALO_WORKLOAD_ACTOR_ID,
+  processDueAiBrainLiveZaloDeliveries,
+  type LiveZaloWorkerResult,
+  type LiveZaloWorkerOptions,
+  type LiveZaloClaim,
+} from './live-zalo-worker';

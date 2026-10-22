@@ -285,3 +285,25 @@ test('hostile thrown values do not escape canonical error handling', async () =>
   assert.equal(r.errorCode, 'BRAIN_INVALID_CONTEXT');
   assert.ok(!JSON.stringify(r).includes(canary));
 });
+
+test('deliveryMode LIVE_SEND is allowed only on ZALO channel, collapsing to DRAFT_ONLY on other channels', async () => {
+  // 1. ZALO with deliveryMode = 'LIVE_SEND' -> delivery = 'LIVE_SEND'
+  const zaloInput = input({ channel: 'ZALO' });
+  const zaloService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' }));
+  const zaloResult = await zaloService.handleBrainTurn(zaloInput);
+  assert.equal(zaloResult.decision, 'RESPOND');
+  assert.equal(zaloResult.delivery, 'LIVE_SEND');
+
+  // 2. MESSENGER with deliveryMode = 'LIVE_SEND' -> delivery = 'DRAFT_ONLY' (never live sends)
+  const messengerInput = input({ channel: 'MESSENGER' });
+  const messengerService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' }));
+  const messengerResult = await messengerService.handleBrainTurn(messengerInput);
+  assert.equal(messengerResult.decision, 'RESPOND');
+  assert.equal(messengerResult.delivery, 'DRAFT_ONLY');
+
+  // 3. ZALO without deliveryMode -> defaults to 'DRAFT_ONLY'
+  const defaultZaloService = make(undefined, async (s) => context(s));
+  const defaultResult = await defaultZaloService.handleBrainTurn(zaloInput);
+  assert.equal(defaultResult.decision, 'RESPOND');
+  assert.equal(defaultResult.delivery, 'DRAFT_ONLY');
+});
