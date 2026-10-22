@@ -177,8 +177,8 @@ async function processClaim(
     return 'skipped';
   }
 
-  const rawTimeout = process.env.LIVE_TIMEOUT_MS ? parseInt(process.env.LIVE_TIMEOUT_MS, 10) : 10000;
-  const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 1000 && rawTimeout <= 10000 ? rawTimeout : 10000;
+  const rawTimeout = process.env.LIVE_TIMEOUT_MS ? parseInt(process.env.LIVE_TIMEOUT_MS, 10) : 25000;
+  const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 1000 && rawTimeout <= 30000 ? rawTimeout : 25000;
 
   const service = createBrainService({
     provider,
