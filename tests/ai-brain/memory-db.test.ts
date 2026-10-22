@@ -15,17 +15,46 @@ if (!url || !serviceKey || !anonKey) {
 const service = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 const anon = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
-async function fixtureScope(): Promise<BrainContextScope> {
-  const { data: customer, error } = await service
+const FIXTURE_COMPANY_ID = '00000000-0000-4000-8000-000000000078';
+const FIXTURE_CUSTOMER_ID = '00000000-0000-4000-8000-000000000079';
+const FIXTURE_CUSTOMER_CODE = 'AI-BRAIN-PHASE3-FIXTURE';
+let fixturePromise: Promise<void> | null = null;
+
+async function provisionFixture(): Promise<void> {
+  const companyInsert = await service
+    .from('companies')
+    .upsert(
+      {
+        id: FIXTURE_COMPANY_ID,
+        name: 'AI Brain Phase 3 CI Fixture',
+        status: 'ACTIVE',
+      },
+      { onConflict: 'id', ignoreDuplicates: true },
+    );
+  assert.ifError(companyInsert.error);
+
+  const customerInsert = await service
     .from('customers')
-    .select('id,company_id')
-    .limit(1)
-    .maybeSingle();
-  assert.ifError(error);
-  assert.ok(customer, 'local fixture must contain at least one customer');
+    .upsert(
+      {
+        id: FIXTURE_CUSTOMER_ID,
+        company_id: FIXTURE_COMPANY_ID,
+        customer_code: FIXTURE_CUSTOMER_CODE,
+        name: 'AI Brain Phase 3 CI Fixture Customer',
+        source: 'MANUAL',
+        stage: 'LEAD_NEW',
+      },
+      { onConflict: 'id', ignoreDuplicates: true },
+    );
+  assert.ifError(customerInsert.error);
+}
+
+async function fixtureScope(): Promise<BrainContextScope> {
+  fixturePromise ??= provisionFixture();
+  await fixturePromise;
   return {
-    companyId: String(customer.company_id),
-    customerId: String(customer.id),
+    companyId: FIXTURE_COMPANY_ID,
+    customerId: FIXTURE_CUSTOMER_ID,
     conversationId: randomUUID(),
     channel: 'INTERNAL',
     traceId: randomUUID(),
