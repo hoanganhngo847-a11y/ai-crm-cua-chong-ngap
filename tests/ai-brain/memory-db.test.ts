@@ -83,7 +83,7 @@ async function fixtureScope(overrides: Partial<BrainContextScope> = {}): Promise
 
 async function createAuthenticatedFixtureClient() {
   const email = `phase3-${randomUUID()}@example.test`;
-  const password = `Aa1!${randomUUID()}-${randomUUID()}`;
+  const password = `Aa1!${randomUUID()}`;
   const created = await service.auth.admin.createUser({ email, password, email_confirm: true });
   assert.ifError(created.error);
   assert.ok(created.data.user?.id);
