@@ -187,6 +187,29 @@ test('JavisRuntimeBackend: handles markdown code block wrapped JSON', async () =
   assert.equal(proposal.confidence, 0.88);
 });
 
+test('JavisRuntimeBackend: normalizes action field to decision when action is returned', async () => {
+  const wrappedText = '```json\n{"action":"RESPOND","draft":"Xin chào bạn","confidence":0.99}\n```';
+
+  const { fetchImpl } = mockJavisFetch({
+    ok: true,
+    text: wrappedText,
+  });
+
+  const backend = new JavisRuntimeBackend({
+    baseUrl: TEST_BASE_URL,
+    internalToken: TEST_INTERNAL_TOKEN,
+    customFetch: fetchImpl,
+  });
+
+  const proposal = await backend.generate('Xin chào shop', {
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(proposal.decision, 'RESPOND');
+  assert.equal(proposal.draft, 'Xin chào bạn');
+  assert.equal(proposal.confidence, 0.99);
+});
+
 test('JavisRuntimeBackend: handles Vietnamese structured text format', async () => {
   const rawJavisText = `Kết quả phân loại yêu cầu:
 - Quyết định: HANDOVER
