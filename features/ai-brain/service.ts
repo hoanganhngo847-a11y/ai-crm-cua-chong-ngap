@@ -98,7 +98,8 @@ export function createBrainService(options: BrainServiceOptions): BrainService {
       catch { throw new BrainBoundaryError(controller.signal.aborted ? 'BRAIN_TIMEOUT' : 'BRAIN_PROVIDER_ERROR'); }
       const proposal = validateProviderProposal(proposalRaw);
       const deliveryMode: BrainDelivery =
-        context?.deliveryMode === 'LIVE_SEND' && context.channel === 'ZALO'
+        context?.deliveryMode === 'LIVE_SEND' &&
+        (context.channel === 'ZALO' || context.channel === 'MESSENGER')
           ? 'LIVE_SEND'
           : 'DRAFT_ONLY';
       return finish({

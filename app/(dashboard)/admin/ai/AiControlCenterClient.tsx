@@ -83,7 +83,26 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
     startTransition(async () => {
       try {
         const fresh = await triggerAlertEvaluationAction();
-        setMonitoring(fresh);
+        setMonitoring((prev) => {
+          const hasAlertReadError = Boolean(
+            fresh.alertsErrors?.activeAlerts || fresh.queryErrors?.activeAlerts
+          );
+          if (hasAlertReadError && prev.alerts.length > 0) {
+            return {
+              ...fresh,
+              alerts: prev.alerts,
+              isAlertsStale: true,
+            };
+          }
+          if (hasAlertReadError) {
+            return {
+              ...fresh,
+              alerts: [],
+              isAlertsStale: false,
+            };
+          }
+          return fresh;
+        });
         setActionSuccess('Đã cập nhật trạng thái giám sát & cảnh báo mới nhất.');
       } catch (err: unknown) {
         const error = err as Error;
@@ -99,8 +118,30 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
     setMetricsWindow(window);
     startTransition(async () => {
       try {
-        const fresh = await getAiMonitoringDashboardData({ channel, timeWindow: window });
-        setMonitoring(fresh);
+        const fresh = await getAiMonitoringDashboardData({
+          channel,
+          timeWindow: window,
+        });
+        setMonitoring((prev) => {
+          const hasAlertReadError = Boolean(
+            fresh.alertsErrors?.activeAlerts || fresh.queryErrors?.activeAlerts
+          );
+          if (hasAlertReadError && prev.alerts.length > 0) {
+            return {
+              ...fresh,
+              alerts: prev.alerts,
+              isAlertsStale: true,
+            };
+          }
+          if (hasAlertReadError) {
+            return {
+              ...fresh,
+              alerts: [],
+              isAlertsStale: false,
+            };
+          }
+          return fresh;
+        });
       } catch (err: unknown) {
         const error = err as Error;
         setActionError(error.message || 'Lỗi khi lọc chỉ số.');
@@ -109,6 +150,10 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
   };
 
   const handleAcknowledgeAlert = (alertId: string) => {
+    if (monitoring.isAlertsStale) {
+      setActionError('Không thể thao tác trên dữ liệu cảnh báo cũ (STALE).');
+      return;
+    }
     setActionError(null);
     setActionSuccess(null);
     startTransition(async () => {
@@ -127,6 +172,10 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
   };
 
   const handleResolveAlert = (alertId: string) => {
+    if (monitoring.isAlertsStale) {
+      setActionError('Không thể thao tác trên dữ liệu cảnh báo cũ (STALE).');
+      return;
+    }
     setActionError(null);
     setActionSuccess(null);
     startTransition(async () => {
@@ -374,22 +423,32 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <div className="text-[11px] uppercase tracking-wider text-slate-500">Chờ xử lý</div>
           <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-xl font-bold text-amber-400">{initialState.handoverCounts.open}</span>
-            <span className="text-xs text-slate-500">ca mở</span>
+            <span className="text-xl font-bold text-amber-400">
+              {initialState.handoverCounts.open !== null ? initialState.handoverCounts.open : '—'}
+            </span>
+            <span className="text-xs text-slate-500">
+              ca mở{initialState.handoverCounts.isSampleBounded ? ' (100 gần nhất)' : ''}
+            </span>
           </div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <div className="text-[11px] uppercase tracking-wider text-slate-500">Đã phản hồi AI</div>
           <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-xl font-bold text-emerald-400">{initialState.deliveryCounts.sent}</span>
-            <span className="text-xs text-slate-500">tin nhắn</span>
+            <span className="text-xl font-bold text-emerald-400">
+              {initialState.deliveryCounts.sent !== null ? initialState.deliveryCounts.sent : '—'}
+            </span>
+            <span className="text-xs text-slate-500">
+              tin nhắn{initialState.deliveryCounts.isSampleBounded ? ' (100 gần nhất)' : ''}
+            </span>
           </div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ tin cậy TB</div>
           <div className="mt-1 flex items-baseline gap-2">
             <span className="text-xl font-bold text-blue-400">
-              {(initialState.deliveryCounts.avgConfidence * 100).toFixed(1)}%
+              {typeof initialState.deliveryCounts.avgConfidence === 'number'
+                ? `${(initialState.deliveryCounts.avgConfidence * 100).toFixed(1)}%`
+                : '—'}
             </span>
           </div>
         </div>
@@ -416,7 +475,7 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
           }`}
         >
           Hộp thư Chuyển giao
-          {initialState.handoverCounts.open > 0 && (
+          {typeof initialState.handoverCounts.open === 'number' && initialState.handoverCounts.open > 0 && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
               {initialState.handoverCounts.open}
             </span>
@@ -441,10 +500,18 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
           }`}
         >
           Giám sát & Cảnh báo
-          {monitoring?.alerts?.filter((a) => a.status === 'ACTIVE').length > 0 && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 animate-pulse">
-              {monitoring.alerts.filter((a) => a.status === 'ACTIVE').length}
+          {monitoring.isAlertsStale || monitoring.alertsStatus === 'DEGRADED' || monitoring.evaluationStatus === 'DEGRADED' ? (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              {monitoring.alerts.length > 0
+                ? `${monitoring.alerts.filter((a) => a.status === 'ACTIVE').length} (cũ)`
+                : '?'}
             </span>
+          ) : (
+            monitoring?.alerts?.filter((a) => a.status === 'ACTIVE').length > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 animate-pulse">
+                {monitoring.alerts.filter((a) => a.status === 'ACTIVE').length}
+              </span>
+            )
           )}
         </button>
       </div>
@@ -452,6 +519,18 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
       {/* TAB 1: SETTINGS */}
       {activeTab === 'settings' && (
         <div className="space-y-6">
+          {initialState.settingsError && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-300">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <span className="text-amber-400">⚠️</span>
+                <span>Lỗi tải cấu hình AI Live: {initialState.settingsError}</span>
+              </div>
+              <p className="mt-1 text-xs text-amber-200/90">
+                Không thể tải cấu hình thực tế từ cơ sở dữ liệu. Cấu hình các kênh đang hiển thị ở trạng thái KHÔNG XÁC ĐỊNH (UNKNOWN). Mọi thao tác chỉnh sửa và lưu cấu hình đã bị vô hiệu hóa để bảo đảm an toàn dữ liệu.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Zalo OA Settings Card */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 space-y-5">
@@ -466,11 +545,13 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   </div>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                  zaloSettings.enabled
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                    : 'border-slate-700 bg-slate-800 text-slate-400'
+                  initialState.settingsError
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                    : zaloSettings.enabled
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}>
-                  {zaloSettings.enabled ? 'LIVE' : 'OFF'}
+                  {initialState.settingsError ? 'UNKNOWN' : zaloSettings.enabled ? 'LIVE' : 'OFF'}
                 </span>
               </div>
 
@@ -480,9 +561,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <input
                     type="checkbox"
                     checked={zaloSettings.enabled}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setZaloSettings({ ...zaloSettings, enabled: e.target.checked })}
-                    className="w-5 h-5 rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                    className="w-5 h-5 rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-50"
                   />
                 </div>
 
@@ -497,9 +578,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                     max="1.0"
                     step="0.01"
                     value={zaloSettings.min_confidence}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setZaloSettings({ ...zaloSettings, min_confidence: parseFloat(e.target.value) })}
-                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer"
+                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer disabled:opacity-50"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">Tin cậy &lt; {zaloSettings.min_confidence.toFixed(3)} sẽ chuyển giao hoặc không gửi.</p>
                 </div>
@@ -508,9 +589,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <label className="text-xs font-medium text-slate-400 block mb-1">Model Routing Profile</label>
                   <select
                     value={zaloSettings.model_routing_profile}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setZaloSettings({ ...zaloSettings, model_routing_profile: e.target.value as ModelRoutingProfile })}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white disabled:opacity-50"
                   >
                     <option value="STANDARD">STANDARD (Javis Runtime / Balanced)</option>
                     <option value="FAST">FAST (Flash Ultra Low Latency)</option>
@@ -522,10 +603,10 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <button
                     type="button"
                     onClick={() => handleUpdateChannel('ZALO', zaloSettings)}
-                    disabled={isPending}
+                    disabled={isPending || Boolean(initialState.settingsError)}
                     className="w-full rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition disabled:opacity-50"
                   >
-                    {isPending ? 'Đang lưu...' : 'Lưu cấu hình Zalo'}
+                    {isPending ? 'Đang lưu...' : initialState.settingsError ? 'Vô hiệu hóa (Lỗi tải cấu hình)' : 'Lưu cấu hình Zalo'}
                   </button>
                 )}
               </div>
@@ -544,11 +625,13 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   </div>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                  messengerSettings.enabled
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                    : 'border-slate-700 bg-slate-800 text-slate-400'
+                  initialState.settingsError
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                    : messengerSettings.enabled
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}>
-                  {messengerSettings.enabled ? 'LIVE' : 'OFF'}
+                  {initialState.settingsError ? 'UNKNOWN' : messengerSettings.enabled ? 'LIVE' : 'OFF'}
                 </span>
               </div>
 
@@ -558,9 +641,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <input
                     type="checkbox"
                     checked={messengerSettings.enabled}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setMessengerSettings({ ...messengerSettings, enabled: e.target.checked })}
-                    className="w-5 h-5 rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                    className="w-5 h-5 rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-50"
                   />
                 </div>
 
@@ -575,9 +658,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                     max="1.0"
                     step="0.01"
                     value={messengerSettings.min_confidence}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setMessengerSettings({ ...messengerSettings, min_confidence: parseFloat(e.target.value) })}
-                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer"
+                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer disabled:opacity-50"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">Tin cậy &lt; {messengerSettings.min_confidence.toFixed(3)} sẽ chuyển giao hoặc không gửi.</p>
                 </div>
@@ -586,9 +669,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <label className="text-xs font-medium text-slate-400 block mb-1">Model Routing Profile</label>
                   <select
                     value={messengerSettings.model_routing_profile}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setMessengerSettings({ ...messengerSettings, model_routing_profile: e.target.value as ModelRoutingProfile })}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white disabled:opacity-50"
                   >
                     <option value="STANDARD">STANDARD (Javis Runtime / Balanced)</option>
                     <option value="FAST">FAST (Flash Ultra Low Latency)</option>
@@ -600,10 +683,10 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <button
                     type="button"
                     onClick={() => handleUpdateChannel('MESSENGER', messengerSettings)}
-                    disabled={isPending}
+                    disabled={isPending || Boolean(initialState.settingsError)}
                     className="w-full rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition disabled:opacity-50"
                   >
-                    {isPending ? 'Đang lưu...' : 'Lưu cấu hình Messenger'}
+                    {isPending ? 'Đang lưu...' : initialState.settingsError ? 'Vô hiệu hóa (Lỗi tải cấu hình)' : 'Lưu cấu hình Messenger'}
                   </button>
                 )}
               </div>
@@ -622,13 +705,15 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   </div>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                  voiceSettings.voice_mode === 'LIVE'
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                    : voiceSettings.voice_mode === 'TEST'
-                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                      : 'border-slate-700 bg-slate-800 text-slate-400'
+                  initialState.settingsError
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                    : voiceSettings.voice_mode === 'LIVE'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : voiceSettings.voice_mode === 'TEST'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                        : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}>
-                  {voiceSettings.voice_mode}
+                  {initialState.settingsError ? 'UNKNOWN' : voiceSettings.voice_mode}
                 </span>
               </div>
 
@@ -637,9 +722,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <label className="text-xs font-medium text-slate-400 block mb-1">Chế độ hoạt động Voice</label>
                   <select
                     value={voiceSettings.voice_mode}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setVoiceSettings({ ...voiceSettings, voice_mode: e.target.value as VoiceMode })}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white disabled:opacity-50"
                   >
                     <option value="OFF">OFF (Tắt tự động tiếp nhận)</option>
                     <option value="TEST">TEST (Chế độ thử nghiệm nội bộ)</option>
@@ -658,9 +743,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                     max="1.0"
                     step="0.01"
                     value={voiceSettings.min_confidence}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setVoiceSettings({ ...voiceSettings, min_confidence: parseFloat(e.target.value) })}
-                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer"
+                    className="w-full accent-blue-500 bg-slate-800 cursor-pointer disabled:opacity-50"
                   />
                 </div>
 
@@ -668,9 +753,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <label className="text-xs font-medium text-slate-400 block mb-1">Model Routing Profile</label>
                   <select
                     value={voiceSettings.model_routing_profile}
-                    disabled={!initialState.isBossAdmin || isPending}
+                    disabled={!initialState.isBossAdmin || isPending || Boolean(initialState.settingsError)}
                     onChange={(e) => setVoiceSettings({ ...voiceSettings, model_routing_profile: e.target.value as ModelRoutingProfile })}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white disabled:opacity-50"
                   >
                     <option value="STANDARD">STANDARD (Javis Runtime / Balanced)</option>
                     <option value="FAST">FAST (Flash Ultra Low Latency)</option>
@@ -682,10 +767,10 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                   <button
                     type="button"
                     onClick={() => handleUpdateChannel('VOICE', voiceSettings)}
-                    disabled={isPending}
+                    disabled={isPending || Boolean(initialState.settingsError)}
                     className="w-full rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition disabled:opacity-50"
                   >
-                    {isPending ? 'Đang lưu...' : 'Lưu cấu hình Voice'}
+                    {isPending ? 'Đang lưu...' : initialState.settingsError ? 'Vô hiệu hóa (Lỗi tải cấu hình)' : 'Lưu cấu hình Voice'}
                   </button>
                 )}
               </div>
@@ -1051,9 +1136,15 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span>Cảnh báo Hệ thống</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                    {monitoring.alerts.length}
-                  </span>
+                  {monitoring.isAlertsStale || monitoring.alertsStatus === 'DEGRADED' || monitoring.evaluationStatus === 'DEGRADED' ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      {monitoring.alerts.length > 0 ? `${monitoring.alerts.length} (dữ liệu cũ)` : 'Không xác định'}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                      {monitoring.alerts.length}
+                    </span>
+                  )}
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
                   Tự động phát hiện bất thường: cron failure, Javis timeout, queue backlog, FAILED spike, handover backlog.
@@ -1061,7 +1152,27 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               </div>
             </div>
 
-            {monitoring.alerts.length === 0 ? (
+            {(monitoring.alertsStatus === 'DEGRADED' || monitoring.evaluationStatus === 'DEGRADED') && monitoring.alerts.length === 0 ? (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-center space-y-2">
+                <div className="flex justify-center">
+                  <span className="px-2.5 py-1 rounded-full text-xs font-bold border border-amber-500/40 bg-amber-500/20 text-amber-300 uppercase">
+                    Không xác định (DEGRADED)
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-amber-200">
+                  Không thể đọc trạng thái cảnh báo hệ thống hoặc đánh giá bị suy giảm
+                </p>
+                <p className="text-xs text-slate-400 max-w-xl mx-auto">
+                  {monitoring.alertsErrors?.activeAlerts ||
+                    monitoring.alertsErrors?.handoverCount ||
+                    monitoring.alertsErrors?.alertPersistence ||
+                    monitoring.queryErrors?.activeAlerts ||
+                    monitoring.queryErrors?.handoverCount ||
+                    monitoring.queryErrors?.alertPersistence ||
+                    'Đã xảy ra lỗi khi đọc bảng cảnh báo hoặc đánh giá điều kiện cảnh báo. Không thể xác nhận hệ thống an toàn.'}
+                </p>
+              </div>
+            ) : monitoring.alerts.length === 0 ? (
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-6 text-center">
                 <span className="text-2xl">✓</span>
                 <p className="mt-2 text-sm font-semibold text-emerald-300">
@@ -1073,6 +1184,15 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               </div>
             ) : (
               <div className="space-y-3">
+                {(monitoring.isAlertsStale || monitoring.alertsStatus === 'DEGRADED' || monitoring.evaluationStatus === 'DEGRADED') && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 flex items-center justify-between text-xs text-amber-200">
+                    <span className="font-semibold flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                      Dữ liệu cảnh báo cũ / Chưa xác thực ({monitoring.alertsErrors?.activeAlerts || monitoring.queryErrors?.activeAlerts || 'Đánh giá suy giảm'})
+                    </span>
+                    <span className="text-[10px] text-amber-300 font-mono">STALE DATA</span>
+                  </div>
+                )}
                 {monitoring.alerts.map((alert) => (
                   <div
                     key={alert.id}
@@ -1137,8 +1257,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                           <button
                             type="button"
                             onClick={() => handleAcknowledgeAlert(alert.id)}
-                            disabled={isPending}
-                            className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-700 transition"
+                            disabled={isPending || Boolean(monitoring.isAlertsStale)}
+                            title={monitoring.isAlertsStale ? 'Không thể thao tác trên dữ liệu cũ' : undefined}
+                            className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Xác nhận
                           </button>
@@ -1146,8 +1267,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                         <button
                           type="button"
                           onClick={() => handleResolveAlert(alert.id)}
-                          disabled={isPending}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 hover:bg-emerald-600/50 transition"
+                          disabled={isPending || Boolean(monitoring.isAlertsStale)}
+                          title={monitoring.isAlertsStale ? 'Không thể thao tác trên dữ liệu cũ' : undefined}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 hover:bg-emerald-600/50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Đã xử lý
                         </button>
@@ -1202,12 +1324,21 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               </div>
             </div>
 
+            {/* Metrics Query Warning Banner if degraded */}
+            {monitoring.metrics.errors && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+                <span className="font-semibold">Lưu ý:</span> Một số chỉ số hiển thị ở trạng thái không xác định (—) do lỗi truy vấn cơ sở dữ liệu.
+              </div>
+            )}
+
             {/* Metrics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Tin nhắn Inbound</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-white">{monitoring.metrics.inboundCount}</span>
+                  <span className="text-2xl font-bold text-white">
+                    {monitoring.metrics.inboundCount !== null ? monitoring.metrics.inboundCount : '—'}
+                  </span>
                   <span className="text-xs text-slate-400">tin đến</span>
                 </div>
               </div>
@@ -1215,7 +1346,9 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Lượt xử lý AI (Turns)</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-blue-400">{monitoring.metrics.brainTurns}</span>
+                  <span className="text-2xl font-bold text-blue-400">
+                    {monitoring.metrics.brainTurns !== null ? monitoring.metrics.brainTurns : '—'}
+                  </span>
                   <span className="text-xs text-slate-400">lượt inference</span>
                 </div>
               </div>
@@ -1224,11 +1357,15 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Tỷ lệ Tự động Trả lời</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-emerald-400">
-                    {monitoring.metrics.brainTurns > 0
+                    {monitoring.metrics.brainTurns !== null &&
+                    monitoring.metrics.respondCount !== null &&
+                    monitoring.metrics.brainTurns > 0
                       ? `${Math.round((monitoring.metrics.respondCount / monitoring.metrics.brainTurns) * 100)}%`
-                      : '0%'}
+                      : '—'}
                   </span>
-                  <span className="text-xs text-slate-400">({monitoring.metrics.respondCount} tin)</span>
+                  <span className="text-xs text-slate-400">
+                    ({monitoring.metrics.respondCount !== null ? `${monitoring.metrics.respondCount} tin` : '—'})
+                  </span>
                 </div>
               </div>
 
@@ -1236,29 +1373,49 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Chuyển giao Nhân viên</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-amber-400">
-                    {monitoring.metrics.handoverCount > 0 && monitoring.metrics.brainTurns > 0
+                    {monitoring.metrics.brainTurns !== null &&
+                    monitoring.metrics.handoverCount !== null &&
+                    monitoring.metrics.brainTurns > 0
                       ? `${Math.round((monitoring.metrics.handoverCount / monitoring.metrics.brainTurns) * 100)}%`
-                      : '0%'}
+                      : '—'}
                   </span>
-                  <span className="text-xs text-slate-400">({monitoring.metrics.handoverCount} ca)</span>
+                  <span className="text-xs text-slate-400">
+                    ({monitoring.metrics.handoverCount !== null ? `${monitoring.metrics.handoverCount} ca` : '—'})
+                  </span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <div className="text-[11px] uppercase tracking-wider text-slate-500">Bỏ qua / Từ chối gửi</div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Bỏ qua / Từ chối gửi (Skipped)</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-slate-400">{monitoring.metrics.noReplyCount}</span>
-                  <span className="text-xs text-slate-500">tin an toàn</span>
+                  <span className="text-2xl font-bold text-slate-400">
+                    {monitoring.metrics.skippedCount !== null
+                      ? monitoring.metrics.skippedCount
+                      : monitoring.metrics.noReplyCount !== null
+                        ? monitoring.metrics.noReplyCount
+                        : '—'}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    tin an toàn ({monitoring.metrics.noReplyCount !== null ? `${monitoring.metrics.noReplyCount} no-reply` : '—'})
+                  </span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Gửi thành công / Thất bại</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-emerald-400">{monitoring.metrics.sendSuccess}</span>
+                  <span className="text-2xl font-bold text-emerald-400">
+                    {monitoring.metrics.sendSuccess !== null ? monitoring.metrics.sendSuccess : '—'}
+                  </span>
                   <span className="text-xs text-slate-500">/</span>
-                  <span className={`text-xl font-bold ${monitoring.metrics.sendFailure > 0 ? 'text-red-400' : 'text-slate-500'}`}>
-                    {monitoring.metrics.sendFailure}
+                  <span
+                    className={`text-xl font-bold ${
+                      monitoring.metrics.sendFailure !== null && monitoring.metrics.sendFailure > 0
+                        ? 'text-red-400'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {monitoring.metrics.sendFailure !== null ? monitoring.metrics.sendFailure : '—'}
                   </span>
                 </div>
               </div>
@@ -1267,35 +1424,58 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ tin cậy Trung bình</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-indigo-400">
-                    {(monitoring.metrics.averageConfidence * 100).toFixed(1)}%
+                    {typeof monitoring.metrics.averageConfidence === 'number'
+                      ? `${(monitoring.metrics.averageConfidence * 100).toFixed(1)}%`
+                      : '—'}
                   </span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ trễ P50 / P95</div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ trễ Brain P50 / P95</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-xl font-bold text-white font-mono">{monitoring.metrics.p50LatencyMs}ms</span>
+                  <span className="text-xl font-bold text-white font-mono">
+                    {monitoring.metrics.p50LatencyMs !== null ? `${monitoring.metrics.p50LatencyMs}ms` : '—'}
+                  </span>
                   <span className="text-xs text-slate-500">/</span>
-                  <span className="text-sm font-semibold text-slate-400 font-mono">{monitoring.metrics.p95LatencyMs}ms</span>
+                  <span className="text-sm font-semibold text-slate-400 font-mono">
+                    {monitoring.metrics.p95LatencyMs !== null ? `${monitoring.metrics.p95LatencyMs}ms` : '—'}
+                  </span>
                 </div>
+                {monitoring.metrics.p50DeliveryLatencyMs !== undefined && monitoring.metrics.p50DeliveryLatencyMs !== null && (
+                  <div className="mt-1 text-[10px] text-slate-500">
+                    Delivery (gồm queue): {monitoring.metrics.p50DeliveryLatencyMs}ms / {monitoring.metrics.p95DeliveryLatencyMs}ms
+                  </div>
+                )}
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Hàng đợi Chờ gửi</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className={`text-2xl font-bold ${monitoring.metrics.queueDepth > 5 ? 'text-amber-400' : 'text-white'}`}>
-                    {monitoring.metrics.queueDepth}
+                  <span
+                    className={`text-2xl font-bold ${
+                      monitoring.metrics.queueDepth !== null && monitoring.metrics.queueDepth > 5
+                        ? 'text-amber-400'
+                        : 'text-white'
+                    }`}
+                  >
+                    {monitoring.metrics.queueDepth !== null ? monitoring.metrics.queueDepth : '—'}
                   </span>
-                  <span className="text-xs text-slate-400">tin đang pending</span>
+                  <span className="text-xs text-slate-400">tin đang pending/processing</span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Tuổi tin cũ nhất trong queue</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className={`text-2xl font-bold font-mono ${monitoring.metrics.oldestPendingAgeSeconds > 60 ? 'text-amber-400' : 'text-white'}`}>
-                    {monitoring.metrics.oldestPendingAgeSeconds}s
+                  <span
+                    className={`text-2xl font-bold font-mono ${
+                      monitoring.metrics.oldestPendingAgeSeconds !== null && monitoring.metrics.oldestPendingAgeSeconds > 60
+                        ? 'text-amber-400'
+                        : 'text-white'
+                    }`}
+                  >
+                    {monitoring.metrics.oldestPendingAgeSeconds !== null ? `${monitoring.metrics.oldestPendingAgeSeconds}s` : '—'}
                   </span>
                 </div>
               </div>
@@ -1303,21 +1483,128 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500">Lỗi Provider / Timeout</div>
                 <div className="mt-1 flex items-baseline gap-2">
-                  <span className={`text-2xl font-bold ${monitoring.metrics.providerFailures > 0 ? 'text-red-400' : 'text-slate-500'}`}>
-                    {monitoring.metrics.providerFailures}
+                  <span
+                    className={`text-2xl font-bold ${
+                      monitoring.metrics.providerFailures !== null && monitoring.metrics.providerFailures > 0
+                        ? 'text-red-400'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {monitoring.metrics.providerFailures !== null ? monitoring.metrics.providerFailures : '—'}
                   </span>
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <div className="text-[11px] uppercase tracking-wider text-slate-500">Lỗi Cron Scheduler</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-wider text-slate-500">Lỗi Cron Scheduler</span>
+                  {monitoring.metrics.schedulerStatus && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[9px] font-bold border uppercase ${
+                        monitoring.metrics.schedulerStatus === 'HEALTHY'
+                          ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                          : monitoring.metrics.schedulerStatus === 'DEGRADED'
+                            ? 'border-amber-500/30 text-amber-400 bg-amber-500/10'
+                            : 'border-red-500/30 text-red-400 bg-red-500/10'
+                      }`}
+                    >
+                      {monitoring.metrics.schedulerStatus}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className={`text-2xl font-bold ${monitoring.metrics.schedulerFailures > 0 ? 'text-red-400' : 'text-slate-500'}`}>
                     {monitoring.metrics.schedulerFailures}
                   </span>
+                  <span className="text-xs text-slate-500">lỗi dispatch</span>
                 </div>
               </div>
             </div>
+
+            {/* 4. Per-Channel Live Deliveries Summary */}
+            {initialState.channelDeliveryCounts && (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Thống kê Live Deliveries theo Kênh
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    Phạm vi tenant hiện tại{initialState.deliveryCounts.isSampleBounded ? ' (Mẫu 100 tin gần nhất toàn hệ thống - số liệu từng kênh trích từ mẫu này, không phải tổng toàn bộ)' : ''}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="text-slate-400 border-b border-slate-800">
+                      <tr>
+                        <th className="py-2 px-3 font-semibold">Kênh</th>
+                        <th className="py-2 px-3 font-semibold">Tổng lượt</th>
+                        <th className="py-2 px-3 font-semibold">Đã gửi (SENT)</th>
+                        <th className="py-2 px-3 font-semibold">Chuyển giao (HANDOVER)</th>
+                        <th className="py-2 px-3 font-semibold">Bỏ qua (SKIPPED)</th>
+                        <th className="py-2 px-3 font-semibold">Thất bại (FAILED)</th>
+                        <th className="py-2 px-3 font-semibold">Độ tin cậy TB</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono text-slate-300">
+                      {(['ZALO', 'MESSENGER', 'VOICE'] as const).map((ch) => {
+                        const counts = initialState.channelDeliveryCounts?.[ch] || {
+                          total: null,
+                          sent: null,
+                          handover: null,
+                          skipped: null,
+                          failed: null,
+                          avgConfidence: null,
+                        };
+                        return (
+                          <tr key={ch} className="hover:bg-slate-800/30">
+                            <td className="py-2.5 px-3 font-sans font-bold text-white flex items-center gap-2">
+                              <span
+                                className={`w-2 h-2 rounded-full ${
+                                  ch === 'ZALO'
+                                    ? 'bg-blue-400'
+                                    : ch === 'MESSENGER'
+                                      ? 'bg-indigo-400'
+                                      : 'bg-emerald-400'
+                                }`}
+                              />
+                              {ch === 'ZALO' ? 'Zalo OA' : ch === 'MESSENGER' ? 'Messenger' : 'Voice AI'}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {counts.total !== null ? (
+                                <span>
+                                  {counts.total}
+                                  {counts.isSampleBounded && (
+                                    <span className="ml-1 text-[10px] text-amber-400 font-normal" title="Trích từ mẫu 100 bản ghi gần nhất toàn hệ thống, không đại diện toàn bộ kênh">
+                                      (mẫu ≤100)
+                                    </span>
+                                  )}
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-emerald-400 font-semibold">{counts.sent !== null ? counts.sent : '—'}</td>
+                            <td className="py-2.5 px-3 text-amber-400">{counts.handover !== null ? counts.handover : '—'}</td>
+                            <td className="py-2.5 px-3 text-slate-400">{counts.skipped !== null ? counts.skipped : '—'}</td>
+                            <td className={`py-2.5 px-3 ${counts.failed !== null && counts.failed > 0 ? 'text-red-400 font-bold' : 'text-slate-500'}`}>
+                              {counts.failed !== null ? counts.failed : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-indigo-300">
+                              {typeof counts.avgConfidence === 'number'
+                                ? `${(counts.avgConfidence * 100).toFixed(1)}%`
+                                : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {initialState.deliveryCounts.isSampleBounded && (
+                  <p className="text-[11px] text-slate-500 italic mt-2">
+                    * Lưu ý: Thống kê từng kênh được trích xuất từ mẫu 100 tin gần nhất toàn hệ thống (kể cả khi số lượng của kênh &lt; 100). Số liệu này không ngụ ý là tổng số tin đầy đủ trong lịch sử kênh.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

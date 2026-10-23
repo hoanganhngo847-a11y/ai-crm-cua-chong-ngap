@@ -1,7 +1,14 @@
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { ComponentHealth, HealthStatusLevel, SystemHealthStatus } from './types';
+import type {
+  ComponentHealth,
+  ComponentName,
+  HealthStatusLevel,
+  InterpretedSchedulerHealth,
+  SchedulerDispatchRun,
+  SystemHealthStatus,
+} from './types';
 
 export interface HealthCheckOptions {
   fetchFn?: typeof fetch;
@@ -9,6 +16,385 @@ export interface HealthCheckOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 2500;
+
+export function calculateSchedulerFailureStats(runs: readonly SchedulerDispatchRun[]): {
+  consecutiveFailures: number;
+  totalFailures: number;
+} {
+  let consecutiveFailures = 0;
+  let totalFailures = 0;
+  let streakBroken = false;
+
+  for (const run of runs) {
+    const isFailed =
+      run.has_error === true ||
+      run.timed_out === true ||
+      (typeof run.status_code === 'number' && (run.status_code < 200 || run.status_code >= 300));
+
+    if (isFailed) {
+      totalFailures++;
+      if (!streakBroken) {
+        consecutiveFailures++;
+      }
+    } else {
+      // Any non-failure (verified success HTTP 2xx, unknown/pending null, or query error)
+      // breaks consecutive failure evidence. [fail, unknown, fail] MUST NOT streak 2.
+      streakBroken = true;
+    }
+  }
+
+  return { consecutiveFailures, totalFailures };
+}
+
+export function interpretSchedulerHealth(
+  rpcResponseOrData: unknown,
+  channel: 'ZALO' | 'MESSENGER' = 'ZALO',
+  now: Date = new Date()
+): InterpretedSchedulerHealth {
+  const normChannel = (channel || 'ZALO').toUpperCase() as 'ZALO' | 'MESSENGER';
+
+  if (!rpcResponseOrData) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: 0,
+      totalFailures: 0,
+      details: `Chưa có dữ liệu phản hồi scheduler (${normChannel})`,
+    };
+  }
+
+  // Handle { data, error } envelope
+  let errorMsg: string | undefined;
+  let rawData: unknown = rpcResponseOrData;
+
+  if (typeof rpcResponseOrData === 'object' && rpcResponseOrData !== null) {
+    const envelope = rpcResponseOrData as { data?: unknown; error?: unknown };
+    if (envelope.error) {
+      const err = envelope.error;
+      errorMsg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' && err !== null && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : String(err);
+      return {
+        channel: normChannel,
+        status: 'DEGRADED',
+        availability: 'UNKNOWN',
+        consecutiveFailures: 0,
+        totalFailures: 0,
+        details: `Lỗi RPC scheduler ${normChannel}: ${errorMsg}`,
+        error: errorMsg,
+      };
+    }
+    if ('data' in envelope) {
+      rawData = envelope.data;
+    }
+  }
+
+  if (Array.isArray(rawData)) {
+    // Legacy array result has no job/view/extension metadata -> NEVER HEALTHY! Unknown metadata remains DEGRADED.
+    const runs = rawData as SchedulerDispatchRun[];
+    const stats = calculateSchedulerFailureStats(runs);
+    const latest = runs[0];
+    const isLatestFailed =
+      latest &&
+      (Boolean(latest.has_error) ||
+        Boolean(latest.timed_out) ||
+        (typeof latest.status_code === 'number' && (latest.status_code < 200 || latest.status_code >= 300)));
+
+    return {
+      channel: normChannel,
+      status: stats.consecutiveFailures >= 2 || isLatestFailed ? 'UNHEALTHY' : 'DEGRADED',
+      availability: stats.consecutiveFailures >= 2 ? 'UNAVAILABLE' : 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Scheduler ${normChannel} trả về mảng kết quả cũ thiếu metadata job/view/extension (unknown metadata)`,
+    };
+  }
+
+  if (!rawData || typeof rawData !== 'object') {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: 0,
+      totalFailures: 0,
+      details: `Dữ liệu phản hồi RPC scheduler ${normChannel} không hợp lệ`,
+    };
+  }
+
+  const rpcData = rawData as Record<string, unknown>;
+
+  // Channel matching check: reject mismatch if metadata channel is present
+  if (typeof rpcData.channel === 'string' && rpcData.channel.trim().toUpperCase() !== normChannel) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: 0,
+      totalFailures: 0,
+      details: `Metadata channel không khớp với kênh được yêu cầu (nhận: ${String(rpcData.channel)}, yêu cầu: ${normChannel})`,
+    };
+  }
+
+  // 1. Guard against known missing or inactive pg_cron job -> UNHEALTHY
+  if (rpcData.job_exists === false) {
+    return {
+      channel: normChannel,
+      status: 'UNHEALTHY',
+      availability: 'UNAVAILABLE',
+      consecutiveFailures: 0,
+      totalFailures: 0,
+      details: `Cron job chưa được đăng ký trong pg_cron (${String(rpcData.job_name || normChannel)})`,
+    };
+  }
+
+  if (rpcData.job_active === false) {
+    return {
+      channel: normChannel,
+      status: 'UNHEALTHY',
+      availability: 'UNAVAILABLE',
+      consecutiveFailures: 0,
+      totalFailures: 0,
+      details: `Cron job đang bị vô hiệu hóa (${String(rpcData.job_name || normChannel)}, active=false)`,
+    };
+  }
+
+  // 2. Inspect dispatch runs and failure stats
+  const runs = Array.isArray(rpcData.runs) ? (rpcData.runs as SchedulerDispatchRun[]) : [];
+  const stats = calculateSchedulerFailureStats(runs);
+  const latest = runs.length > 0 ? runs[0] : null;
+
+  // Known run failure -> UNHEALTHY
+  if (latest) {
+    const isLatestFailed =
+      latest.has_error === true ||
+      latest.timed_out === true ||
+      (typeof latest.status_code === 'number' &&
+        Number.isFinite(latest.status_code) &&
+        (latest.status_code < 200 || latest.status_code >= 300));
+
+    if (isLatestFailed) {
+      return {
+        channel: normChannel,
+        status: 'UNHEALTHY',
+        availability: stats.consecutiveFailures >= 2 ? 'UNAVAILABLE' : 'DEGRADED',
+        consecutiveFailures: stats.consecutiveFailures,
+        totalFailures: stats.totalFailures,
+        details: `Lần chạy gần nhất của ${normChannel} thất bại (HTTP ${latest.status_code}, error=${latest.has_error}, timed_out=${latest.timed_out})`,
+      };
+    }
+  }
+
+  if (stats.consecutiveFailures >= 2) {
+    return {
+      channel: normChannel,
+      status: 'UNHEALTHY',
+      availability: 'UNAVAILABLE',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Scheduler ${normChannel} có ${stats.consecutiveFailures} lần thất bại liên tiếp`,
+    };
+  }
+
+  // 3. Cadence validation -> DEGRADED
+  if (rpcData.job_schedule && rpcData.job_schedule !== '* * * * *') {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Chu kỳ cron job không đúng: ${String(rpcData.job_schedule)} (kỳ vọng: * * * * *)`,
+    };
+  }
+
+  // 4. Missing dispatch evidence -> DEGRADED
+  if (!latest) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Chưa tìm thấy bản ghi dispatch cho ${normChannel} (missing dispatch evidence)`,
+    };
+  }
+
+  // 5. Timestamp validations -> DEGRADED
+  if (!latest.created) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Timestamp bản ghi dispatch gần nhất là null (${normChannel})`,
+    };
+  }
+
+  const createdMs = new Date(latest.created).getTime();
+  if (!Number.isFinite(createdMs)) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Timestamp bản ghi dispatch gần nhất không hợp lệ: "${latest.created}" (${normChannel})`,
+    };
+  }
+
+  const nowMs = now.getTime();
+  if (createdMs > nowMs + 60000) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Timestamp bản ghi dispatch ở tương lai: "${latest.created}" (${normChannel})`,
+    };
+  }
+
+  const diffMs = nowMs - createdMs;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin > 4) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Lần chạy gần nhất của ${normChannel} cách đây ${diffMin} phút (dự kiến mỗi 1 phút)`,
+    };
+  }
+
+  // 6. HTTP response validations -> pending HTTP null is DEGRADED (never HEALTHY/AVAILABLE)
+  if (latest.status_code === null || latest.status_code === undefined) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Lần chạy gần nhất của ${normChannel} đang chờ phản hồi HTTP (status_code is null)`,
+    };
+  }
+
+  // 6b. Verify positive false for error and timeout flags
+  // Unknown flags (null/undefined) must return DEGRADED/UNKNOWN, not a fabricated failed dispatch.
+  if (latest.has_error !== false || latest.timed_out !== false) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Cờ trạng thái phản hồi HTTP chưa được xác thực rõ ràng (has_error: ${String(latest.has_error)}, timed_out: ${String(latest.timed_out)}, ${normChannel})`,
+    };
+  }
+
+  // 7. Positive metadata validations: HEALTHY requires ALL true:
+  // extension_available === true, view_available === true, job_exists === true, job_active === true, job_schedule === '* * * * *'
+  if (rpcData.extension_available === false) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Extension pg_cron chưa được kích hoạt trên database (${normChannel})`,
+    };
+  }
+  if (rpcData.extension_available !== true) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Trạng thái extension pg_cron không xác định (extension_available !== true, ${normChannel})`,
+    };
+  }
+
+  if (rpcData.view_available === false) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `View cron.job hoặc net._http_response không khả dụng (${normChannel})`,
+    };
+  }
+  if (rpcData.view_available !== true) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Trạng thái view pg_cron không xác định (view_available !== true, ${normChannel})`,
+    };
+  }
+
+  if (rpcData.job_exists !== true) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Metadata cron job không xác định (job_exists !== true, ${normChannel})`,
+    };
+  }
+
+  if (rpcData.job_active !== true) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Metadata cron job không xác định (job_active !== true, ${normChannel})`,
+    };
+  }
+
+  if (rpcData.job_schedule !== '* * * * *') {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'DEGRADED',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Chu kỳ cron job không đúng: ${String(rpcData.job_schedule)} (kỳ vọng: * * * * *)`,
+    };
+  }
+
+  if (typeof rpcData.channel !== 'string' || rpcData.channel.trim().toUpperCase() !== normChannel) {
+    return {
+      channel: normChannel,
+      status: 'DEGRADED',
+      availability: 'UNKNOWN',
+      consecutiveFailures: stats.consecutiveFailures,
+      totalFailures: stats.totalFailures,
+      details: `Metadata channel không xác định hoặc không khớp (nhận: ${String(rpcData.channel)}, yêu cầu: ${normChannel})`,
+    };
+  }
+
+  // Positive verified healthy!
+  return {
+    channel: normChannel,
+    status: 'HEALTHY',
+    availability: 'AVAILABLE',
+    consecutiveFailures: stats.consecutiveFailures,
+    totalFailures: stats.totalFailures,
+    details: `Scheduler ${normChannel} đang chạy đều đặn (lần cuối: ${diffMin < 1 ? 'dưới 1' : diffMin} phút trước, HTTP ${latest.status_code})`,
+  };
+}
 
 export async function checkJavisBrainHealth(
   options: HealthCheckOptions = {}
@@ -238,69 +624,53 @@ export async function checkMessengerTransportHealth(): Promise<ComponentHealth> 
 }
 
 export async function checkSchedulerHealth(
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  channel: 'ZALO' | 'MESSENGER' = 'ZALO'
 ): Promise<ComponentHealth> {
-  const now = new Date().toISOString();
+  const now = new Date();
+  const normChannel = (channel || 'ZALO').toUpperCase() as 'ZALO' | 'MESSENGER';
+  const componentName: ComponentName =
+    normChannel === 'MESSENGER'
+      ? 'Supabase Scheduler (Messenger)'
+      : 'Supabase Scheduler (Zalo)';
 
   if (!supabase) {
     return {
-      name: 'Supabase scheduler',
-      status: 'HEALTHY',
-      lastCheckedAt: now,
-      details: 'Scheduler active (mock client)',
+      name: componentName,
+      status: 'DEGRADED',
+      lastCheckedAt: now.toISOString(),
+      details: `Chưa cấu hình Supabase client (${normChannel})`,
+    };
+  }
+
+  if (typeof supabase.rpc !== 'function') {
+    return {
+      name: componentName,
+      status: 'DEGRADED',
+      lastCheckedAt: now.toISOString(),
+      details: `Supabase client không hỗ trợ hàm rpc (${normChannel})`,
     };
   }
 
   try {
-    const { data, error } = await supabase
-      .from('ai_brain_live_zalo_dispatch_status')
-      .select('created, status_code, has_error, timed_out')
-      .order('created', { ascending: false })
-      .limit(3);
+    const rpcRes = await supabase.rpc('get_ai_channel_scheduler_health', {
+      p_channel: normChannel,
+      p_limit: 10,
+    });
 
-    if (error || !data || data.length === 0) {
-      return {
-        name: 'Supabase scheduler',
-        status: 'DEGRADED',
-        lastCheckedAt: now,
-        details: 'Chưa tìm thấy bản ghi dispatch hoặc quyền truy cập cron_internal bị giới hạn',
-      };
-    }
-
-    const latest = data[0];
-    const diffMs = Date.now() - new Date(latest.created).getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-
-    if (latest.has_error || latest.timed_out || (typeof latest.status_code === 'number' && latest.status_code !== 200)) {
-      return {
-        name: 'Supabase scheduler',
-        status: 'UNHEALTHY',
-        lastCheckedAt: now,
-        details: `Lần chạy gần nhất thất bại (HTTP ${latest.status_code}, error=${latest.has_error})`,
-      };
-    }
-
-    if (diffMin > 4) {
-      return {
-        name: 'Supabase scheduler',
-        status: 'DEGRADED',
-        lastCheckedAt: now,
-        details: `Lần chạy gần nhất cách đây ${diffMin} phút (dự kiến mỗi 1 phút)`,
-      };
-    }
-
+    const interpreted = interpretSchedulerHealth(rpcRes, normChannel, now);
     return {
-      name: 'Supabase scheduler',
-      status: 'HEALTHY',
-      lastCheckedAt: now,
-      details: `Đang chạy đều đặn mỗi phút (lần cuối: ${diffMin < 1 ? 'dưới 1' : diffMin} phút trước, HTTP 200)`,
+      name: componentName,
+      status: interpreted.status,
+      lastCheckedAt: now.toISOString(),
+      details: interpreted.details,
     };
   } catch (error: unknown) {
     return {
-      name: 'Supabase scheduler',
+      name: componentName,
       status: 'DEGRADED',
-      lastCheckedAt: now,
-      details: error instanceof Error ? error.message : 'Lỗi kiểm tra scheduler',
+      lastCheckedAt: now.toISOString(),
+      details: error instanceof Error ? error.message : `Lỗi kiểm tra scheduler ${normChannel}`,
     };
   }
 }
@@ -342,15 +712,32 @@ export async function getSystemHealthStatus(
     details: 'Dịch vụ chính đang vận hành bình thường',
   };
 
-  const [javisBrain, javisRuntime, zcajsWorker, messenger, scheduler] = await Promise.all([
-    checkJavisBrainHealth(options),
-    checkJavisRuntimeHealth(options),
-    checkZcajsWorkerHealth(options),
-    checkMessengerTransportHealth(),
-    checkSchedulerHealth(supabase),
-  ]);
+  const [javisBrain, javisRuntime, zcajsWorker, messenger, zaloScheduler, messengerScheduler] =
+    await Promise.all([
+      checkJavisBrainHealth(options),
+      checkJavisRuntimeHealth(options),
+      checkZcajsWorkerHealth(options),
+      checkMessengerTransportHealth(),
+      checkSchedulerHealth(supabase, 'ZALO'),
+      checkSchedulerHealth(supabase, 'MESSENGER'),
+    ]);
 
   const voice = checkVoiceStringeeHealth();
+
+  // Legacy aggregated 'Supabase scheduler' component
+  const legacyScheduler: ComponentHealth = {
+    name: 'Supabase scheduler',
+    status:
+      zaloScheduler.status === 'UNHEALTHY' || messengerScheduler.status === 'UNHEALTHY'
+        ? 'UNHEALTHY'
+        : zaloScheduler.status === 'DEGRADED' || messengerScheduler.status === 'DEGRADED'
+          ? 'DEGRADED'
+          : zaloScheduler.status === 'HEALTHY' && messengerScheduler.status === 'HEALTHY'
+            ? 'HEALTHY'
+            : 'DEGRADED',
+    lastCheckedAt: now,
+    details: `Zalo: ${zaloScheduler.status}; Messenger: ${messengerScheduler.status}`,
+  };
 
   const components: ComponentHealth[] = [
     crmHealth,
@@ -358,7 +745,9 @@ export async function getSystemHealthStatus(
     javisRuntime,
     zcajsWorker,
     messenger,
-    scheduler,
+    zaloScheduler,
+    messengerScheduler,
+    legacyScheduler,
     voice,
   ];
 
