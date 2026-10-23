@@ -11,6 +11,7 @@ import type {
 import { JavisBrainProvider } from './javis-provider';
 import { createBrainService } from './service';
 import { ZaloInboxService } from '../omnichannel/zalo/inbox-service';
+import { classifyHandoverReason, createHandoverCase } from './handover';
 
 export interface LiveZaloClaim {
   id: string;
@@ -70,7 +71,7 @@ async function loadEligibleInput(client: SupabaseClient, claim: LiveZaloClaim): 
 
   const { data: conversation, error: conversationError } = await client
     .from('conversations')
-    .select('id, company_id, customer_id, channel, status, assigned_to')
+    .select('id, company_id, customer_id, channel, status, assigned_to, ai_mode')
     .eq('id', claim.conversation_id)
     .eq('company_id', claim.company_id)
     .eq('customer_id', claim.customer_id)
@@ -80,8 +81,13 @@ async function loadEligibleInput(client: SupabaseClient, claim: LiveZaloClaim): 
     throw new Error('LIVE_SCOPE_INVALID');
   }
 
-  // Conversation closed or human-owned -> AI silent
-  if (conversation.status === 'CLOSED' || conversation.status === 'PENDING_SALE' || conversation.assigned_to !== null) {
+  // Conversation closed, human-owned, or AI paused -> AI silent
+  if (
+    conversation.status === 'CLOSED' ||
+    conversation.status === 'PENDING_SALE' ||
+    conversation.assigned_to !== null ||
+    conversation.ai_mode === 'PAUSED'
+  ) {
     return null;
   }
 
@@ -218,6 +224,32 @@ async function processClaim(
   }
 
   // Decision Gate: Only RESPOND can auto-send. HANDOVER or NO_REPLY must not send.
+  if (result.decision === 'HANDOVER') {
+    const { reason, priority } = classifyHandoverReason(result.handoverReason, {
+      confidence: result.confidence,
+    });
+    try {
+      await createHandoverCase(client, {
+        companyId: claim.company_id,
+        customerId: claim.customer_id,
+        conversationId: claim.conversation_id,
+        sourceInteractionId: claim.source_interaction_id,
+        reason,
+        priority,
+        brainTurnId: result.turnId,
+      });
+    } catch {
+      // Handover case creation failure must fail closed (do not send to customer)
+    }
+
+    await finish(client, claim, lockToken, 'SKIPPED', {
+      decision: 'HANDOVER',
+      confidence: result.confidence,
+      turnId: result.turnId,
+    });
+    return 'skipped';
+  }
+
   if (result.decision !== 'RESPOND') {
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: result.decision,
@@ -267,10 +299,10 @@ async function processClaim(
     return 'skipped';
   }
 
-  // PRE-SEND RE-CHECK 2: Human ownership re-check right before sending!
+  // PRE-SEND RE-CHECK 2: Human ownership / AI pause re-check right before sending!
   const { data: currentConv, error: convCheckError } = await client
     .from('conversations')
-    .select('status, assigned_to')
+    .select('status, assigned_to, ai_mode')
     .eq('id', claim.conversation_id)
     .maybeSingle();
 
@@ -279,12 +311,13 @@ async function processClaim(
     !currentConv ||
     currentConv.status === 'CLOSED' ||
     currentConv.status === 'PENDING_SALE' ||
-    currentConv.assigned_to !== null
+    currentConv.assigned_to !== null ||
+    currentConv.ai_mode === 'PAUSED'
   ) {
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: 'RESPOND',
       confidence: result.confidence,
-      errorCode: 'HUMAN_TAKEN_OVER',
+      errorCode: currentConv?.ai_mode === 'PAUSED' ? 'AI_PAUSED' : 'HUMAN_TAKEN_OVER',
       turnId: result.turnId,
     });
     return 'skipped';

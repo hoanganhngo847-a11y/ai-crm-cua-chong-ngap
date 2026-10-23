@@ -74,6 +74,7 @@ export interface BrainConversationContext {
   readonly lastMessageAt: string | null;
   readonly status: string;
   readonly assignedTo: string | null;
+  readonly aiMode?: string | null;
   readonly createdAt: string;
 }
 
