@@ -376,7 +376,7 @@ test('H: claim_ai_brain_live_deliveries locks row with token and increments atte
   });
 
   const token1 = randomUUID();
-  let claimed: Array<{ id: string; source_interaction_id: string; attempts: number }> = [];
+  const claimed: Array<{ id: string; source_interaction_id: string; attempts: number }> = [];
   for (let i = 0; i < 10; i++) {
     const { data, error } = await service.rpc('claim_ai_brain_live_deliveries', {
       p_limit: 10,
