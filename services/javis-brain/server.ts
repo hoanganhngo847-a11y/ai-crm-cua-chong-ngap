@@ -1,4 +1,5 @@
 import 'server-only';
+import { dossierContextSchema, validateDossierSnapshot, type DossierSnapshot, type DossierContext } from '../../features/customer-360/contracts';
 import http from 'node:http';
 import { validateProviderProposal } from '../../features/ai-brain/validation';
 import { evaluateTurnPolicy } from './policy';
@@ -130,7 +131,7 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
             finalizeLog(405);
             return;
           }
-        } else if (path === '/v1/brain/turn') {
+        } else if (path === '/v1/brain/turn' || path === '/v1/brain/dossier') {
           if (req.method !== 'POST') {
             sendJson(res, 405, { error: 'METHOD_NOT_ALLOWED' });
             finalizeLog(405);
@@ -304,8 +305,13 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
 
         // Validate BrainTurnRequest
         let turnRequest;
+        let dossierContext: DossierContext | undefined;
         try {
-          turnRequest = validateBrainTurnRequest(parsedBody);
+          if (path === '/v1/brain/dossier') {
+            dossierContext = dossierContextSchema.parse(parsedBody);
+          } else {
+            turnRequest = validateBrainTurnRequest(parsedBody);
+          }
         } catch (err: unknown) {
           if (err instanceof RequestValidationError) {
             sendJson(res, 400, { error: 'BAD_REQUEST' });
@@ -317,11 +323,11 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
           return;
         }
 
-        turnId = turnRequest.turnId;
-        traceId = turnRequest.traceId;
+        turnId = turnRequest?.turnId ?? null;
+        traceId = turnRequest?.traceId ?? null;
 
         // Policy check: short-circuit if allowDrafts === false, AI_PAUSED, or HANDOVER_REQUIRED
-        const policyProposal = evaluateTurnPolicy(turnRequest);
+        const policyProposal = turnRequest ? evaluateTurnPolicy(turnRequest) : null;
         if (policyProposal !== null) {
           decision = policyProposal.decision;
           const turnResponse: TurnResponse = {
@@ -377,13 +383,18 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
           );
         });
 
-        let backendPromise: Promise<BrainProposal>;
+        let backendPromise: Promise<BrainProposal | DossierSnapshot>;
         try {
-          backendPromise = modelBackend.generate(turnRequest.input.text, {
-            signal: abortController.signal,
-            latencyProfile: turnRequest.latencyProfile,
-            grounding: turnRequest.grounding,
-          });
+          if (dossierContext) {
+            if (!modelBackend.generateDossier) throw new Error('DOSSIER_BACKEND_UNAVAILABLE');
+            backendPromise = modelBackend.generateDossier(dossierContext, { signal: abortController.signal });
+          } else if (turnRequest) {
+            backendPromise = modelBackend.generate(turnRequest.input.text, {
+              signal: abortController.signal,
+              latencyProfile: turnRequest.latencyProfile,
+              grounding: turnRequest.grounding,
+            });
+          } else { throw new Error('INVALID_TASK'); }
         } catch (syncErr) {
           releaseSlot();
           activeAbortControllers.delete(abortController);
@@ -406,7 +417,7 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
         let deadlineTimer: NodeJS.Timeout | undefined;
         try {
           const deadlineMs =
-            turnRequest.latencyProfile === 'REALTIME' ? realtimeDeadlineMs : standardDeadlineMs;
+            turnRequest?.latencyProfile === 'REALTIME' ? realtimeDeadlineMs : standardDeadlineMs;
 
           const timeoutPromise = new Promise<never>((_, reject) => {
             deadlineTimer = setTimeout(() => {
@@ -421,6 +432,12 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
             disconnectPromise,
           ]);
 
+          if (dossierContext) {
+            const snapshot = validateDossierSnapshot(proposalRaw, dossierContext);
+            sendJson(res, 200, { ok: true, version: 'dossier-v1', snapshot });
+            finalizeLog(200);
+            return;
+          }
           // Output boundary runtime validation
           const proposal = validateProviderProposal(proposalRaw);
 

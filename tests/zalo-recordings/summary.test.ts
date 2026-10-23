@@ -19,7 +19,7 @@ import {
   GET as summaryGetHandler,
   POST as summaryPostHandler,
   handleZaloCallSummaryCron,
-} from '../../app/api/cron/zalo-call-summary/route';
+} from '../../app/api/cron/zalo-call-summary/handler';
 import {
   validateCallSummaryOutput,
   VALID_LEAD_TEMPERATURES,

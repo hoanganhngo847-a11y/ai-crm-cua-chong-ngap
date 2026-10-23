@@ -6,7 +6,7 @@ import {
   GET,
   POST,
   type AiBrainLiveMessengerRouteDeps,
-} from '../../app/api/cron/ai-brain-live-messenger/route';
+} from '../../app/api/cron/ai-brain-live-messenger/handler';
 
 const TEST_SECRET = 'cron-secret-super-secure-token-12345';
 const CANARY_SECRET = 'canary-super-secret-do-not-leak-into-logs-or-response';

@@ -6,7 +6,7 @@ import {
   GET,
   POST,
   type AiBrainShadowRouteDeps,
-} from '../../app/api/cron/ai-brain-shadow/route';
+} from '../../app/api/cron/ai-brain-shadow/handler';
 
 const TEST_SECRET = 'cron-secret-super-secure-token-12345';
 const CANARY_SECRET = 'canary-super-secret-do-not-leak-into-logs-or-response';

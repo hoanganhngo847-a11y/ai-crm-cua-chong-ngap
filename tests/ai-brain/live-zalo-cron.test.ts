@@ -6,7 +6,7 @@ import {
   GET,
   POST,
   type AiBrainLiveZaloRouteDeps,
-} from '../../app/api/cron/ai-brain-live-zalo/route';
+} from '../../app/api/cron/ai-brain-live-zalo/handler';
 
 const TEST_SECRET = 'cron-secret-super-secure-token-12345';
 const CANARY_SECRET = 'canary-super-secret-do-not-leak-into-logs-or-response';

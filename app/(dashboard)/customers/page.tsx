@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import CustomerList from '../../../features/crm/components/customer-list';
+import Link from 'next/link';
 
 export const metadata = {
   title: 'Khách hàng | AI CRM Cửa Chống Ngập',
@@ -43,5 +44,5 @@ export default async function CustomersDashboardPage() {
     );
   }
 
-  return <CustomerList userRole={actor.role} userFullName={actor.fullName} />;
+  return <><div className="px-6 pt-6"><Link href="/customers/dossier" className="inline-block rounded-xl border border-blue-500/30 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-300">Mở Customer 360 — Hồ sơ khách hàng AI →</Link></div><CustomerList userRole={actor.role} userFullName={actor.fullName} /></>;
 }

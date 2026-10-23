@@ -1,4 +1,5 @@
 import 'server-only';
+import type { DossierContext, DossierSnapshot } from '../../features/customer-360/contracts';
 import type {
   BrainChannel,
   BrainConversationState,
@@ -34,6 +35,7 @@ export interface JavisBrainConfig {
 }
 
 export interface ModelBackend {
+  generateDossier?(context: DossierContext, options: { signal: AbortSignal }): Promise<DossierSnapshot>;
   generate(
     inputText: string,
     options: {
