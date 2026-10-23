@@ -72,7 +72,7 @@ async function loadEligibleInput(
   // 2. Check conversation state
   const { data: conversation, error: conversationError } = await client
     .from('conversations')
-    .select('id, company_id, customer_id, channel, status, assigned_to, ai_mode')
+    .select('id, company_id, customer_id, channel, status, assigned_to, ai_mode, external_conversation_id')
     .eq('id', claim.conversation_id)
     .eq('company_id', claim.company_id)
     .eq('customer_id', claim.customer_id)
@@ -91,6 +91,28 @@ async function loadEligibleInput(
     conversation.ai_mode === 'PAUSED'
   ) {
     return null;
+  }
+
+  // Canary restriction for Messenger: default deny unless explicitly allowlisted
+  if (claim.channel === 'MESSENGER') {
+    const externalId = (conversation as { external_conversation_id?: string | null }).external_conversation_id || '';
+    const colonIdx = externalId.indexOf(':');
+    const pageId = colonIdx > 0 ? externalId.slice(0, colonIdx) : null;
+    if (!pageId) return null;
+
+    const { data: canaryAllowed, error: canaryErr } = await client
+      .from('ai_brain_live_canary_allowlist')
+      .select('id')
+      .eq('company_id', claim.company_id)
+      .eq('channel', 'MESSENGER')
+      .eq('conversation_id', claim.conversation_id)
+      .eq('page_id', pageId)
+      .eq('enabled', true)
+      .maybeSingle();
+
+    if (canaryErr || !canaryAllowed) {
+      return null;
+    }
   }
 
   // 3. Check source interaction
@@ -171,9 +193,15 @@ async function finish(
     externalMessageId?: string | null;
     errorCode?: string | null;
     turnId?: string | null;
+    brainLatencyMs?: number | null;
   }
 ): Promise<void> {
-  const { data, error } = await client.rpc('finish_ai_brain_live_delivery', {
+  const isExtended = claim.channel === 'MESSENGER' || (claim.channel !== 'ZALO' && details?.brainLatencyMs != null);
+  const rpcName = isExtended
+    ? 'finish_ai_brain_live_delivery_extended'
+    : 'finish_ai_brain_live_delivery';
+
+  const params: Record<string, unknown> = {
     p_id: claim.id,
     p_lock_token: lockToken,
     p_send_status: status,
@@ -182,7 +210,13 @@ async function finish(
     p_external_message_id: details?.externalMessageId ?? null,
     p_error_code: details?.errorCode ?? null,
     p_brain_turn_id: details?.turnId ?? null,
-  });
+  };
+
+  if (rpcName === 'finish_ai_brain_live_delivery_extended') {
+    params.p_brain_latency_ms = details?.brainLatencyMs ?? null;
+  }
+
+  const { data, error } = await client.rpc(rpcName, params);
   if (error || data !== true) throw new Error('LIVE_FINISH_FENCED');
 }
 
@@ -240,6 +274,10 @@ async function processClaim(
     input: { text: eligible.text },
   });
 
+  const brainLatencyMs = typeof result.latencyMs === 'number' && Number.isFinite(result.latencyMs)
+    ? Math.round(result.latencyMs)
+    : null;
+
   // Provider error or timeout
   if (result.decision === 'ERROR') {
     await finish(client, claim, lockToken, 'FAILED', {
@@ -247,6 +285,7 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: result.errorCode,
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'failed';
   }
@@ -267,13 +306,23 @@ async function processClaim(
         brainTurnId: result.turnId,
       });
     } catch {
-      // Handover case creation failure must fail closed (do not send to customer)
+      // Handover case creation failure must fail closed AND be visible with sanitized code and server ID only
+      console.error(`[ai-brain-live-delivery] createHandoverCase failed for claim ${claim.id}`);
+      await finish(client, claim, lockToken, 'FAILED', {
+        decision: 'HANDOVER',
+        confidence: result.confidence,
+        errorCode: 'HANDOVER_CASE_CREATION_FAILED',
+        turnId: result.turnId,
+        brainLatencyMs,
+      });
+      return 'failed';
     }
 
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: 'HANDOVER',
       confidence: result.confidence,
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
   }
@@ -283,6 +332,7 @@ async function processClaim(
       decision: result.decision,
       confidence: result.confidence,
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
   }
@@ -294,6 +344,7 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: 'LOW_CONFIDENCE',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
   }
@@ -305,6 +356,7 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: 'EMPTY_DRAFT',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
   }
@@ -324,6 +376,7 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: 'KILL_SWITCH_ENGAGED',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
   }
@@ -348,8 +401,46 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: currentConv?.ai_mode === 'PAUSED' ? 'AI_PAUSED' : 'HUMAN_TAKEN_OVER',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
+  }
+
+  // PRE-SEND RE-CHECK 3: Canary allowlist re-check right before sending!
+  if (claim.channel === 'MESSENGER') {
+    const { data: convExternal } = await client
+      .from('conversations')
+      .select('external_conversation_id')
+      .eq('id', claim.conversation_id)
+      .eq('company_id', claim.company_id)
+      .maybeSingle();
+
+    const externalId = (convExternal as { external_conversation_id?: string | null })?.external_conversation_id || '';
+    const colonIdx = externalId.indexOf(':');
+    const pageId = colonIdx > 0 ? externalId.slice(0, colonIdx) : null;
+
+    const { data: canaryActive, error: canaryCheckErr } = pageId
+      ? await client
+          .from('ai_brain_live_canary_allowlist')
+          .select('id')
+          .eq('company_id', claim.company_id)
+          .eq('channel', 'MESSENGER')
+          .eq('conversation_id', claim.conversation_id)
+          .eq('page_id', pageId)
+          .eq('enabled', true)
+          .maybeSingle()
+      : { data: null, error: null };
+
+    if (canaryCheckErr || !canaryActive) {
+      await finish(client, claim, lockToken, 'SKIPPED', {
+        decision: 'RESPOND',
+        confidence: result.confidence,
+        errorCode: 'CANARY_RESTRICTED',
+        turnId: result.turnId,
+        brainLatencyMs,
+      });
+      return 'skipped';
+    }
   }
 
   // SENDER TRANSPORT CALL (CRM is the delivery authority)
@@ -360,6 +451,7 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: 'NO_TRANSPORT_AVAILABLE',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'failed';
   }
@@ -370,7 +462,9 @@ async function processClaim(
     draft: proposedDraft,
     commandId,
     minConfidence: eligible.minConfidence,
+    turnConfidence: result.confidence,
     turnId: result.turnId,
+    lockToken,
   });
 
   if (sendOutcome.outcome === 'SENT') {
@@ -378,7 +472,9 @@ async function processClaim(
       decision: 'RESPOND',
       confidence: result.confidence,
       externalMessageId: sendOutcome.externalMessageId ?? null,
+      errorCode: sendOutcome.errorCode ?? null,
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'sent';
   }
@@ -389,15 +485,29 @@ async function processClaim(
       confidence: result.confidence,
       errorCode: sendOutcome.errorCode ?? 'SKIPPED_BY_TRANSPORT',
       turnId: result.turnId,
+      brainLatencyMs,
     });
     return 'skipped';
+  }
+
+  if (sendOutcome.outcome === 'UNCERTAIN') {
+    await finish(client, claim, lockToken, 'FAILED', {
+      decision: 'RESPOND',
+      confidence: result.confidence,
+      errorCode: sendOutcome.errorCode || 'MESSENGER_DISPATCH_UNCERTAIN',
+      turnId: result.turnId,
+      brainLatencyMs,
+    });
+    return 'failed';
   }
 
   await finish(client, claim, lockToken, 'FAILED', {
     decision: 'RESPOND',
     confidence: result.confidence,
+    externalMessageId: sendOutcome.externalMessageId ?? null,
     errorCode: sendOutcome.errorCode || 'SEND_FAILED',
     turnId: result.turnId,
+    brainLatencyMs,
   });
   return 'failed';
 }

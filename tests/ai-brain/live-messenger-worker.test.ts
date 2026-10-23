@@ -24,6 +24,7 @@ interface MockWorkerDbConfig {
 
 function createMockMessengerWorkerSupabase(config: MockWorkerDbConfig = {}) {
   const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  let currentLockToken: string | null = null;
 
   const defaultClaim = {
     id: CLAIM_ID,
@@ -99,6 +100,33 @@ function createMockMessengerWorkerSupabase(config: MockWorkerDbConfig = {}) {
             };
           }
 
+          if (table === 'ai_brain_live_canary_allowlist') {
+            return {
+              data: {
+                id: 'canary-worker-1',
+                company_id: COMPANY_ID,
+                channel: 'MESSENGER',
+                conversation_id: CONVERSATION_ID,
+                page_id: PAGE_ID,
+                enabled: true,
+              },
+              error: null,
+            };
+          }
+
+          if (table === 'ai_brain_live_deliveries') {
+            return {
+              data: {
+                id: CLAIM_ID,
+                lock_token: currentLockToken,
+                send_status: 'PROCESSING',
+                external_message_id: null,
+                dispatch_started_at: null,
+              },
+              error: null,
+            };
+          }
+
           return { data: null, error: null };
         },
       };
@@ -107,9 +135,13 @@ function createMockMessengerWorkerSupabase(config: MockWorkerDbConfig = {}) {
     async rpc(name: string, params: Record<string, unknown>) {
       rpcCalls.push({ name, params });
       if (name === 'claim_ai_brain_live_deliveries') {
+        currentLockToken = params.p_lock_token as string;
         return { data: [defaultClaim], error: null };
       }
-      if (name === 'finish_ai_brain_live_delivery') {
+      if (name === 'start_ai_messenger_live_dispatch') {
+        return { data: true, error: null };
+      }
+      if (name === 'finish_ai_brain_live_delivery' || name === 'finish_ai_brain_live_delivery_extended') {
         return { data: true, error: null };
       }
       if (name === 'record_ai_messenger_live_outbound') {
@@ -189,7 +221,9 @@ test('Messenger worker: full end-to-end live auto-reply with Javis Brain provide
   assert.equal(dispatchCalls.length, 1);
 
   // Assert finish was called with SENT status and externalMessageId
-  const finishCall = mockDb.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'SENT');
   assert.equal(finishCall.params.p_external_message_id, 'mid.fb.123456789');
@@ -231,7 +265,9 @@ test('Messenger worker: low confidence skips delivery and does not call transpor
   assert.equal(result.skipped, 1);
   assert.equal(dispatchCalled, false);
 
-  const finishCall = mockDb.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'SKIPPED');
   assert.equal(finishCall.params.p_error_code, 'LOW_CONFIDENCE');
@@ -269,7 +305,9 @@ test('Messenger worker: invalid provider proposal (empty draft) fails closed and
   assert.equal(result.failed, 1);
   assert.equal(dispatchCalled, false);
 
-  const finishCall = mockDb.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'FAILED');
   assert.equal(finishCall.params.p_error_code, 'BRAIN_PROVIDER_ERROR');

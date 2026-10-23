@@ -181,3 +181,60 @@ test('Monitoring DB: Security & RLS - anon cannot read, update, or delete ai_mon
 
   assert.ok(anonDeleteError, 'Anon delete must fail');
 });
+
+test('Monitoring DB: get_ai_channel_scheduler_health is strictly service_role only, revoked from anon', async () => {
+  // 1. service_role can call get_ai_channel_scheduler_health for ZALO and MESSENGER
+  const { data: zaloData, error: zaloErr } = await service.rpc('get_ai_channel_scheduler_health', {
+    p_channel: 'ZALO',
+    p_limit: 5,
+  });
+
+  assert.ifError(zaloErr);
+  assert.ok(zaloData && typeof zaloData === 'object');
+  assert.equal(zaloData.channel, 'ZALO');
+  assert.equal(zaloData.job_name, 'ai_brain_live_zalo_worker');
+  assert.ok(Array.isArray(zaloData.runs));
+
+  const { data: msgData, error: msgErr } = await service.rpc('get_ai_channel_scheduler_health', {
+    p_channel: 'MESSENGER',
+    p_limit: 5,
+  });
+
+  assert.ifError(msgErr);
+  assert.ok(msgData && typeof msgData === 'object');
+  assert.equal(msgData.channel, 'MESSENGER');
+  assert.equal(msgData.job_name, 'ai_brain_live_messenger_worker');
+  assert.ok(Array.isArray(msgData.runs));
+
+  // In local test DB without pg_cron, job_exists must be null (safe explicit unknown, not false positive)
+  if (!zaloData.extension_available) {
+    assert.equal(zaloData.job_exists, null, 'Safe missing extension must return explicit null for job_exists');
+    assert.equal(zaloData.job_active, null);
+    assert.equal(zaloData.job_schedule, null);
+  }
+
+  // 2. anon cannot execute get_ai_channel_scheduler_health (permission denied)
+  const { data: anonData, error: anonErr } = await anon.rpc('get_ai_channel_scheduler_health', {
+    p_channel: 'ZALO',
+  });
+
+  assert.equal(anonData, null);
+  assert.ok(anonErr, 'Anon execution of get_ai_channel_scheduler_health must be rejected');
+  assert.ok(
+    anonErr.code === '42501' || anonErr.message.includes('permission denied'),
+    `Expected permission denied error, got: ${anonErr.message}`
+  );
+
+  // 3. Unused synonym get_ai_scheduler_dispatch_status must be dropped
+  const { error: synonymErr } = await service.rpc('get_ai_scheduler_dispatch_status', {
+    p_channel: 'ZALO',
+  });
+  assert.ok(synonymErr, 'Unused synonym get_ai_scheduler_dispatch_status must NOT exist');
+
+  // 4. Invalid channel must be rejected
+  const { error: invalidChanErr } = await service.rpc('get_ai_channel_scheduler_health', {
+    p_channel: 'TELEGRAM',
+  });
+  assert.ok(invalidChanErr, 'Unsupported channel must be rejected');
+  assert.ok(invalidChanErr.message.includes('UNSUPPORTED_CHANNEL'));
+});

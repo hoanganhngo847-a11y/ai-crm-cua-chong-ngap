@@ -24,7 +24,9 @@ export interface LiveDeliverySendParams {
   draft: string;
   commandId: string;
   minConfidence: number;
+  turnConfidence?: number;
   turnId?: string | null;
+  lockToken?: string;
 }
 
 export interface LiveDeliverySendOutcome {

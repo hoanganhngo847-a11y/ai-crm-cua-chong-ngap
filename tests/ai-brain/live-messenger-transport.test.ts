@@ -12,6 +12,7 @@ const CUSTOMER_ID = '22222222-2222-4222-8222-222222222222';
 const CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
 const INTERACTION_ID = '44444444-4444-4444-8444-444444444444';
 const CLAIM_ID = '55555555-5555-4555-8555-555555555555';
+const LOCK_TOKEN = '77777777-7777-4777-8777-777777777777';
 const PAGE_ID = '10987654321';
 const RECIPIENT_PSID = '9876543210';
 const DRAFT_TEXT = 'Dạ chào anh, em là trợ lý AI cửa chống ngập MDTech.';
@@ -22,6 +23,11 @@ interface MockDbOptions {
   inboundData?: { created_at: string } | null;
   inboundError?: Error | null;
   recordRpcError?: Error | null;
+  canaryAllowed?: boolean;
+  deliveryData?: Record<string, unknown> | null;
+  deliveryError?: Error | null;
+  fenceAllowed?: boolean;
+  fenceRpcError?: Error | null;
 }
 
 function createMockSupabase(options: MockDbOptions = {}) {
@@ -36,6 +42,14 @@ function createMockSupabase(options: MockDbOptions = {}) {
 
   const defaultInbound = {
     created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 5 mins ago (well within 24h)
+  };
+
+  const defaultDelivery = {
+    id: CLAIM_ID,
+    lock_token: LOCK_TOKEN,
+    send_status: 'PROCESSING',
+    external_message_id: null,
+    dispatch_started_at: null,
   };
 
   const client = {
@@ -67,6 +81,25 @@ function createMockSupabase(options: MockDbOptions = {}) {
             if (options.inboundData !== undefined) return { data: options.inboundData, error: null };
             return { data: defaultInbound, error: null };
           }
+          if (table === 'ai_brain_live_canary_allowlist') {
+            if (options.canaryAllowed === false) return { data: null, error: null };
+            return {
+              data: {
+                id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+                company_id: COMPANY_ID,
+                channel: 'MESSENGER',
+                conversation_id: CONVERSATION_ID,
+                page_id: PAGE_ID,
+                enabled: true,
+              },
+              error: null,
+            };
+          }
+          if (table === 'ai_brain_live_deliveries') {
+            if (options.deliveryError) return { data: null, error: options.deliveryError };
+            if (options.deliveryData !== undefined) return { data: options.deliveryData, error: null };
+            return { data: defaultDelivery, error: null };
+          }
           return { data: null, error: null };
         },
       };
@@ -74,6 +107,11 @@ function createMockSupabase(options: MockDbOptions = {}) {
     },
     async rpc(name: string, params: Record<string, unknown>) {
       rpcCalls.push({ name, params });
+      if (name === 'start_ai_messenger_live_dispatch') {
+        if (options.fenceRpcError) return { data: null, error: options.fenceRpcError };
+        if (options.fenceAllowed === false) return { data: false, error: null };
+        return { data: true, error: null };
+      }
       if (name === 'record_ai_messenger_live_outbound') {
         if (options.recordRpcError) return { data: null, error: options.recordRpcError };
         return { data: '66666666-6666-4666-8666-666666666666', error: null };
@@ -107,7 +145,7 @@ afterEach(() => {
   process.env = originalEnv;
 });
 
-test('Messenger transport: successfully sends reply and records outbound interaction', async () => {
+test('Messenger transport: successfully sends reply with atomic dispatch-start fence and records outbound interaction', async () => {
   const mockDb = createMockSupabase();
   const dispatchCalls: unknown[] = [];
 
@@ -131,6 +169,7 @@ test('Messenger transport: successfully sends reply and records outbound interac
     draft: DRAFT_TEXT,
     commandId: `ai-live:${INTERACTION_ID}`,
     minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
   });
 
   assert.equal(result.outcome, 'SENT');
@@ -146,10 +185,24 @@ test('Messenger transport: successfully sends reply and records outbound interac
     content: DRAFT_TEXT,
   });
 
-  // Verify timeline interaction was recorded via record_ai_messenger_live_outbound RPC
-  assert.equal(mockDb.rpcCalls.length, 1);
-  assert.equal(mockDb.rpcCalls[0].name, 'record_ai_messenger_live_outbound');
+  // Verify atomic dispatch fence RPC was called BEFORE recording outbound
+  assert.equal(mockDb.rpcCalls.length, 2);
+  assert.equal(mockDb.rpcCalls[0].name, 'start_ai_messenger_live_dispatch');
   assert.deepEqual(mockDb.rpcCalls[0].params, {
+    p_delivery_id: CLAIM_ID,
+    p_lock_token: LOCK_TOKEN,
+    p_company_id: COMPANY_ID,
+    p_customer_id: CUSTOMER_ID,
+    p_conversation_id: CONVERSATION_ID,
+    p_source_interaction_id: INTERACTION_ID,
+    p_page_id: PAGE_ID,
+    p_min_confidence: 0.85,
+    p_turn_confidence: null,
+  });
+
+  // Verify timeline interaction was recorded via record_ai_messenger_live_outbound RPC
+  assert.equal(mockDb.rpcCalls[1].name, 'record_ai_messenger_live_outbound');
+  assert.deepEqual(mockDb.rpcCalls[1].params, {
     p_company_id: COMPANY_ID,
     p_customer_id: CUSTOMER_ID,
     p_conversation_id: CONVERSATION_ID,
@@ -159,6 +212,173 @@ test('Messenger transport: successfully sends reply and records outbound interac
     p_content: DRAFT_TEXT,
     p_actor_type: 'AI',
   });
+});
+
+test('Messenger transport: missing lock token denies send immediately', async () => {
+  const mockDb = createMockSupabase();
+  let dispatchCalled = false;
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.1' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  // Call sendReply with NO lockToken
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+  });
+
+  assert.equal(result.outcome, 'FAILED');
+  assert.equal(result.errorCode, 'MISSING_LOCK_TOKEN');
+  assert.equal(dispatchCalled, false);
+  assert.equal(mockDb.rpcCalls.length, 0);
+});
+
+test('Messenger transport: non-numeric Page ID fails closed', async () => {
+  const mockDb = createMockSupabase({
+    convData: {
+      id: CONVERSATION_ID,
+      company_id: COMPANY_ID,
+      channel: 'FACEBOOK',
+      external_conversation_id: `page-not-numeric:${RECIPIENT_PSID}`,
+    },
+  });
+  let dispatchCalled = false;
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.1' };
+    }) as never,
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'FAILED');
+  assert.equal(result.errorCode, 'INVALID_EXTERNAL_CONVERSATION_ID');
+  assert.equal(dispatchCalled, false);
+});
+
+test('Messenger transport: dispatch-start fence denial halts physical dispatch (0 sends)', async () => {
+  const mockDb = createMockSupabase({ fenceAllowed: false });
+  let dispatchCalled = false;
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.1' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'SKIPPED');
+  assert.equal(result.errorCode, 'DISPATCH_FENCE_DENIED');
+  assert.equal(dispatchCalled, false);
+  // Fencing RPC was called, but provider was never called
+  assert.equal(mockDb.rpcCalls.length, 1);
+  assert.equal(mockDb.rpcCalls[0].name, 'start_ai_messenger_live_dispatch');
+});
+
+test('Messenger transport: delivery lookup error fails closed and denies dispatch', async () => {
+  const mockDb = createMockSupabase({
+    deliveryError: new Error('DB_UNAVAILABLE'),
+  });
+  let dispatchCalled = false;
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.1' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'FAILED');
+  assert.equal(result.errorCode, 'DELIVERY_LOOKUP_FAILED');
+  assert.equal(dispatchCalled, false);
+});
+
+test('Messenger transport: worker crash after dispatch-marker sets marker -> 0 second send on reclaim', async () => {
+  // Simulates a delivery where dispatch_started_at was already marked before a crash
+  const mockDb = createMockSupabase({
+    deliveryData: {
+      id: CLAIM_ID,
+      lock_token: LOCK_TOKEN,
+      send_status: 'PROCESSING',
+      external_message_id: null,
+      dispatch_started_at: '2026-10-23T04:00:00.000Z',
+    },
+  });
+
+  let dispatchCalled = false;
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.should-never-reach' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'SKIPPED');
+  assert.equal(result.errorCode, 'DISPATCH_ALREADY_STARTED');
+  assert.equal(dispatchCalled, false);
 });
 
 test('Messenger transport: fails closed when 24-hour messaging window has elapsed', async () => {
@@ -186,6 +406,7 @@ test('Messenger transport: fails closed when 24-hour messaging window has elapse
     draft: DRAFT_TEXT,
     commandId: `ai-live:${INTERACTION_ID}`,
     minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
   });
 
   assert.equal(result.outcome, 'FAILED');
@@ -216,11 +437,43 @@ test('Messenger transport: fails closed on company mismatch with page binding', 
     draft: DRAFT_TEXT,
     commandId: `ai-live:${INTERACTION_ID}`,
     minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
   });
 
   assert.equal(result.outcome, 'FAILED');
   assert.equal(result.errorCode, 'PAGE_COMPANY_MISMATCH');
   assert.equal(dispatchCalled, false);
+});
+
+test('Messenger transport: strict canary default-denies un-allowlisted conversations', async () => {
+  const mockDb = createMockSupabase({ canaryAllowed: false });
+  let dispatchCalled = false;
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.1' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'SKIPPED');
+  assert.equal(result.errorCode, 'CANARY_NOT_ALLOWED');
+  assert.equal(dispatchCalled, false);
+  assert.equal(mockDb.rpcCalls.length, 0);
 });
 
 test('Messenger transport: maps provider FAILED and UNKNOWN outcomes correctly', async () => {
@@ -242,6 +495,7 @@ test('Messenger transport: maps provider FAILED and UNKNOWN outcomes correctly',
     draft: DRAFT_TEXT,
     commandId: `ai-live:${INTERACTION_ID}`,
     minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
   });
   assert.equal(failResult.outcome, 'FAILED');
   assert.equal(failResult.errorCode, 'MESSENGER_DISPATCH_FAILED');
@@ -262,7 +516,75 @@ test('Messenger transport: maps provider FAILED and UNKNOWN outcomes correctly',
     draft: DRAFT_TEXT,
     commandId: `ai-live:${INTERACTION_ID}`,
     minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
   });
   assert.equal(unknownResult.outcome, 'UNCERTAIN');
   assert.equal(unknownResult.errorCode, 'MESSENGER_DISPATCH_UNCERTAIN');
+});
+
+test('Messenger transport: outbound persistence errors are explicit FAILED with provider ID preserved (not ordinary SENT)', async () => {
+  const mockDb = createMockSupabase({
+    recordRpcError: new Error('DB_DEADLOCK_ON_INTERACTIONS'),
+  });
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => ({ status: 'SENT' as const, mid: 'mid.persisted-fail-1' })) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  // Explicit non-retryable failure with provider ID preserved; NOT ordinary SENT
+  assert.equal(result.outcome, 'FAILED');
+  assert.equal(result.externalMessageId, 'mid.persisted-fail-1');
+  assert.equal(result.errorCode, 'OUTBOUND_PERSISTENCE_FAILED');
+});
+
+test('Messenger transport: prevents duplicate physical send when delivery was already sent', async () => {
+  const mockDb = createMockSupabase({
+    deliveryData: {
+      id: CLAIM_ID,
+      lock_token: LOCK_TOKEN,
+      send_status: 'PROCESSING',
+      external_message_id: 'mid.already-sent-prev',
+      dispatch_started_at: '2026-10-23T04:00:00.000Z',
+    },
+  });
+
+  let dispatchCalled = false;
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async () => {
+      dispatchCalled = true;
+      return { status: 'SENT', mid: 'mid.should-not-reach' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'SENT');
+  assert.equal(result.externalMessageId, 'mid.already-sent-prev');
+  assert.equal(dispatchCalled, false);
 });

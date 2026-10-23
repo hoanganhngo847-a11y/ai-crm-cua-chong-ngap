@@ -33,7 +33,16 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
   }
 
   async sendReply(params: LiveDeliverySendParams): Promise<LiveDeliverySendOutcome> {
-    const { claim, draft } = params;
+    const { claim, draft, lockToken } = params;
+
+    // 0. Channel and required lock token guards
+    if (claim.channel !== 'MESSENGER') {
+      return { outcome: 'FAILED', errorCode: 'INVALID_CHANNEL' };
+    }
+
+    if (!lockToken || typeof lockToken !== 'string' || !lockToken.trim()) {
+      return { outcome: 'FAILED', errorCode: 'MISSING_LOCK_TOKEN' };
+    }
 
     // 1. Resolve conversation external ID (format: "pageId:recipientPsid")
     const { data: conv, error: convError } = await this.supabase
@@ -47,6 +56,10 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       return { outcome: 'FAILED', errorCode: 'CONVERSATION_NOT_FOUND' };
     }
 
+    if (conv.company_id !== claim.company_id || conv.channel !== 'FACEBOOK') {
+      return { outcome: 'FAILED', errorCode: 'CHANNEL_OR_COMPANY_MISMATCH' };
+    }
+
     const externalId = conv.external_conversation_id || '';
     const colonIdx = externalId.indexOf(':');
     if (colonIdx <= 0 || colonIdx === externalId.length - 1) {
@@ -56,7 +69,12 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
     const pageId = externalId.slice(0, colonIdx);
     const recipientPsid = externalId.slice(colonIdx + 1);
 
-    // 2. Resolve Page credentials via binding
+    // Strictly validate that Page ID consists only of numeric digits
+    if (!/^\d+$/.test(pageId)) {
+      return { outcome: 'FAILED', errorCode: 'INVALID_EXTERNAL_CONVERSATION_ID' };
+    }
+
+    // 2. Resolve Page credentials via binding and enforce company + page match
     let config: PageBinding;
     try {
       config = this.resolveBinding(pageId);
@@ -64,7 +82,7 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       return { outcome: 'FAILED', errorCode: 'PAGE_NOT_CONFIGURED' };
     }
 
-    if (config.company !== claim.company_id) {
+    if (config.company !== claim.company_id || config.page !== pageId) {
       return { outcome: 'FAILED', errorCode: 'PAGE_COMPANY_MISMATCH' };
     }
 
@@ -78,7 +96,49 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       return { outcome: 'FAILED', errorCode: 'INVALID_GRAPH_VERSION' };
     }
 
-    // 3. 24-hour messaging window guard
+    // 3. Strict Canary Allowlist verification in transport
+    const { data: canaryAllowed, error: canaryErr } = await this.supabase
+      .from('ai_brain_live_canary_allowlist')
+      .select('id')
+      .eq('company_id', claim.company_id)
+      .eq('channel', 'MESSENGER')
+      .eq('conversation_id', claim.conversation_id)
+      .eq('page_id', pageId)
+      .eq('enabled', true)
+      .maybeSingle();
+
+    if (canaryErr || !canaryAllowed) {
+      return { outcome: 'SKIPPED', errorCode: 'CANARY_NOT_ALLOWED' };
+    }
+
+    // 4. Pre-check delivery record: if already sent or already marked, never physically resend
+    const { data: deliveryCheck, error: deliveryErr } = await this.supabase
+      .from('ai_brain_live_deliveries')
+      .select('lock_token, send_status, external_message_id, dispatch_started_at')
+      .eq('id', claim.id)
+      .maybeSingle();
+
+    if (deliveryErr || !deliveryCheck) {
+      return { outcome: 'FAILED', errorCode: 'DELIVERY_LOOKUP_FAILED' };
+    }
+
+    if (deliveryCheck.external_message_id) {
+      return {
+        outcome: 'SENT',
+        externalMessageId: deliveryCheck.external_message_id,
+      };
+    }
+
+    if (deliveryCheck.dispatch_started_at) {
+      // Dispatch was already marked or attempted; never physically resend
+      return { outcome: 'SKIPPED', errorCode: 'DISPATCH_ALREADY_STARTED' };
+    }
+
+    if (deliveryCheck.lock_token !== lockToken) {
+      return { outcome: 'SKIPPED', errorCode: 'LEASE_FENCED' };
+    }
+
+    // 5. 24-hour messaging window guard
     const { data: latestInbound, error: inboundError } = await this.supabase
       .from('interactions')
       .select('created_at')
@@ -94,11 +154,33 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       return { outcome: 'FAILED', errorCode: 'INBOUND_WINDOW_CHECK_FAILED' };
     }
 
-    if (!canReply(latestInbound?.created_at || null)) {
+    if (!latestInbound || !canReply(latestInbound.created_at)) {
       return { outcome: 'FAILED', errorCode: 'MESSAGING_WINDOW_CLOSED' };
     }
 
-    // 4. Dispatch via Meta Graph API
+    // 6. ATOMIC DURABLE DISPATCH-START FENCE BEFORE GRAPH CALL
+    // Atomically validates active lock token, lease, scope, canary, current settings,
+    // ownership, and 24h window, setting dispatch_started_at ONLY ONCE.
+    const { data: fenceAcquired, error: fenceError } = await this.supabase.rpc(
+      'start_ai_messenger_live_dispatch',
+      {
+        p_delivery_id: claim.id,
+        p_lock_token: lockToken,
+        p_company_id: claim.company_id,
+        p_customer_id: claim.customer_id,
+        p_conversation_id: claim.conversation_id,
+        p_source_interaction_id: claim.source_interaction_id,
+        p_page_id: pageId,
+        p_min_confidence: params.minConfidence,
+        p_turn_confidence: params.turnConfidence ?? null,
+      }
+    );
+
+    if (fenceError || fenceAcquired !== true) {
+      return { outcome: 'SKIPPED', errorCode: 'DISPATCH_FENCE_DENIED' };
+    }
+
+    // 7. Physical Dispatch via Meta Graph API (Fence held)
     const dispatchResult = await this.dispatchFn(
       {
         page: pageId,
@@ -111,7 +193,7 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
     );
 
     if (dispatchResult.status === 'SENT' && dispatchResult.mid) {
-      // 5. Atomically record outbound interaction on CRM timeline
+      // 8. Atomically record outbound interaction on CRM timeline
       const externalRef = `meta:${pageId}:${dispatchResult.mid}`;
       const { error: recordError } = await this.supabase.rpc('record_ai_messenger_live_outbound', {
         p_company_id: claim.company_id,
@@ -125,7 +207,14 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       });
 
       if (recordError) {
-        console.error(`[MessengerDelivery] record_ai_messenger_live_outbound failed: ${recordError.message}`);
+        // Sanitize log: constant code and delivery ID only, no raw recordError.message
+        console.error(`[MessengerDelivery] record_ai_messenger_live_outbound failed for delivery ${claim.id}`);
+        // Successful provider send + record error => explicit non-retryable failure with provider ID preserved
+        return {
+          outcome: 'FAILED',
+          externalMessageId: dispatchResult.mid,
+          errorCode: 'OUTBOUND_PERSISTENCE_FAILED',
+        };
       }
 
       return {

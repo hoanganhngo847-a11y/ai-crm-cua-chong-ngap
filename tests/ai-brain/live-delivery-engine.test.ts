@@ -25,14 +25,18 @@ interface MockDbConfig {
   messengerSettingEnabled?: boolean;
   zaloSettingEnabled?: boolean;
   preSendMessengerEnabled?: boolean;
+  canaryMessengerEnabled?: boolean;
+  preSendCanaryMessengerEnabled?: boolean;
   convFbStatus?: string;
   convFbAssignedTo?: string | null;
   convFbAiMode?: string;
+  handoverRpcError?: Error | null;
 }
 
 function createMockEngineSupabase(config: MockDbConfig = {}) {
   const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
   const channelQueryCounts: Record<string, number> = {};
+  let canaryQueryCount = 0;
 
   const defaultClaims: LiveDeliveryClaim[] = config.claims ?? [
     {
@@ -85,6 +89,28 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
             }
           }
 
+          if (table === 'ai_brain_live_canary_allowlist') {
+            canaryQueryCount += 1;
+            const isPreSend = canaryQueryCount > 1;
+            if (config.canaryMessengerEnabled === false) {
+              return { data: null, error: null };
+            }
+            if (isPreSend && config.preSendCanaryMessengerEnabled === false) {
+              return { data: null, error: null };
+            }
+            return {
+              data: {
+                id: 'canary-fb-1',
+                company_id: COMPANY_ID,
+                channel: 'MESSENGER',
+                conversation_id: CONVERSATION_ID_FB,
+                page_id: 'page123',
+                enabled: true,
+              },
+              error: null,
+            };
+          }
+
           if (table === 'conversations') {
             const id = filters.id as string;
             if (id === CONVERSATION_ID_ZALO) {
@@ -97,6 +123,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                   status: 'OPEN',
                   assigned_to: null,
                   ai_mode: 'ACTIVE',
+                  external_conversation_id: 'oa_user_1',
                 },
                 error: null,
               };
@@ -111,6 +138,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                   status: config.convFbStatus ?? 'OPEN',
                   assigned_to: config.convFbAssignedTo ?? null,
                   ai_mode: config.convFbAiMode ?? 'ACTIVE',
+                  external_conversation_id: 'page123:user456',
                 },
                 error: null,
               };
@@ -165,10 +193,11 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
       if (name === 'claim_ai_brain_live_deliveries') {
         return { data: defaultClaims, error: null };
       }
-      if (name === 'finish_ai_brain_live_delivery') {
+      if (name === 'finish_ai_brain_live_delivery' || name === 'finish_ai_brain_live_delivery_extended') {
         return { data: true, error: null };
       }
       if (name === 'create_ai_handover_case') {
+        if (config.handoverRpcError) throw config.handoverRpcError;
         return { data: '55555555-5555-4555-8555-555555555555', error: null };
       }
       throw new Error(`Unexpected mock RPC: ${name}`);
@@ -180,10 +209,14 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
 
 class MockTransport implements LiveDeliveryTransport {
   public sendCalls: LiveDeliverySendParams[] = [];
-  constructor(public readonly channel: 'ZALO' | 'MESSENGER') {}
+  constructor(
+    public readonly channel: 'ZALO' | 'MESSENGER',
+    private readonly outcomeOverride?: LiveDeliverySendOutcome
+  ) {}
 
   async sendReply(params: LiveDeliverySendParams): Promise<LiveDeliverySendOutcome> {
     this.sendCalls.push(params);
+    if (this.outcomeOverride) return this.outcomeOverride;
     return {
       outcome: 'SENT',
       externalMessageId: `ext-${this.channel}-${params.claim.id.slice(0, 8)}`,
@@ -287,10 +320,51 @@ test('Generic Engine: Messenger pre-send kill switch halts delivery without call
   assert.equal(messengerTransport.sendCalls.length, 0);
 
   // Assert finish was called with KILL_SWITCH_ENGAGED
-  const finishCall = mockDb.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'SKIPPED');
   assert.equal(finishCall.params.p_error_code, 'KILL_SWITCH_ENGAGED');
+});
+
+test('Generic Engine: Messenger pre-send canary restriction halts delivery without calling transport', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    preSendCanaryMessengerEnabled: false, // Canary revoked right before send!
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider();
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(messengerTransport.sendCalls.length, 0);
+
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'SKIPPED');
+  assert.equal(finishCall.params.p_error_code, 'CANARY_RESTRICTED');
 });
 
 test('Generic Engine: Human ownership on Messenger conversation halts delivery', async () => {
@@ -362,4 +436,101 @@ test('Generic Engine: Handover on Messenger creates handover case and skips send
   const handoverCall = mockDb.rpcCalls.find((c) => c.name === 'create_ai_handover_case');
   assert.ok(handoverCall);
   assert.equal(handoverCall.params.p_reason, 'CUSTOMER_REQUESTED_HUMAN');
+});
+
+test('Generic Engine: Handover case creation failure fails closed and records visible error', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    handoverRpcError: new Error('HANDOVER_RPC_TIMEOUT'),
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'HANDOVER',
+    handoverReason: 'COMPLAINT_OR_NEGATIVE_FEEDBACK',
+    confidence: 0.88,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(messengerTransport.sendCalls.length, 0);
+
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'FAILED');
+  assert.equal(finishCall.params.p_error_code, 'HANDOVER_CASE_CREATION_FAILED');
+});
+
+test('Generic Engine: persists actual Brain latency_ms and preserves MID on OUTBOUND_PERSISTENCE_FAILED', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER', {
+    outcome: 'FAILED',
+    errorCode: 'OUTBOUND_PERSISTENCE_FAILED',
+    externalMessageId: 'mid.prov-success-record-failed',
+  });
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: 'Dạ em chào anh, đây là phản hồi tự động.',
+    confidence: 0.95,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.failed, 1);
+
+  // Verify transport received lockToken and turnConfidence
+  assert.equal(messengerTransport.sendCalls.length, 1);
+  assert.ok(messengerTransport.sendCalls[0].lockToken);
+  assert.equal(messengerTransport.sendCalls[0].turnConfidence, 0.95);
+
+  // Verify finish_ai_brain_live_delivery received brain latency and preserved MID
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'FAILED');
+  assert.equal(finishCall.params.p_error_code, 'OUTBOUND_PERSISTENCE_FAILED');
+  assert.equal(finishCall.params.p_external_message_id, 'mid.prov-success-record-failed');
+  assert.equal(typeof finishCall.params.p_brain_latency_ms, 'number');
+  assert.ok((finishCall.params.p_brain_latency_ms as number) >= 0);
 });

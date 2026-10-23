@@ -286,7 +286,7 @@ test('hostile thrown values do not escape canonical error handling', async () =>
   assert.ok(!JSON.stringify(r).includes(canary));
 });
 
-test('deliveryMode LIVE_SEND is allowed only on ZALO channel, collapsing to DRAFT_ONLY on other channels', async () => {
+test('deliveryMode LIVE_SEND is allowed on ZALO and MESSENGER channels, collapsing to DRAFT_ONLY on other channels', async () => {
   // 1. ZALO with deliveryMode = 'LIVE_SEND' -> delivery = 'LIVE_SEND'
   const zaloInput = input({ channel: 'ZALO' });
   const zaloService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' }));
@@ -294,16 +294,137 @@ test('deliveryMode LIVE_SEND is allowed only on ZALO channel, collapsing to DRAF
   assert.equal(zaloResult.decision, 'RESPOND');
   assert.equal(zaloResult.delivery, 'LIVE_SEND');
 
-  // 2. MESSENGER with deliveryMode = 'LIVE_SEND' -> delivery = 'DRAFT_ONLY' (never live sends)
+  // 2. MESSENGER with deliveryMode = 'LIVE_SEND' -> delivery = 'LIVE_SEND'
   const messengerInput = input({ channel: 'MESSENGER' });
   const messengerService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' }));
   const messengerResult = await messengerService.handleBrainTurn(messengerInput);
   assert.equal(messengerResult.decision, 'RESPOND');
-  assert.equal(messengerResult.delivery, 'DRAFT_ONLY');
+  assert.equal(messengerResult.delivery, 'LIVE_SEND');
 
-  // 3. ZALO without deliveryMode -> defaults to 'DRAFT_ONLY'
+  // 3. MESSENGER without deliveryMode -> defaults to 'DRAFT_ONLY'
+  const defaultMessengerService = make(undefined, async (s) => context(s));
+  const defaultMessengerResult = await defaultMessengerService.handleBrainTurn(messengerInput);
+  assert.equal(defaultMessengerResult.decision, 'RESPOND');
+  assert.equal(defaultMessengerResult.delivery, 'DRAFT_ONLY');
+
+  // 4. MESSENGER with explicit DRAFT_ONLY -> delivery = 'DRAFT_ONLY'
+  const draftOnlyMessengerService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'DRAFT_ONLY' }));
+  const draftOnlyResult = await draftOnlyMessengerService.handleBrainTurn(messengerInput);
+  assert.equal(draftOnlyResult.decision, 'RESPOND');
+  assert.equal(draftOnlyResult.delivery, 'DRAFT_ONLY');
+
+  // 5. ZALO without deliveryMode -> defaults to 'DRAFT_ONLY'
   const defaultZaloService = make(undefined, async (s) => context(s));
-  const defaultResult = await defaultZaloService.handleBrainTurn(zaloInput);
-  assert.equal(defaultResult.decision, 'RESPOND');
-  assert.equal(defaultResult.delivery, 'DRAFT_ONLY');
+  const defaultZaloResult = await defaultZaloService.handleBrainTurn(zaloInput);
+  assert.equal(defaultZaloResult.decision, 'RESPOND');
+  assert.equal(defaultZaloResult.delivery, 'DRAFT_ONLY');
+
+  // 6. Non-live channels (PHONE, WEB, INTERNAL) with deliveryMode = 'LIVE_SEND' collapse to 'DRAFT_ONLY'
+  for (const channel of ['PHONE', 'WEB', 'INTERNAL'] as const) {
+    const nonLiveInput = input({ channel, modality: channels[channel] });
+    const nonLiveService = make(undefined, async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' }));
+    const nonLiveResult = await nonLiveService.handleBrainTurn(nonLiveInput);
+    assert.equal(nonLiveResult.decision, 'RESPOND');
+    assert.equal(nonLiveResult.delivery, 'DRAFT_ONLY');
+  }
+
+  // 7. Untrusted caller injecting deliveryMode fails closed with BRAIN_INVALID_CONTEXT before resolver
+  let resolverCalled = 0;
+  const untrustedInjectionResult = await make(undefined, async (s) => {
+    resolverCalled++;
+    return context(s);
+  }).handleBrainTurn(input({ deliveryMode: 'LIVE_SEND' } as Record<string, unknown>));
+  assert.equal(untrustedInjectionResult.errorCode, 'BRAIN_INVALID_CONTEXT');
+  assert.equal(resolverCalled, 0);
+
+  // 8. Server context with invalid deliveryMode fails closed with BRAIN_INVALID_CONTEXT
+  for (const invalidMode of ['SEND_AUTOMATICALLY', 'INSTANT', 'TRUE', ''] as const) {
+    const invalidService = make(
+      undefined,
+      async (s) => ({ ...context(s), deliveryMode: invalidMode } as unknown as BrainServerContext)
+    );
+    const invalidResult = await invalidService.handleBrainTurn(messengerInput);
+    assert.equal(invalidResult.errorCode, 'BRAIN_INVALID_CONTEXT');
+  }
+
+  // 9. Non-RESPOND proposals (HANDOVER, NO_REPLY) with deliveryMode = 'LIVE_SEND' do not attach delivery
+  const handoverService = make(
+    provider(async () => ({ decision: 'HANDOVER', confidence: 0.9, handoverReason: 'CUSTOMER_ESCALATION' })),
+    async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' })
+  );
+  const handoverResult = await handoverService.handleBrainTurn(messengerInput);
+  assert.equal(handoverResult.decision, 'HANDOVER');
+  assert.equal(handoverResult.delivery, undefined);
+
+  const noReplyService = make(
+    provider(async () => ({ decision: 'NO_REPLY', confidence: 0.95 })),
+    async (s) => ({ ...context(s), deliveryMode: 'LIVE_SEND' })
+  );
+  const noReplyResult = await noReplyService.handleBrainTurn(messengerInput);
+  assert.equal(noReplyResult.decision, 'NO_REPLY');
+  assert.equal(noReplyResult.delivery, undefined);
+
+  // 10. Shadow worker context (without deliveryMode) on MESSENGER and ZALO stays DRAFT_ONLY
+  const shadowMessengerContext = {
+    ...context(messengerInput),
+    caller: { actorId: '00000000-0000-4000-8000-0000000000a1', actorType: 'WORKLOAD' as const },
+  };
+  delete (shadowMessengerContext as Record<string, unknown>).deliveryMode;
+  const shadowService = make(undefined, async () => shadowMessengerContext);
+  const shadowResult = await shadowService.handleBrainTurn(messengerInput);
+  assert.equal(shadowResult.decision, 'RESPOND');
+  assert.equal(shadowResult.delivery, 'DRAFT_ONLY');
+});
+
+test('MESSENGER LIVE_SEND propagates grounding and generates clean server audit without leaking content', async () => {
+  const messengerInput = input({ channel: 'MESSENGER' });
+  const mockGrounding = {
+    knowledge: [{ category: 'POLICY', title: 'Return Policy', content: '30 days return' }],
+    memories: [{ type: 'PREFERENCE', key: 'lang', content: 'Vietnamese', confidence: 0.9, verified: true }],
+    recentMessages: [{ direction: 'INBOUND' as const, actorType: 'CUSTOMER', content: 'Hello', createdAt: '2026-10-23T00:00:00Z' }],
+    conversation: { id: conversation, channel: 'MESSENGER', status: 'OPEN' },
+  };
+
+  let capturedRequest: BrainTurnRequest | undefined;
+  const testProvider = provider(async (req) => {
+    capturedRequest = req;
+    assert.ok(Object.isFrozen(req.grounding));
+    assert.ok(Object.isFrozen(req.scope));
+    return proposal;
+  });
+
+  const liveMessengerService = make(testProvider, async (s) => ({
+    ...context(s),
+    deliveryMode: 'LIVE_SEND',
+    grounding: mockGrounding as never,
+  }));
+
+  const result = await liveMessengerService.handleBrainTurn(messengerInput);
+  assert.equal(result.decision, 'RESPOND');
+  assert.equal(result.delivery, 'LIVE_SEND');
+  assert.equal(result.draft, proposal.draft);
+  assert.equal(result.confidence, proposal.confidence);
+
+  // Verify grounding received by provider
+  assert.ok(capturedRequest);
+  assert.deepEqual(capturedRequest?.grounding?.knowledge, mockGrounding.knowledge);
+  assert.deepEqual(capturedRequest?.grounding?.memories, mockGrounding.memories);
+
+  // Verify audit projection properties
+  assert.equal(result.audit.companyId, company);
+  assert.equal(result.audit.customerId, customer);
+  assert.equal(result.audit.conversationId, conversation);
+  assert.equal(result.audit.channel, 'MESSENGER');
+  assert.equal(result.audit.modality, 'TEXT');
+  assert.equal(result.audit.decision, 'RESPOND');
+  assert.equal(result.audit.handoverRequired, false);
+  assert.equal(result.audit.turnId, result.turnId);
+  assert.equal(result.audit.traceId, trace);
+  assert.ok(Number.isFinite(result.audit.latencyMs));
+
+  // Verify audit does not leak grounding or draft content
+  const serializedAudit = JSON.stringify(result.audit);
+  assert.ok(!serializedAudit.includes('Return Policy'));
+  assert.ok(!serializedAudit.includes('Vietnamese'));
+  assert.ok(!serializedAudit.includes(proposal.draft));
 });

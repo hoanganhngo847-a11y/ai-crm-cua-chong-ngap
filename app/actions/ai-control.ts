@@ -5,23 +5,16 @@ import { getActorContext, requireBossAdmin } from '../../lib/auth/context';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
 import {
-  getAiPipelineMetrics,
-  getSystemHealthStatus,
-  evaluateAlertConditions,
-  type AiPipelineMetrics,
-  type SystemHealthStatus,
+  fetchAiMonitoringDashboardState,
   type AiMonitoringAlert,
+  type AiMonitoringDashboardState,
 } from '../../features/ai-brain/monitoring';
 
 export type LiveChannel = 'ZALO' | 'MESSENGER' | 'VOICE';
 export type VoiceMode = 'OFF' | 'TEST' | 'LIVE';
 export type ModelRoutingProfile = 'STANDARD' | 'FAST' | 'QUALITY';
 
-export interface AiMonitoringDashboardState {
-  metrics: AiPipelineMetrics;
-  health: SystemHealthStatus;
-  alerts: AiMonitoringAlert[];
-}
+export type { AiMonitoringDashboardState };
 
 export interface ChannelLiveSetting {
   company_id: string;
@@ -75,25 +68,47 @@ export interface AiDeliveryItem {
   } | null;
 }
 
+export interface HandoverCaseCounts {
+  total: number | null;
+  open: number | null;
+  claimed: number | null;
+  resolved: number | null;
+  isSampleBounded?: boolean;
+  sampleLimit?: number;
+  error?: string | null;
+}
+
+export interface AiDeliveryCounts {
+  total: number | null;
+  sent: number | null;
+  handover: number | null;
+  skipped: number | null;
+  failed: number | null;
+  avgConfidence: number | null;
+  isSampleBounded?: boolean;
+  sampleLimit?: number;
+  error?: string | null;
+}
+
 export interface AiControlState {
   companyId: string;
   isBossAdmin: boolean;
   settings: Record<LiveChannel, ChannelLiveSetting>;
-  handoverCounts: {
-    total: number;
-    open: number;
-    claimed: number;
-    resolved: number;
-  };
+  settingsError?: string | null;
+  handoverCounts: HandoverCaseCounts;
   handoverCases: HandoverCaseItem[];
-  deliveryCounts: {
-    total: number;
-    sent: number;
-    handover: number;
-    skipped: number;
-    failed: number;
-    avgConfidence: number;
-  };
+  deliveryCounts: AiDeliveryCounts;
+  channelDeliveryCounts?: Record<string, {
+    total: number | null;
+    sent: number | null;
+    handover: number | null;
+    skipped: number | null;
+    failed: number | null;
+    avgConfidence: number | null;
+    isSampleBounded?: boolean;
+    sampleLimit?: number;
+    error?: string | null;
+  }>;
   deliveries: AiDeliveryItem[];
   monitoring: AiMonitoringDashboardState;
 }
@@ -120,7 +135,7 @@ export async function getAiControlState(): Promise<AiControlState> {
   const companyId = actor.companyId;
 
   // 1. Fetch live settings for all channels
-  const { data: rawSettings } = await client
+  const { data: rawSettings, error: settingsError } = await client
     .from('ai_brain_live_settings')
     .select('company_id,channel,enabled,min_confidence,voice_mode,model_routing_profile,updated_at')
     .eq('company_id', companyId);
@@ -155,22 +170,24 @@ export async function getAiControlState(): Promise<AiControlState> {
     },
   };
 
-  for (const row of rawSettings || []) {
-    if (DEFAULT_CHANNELS.includes(row.channel as LiveChannel)) {
-      settingsMap[row.channel as LiveChannel] = {
-        company_id: companyId,
-        channel: row.channel as LiveChannel,
-        enabled: Boolean(row.enabled),
-        min_confidence: Number(row.min_confidence) || 0.850,
-        voice_mode: (row.voice_mode as VoiceMode) || 'OFF',
-        model_routing_profile: (row.model_routing_profile as ModelRoutingProfile) || 'STANDARD',
-        updated_at: row.updated_at,
-      };
+  if (rawSettings && !settingsError) {
+    for (const row of rawSettings) {
+      if (DEFAULT_CHANNELS.includes(row.channel as LiveChannel)) {
+        settingsMap[row.channel as LiveChannel] = {
+          company_id: companyId,
+          channel: row.channel as LiveChannel,
+          enabled: Boolean(row.enabled),
+          min_confidence: Number(row.min_confidence) || 0.850,
+          voice_mode: (row.voice_mode as VoiceMode) || 'OFF',
+          model_routing_profile: (row.model_routing_profile as ModelRoutingProfile) || 'STANDARD',
+          updated_at: row.updated_at,
+        };
+      }
     }
   }
 
   // 2. Fetch Handover Cases
-  const { data: rawCases } = await client
+  const { data: rawCases, error: casesError } = await client
     .from('ai_handover_cases')
     .select(`
       id, company_id, customer_id, conversation_id, source_interaction_id,
@@ -201,49 +218,54 @@ export async function getAiControlState(): Promise<AiControlState> {
     assigned_profile?: { full_name: string | null } | null;
   }
 
-  const handoverCases: HandoverCaseItem[] = ((rawCases || []) as unknown as RawCaseRow[]).map((row) => ({
-    id: row.id,
-    company_id: row.company_id,
-    customer_id: row.customer_id,
-    conversation_id: row.conversation_id,
-    source_interaction_id: row.source_interaction_id,
-    reason: row.reason,
-    priority: row.priority,
-    status: row.status,
-    assigned_to: row.assigned_to,
-    assigned_name: row.assigned_profile?.full_name || null,
-    brain_turn_id: row.brain_turn_id,
-    created_at: row.created_at,
-    claimed_at: row.claimed_at,
-    resolved_at: row.resolved_at,
-    customer: row.customer ? {
-      id: row.customer.id,
-      name: row.customer.name,
-      customer_code: row.customer.customer_code,
-    } : null,
-  }));
+  let handoverCases: HandoverCaseItem[] = [];
+  let handoverCounts: HandoverCaseCounts;
 
-  const handoverCounts = {
-    total: handoverCases.length,
-    open: handoverCases.filter((c) => c.status === 'OPEN').length,
-    claimed: handoverCases.filter((c) => c.status === 'CLAIMED').length,
-    resolved: handoverCases.filter((c) => c.status === 'RESOLVED').length,
-  };
+  if (casesError) {
+    handoverCounts = {
+      total: null,
+      open: null,
+      claimed: null,
+      resolved: null,
+      error: casesError.message,
+    };
+  } else {
+    handoverCases = ((rawCases || []) as unknown as RawCaseRow[]).map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      customer_id: row.customer_id,
+      conversation_id: row.conversation_id,
+      source_interaction_id: row.source_interaction_id,
+      reason: row.reason,
+      priority: row.priority,
+      status: row.status,
+      assigned_to: row.assigned_to,
+      assigned_name: row.assigned_profile?.full_name || null,
+      brain_turn_id: row.brain_turn_id,
+      created_at: row.created_at,
+      claimed_at: row.claimed_at,
+      resolved_at: row.resolved_at,
+      customer: row.customer
+        ? {
+            id: row.customer.id,
+            name: row.customer.name,
+            customer_code: row.customer.customer_code,
+          }
+        : null,
+    }));
+
+    handoverCounts = {
+      total: handoverCases.length,
+      open: handoverCases.filter((c) => c.status === 'OPEN').length,
+      claimed: handoverCases.filter((c) => c.status === 'CLAIMED').length,
+      resolved: handoverCases.filter((c) => c.status === 'RESOLVED').length,
+      isSampleBounded: handoverCases.length >= 100,
+      sampleLimit: 100,
+    };
+  }
 
   // 3. Fetch Deliveries
-  const { data: rawDeliveries } = await client
-    .from('ai_brain_live_deliveries')
-    .select(`
-      id, company_id, customer_id, conversation_id, channel,
-      send_status, decision, confidence, error_code,
-      external_message_id, sent_at, completed_at, created_at,
-      customer:customers(id, name)
-    `)
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .limit(100);
-
-  interface RawDeliveryRow {
+  interface NormalizedDeliveryRow {
     id: string;
     company_id: string;
     customer_id: string;
@@ -260,41 +282,179 @@ export async function getAiControlState(): Promise<AiControlState> {
     customer?: { id: string; name: string } | null;
   }
 
-  const deliveries: AiDeliveryItem[] = ((rawDeliveries || []) as unknown as RawDeliveryRow[]).map((row) => ({
-    id: row.id,
-    company_id: row.company_id,
-    customer_id: row.customer_id,
-    conversation_id: row.conversation_id,
-    channel: row.channel,
-    send_status: row.send_status,
-    decision: row.decision,
-    confidence: row.confidence !== null ? Number(row.confidence) : null,
-    error_code: row.error_code,
-    external_message_id: row.external_message_id,
-    sent_at: row.sent_at,
-    completed_at: row.completed_at,
-    created_at: row.created_at,
-    customer: row.customer ? {
-      id: row.customer.id,
-      name: row.customer.name,
-    } : null,
-  }));
+  let deliveriesData: NormalizedDeliveryRow[] | null = null;
+  let deliveriesError: { message: string } | null = null;
 
-  const confidences = deliveries
-    .map((d) => d.confidence)
-    .filter((c): c is number => typeof c === 'number' && Number.isFinite(c));
-  const avgConfidence = confidences.length > 0
-    ? confidences.reduce((a, b) => a + b, 0) / confidences.length
-    : 0;
+  const joinedDeliveriesResult = await client
+    .from('ai_brain_live_deliveries')
+    .select(`
+      id, company_id, customer_id, conversation_id, channel,
+      send_status, decision, confidence, error_code,
+      external_message_id, sent_at, completed_at, created_at,
+      customer:customers(id, name)
+    `)
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false })
+    .limit(100);
 
-  const deliveryCounts = {
-    total: deliveries.length,
-    sent: deliveries.filter((d) => d.send_status === 'SENT').length,
-    handover: deliveries.filter((d) => d.decision === 'HANDOVER').length,
-    skipped: deliveries.filter((d) => d.send_status === 'SKIPPED').length,
-    failed: deliveries.filter((d) => d.send_status === 'FAILED').length,
-    avgConfidence: Math.round(avgConfidence * 1000) / 1000,
-  };
+  if (joinedDeliveriesResult.error) {
+    // Fallback without customer join if foreign key or schema relationship is not available
+    const fallbackResult = await client
+      .from('ai_brain_live_deliveries')
+      .select(`
+        id, company_id, customer_id, conversation_id, channel,
+        send_status, decision, confidence, error_code,
+        external_message_id, sent_at, completed_at, created_at
+      `)
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (fallbackResult.error) {
+      deliveriesError = { message: fallbackResult.error.message };
+    } else {
+      deliveriesData = (fallbackResult.data || []).map((row) => ({
+        id: row.id,
+        company_id: row.company_id,
+        customer_id: row.customer_id,
+        conversation_id: row.conversation_id,
+        channel: row.channel,
+        send_status: row.send_status,
+        decision: row.decision,
+        confidence: row.confidence !== null ? Number(row.confidence) : null,
+        error_code: row.error_code,
+        external_message_id: row.external_message_id,
+        sent_at: row.sent_at,
+        completed_at: row.completed_at,
+        created_at: row.created_at,
+        customer: null,
+      }));
+    }
+  } else {
+    deliveriesData = (joinedDeliveriesResult.data || []).map((row) => {
+      const cust = Array.isArray(row.customer) ? row.customer[0] : row.customer;
+      return {
+        id: row.id,
+        company_id: row.company_id,
+        customer_id: row.customer_id,
+        conversation_id: row.conversation_id,
+        channel: row.channel,
+        send_status: row.send_status,
+        decision: row.decision,
+        confidence: row.confidence !== null ? Number(row.confidence) : null,
+        error_code: row.error_code,
+        external_message_id: row.external_message_id,
+        sent_at: row.sent_at,
+        completed_at: row.completed_at,
+        created_at: row.created_at,
+        customer: cust ? { id: cust.id, name: cust.name } : null,
+      };
+    });
+  }
+
+  let deliveries: AiDeliveryItem[] = [];
+  let deliveryCounts: AiDeliveryCounts;
+  const channelDeliveryCounts: Record<
+    string,
+    {
+      total: number | null;
+      sent: number | null;
+      handover: number | null;
+      skipped: number | null;
+      failed: number | null;
+      avgConfidence: number | null;
+      isSampleBounded?: boolean;
+      sampleLimit?: number;
+      error?: string | null;
+    }
+  > = {};
+
+  if (deliveriesError) {
+    deliveryCounts = {
+      total: null,
+      sent: null,
+      handover: null,
+      skipped: null,
+      failed: null,
+      avgConfidence: null,
+      error: deliveriesError.message,
+    };
+
+    for (const ch of ['ZALO', 'MESSENGER', 'VOICE']) {
+      channelDeliveryCounts[ch] = {
+        total: null,
+        sent: null,
+        handover: null,
+        skipped: null,
+        failed: null,
+        avgConfidence: null,
+        error: deliveriesError.message,
+      };
+    }
+  } else {
+    const rawDeliveriesData = deliveriesData || [];
+    deliveries = rawDeliveriesData.map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      customer_id: row.customer_id,
+      conversation_id: row.conversation_id,
+      channel: row.channel,
+      send_status: row.send_status,
+      decision: row.decision,
+      confidence: row.confidence !== null ? Number(row.confidence) : null,
+      error_code: row.error_code,
+      external_message_id: row.external_message_id,
+      sent_at: row.sent_at,
+      completed_at: row.completed_at,
+      created_at: row.created_at,
+      customer: row.customer
+        ? {
+            id: row.customer.id,
+            name: row.customer.name,
+          }
+        : null,
+    }));
+
+    const confidences = deliveries
+      .map((d) => d.confidence)
+      .filter((c): c is number => typeof c === 'number' && Number.isFinite(c));
+    const avgConfidence =
+      confidences.length > 0
+        ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+        : null;
+
+    deliveryCounts = {
+      total: deliveries.length,
+      sent: deliveries.filter((d) => d.send_status === 'SENT').length,
+      handover: deliveries.filter((d) => d.decision === 'HANDOVER').length,
+      skipped: deliveries.filter((d) => d.send_status === 'SKIPPED').length,
+      failed: deliveries.filter((d) => d.send_status === 'FAILED').length,
+      avgConfidence: avgConfidence !== null ? Math.round(avgConfidence * 1000) / 1000 : null,
+      isSampleBounded: deliveries.length >= 100,
+      sampleLimit: 100,
+    };
+
+    for (const ch of ['ZALO', 'MESSENGER', 'VOICE']) {
+      const chDeliveries = deliveries.filter((d) => d.channel === ch);
+      const chConfidences = chDeliveries
+        .map((d) => d.confidence)
+        .filter((c): c is number => typeof c === 'number' && Number.isFinite(c));
+      const chAvgConfidence =
+        chConfidences.length > 0
+          ? chConfidences.reduce((a, b) => a + b, 0) / chConfidences.length
+          : null;
+      channelDeliveryCounts[ch] = {
+        total: chDeliveries.length,
+        sent: chDeliveries.filter((d) => d.send_status === 'SENT').length,
+        handover: chDeliveries.filter((d) => d.decision === 'HANDOVER').length,
+        skipped: chDeliveries.filter((d) => d.send_status === 'SKIPPED').length,
+        failed: chDeliveries.filter((d) => d.send_status === 'FAILED').length,
+        avgConfidence: chAvgConfidence !== null ? Math.round(chAvgConfidence * 1000) / 1000 : null,
+        isSampleBounded: deliveries.length >= 100,
+        sampleLimit: 100,
+      };
+    }
+  }
 
   // 4. Fetch Monitoring Data (metrics, health, active alerts)
   const monitoring = await getAiMonitoringDashboardDataInternal(client, companyId, { timeWindow: '24h' });
@@ -303,9 +463,11 @@ export async function getAiControlState(): Promise<AiControlState> {
     companyId,
     isBossAdmin: actor.role === APPLICATION_ROLES.BOSS_ADMIN,
     settings: settingsMap,
+    settingsError: settingsError ? settingsError.message : null,
     handoverCounts,
     handoverCases,
     deliveryCounts,
+    channelDeliveryCounts,
     deliveries,
     monitoring,
   };
@@ -435,28 +597,42 @@ async function getAiMonitoringDashboardDataInternal(
   options: {
     channel?: string;
     timeWindow?: '1h' | '24h' | '7d' | '30d';
+    existingAlerts?: readonly AiMonitoringAlert[];
   } = {}
 ): Promise<AiMonitoringDashboardState> {
-  const [metrics, health] = await Promise.all([
-    getAiPipelineMetrics(client, companyId, options),
-    getSystemHealthStatus(client),
-  ]);
-  const alertsResult = await evaluateAlertConditions(client, companyId, { metrics, health });
-
-  return {
-    metrics,
-    health,
-    alerts: [...alertsResult.activeAlerts],
-  };
+  return fetchAiMonitoringDashboardState(client, companyId, options);
 }
 
-export async function getAiMonitoringDashboardData(options: {
+export interface GetAiMonitoringDashboardDataOptions {
   channel?: string;
   timeWindow?: '1h' | '24h' | '7d' | '30d';
-} = {}): Promise<AiMonitoringDashboardState> {
+}
+
+export async function getAiMonitoringDashboardData(
+  options: GetAiMonitoringDashboardDataOptions = {}
+): Promise<AiMonitoringDashboardState> {
   const actor = await requireAuthorizedActor();
   const client = createAdminClient();
-  return getAiMonitoringDashboardDataInternal(client, actor.companyId, options);
+
+  // Construct an explicit allowlist forwarding only channel and timeWindow
+  const forwardedOptions: {
+    channel?: string;
+    timeWindow?: '1h' | '24h' | '7d' | '30d';
+  } = {};
+
+  if (typeof options.channel === 'string') {
+    forwardedOptions.channel = options.channel;
+  }
+  if (
+    options.timeWindow === '1h' ||
+    options.timeWindow === '24h' ||
+    options.timeWindow === '7d' ||
+    options.timeWindow === '30d'
+  ) {
+    forwardedOptions.timeWindow = options.timeWindow;
+  }
+
+  return getAiMonitoringDashboardDataInternal(client, actor.companyId, forwardedOptions);
 }
 
 export async function acknowledgeAlertAction(alertId: string) {
@@ -500,5 +676,7 @@ export async function resolveAlertAction(alertId: string) {
 export async function triggerAlertEvaluationAction(): Promise<AiMonitoringDashboardState> {
   const actor = await requireAuthorizedActor();
   const client = createAdminClient();
-  return getAiMonitoringDashboardDataInternal(client, actor.companyId, { timeWindow: '1h' });
+  return getAiMonitoringDashboardDataInternal(client, actor.companyId, {
+    timeWindow: '1h',
+  });
 }
