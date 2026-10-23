@@ -10,6 +10,7 @@ export * from './service';
 export * from './handover';
 export * from './grounding';
 export * from './memory';
+export * from './monitoring';
 export {
   processDueAiBrainShadowRuns,
   type ShadowWorkerResult,

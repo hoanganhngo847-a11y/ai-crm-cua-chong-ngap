@@ -68,7 +68,7 @@
     "test:voice:business": "node --conditions=react-server --import tsx tests/voice/business-call-db.test.ts",
     "test:voice:unit": "node --conditions=react-server tests/run-voice-tests.cjs --unit",
     "test:zalo-transcription:bulk-recovery": "tsx --conditions=react-server tests/zalo-recordings/transcription-bulk-recovery.test.ts",
-    "test:ai-brain": "tsx --conditions=react-server --test tests/ai-brain/contract.test.ts tests/ai-brain/javis-provider.test.ts tests/ai-brain/context-gateway.test.ts tests/ai-brain/shadow-worker.test.ts tests/ai-brain/shadow-cron.test.ts tests/ai-brain/live-zalo-worker.test.ts tests/ai-brain/live-zalo-cron.test.ts tests/ai-brain/handover-classifier.test.ts tests/ai-brain/handover-service.test.ts tests/ai-brain/memory-sanitizer.test.ts tests/ai-brain/grounding-retriever.test.ts tests/ai-brain/ai-control-actions.test.ts",
+    "test:ai-brain": "tsx --conditions=react-server --test tests/ai-brain/contract.test.ts tests/ai-brain/javis-provider.test.ts tests/ai-brain/context-gateway.test.ts tests/ai-brain/shadow-worker.test.ts tests/ai-brain/shadow-cron.test.ts tests/ai-brain/live-zalo-worker.test.ts tests/ai-brain/live-zalo-cron.test.ts tests/ai-brain/handover-classifier.test.ts tests/ai-brain/handover-service.test.ts tests/ai-brain/memory-sanitizer.test.ts tests/ai-brain/grounding-retriever.test.ts tests/ai-brain/ai-control-actions.test.ts tests/ai-brain/monitoring-metrics.test.ts tests/ai-brain/monitoring-health.test.ts tests/ai-brain/monitoring-alerts.test.ts",
     "test:ai-brain:shadow": "tsx --conditions=react-server --test tests/ai-brain/shadow-worker.test.ts tests/ai-brain/shadow-cron.test.ts",
     "test:ai-brain:shadow-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/shadow-db.test.ts",
     "test:ai-brain:live": "tsx --conditions=react-server --test tests/ai-brain/live-zalo-worker.test.ts tests/ai-brain/live-zalo-cron.test.ts",
@@ -77,6 +77,7 @@
     "test:ai-brain:handover-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/handover-db.test.ts",
     "test:ai-brain:grounding-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/grounding-db.test.ts",
     "test:ai-brain:control-center-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/control-center-db.test.ts",
+    "test:ai-brain:monitoring-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/monitoring-db.test.ts",
     "build:javis-brain": "tsc -p tsconfig.javis-brain.json",
     "start:javis-brain": "node --conditions=react-server .javis-brain/services/javis-brain/main.js",
     "test:javis-brain": "tsx --conditions=react-server --test tests/javis-brain/server.test.ts tests/javis-brain/e2e.test.ts tests/javis-brain/model.test.ts tests/javis-brain/runtime.test.ts tests/javis-brain/grounding.test.ts"
