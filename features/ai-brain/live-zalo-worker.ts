@@ -397,7 +397,7 @@ export async function processDueAiBrainLiveZaloDeliveries(
   const client = options.supabase ?? createAdminClient();
   const provider = options.provider ?? productionProvider();
   const inboxService = options.inboxService ?? new ZaloInboxService({ supabase: client });
-  const dataSource = options.dataSource ?? createSupabaseBrainContextDataSource();
+  const dataSource = options.dataSource ?? (options.supabase ? undefined : createSupabaseBrainContextDataSource());
   const lockToken = randomUUID();
 
   const { data, error } = await client.rpc('claim_ai_brain_live_deliveries', {
