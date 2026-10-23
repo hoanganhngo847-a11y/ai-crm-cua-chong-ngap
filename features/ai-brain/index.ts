@@ -8,6 +8,8 @@ export * from './javis-provider';
 export * from './mock-provider';
 export * from './service';
 export * from './handover';
+export * from './grounding';
+export * from './memory';
 export {
   processDueAiBrainShadowRuns,
   type ShadowWorkerResult,

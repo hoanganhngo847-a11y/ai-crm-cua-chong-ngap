@@ -5,6 +5,7 @@ import {
   ALLOWED_BRAIN_LATENCIES,
   ALLOWED_BRAIN_MODALITIES,
   ALLOWED_CONVERSATION_STATES,
+  type BrainTurnGrounding,
   type BrainTurnRequest,
 } from '../../features/ai-brain/contracts';
 import { deepFreeze, isUuid } from '../../features/ai-brain/validation';
@@ -85,11 +86,87 @@ function validateText(value: unknown): string {
   return value;
 }
 
+function validateGrounding(raw: unknown): BrainTurnGrounding {
+  const g = snapshotPlainRecord(raw);
+  assertExactKeys(
+    g,
+    ['company', 'customer', 'conversation', 'recentMessages', 'knowledge', 'memories', 'businessFacts'],
+    ['recentMessages', 'knowledge', 'memories']
+  );
+  if (!Array.isArray(g.recentMessages) || !Array.isArray(g.knowledge) || !Array.isArray(g.memories)) {
+    deny('grounding arrays must be valid lists');
+  }
+  const recentMessages = g.recentMessages.slice(0, 10).map((item) => {
+    const rec = snapshotPlainRecord(item);
+    return {
+      direction: rec.direction === 'INBOUND' ? ('INBOUND' as const) : ('OUTBOUND' as const),
+      actorType: typeof rec.actorType === 'string' ? rec.actorType.slice(0, 64) : 'UNKNOWN',
+      content: typeof rec.content === 'string' ? rec.content.slice(0, 2000) : '',
+      createdAt: typeof rec.createdAt === 'string' ? rec.createdAt.slice(0, 64) : '',
+    };
+  });
+  const knowledge = g.knowledge.slice(0, 10).map((item) => {
+    const rec = snapshotPlainRecord(item);
+    return {
+      category: typeof rec.category === 'string' ? rec.category.slice(0, 64) : 'OTHER',
+      title: typeof rec.title === 'string' ? rec.title.slice(0, 300) : '',
+      content: typeof rec.content === 'string' ? rec.content.slice(0, 2000) : '',
+    };
+  });
+  const memories = g.memories.slice(0, 10).map((item) => {
+    const rec = snapshotPlainRecord(item);
+    return {
+      type: typeof rec.type === 'string' ? rec.type.slice(0, 64) : 'FACT',
+      key: typeof rec.key === 'string' ? rec.key.slice(0, 120) : null,
+      content: typeof rec.content === 'string' ? rec.content.slice(0, 2000) : '',
+      confidence: typeof rec.confidence === 'number' && Number.isFinite(rec.confidence) ? Math.max(0, Math.min(1, rec.confidence)) : 0.5,
+      verified: rec.verified === true,
+    };
+  });
+  let customer;
+  if (g.customer && typeof g.customer === 'object') {
+    const c = snapshotPlainRecord(g.customer);
+    customer = {
+      id: typeof c.id === 'string' ? c.id.slice(0, 64) : undefined,
+      name: typeof c.name === 'string' ? c.name.slice(0, 128) : undefined,
+      customerCode: typeof c.customerCode === 'string' ? c.customerCode.slice(0, 128) : null,
+      stage: typeof c.stage === 'string' ? c.stage.slice(0, 64) : null,
+    };
+  }
+  let conversation;
+  if (g.conversation && typeof g.conversation === 'object') {
+    const cv = snapshotPlainRecord(g.conversation);
+    conversation = {
+      id: typeof cv.id === 'string' ? cv.id.slice(0, 64) : '',
+      channel: typeof cv.channel === 'string' ? cv.channel.slice(0, 64) : '',
+      status: typeof cv.status === 'string' ? cv.status.slice(0, 64) : '',
+      aiMode: typeof cv.aiMode === 'string' ? cv.aiMode.slice(0, 64) : null,
+      assignedTo: typeof cv.assignedTo === 'string' ? cv.assignedTo.slice(0, 64) : null,
+    };
+  }
+  let businessFacts;
+  if (g.businessFacts && typeof g.businessFacts === 'object') {
+    const bf = snapshotPlainRecord(g.businessFacts);
+    businessFacts = {
+      upcomingAppointmentsCount: typeof bf.upcomingAppointmentsCount === 'number' ? bf.upcomingAppointmentsCount : 0,
+      lastCallSummary: typeof bf.lastCallSummary === 'string' ? bf.lastCallSummary.slice(0, 1000) : null,
+    };
+  }
+  return {
+    customer,
+    conversation,
+    recentMessages,
+    knowledge,
+    memories,
+    businessFacts,
+  };
+}
+
 export function validateBrainTurnRequest(raw: unknown): BrainTurnRequest {
   const root = snapshotPlainRecord(raw);
   assertExactKeys(
     root,
-    ['version', 'turnId', 'traceId', 'scope', 'policy', 'input', 'latencyProfile'],
+    ['version', 'turnId', 'traceId', 'scope', 'policy', 'input', 'latencyProfile', 'grounding'],
     ['version', 'turnId', 'traceId', 'scope', 'policy', 'input', 'latencyProfile']
   );
 
@@ -164,6 +241,7 @@ export function validateBrainTurnRequest(raw: unknown): BrainTurnRequest {
       text,
     },
     latencyProfile,
+    ...(root.grounding !== undefined ? { grounding: validateGrounding(root.grounding) } : {}),
   });
 }
 

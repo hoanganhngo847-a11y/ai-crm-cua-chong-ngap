@@ -382,6 +382,7 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
           backendPromise = modelBackend.generate(turnRequest.input.text, {
             signal: abortController.signal,
             latencyProfile: turnRequest.latencyProfile,
+            grounding: turnRequest.grounding,
           });
         } catch (syncErr) {
           releaseSlot();

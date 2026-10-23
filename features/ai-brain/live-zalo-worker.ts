@@ -12,6 +12,9 @@ import { JavisBrainProvider } from './javis-provider';
 import { createBrainService } from './service';
 import { ZaloInboxService } from '../omnichannel/zalo/inbox-service';
 import { classifyHandoverReason, createHandoverCase } from './handover';
+import type { BrainContextDataSource } from './context-contracts';
+import { createSupabaseBrainContextDataSource } from './context-supabase';
+import { resolveGroundingContext, type BrainTurnGrounding } from './grounding';
 
 export interface LiveZaloClaim {
   id: string;
@@ -46,6 +49,7 @@ export interface LiveZaloWorkerOptions {
   supabase?: SupabaseClient;
   provider?: BrainProvider;
   inboxService?: ZaloInboxService;
+  dataSource?: BrainContextDataSource;
 }
 
 function productionProvider(): BrainProvider | undefined {
@@ -59,7 +63,11 @@ function productionProvider(): BrainProvider | undefined {
   }
 }
 
-async function loadEligibleInput(client: SupabaseClient, claim: LiveZaloClaim): Promise<EligibleLiveInput | null> {
+async function loadEligibleInput(
+  client: SupabaseClient,
+  claim: LiveZaloClaim,
+  dataSource?: BrainContextDataSource
+): Promise<EligibleLiveInput | null> {
   const { data: setting, error: settingError } = await client
     .from('ai_brain_live_settings')
     .select('enabled, min_confidence')
@@ -116,6 +124,26 @@ async function loadEligibleInput(client: SupabaseClient, claim: LiveZaloClaim): 
     ? setting.min_confidence
     : parseFloat(String(setting.min_confidence || '0.85'));
 
+  const traceId = randomUUID();
+  let grounding: BrainTurnGrounding | undefined;
+  if (dataSource) {
+    try {
+      grounding = await resolveGroundingContext({
+        scope: {
+          companyId: conversation.company_id,
+          customerId: conversation.customer_id,
+          conversationId: conversation.id,
+          channel: 'ZALO',
+          traceId,
+        },
+        inputText: interaction.sanitized_content,
+        dataSource,
+      });
+    } catch {
+      // Grounding failures collapse gracefully without breaking live delivery
+    }
+  }
+
   return {
     text: interaction.sanitized_content,
     minConfidence: Number.isFinite(minConfidence) ? minConfidence : 0.85,
@@ -130,7 +158,8 @@ async function loadEligibleInput(client: SupabaseClient, claim: LiveZaloClaim): 
       conversationState: 'AI_ACTIVE',
       allowDrafts: true,
       deliveryMode: 'LIVE_SEND',
-      traceId: randomUUID(),
+      traceId,
+      grounding,
     }),
   };
 }
@@ -167,10 +196,11 @@ async function processClaim(
   lockToken: string,
   provider: BrainProvider | undefined,
   inboxService: ZaloInboxService,
+  dataSource?: BrainContextDataSource,
 ): Promise<'sent' | 'skipped' | 'failed'> {
   let eligible: EligibleLiveInput | null;
   try {
-    eligible = await loadEligibleInput(client, claim);
+    eligible = await loadEligibleInput(client, claim, dataSource);
   } catch (err: unknown) {
     await finish(client, claim, lockToken, 'FAILED', {
       errorCode: err instanceof Error ? err.message : 'LIVE_SOURCE_INVALID',
@@ -367,6 +397,7 @@ export async function processDueAiBrainLiveZaloDeliveries(
   const client = options.supabase ?? createAdminClient();
   const provider = options.provider ?? productionProvider();
   const inboxService = options.inboxService ?? new ZaloInboxService({ supabase: client });
+  const dataSource = options.dataSource ?? createSupabaseBrainContextDataSource();
   const lockToken = randomUUID();
 
   const { data, error } = await client.rpc('claim_ai_brain_live_deliveries', {
@@ -380,7 +411,7 @@ export async function processDueAiBrainLiveZaloDeliveries(
 
   for (const claim of claims) {
     try {
-      const outcome = await processClaim(client, claim, lockToken, provider, inboxService);
+      const outcome = await processClaim(client, claim, lockToken, provider, inboxService, dataSource);
       summary[outcome] += 1;
     } catch {
       summary.failed += 1;

@@ -12,6 +12,9 @@ import type {
 } from './contracts';
 import { JavisBrainProvider } from './javis-provider';
 import { createBrainService } from './service';
+import type { BrainContextDataSource } from './context-contracts';
+import { createSupabaseBrainContextDataSource } from './context-supabase';
+import { resolveGroundingContext, type BrainTurnGrounding } from './grounding';
 
 interface ShadowClaim {
   id: string;
@@ -44,6 +47,7 @@ export interface ShadowWorkerResult {
 export interface ShadowWorkerOptions {
   supabase?: SupabaseClient;
   provider?: BrainProvider;
+  dataSource?: BrainContextDataSource;
 }
 
 function productionProvider(): BrainProvider | undefined {
@@ -67,7 +71,11 @@ function conversationState(status: string, assignedTo: string | null): BrainConv
   return 'AI_ACTIVE';
 }
 
-async function loadEligibleInput(client: SupabaseClient, claim: ShadowClaim): Promise<EligibleShadowInput | null> {
+async function loadEligibleInput(
+  client: SupabaseClient,
+  claim: ShadowClaim,
+  dataSource?: BrainContextDataSource
+): Promise<EligibleShadowInput | null> {
   const { data: setting, error: settingError } = await client
     .from('ai_brain_shadow_settings')
     .select('enabled')
@@ -110,6 +118,26 @@ async function loadEligibleInput(client: SupabaseClient, claim: ShadowClaim): Pr
     throw new Error('SHADOW_SOURCE_INVALID');
   }
 
+  const traceId = randomUUID();
+  let grounding: BrainTurnGrounding | undefined;
+  if (dataSource) {
+    try {
+      grounding = await resolveGroundingContext({
+        scope: {
+          companyId: conversation.company_id,
+          customerId: conversation.customer_id,
+          conversationId: conversation.id,
+          channel: claim.channel as BrainChannel,
+          traceId,
+        },
+        inputText: interaction.sanitized_content,
+        dataSource,
+      });
+    } catch {
+      // Grounding failures collapse gracefully without breaking shadow execution
+    }
+  }
+
   const state = conversationState(conversation.status, conversation.assigned_to);
   return {
     text: interaction.sanitized_content,
@@ -123,7 +151,8 @@ async function loadEligibleInput(client: SupabaseClient, claim: ShadowClaim): Pr
       permissionProfile: 'READ_ONLY',
       conversationState: state,
       allowDrafts: state !== 'AI_PAUSED',
-      traceId: randomUUID(),
+      traceId,
+      grounding,
     }),
   };
 }
@@ -162,10 +191,11 @@ async function processClaim(
   claim: ShadowClaim,
   lockToken: string,
   provider: BrainProvider | undefined,
+  dataSource?: BrainContextDataSource,
 ): Promise<'completed' | 'skipped' | 'failed'> {
   let eligible: EligibleShadowInput | null;
   try {
-    eligible = await loadEligibleInput(client, claim);
+    eligible = await loadEligibleInput(client, claim, dataSource);
   } catch {
     const result = await createBrainService({
       resolveContext: async () => { throw new Error('INVALID_CONTEXT'); },
@@ -228,6 +258,7 @@ export async function processDueAiBrainShadowRuns(
 
   const client = options.supabase ?? createAdminClient();
   const provider = options.provider ?? productionProvider();
+  const dataSource = options.dataSource ?? createSupabaseBrainContextDataSource();
   const lockToken = randomUUID();
   const { data, error } = await client.rpc('claim_ai_brain_shadow_runs', {
     p_limit: limit,
@@ -239,7 +270,7 @@ export async function processDueAiBrainShadowRuns(
   const summary: ShadowWorkerResult = { claimed: claims.length, completed: 0, skipped: 0, failed: 0 };
   for (const claim of claims) {
     try {
-      const outcome = await processClaim(client, claim, lockToken, provider);
+      const outcome = await processClaim(client, claim, lockToken, provider, dataSource);
       summary[outcome] += 1;
     } catch {
       summary.failed += 1;

@@ -89,6 +89,7 @@ export function createBrainService(options: BrainServiceOptions): BrainService {
           modality: context.modality, sessionId: context.sessionId },
         policy: { permissionProfile: 'READ_ONLY', conversationState: context.conversationState, allowDrafts: context.allowDrafts },
         input: { text: input.input.text }, latencyProfile: input.latency ?? 'STANDARD',
+        ...(context.grounding ? { grounding: context.grounding } : {}),
       });
       // Throws from provider code are always provider failures, including forged internal
       // error classes. Only this service's deadline can select the timeout code.

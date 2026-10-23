@@ -3,7 +3,7 @@ import {
   ALLOWED_ACTOR_TYPES, ALLOWED_BRAIN_CHANNELS, ALLOWED_BRAIN_DELIVERIES, ALLOWED_BRAIN_LATENCIES,
   ALLOWED_BRAIN_MODALITIES, ALLOWED_CONVERSATION_STATES,
   type BrainContextSelector, type BrainDelivery, type BrainErrorCode, type BrainProposal,
-  type BrainProviderDescriptor, type BrainServerContext, type BrainUntrustedInput,
+  type BrainProviderDescriptor, type BrainServerContext, type BrainTurnGrounding, type BrainUntrustedInput,
 } from './contracts';
 
 const boundaryCodes = new WeakMap<object, BrainErrorCode>();
@@ -89,6 +89,7 @@ export function validateServerContext(raw: unknown, selector: BrainContextSelect
     channel: selector.channel, modality: selector.modality, sessionId: selector.sessionId,
     caller: { actorId: caller.actorId, actorType }, permissionProfile: 'READ_ONLY',
     conversationState, allowDrafts: p.allowDrafts, deliveryMode, traceId: p.traceId,
+    ...(p.grounding && typeof p.grounding === 'object' ? { grounding: p.grounding as BrainTurnGrounding } : {}),
   });
 }
 export function validateProviderDescriptor(raw: unknown): BrainProviderDescriptor {
