@@ -110,7 +110,7 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
       const admin = createAdminClient();
       const { data, error } = await admin
         .from('conversations')
-        .select('id,channel,last_message_at,status,assigned_to,created_at')
+        .select('id,channel,last_message_at,status,assigned_to,ai_mode,created_at')
         .eq('company_id', scope.companyId)
         .eq('customer_id', scope.customerId)
         .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -122,6 +122,7 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
         lastMessageAt: nullableText(row.last_message_at, 64),
         status: text(row.status, 64),
         assignedTo: nullableText(row.assigned_to, 64),
+        aiMode: nullableText(row.ai_mode, 64),
         createdAt: String(row.created_at),
       })));
     },

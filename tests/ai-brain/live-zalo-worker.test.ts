@@ -66,6 +66,7 @@ function createMockSupabase(config: MockDbConfig = {}) {
     channel: 'ZALO',
     status: 'OPEN',
     assigned_to: null,
+    ai_mode: 'ACTIVE',
   };
 
   const defaultInteraction = {
@@ -137,6 +138,9 @@ function createMockSupabase(config: MockDbConfig = {}) {
       if (name === 'finish_ai_brain_live_delivery') {
         if (config.finishError) return { data: null, error: config.finishError };
         return { data: config.finishData ?? true, error: null };
+      }
+      if (name === 'create_ai_handover_case') {
+        return { data: '55555555-5555-4555-8555-555555555555', error: null };
       }
       throw new Error(`Unexpected mock RPC: ${name}`);
     },
@@ -422,7 +426,7 @@ test('GATE: Low confidence (< min_confidence) skips without sending', async () =
   assert.equal(finishCall?.params.p_error_code, 'LOW_CONFIDENCE');
 });
 
-test('GATE: Decision HANDOVER skips without sending', async () => {
+test('GATE: Decision HANDOVER skips without sending and creates handover case', async () => {
   const supabase = createMockSupabase();
   const provider = createMockProvider({ decision: 'HANDOVER', handoverReason: 'CUSTOMER_REQUESTED_STAFF', confidence: 1 });
   const inbox = createMockInboxService();
@@ -431,9 +435,64 @@ test('GATE: Decision HANDOVER skips without sending', async () => {
   assert.equal(summary.skipped, 1);
   assert.equal(inbox.sendCalls.length, 0);
 
+  const handoverCall = supabase.rpcCalls.find((c) => c.name === 'create_ai_handover_case');
+  assert.ok(handoverCall);
+  assert.equal(handoverCall.params.p_reason, 'CUSTOMER_REQUESTED_HUMAN');
+  assert.equal(handoverCall.params.p_priority, 'NORMAL');
+
   const finishCall = supabase.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
   assert.equal(finishCall?.params.p_send_status, 'SKIPPED');
   assert.equal(finishCall?.params.p_decision, 'HANDOVER');
+});
+
+test('DENY: AI paused (ai_mode === "PAUSED") skips without calling provider or sender', async () => {
+  const supabase = createMockSupabase({
+    conversationData: {
+      id: CONVERSATION_ID,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      status: 'OPEN',
+      assigned_to: null,
+      ai_mode: 'PAUSED',
+    },
+  });
+  const provider = createMockProvider({});
+  const inbox = createMockInboxService();
+
+  const summary = await processDueAiBrainLiveZaloDeliveries(1, { supabase, provider, inboxService: inbox });
+  assert.equal(summary.skipped, 1);
+  assert.equal(provider.calls.length, 0);
+  assert.equal(inbox.sendCalls.length, 0);
+});
+
+test('RACE: AI paused (ai_mode = "PAUSED") during inference halts send via pre-send recheck', async () => {
+  const supabase = createMockSupabase({
+    conversationData: {
+      id: CONVERSATION_ID,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      status: 'OPEN',
+      assigned_to: null,
+      ai_mode: 'ACTIVE',
+    },
+    preSendConversationData: {
+      status: 'OPEN',
+      assigned_to: null,
+      ai_mode: 'PAUSED',
+    },
+  });
+  const provider = createMockProvider({ decision: 'RESPOND', draft: 'Dạ chào anh', confidence: 0.95 });
+  const inbox = createMockInboxService();
+
+  const summary = await processDueAiBrainLiveZaloDeliveries(1, { supabase, provider, inboxService: inbox });
+  assert.equal(summary.skipped, 1);
+  assert.equal(inbox.sendCalls.length, 0);
+
+  const finishCall = supabase.rpcCalls.find((c) => c.name === 'finish_ai_brain_live_delivery');
+  assert.equal(finishCall?.params.p_send_status, 'SKIPPED');
+  assert.equal(finishCall?.params.p_error_code, 'AI_PAUSED');
 });
 
 test('GATE: Decision NO_REPLY skips without sending', async () => {

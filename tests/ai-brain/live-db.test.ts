@@ -376,12 +376,18 @@ test('H: claim_ai_brain_live_deliveries locks row with token and increments atte
   });
 
   const token1 = randomUUID();
-  const { data: claimed, error } = await service.rpc('claim_ai_brain_live_deliveries', {
-    p_limit: 10,
-    p_lock_token: token1,
-  });
-  assert.ifError(error);
-  assert.ok(Array.isArray(claimed));
+  let claimed: Array<{ id: string; source_interaction_id: string; attempts: number }> = [];
+  for (let i = 0; i < 10; i++) {
+    const { data, error } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 10,
+      p_lock_token: token1,
+    });
+    assert.ifError(error);
+    if (!data || data.length === 0) break;
+    claimed.push(...(data as any));
+    if (claimed.some((c) => c.source_interaction_id === interactionId)) break;
+  }
+  assert.ok(claimed.length > 0);
   const target = claimed.find((c: { source_interaction_id: string }) => c.source_interaction_id === interactionId);
   assert.ok(target);
   assert.equal(target.attempts, 1);
