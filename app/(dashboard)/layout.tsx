@@ -87,6 +87,9 @@ export default async function DashboardLayout({
                 <Link href="/admin" className="text-slate-300 hover:text-white transition">
                   Quản trị hệ thống
                 </Link>
+                <Link href="/admin/ai" className="text-slate-300 hover:text-white transition">
+                  AI Control Center
+                </Link>
                 <Link href="/admin/facebook" className="text-slate-300 hover:text-white transition">
                   Kết nối Facebook
                 </Link>

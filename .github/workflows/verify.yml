@@ -37,6 +37,7 @@ jobs:
       - run: npx tsx --conditions=react-server --test tests/ai-brain/live-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/handover-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/grounding-db.test.ts
+      - run: npx tsx --conditions=react-server --test tests/ai-brain/control-center-db.test.ts
       - run: sudo DEBIAN_FRONTEND=noninteractive apt-get update -y && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
       - run: npm run test:zalo-recordings
       - run: npm run test:zalo-recordings:db
