@@ -1,4 +1,6 @@
 import 'server-only';
+import { randomUUID } from 'node:crypto';
+import { DOSSIER_INSTRUCTION, validateDossierSnapshot, type DossierContext, type DossierSnapshot } from '../../features/customer-360/contracts';
 import { validateProviderProposal } from '../../features/ai-brain/validation';
 import type { BrainLatencyProfile, BrainProposal, BrainTurnGrounding, ModelBackend } from './types';
 import { MAX_MODEL_RESPONSE_BYTES, MAX_UPSTREAM_RESPONSE_BYTES } from './validation';
@@ -158,14 +160,25 @@ export class GeminiModelBackend implements ModelBackend {
     this.customFetch = options.customFetch;
   }
 
-  async generate(
+  async generateDossier(context: DossierContext, options: { signal: AbortSignal }): Promise<DossierSnapshot> {
+    return this.generateInternal('', { ...options, dossier: context }) as Promise<DossierSnapshot>;
+  }
+
+  async generate(inputText: string, options: {
+    signal: AbortSignal; latencyProfile?: BrainLatencyProfile; grounding?: BrainTurnGrounding;
+  }): Promise<BrainProposal> {
+    return this.generateInternal(inputText, options) as Promise<BrainProposal>;
+  }
+
+  private async generateInternal(
     inputText: string,
     options: {
       readonly signal: AbortSignal;
       readonly latencyProfile?: BrainLatencyProfile;
       readonly grounding?: BrainTurnGrounding;
+      readonly dossier?: DossierContext;
     }
-  ): Promise<BrainProposal> {
+  ): Promise<BrainProposal | DossierSnapshot> {
     if (options.signal.aborted) {
       throw new Error('MODEL_ABORTED_BEFORE_CALL');
     }
@@ -278,7 +291,7 @@ export class GeminiModelBackend implements ModelBackend {
     };
 
     const groundingBlock = formatGroundingContext(options.grounding);
-    const userPrompt = groundingBlock
+    const userPrompt = options.dossier ? JSON.stringify(options.dossier) : groundingBlock
       ? `${groundingBlock}\n\n[LATEST INQUIRY TO RESPOND TO]\n${inputText}`
       : inputText;
 
@@ -291,11 +304,11 @@ export class GeminiModelBackend implements ModelBackend {
         },
       ],
       config: {
-        systemInstruction: JAVIS_BRAIN_SYSTEM_INSTRUCTION,
+        systemInstruction: options.dossier ? DOSSIER_INSTRUCTION : JAVIS_BRAIN_SYSTEM_INSTRUCTION,
         responseMimeType: 'application/json',
-        responseSchema,
+        ...(options.dossier ? {} : { responseSchema }),
         temperature: 0.1,
-        maxOutputTokens: 768,
+        maxOutputTokens: options.dossier ? 4000 : 768,
         thinkingConfig: {
           thinkingBudget: 0,
           includeThoughts: false,
@@ -349,7 +362,7 @@ export class GeminiModelBackend implements ModelBackend {
       }
     }
 
-    return validateProviderProposal(parsed);
+    return options.dossier ? validateDossierSnapshot(parsed, options.dossier) : validateProviderProposal(parsed);
   }
 }
 
@@ -441,14 +454,25 @@ export class JavisRuntimeBackend implements ModelBackend {
     this.customFetch = options.customFetch;
   }
 
-  async generate(
+  async generateDossier(context: DossierContext, options: { signal: AbortSignal }): Promise<DossierSnapshot> {
+    return this.generateInternal('', { ...options, dossier: context }) as Promise<DossierSnapshot>;
+  }
+
+  async generate(inputText: string, options: {
+    signal: AbortSignal; latencyProfile?: BrainLatencyProfile; grounding?: BrainTurnGrounding;
+  }): Promise<BrainProposal> {
+    return this.generateInternal(inputText, options) as Promise<BrainProposal>;
+  }
+
+  private async generateInternal(
     inputText: string,
     options: {
       readonly signal: AbortSignal;
       readonly latencyProfile?: BrainLatencyProfile;
       readonly grounding?: BrainTurnGrounding;
+      readonly dossier?: DossierContext;
     }
-  ): Promise<BrainProposal> {
+  ): Promise<BrainProposal | DossierSnapshot> {
     if (options.signal.aborted) {
       throw new Error('MODEL_ABORTED_BEFORE_CALL');
     }
@@ -461,10 +485,10 @@ export class JavisRuntimeBackend implements ModelBackend {
       ? `${groundingBlock}\n\n[CUSTOMER INQUIRY]\n${inputText}`
       : `Customer inquiry:\n${inputText}`;
 
-    const prompt = `${JAVIS_BRAIN_SYSTEM_INSTRUCTION}\n\n${inquiryBlock}\n\nReturn strictly valid JSON only with {"decision": "RESPOND" | "HANDOVER" | "NO_REPLY", "confidence": number, "draft": string}:`;
+    const prompt = options.dossier ? `${DOSSIER_INSTRUCTION}\n\n${JSON.stringify(options.dossier)}` : `${JAVIS_BRAIN_SYSTEM_INSTRUCTION}\n\n${inquiryBlock}\n\nReturn strictly valid JSON only with {"decision": "RESPOND" | "HANDOVER" | "NO_REPLY", "confidence": number, "draft": string}:`;
     const formBody = new URLSearchParams({
       message: prompt,
-      session: 'crm_shadow_readonly',
+      session: options.dossier ? `crm_dossier_readonly_${randomUUID()}` : 'crm_shadow_readonly',
     }).toString();
 
     let response: Response;
@@ -570,7 +594,7 @@ export class JavisRuntimeBackend implements ModelBackend {
       throw new Error('MODEL_RESPONSE_TOO_LARGE');
     }
 
-    const parsedProposal = parseJavisProposalText(rawText);
+    const parsedProposal = options.dossier ? JSON.parse(rawText) : parseJavisProposalText(rawText);
 
     if (
       parsedProposal &&
@@ -598,6 +622,6 @@ export class JavisRuntimeBackend implements ModelBackend {
       }
     }
 
-    return validateProviderProposal(parsedProposal);
+    return options.dossier ? validateDossierSnapshot(parsedProposal, options.dossier) : validateProviderProposal(parsedProposal);
   }
 }

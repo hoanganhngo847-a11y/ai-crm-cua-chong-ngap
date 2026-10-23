@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
+import Link from 'next/link';
 
 export default async function CrmDashboardPage() {
   const actor = await getActorContext();
@@ -42,6 +43,11 @@ export default async function CrmDashboardPage() {
           Màn hình quản lý khách hàng 360, cơ hội bán hàng và theo dõi chốt đơn.
         </p>
       </div>
+
+      <Link href="/customers/dossier" className="block rounded-xl border border-blue-500/30 bg-blue-500/10 p-6 text-blue-200">
+        <h2 className="text-lg font-semibold">Customer 360 — Hồ sơ khách hàng AI →</h2>
+        <p className="mt-2 text-sm text-slate-400">Danh tính đa kênh, tình trạng hiện tại, lịch sử tương tác, cuộc gọi và bước tiếp theo.</p>
+      </Link>
 
       <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
         <div className="flex items-center justify-between">

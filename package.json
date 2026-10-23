@@ -82,7 +82,9 @@
     "test:ai-brain:monitoring-db": "tsx --env-file-if-exists=.env.local --conditions=react-server --test tests/ai-brain/monitoring-db.test.ts",
     "build:javis-brain": "tsc -p tsconfig.javis-brain.json",
     "start:javis-brain": "node --conditions=react-server .javis-brain/services/javis-brain/main.js",
-    "test:javis-brain": "tsx --conditions=react-server --test tests/javis-brain/server.test.ts tests/javis-brain/e2e.test.ts tests/javis-brain/model.test.ts tests/javis-brain/runtime.test.ts tests/javis-brain/grounding.test.ts"
+    "test:javis-brain": "tsx --conditions=react-server --test tests/javis-brain/server.test.ts tests/javis-brain/e2e.test.ts tests/javis-brain/model.test.ts tests/javis-brain/runtime.test.ts tests/javis-brain/grounding.test.ts",
+    "test:customer-360": "tsx --conditions=react-server --test tests/customer-360/contracts.test.ts tests/customer-360/javis.test.ts",
+    "test:customer-360:db": "tsx --conditions=react-server --test tests/customer-360/database.test.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",
@@ -94,7 +96,8 @@
     "pdf-lib": "^1.17.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "zod": "4.6.4"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.16",

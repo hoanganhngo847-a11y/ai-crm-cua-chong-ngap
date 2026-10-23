@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { GET as cronHandler, POST as cronPostHandler, handleZaloTranscriptionCron } from '../../app/api/cron/zalo-transcription/route';
+import { GET as cronHandler, POST as cronPostHandler, handleZaloTranscriptionCron } from '../../app/api/cron/zalo-transcription/handler';
 import { sha256 } from '../../features/zalo-recordings/metadata';
 import { RECORDING_BUCKET, uploadRecording } from '../../features/zalo-recordings/upload';
 import { MockTranscriptionProvider } from '../../features/zalo-transcription/provider';

@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { BrainProposal, BrainProvider, BrainProviderDescriptor, BrainTurnRequest } from './contracts';
 import { validateProviderProposal } from './validation';
+import { dossierContextSchema, validateDossierSnapshot, type DossierContext, type DossierSnapshot } from '../customer-360/contracts';
 
 const TURN_PATH = '/v1/brain/turn';
 const HEALTH_PATH = '/health';
@@ -161,6 +162,33 @@ export class JavisBrainProvider implements BrainProvider {
       cache: 'no-store',
     });
     return parseTurnEnvelope(await readJsonResponse(response));
+  }
+
+  /** Task extension on the existing Brain provider. CRM alone owns source selection and persistence. */
+  async runDossier(context: DossierContext, options: { signal: AbortSignal }): Promise<DossierSnapshot> {
+    dossierContextSchema.parse(context);
+    const response = await this.#request(`${this.#baseUrl}/v1/brain/dossier`, {
+      method: 'POST', headers: this.#headers(true), body: JSON.stringify(context),
+      signal: options.signal, redirect: 'error', cache: 'no-store',
+    });
+    if (!response.ok || !response.body) throw new JavisAdapterError();
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > 24 * 1024) throw new JavisAdapterError();
+        chunks.push(value);
+      }
+      const envelope = snapshotRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))));
+      exactKeys(envelope, ['ok', 'version', 'snapshot']);
+      if (envelope.ok !== true || envelope.version !== 'dossier-v1') throw new JavisAdapterError();
+      return validateDossierSnapshot(envelope.snapshot, context);
+    } catch { throw new JavisAdapterError(); }
+    finally { await reader.cancel().catch(() => undefined); }
   }
 
   /** Explicit readiness probe for deployment/operations. No CRM payload is sent. */
