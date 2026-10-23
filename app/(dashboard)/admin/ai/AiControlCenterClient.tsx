@@ -7,11 +7,16 @@ import {
   type LiveChannel,
   type VoiceMode,
   type ModelRoutingProfile,
+  type AiMonitoringDashboardState,
   updateAiChannelSettingAction,
   emergencyKillSwitchAction,
   claimHandoverCaseAction,
   resolveHandoverCaseAction,
   resumeAiConversationAction,
+  getAiMonitoringDashboardData,
+  acknowledgeAlertAction,
+  resolveAlertAction,
+  triggerAlertEvaluationAction,
 } from '../../../actions/ai-control';
 
 const REASON_LABELS: Record<string, { label: string; color: string }> = {
@@ -47,11 +52,17 @@ function formatTimeAgo(isoString: string): string {
 }
 
 export default function AiControlCenterClient({ initialState }: { initialState: AiControlState }) {
-  const [activeTab, setActiveTab] = useState<'settings' | 'handover' | 'conversations'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'handover' | 'conversations' | 'monitoring'>('settings');
   const [isPending, startTransition] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
+
+  // Monitoring & Alerts state
+  const [monitoring, setMonitoring] = useState<AiMonitoringDashboardState>(initialState.monitoring);
+  const [metricsWindow, setMetricsWindow] = useState<'1h' | '24h' | '7d' | '30d'>('24h');
+  const [metricsChannel, setMetricsChannel] = useState<string>('ALL');
+  const [isRefreshingMonitoring, setIsRefreshingMonitoring] = useState(false);
 
   // Filters for Handover tab
   const [handoverFilter, setHandoverFilter] = useState<'ALL' | 'OPEN' | 'CLAIMED' | 'RESOLVED'>('OPEN');
@@ -65,6 +76,73 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
   const [zaloSettings, setZaloSettings] = useState(initialState.settings.ZALO);
   const [messengerSettings, setMessengerSettings] = useState(initialState.settings.MESSENGER);
   const [voiceSettings, setVoiceSettings] = useState(initialState.settings.VOICE);
+
+  const handleRefreshMonitoring = () => {
+    setIsRefreshingMonitoring(true);
+    setActionError(null);
+    startTransition(async () => {
+      try {
+        const fresh = await triggerAlertEvaluationAction();
+        setMonitoring(fresh);
+        setActionSuccess('Đã cập nhật trạng thái giám sát & cảnh báo mới nhất.');
+      } catch (err: unknown) {
+        const error = err as Error;
+        setActionError(error.message || 'Lỗi khi cập nhật dữ liệu giám sát.');
+      } finally {
+        setIsRefreshingMonitoring(false);
+      }
+    });
+  };
+
+  const handleMetricsFilterChange = (channel: string, window: '1h' | '24h' | '7d' | '30d') => {
+    setMetricsChannel(channel);
+    setMetricsWindow(window);
+    startTransition(async () => {
+      try {
+        const fresh = await getAiMonitoringDashboardData({ channel, timeWindow: window });
+        setMonitoring(fresh);
+      } catch (err: unknown) {
+        const error = err as Error;
+        setActionError(error.message || 'Lỗi khi lọc chỉ số.');
+      }
+    });
+  };
+
+  const handleAcknowledgeAlert = (alertId: string) => {
+    setActionError(null);
+    setActionSuccess(null);
+    startTransition(async () => {
+      try {
+        await acknowledgeAlertAction(alertId);
+        setMonitoring((prev) => ({
+          ...prev,
+          alerts: prev.alerts.map((a) => (a.id === alertId ? { ...a, status: 'ACKNOWLEDGED' as const } : a)),
+        }));
+        setActionSuccess('Đã xác nhận cảnh báo.');
+      } catch (err: unknown) {
+        const error = err as Error;
+        setActionError(error.message || 'Lỗi khi xác nhận cảnh báo.');
+      }
+    });
+  };
+
+  const handleResolveAlert = (alertId: string) => {
+    setActionError(null);
+    setActionSuccess(null);
+    startTransition(async () => {
+      try {
+        await resolveAlertAction(alertId);
+        setMonitoring((prev) => ({
+          ...prev,
+          alerts: prev.alerts.filter((a) => a.id !== alertId),
+        }));
+        setActionSuccess('Đã đánh dấu hoàn tất cảnh báo.');
+      } catch (err: unknown) {
+        const error = err as Error;
+        setActionError(error.message || 'Lỗi khi xử lý cảnh báo.');
+      }
+    });
+  };
 
   const handleUpdateChannel = (channel: LiveChannel, formState: typeof zaloSettings) => {
     setActionError(null);
@@ -353,6 +431,21 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
           }`}
         >
           Nhật ký Hội thoại AI ({initialState.deliveryCounts.total})
+        </button>
+        <button
+          onClick={() => setActiveTab('monitoring')}
+          className={`pb-3 text-sm font-semibold transition border-b-2 flex items-center gap-2 ${
+            activeTab === 'monitoring'
+              ? 'border-blue-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          Giám sát & Cảnh báo
+          {monitoring?.alerts?.filter((a) => a.status === 'ACTIVE').length > 0 && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 animate-pulse">
+              {monitoring.alerts.filter((a) => a.status === 'ACTIVE').length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -879,6 +972,352 @@ export default function AiControlCenterClient({ initialState }: { initialState: 
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: MONITORING & ALERTS */}
+      {activeTab === 'monitoring' && (
+        <div className="space-y-8">
+          {/* 1. Health Status Section */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Trạng thái Kết nối & Hạ tầng AI</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                    monitoring.health.overall === 'HEALTHY'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : monitoring.health.overall === 'DEGRADED'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                        : 'border-red-500/30 bg-red-500/10 text-red-300'
+                  }`}>
+                    {monitoring.health.overall}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Kiểm tra tính sẵn sàng của CRM, Javis Brain, ZCAJS Worker, Messenger Transport, Supabase Scheduler và Voice.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRefreshMonitoring}
+                disabled={isRefreshingMonitoring || isPending}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition disabled:opacity-50"
+              >
+                <span className={isRefreshingMonitoring ? 'animate-spin' : ''}>🔄</span>
+                {isRefreshingMonitoring ? 'Đang kiểm tra...' : 'Đánh giá lại ngay'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {monitoring.health.components.map((comp) => (
+                <div
+                  key={comp.name}
+                  className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-2 flex flex-col justify-between"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-xs font-semibold text-white">{comp.name}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      comp.status === 'HEALTHY'
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : comp.status === 'DEGRADED'
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                          : comp.status === 'UNHEALTHY'
+                            ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                            : 'border-slate-700 bg-slate-800 text-slate-400'
+                    }`}>
+                      {comp.status}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    {comp.details || '—'}
+                  </p>
+
+                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                    <span>{comp.latencyMs !== undefined ? `${comp.latencyMs}ms` : '—'}</span>
+                    <span>{formatTimeAgo(comp.lastCheckedAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. Active Alerts Section */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Cảnh báo Hệ thống</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                    {monitoring.alerts.length}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Tự động phát hiện bất thường: cron failure, Javis timeout, queue backlog, FAILED spike, handover backlog.
+                </p>
+              </div>
+            </div>
+
+            {monitoring.alerts.length === 0 ? (
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-6 text-center">
+                <span className="text-2xl">✓</span>
+                <p className="mt-2 text-sm font-semibold text-emerald-300">
+                  Hệ thống AI đang vận hành ổn định
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Không có cảnh báo bất thường nào đang kích hoạt trong pipeline.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {monitoring.alerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className={`rounded-xl border p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                      alert.severity === 'CRITICAL'
+                        ? 'border-red-500/40 bg-red-500/10'
+                        : alert.severity === 'HIGH'
+                          ? 'border-orange-500/40 bg-orange-500/10'
+                          : alert.severity === 'WARNING'
+                            ? 'border-amber-500/40 bg-amber-500/10'
+                            : 'border-blue-500/40 bg-blue-500/10'
+                    }`}
+                  >
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase ${
+                          alert.severity === 'CRITICAL'
+                            ? 'border-red-500 text-red-300 bg-red-500/20'
+                            : alert.severity === 'HIGH'
+                              ? 'border-orange-500 text-orange-300 bg-orange-500/20'
+                              : alert.severity === 'WARNING'
+                                ? 'border-amber-500 text-amber-300 bg-amber-500/20'
+                                : 'border-blue-500 text-blue-300 bg-blue-500/20'
+                        }`}>
+                          {alert.severity}
+                        </span>
+
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-slate-700 bg-slate-800 text-slate-300">
+                          {alert.channel}
+                        </span>
+
+                        <span className="text-xs font-bold text-white">
+                          {alert.title}
+                        </span>
+
+                        {alert.triggerCount > 1 && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-900/80 text-slate-300 border border-slate-700">
+                            ×{alert.triggerCount} lần
+                          </span>
+                        )}
+
+                        {alert.status === 'ACKNOWLEDGED' && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                            Đã xác nhận
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {alert.description}
+                      </p>
+
+                      <div className="flex items-center gap-4 text-[10px] text-slate-400">
+                        <span>Lần đầu: {formatTimeAgo(alert.firstTriggeredAt)}</span>
+                        <span>Lần cuối: {formatTimeAgo(alert.lastTriggeredAt)}</span>
+                      </div>
+                    </div>
+
+                    {initialState.isBossAdmin && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        {alert.status === 'ACTIVE' && (
+                          <button
+                            type="button"
+                            onClick={() => handleAcknowledgeAlert(alert.id)}
+                            disabled={isPending}
+                            className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-700 transition"
+                          >
+                            Xác nhận
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleResolveAlert(alert.id)}
+                          disabled={isPending}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 hover:bg-emerald-600/50 transition"
+                        >
+                          Đã xử lý
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 3. Pipeline Metrics Section */}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-white">Chỉ số Hiệu năng Pipeline (Metrics)</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Thống kê thời gian thực về khối lượng inbound, tỷ lệ phản hồi, độ trễ p50/p95 và hàng đợi.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* Channel filter */}
+                <select
+                  value={metricsChannel}
+                  onChange={(e) => handleMetricsFilterChange(e.target.value, metricsWindow)}
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-white"
+                >
+                  <option value="ALL">Tất cả kênh</option>
+                  <option value="ZALO">Zalo OA</option>
+                  <option value="MESSENGER">Messenger</option>
+                  <option value="VOICE">Voice AI</option>
+                </select>
+
+                {/* Time window pills */}
+                <div className="inline-flex rounded-lg border border-slate-800 bg-slate-900 p-0.5 text-xs">
+                  {(['1h', '24h', '7d', '30d'] as const).map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => handleMetricsFilterChange(metricsChannel, w)}
+                      className={`px-2.5 py-1 rounded-md font-medium transition ${
+                        metricsWindow === w
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {w === '1h' ? '1 Giờ' : w === '24h' ? '24 Giờ' : w === '7d' ? '7 Ngày' : '30 Ngày'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Tin nhắn Inbound</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-white">{monitoring.metrics.inboundCount}</span>
+                  <span className="text-xs text-slate-400">tin đến</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Lượt xử lý AI (Turns)</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-blue-400">{monitoring.metrics.brainTurns}</span>
+                  <span className="text-xs text-slate-400">lượt inference</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Tỷ lệ Tự động Trả lời</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-emerald-400">
+                    {monitoring.metrics.brainTurns > 0
+                      ? `${Math.round((monitoring.metrics.respondCount / monitoring.metrics.brainTurns) * 100)}%`
+                      : '0%'}
+                  </span>
+                  <span className="text-xs text-slate-400">({monitoring.metrics.respondCount} tin)</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Chuyển giao Nhân viên</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-amber-400">
+                    {monitoring.metrics.handoverCount > 0 && monitoring.metrics.brainTurns > 0
+                      ? `${Math.round((monitoring.metrics.handoverCount / monitoring.metrics.brainTurns) * 100)}%`
+                      : '0%'}
+                  </span>
+                  <span className="text-xs text-slate-400">({monitoring.metrics.handoverCount} ca)</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Bỏ qua / Từ chối gửi</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-slate-400">{monitoring.metrics.noReplyCount}</span>
+                  <span className="text-xs text-slate-500">tin an toàn</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Gửi thành công / Thất bại</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-emerald-400">{monitoring.metrics.sendSuccess}</span>
+                  <span className="text-xs text-slate-500">/</span>
+                  <span className={`text-xl font-bold ${monitoring.metrics.sendFailure > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                    {monitoring.metrics.sendFailure}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ tin cậy Trung bình</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-indigo-400">
+                    {(monitoring.metrics.averageConfidence * 100).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Độ trễ P50 / P95</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-xl font-bold text-white font-mono">{monitoring.metrics.p50LatencyMs}ms</span>
+                  <span className="text-xs text-slate-500">/</span>
+                  <span className="text-sm font-semibold text-slate-400 font-mono">{monitoring.metrics.p95LatencyMs}ms</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Hàng đợi Chờ gửi</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className={`text-2xl font-bold ${monitoring.metrics.queueDepth > 5 ? 'text-amber-400' : 'text-white'}`}>
+                    {monitoring.metrics.queueDepth}
+                  </span>
+                  <span className="text-xs text-slate-400">tin đang pending</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Tuổi tin cũ nhất trong queue</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className={`text-2xl font-bold font-mono ${monitoring.metrics.oldestPendingAgeSeconds > 60 ? 'text-amber-400' : 'text-white'}`}>
+                    {monitoring.metrics.oldestPendingAgeSeconds}s
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Lỗi Provider / Timeout</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className={`text-2xl font-bold ${monitoring.metrics.providerFailures > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                    {monitoring.metrics.providerFailures}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Lỗi Cron Scheduler</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className={`text-2xl font-bold ${monitoring.metrics.schedulerFailures > 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                    {monitoring.metrics.schedulerFailures}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

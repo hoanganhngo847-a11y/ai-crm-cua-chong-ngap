@@ -4,10 +4,24 @@ import { revalidatePath } from 'next/cache';
 import { getActorContext, requireBossAdmin } from '../../lib/auth/context';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../shared/constants/roles';
+import {
+  getAiPipelineMetrics,
+  getSystemHealthStatus,
+  evaluateAlertConditions,
+  type AiPipelineMetrics,
+  type SystemHealthStatus,
+  type AiMonitoringAlert,
+} from '../../features/ai-brain/monitoring';
 
 export type LiveChannel = 'ZALO' | 'MESSENGER' | 'VOICE';
 export type VoiceMode = 'OFF' | 'TEST' | 'LIVE';
 export type ModelRoutingProfile = 'STANDARD' | 'FAST' | 'QUALITY';
+
+export interface AiMonitoringDashboardState {
+  metrics: AiPipelineMetrics;
+  health: SystemHealthStatus;
+  alerts: AiMonitoringAlert[];
+}
 
 export interface ChannelLiveSetting {
   company_id: string;
@@ -81,6 +95,7 @@ export interface AiControlState {
     avgConfidence: number;
   };
   deliveries: AiDeliveryItem[];
+  monitoring: AiMonitoringDashboardState;
 }
 
 const DEFAULT_CHANNELS: readonly LiveChannel[] = ['ZALO', 'MESSENGER', 'VOICE'];
@@ -281,6 +296,9 @@ export async function getAiControlState(): Promise<AiControlState> {
     avgConfidence: Math.round(avgConfidence * 1000) / 1000,
   };
 
+  // 4. Fetch Monitoring Data (metrics, health, active alerts)
+  const monitoring = await getAiMonitoringDashboardDataInternal(client, companyId, { timeWindow: '24h' });
+
   return {
     companyId,
     isBossAdmin: actor.role === APPLICATION_ROLES.BOSS_ADMIN,
@@ -289,6 +307,7 @@ export async function getAiControlState(): Promise<AiControlState> {
     handoverCases,
     deliveryCounts,
     deliveries,
+    monitoring,
   };
 }
 
@@ -408,4 +427,78 @@ export async function resumeAiConversationAction(conversationId: string) {
 
   revalidatePath('/admin/ai');
   return { success: true };
+}
+
+async function getAiMonitoringDashboardDataInternal(
+  client: ReturnType<typeof createAdminClient>,
+  companyId: string,
+  options: {
+    channel?: string;
+    timeWindow?: '1h' | '24h' | '7d' | '30d';
+  } = {}
+): Promise<AiMonitoringDashboardState> {
+  const [metrics, health] = await Promise.all([
+    getAiPipelineMetrics(client, companyId, options),
+    getSystemHealthStatus(client),
+  ]);
+  const alertsResult = await evaluateAlertConditions(client, companyId, { metrics, health });
+
+  return {
+    metrics,
+    health,
+    alerts: [...alertsResult.activeAlerts],
+  };
+}
+
+export async function getAiMonitoringDashboardData(options: {
+  channel?: string;
+  timeWindow?: '1h' | '24h' | '7d' | '30d';
+} = {}): Promise<AiMonitoringDashboardState> {
+  const actor = await requireAuthorizedActor();
+  const client = createAdminClient();
+  return getAiMonitoringDashboardDataInternal(client, actor.companyId, options);
+}
+
+export async function acknowledgeAlertAction(alertId: string) {
+  const actor = await requireAuthorizedActor();
+  await requireBossAdmin(actor.companyId);
+  const client = createAdminClient();
+
+  const { data: success, error } = await client.rpc('acknowledge_ai_monitoring_alert', {
+    p_company_id: actor.companyId,
+    p_alert_id: alertId,
+    p_user_id: actor.userId,
+  });
+
+  if (error || !success) {
+    throw new Error(error?.message || 'Không thể xác nhận cảnh báo.');
+  }
+
+  revalidatePath('/admin/ai');
+  return { success: true };
+}
+
+export async function resolveAlertAction(alertId: string) {
+  const actor = await requireAuthorizedActor();
+  await requireBossAdmin(actor.companyId);
+  const client = createAdminClient();
+
+  const { data: success, error } = await client.rpc('resolve_ai_monitoring_alert', {
+    p_company_id: actor.companyId,
+    p_alert_id: alertId,
+    p_user_id: actor.userId,
+  });
+
+  if (error || !success) {
+    throw new Error(error?.message || 'Không thể đánh dấu đã xử lý cảnh báo.');
+  }
+
+  revalidatePath('/admin/ai');
+  return { success: true };
+}
+
+export async function triggerAlertEvaluationAction(): Promise<AiMonitoringDashboardState> {
+  const actor = await requireAuthorizedActor();
+  const client = createAdminClient();
+  return getAiMonitoringDashboardDataInternal(client, actor.companyId, { timeWindow: '1h' });
 }
