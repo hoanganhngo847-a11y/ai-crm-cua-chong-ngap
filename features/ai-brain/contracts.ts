@@ -1,5 +1,9 @@
 import 'server-only';
 
+import type { BrainTurnGrounding } from './grounding/contracts';
+
+export type { BrainTurnGrounding };
+
 export type BrainChannel = 'MESSENGER' | 'ZALO' | 'PHONE' | 'WEB' | 'INTERNAL';
 export const ALLOWED_BRAIN_CHANNELS: readonly BrainChannel[] = [
   'MESSENGER',
@@ -126,6 +130,7 @@ export interface BrainServerContext {
   readonly allowDrafts: boolean;
   readonly deliveryMode?: BrainDelivery;
   readonly traceId: string;
+  readonly grounding?: BrainTurnGrounding;
 }
 
 /**
@@ -162,6 +167,7 @@ export interface BrainTurnRequest {
     readonly text: string;
   };
   readonly latencyProfile: BrainLatencyProfile;
+  readonly grounding?: BrainTurnGrounding;
 }
 
 /**

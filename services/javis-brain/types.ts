@@ -5,6 +5,7 @@ import type {
   BrainLatencyProfile,
   BrainModality,
   BrainProposal,
+  BrainTurnGrounding,
   BrainTurnRequest,
 } from '../../features/ai-brain/contracts';
 
@@ -14,6 +15,7 @@ export type {
   BrainLatencyProfile,
   BrainModality,
   BrainProposal,
+  BrainTurnGrounding,
   BrainTurnRequest,
 };
 
@@ -37,6 +39,7 @@ export interface ModelBackend {
     options: {
       readonly signal: AbortSignal;
       readonly latencyProfile: BrainLatencyProfile;
+      readonly grounding?: BrainTurnGrounding;
     }
   ): Promise<BrainProposal>;
 }
