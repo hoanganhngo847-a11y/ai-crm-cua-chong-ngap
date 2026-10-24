@@ -39,6 +39,7 @@ RUN npm install --omit=dev --no-audit --no-fund /tmp/zca-js.tgz \
 COPY src ./src
 COPY patches/patch-worker-contact-endpoint.mjs /tmp/patch-worker-contact-endpoint.mjs
 RUN node /tmp/patch-worker-contact-endpoint.mjs \
+  && node --check src/index.mjs \
   && rm -f /tmp/patch-worker-contact-endpoint.mjs
 
 EXPOSE 10000
