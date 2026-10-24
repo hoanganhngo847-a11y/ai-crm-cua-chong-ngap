@@ -37,7 +37,7 @@ function TemplateEditor({
   onCancel: () => void;
 }) {
   const [channel, setChannel] = useState<Channel>(editing?.channel || "FACEBOOK");
-  const [templateType, setTemplateType] = useState(
+  const [templateType, setTemplateType] = useState<Template["template_type"]>(
     editing?.template_type || "MESSENGER_RESPONSE",
   );
   const [content, setContent] = useState(editing?.content || "");
@@ -153,7 +153,9 @@ function TemplateEditor({
                 aria-label="Loại mẫu"
                 name="type"
                 value={templateType}
-                onChange={(e) => setTemplateType(e.target.value)}
+                onChange={(e) =>
+                  setTemplateType(e.target.value as Template["template_type"])
+                }
                 className={field}
               >
                 {channel === "FACEBOOK" ? (
