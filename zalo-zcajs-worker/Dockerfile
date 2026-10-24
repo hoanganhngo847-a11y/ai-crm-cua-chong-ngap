@@ -7,9 +7,13 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+COPY patches/zcajs-old-direct-messages.patch /tmp/zcajs-old-direct-messages.patch
+
 WORKDIR /src/zcajs
 RUN git clone "$ZCAJS_REPO" . \
   && git checkout "$ZCAJS_COMMIT" \
+  && git apply --check /tmp/zcajs-old-direct-messages.patch \
+  && git apply /tmp/zcajs-old-direct-messages.patch \
   && npm install --no-audit --no-fund \
   && npm run build \
   && mkdir -p /out \

@@ -1,0 +1,97 @@
+diff --git a/src/apis/listen.ts b/src/apis/listen.ts
+--- a/src/apis/listen.ts
++++ b/src/apis/listen.ts
+@@ -37,6 +37,10 @@
+     private cipherKey?: string;
+ 
+     private selfListen;
++
++    private ws?: WebSocket;
++    private oldMessagePoll?: ReturnType<typeof setInterval>;
++    private oldMessageRequestId = 0;
+ 
+     constructor(url: string) {
+         super();
+@@ -89,12 +93,21 @@
+             },
+         });
+ 
++        this.ws = ws;
++
+         ws.onopen = () => {
+             this.onConnectedCallback();
+             this.emit("connected");
++
++            setTimeout(() => this.requestOldDirectMessages(), 1500);
++            if (this.oldMessagePoll) clearInterval(this.oldMessagePoll);
++            this.oldMessagePoll = setInterval(() => this.requestOldDirectMessages(), 60_000);
+         };
+ 
+         ws.onclose = () => {
++            if (this.oldMessagePoll) clearInterval(this.oldMessagePoll);
++            this.oldMessagePoll = undefined;
++            this.ws = undefined;
+             this.onClosedCallback();
+             this.emit("closed");
+         };
+@@ -151,6 +164,32 @@
+                     }
+                 }
+ 
++                if (cmd == 510 && s == 1) {
++                    const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
++                    const msgs = Array.isArray(parsedData?.msgs) ? parsedData.msgs : [];
++
++                    for (const msg of msgs) {
++                        if (typeof msg?.content == "object" && msg.content?.hasOwnProperty("deleteMsg")) {
++                            continue;
++                        }
++
++                        const numericTs = Number(msg?.ts);
++                        if (!Number.isFinite(numericTs) || numericTs <= 0) continue;
++                        const messageMs = numericTs < 1_000_000_000_000 ? numericTs * 1000 : numericTs;
++                        if (Date.now() - messageMs > 24 * 60 * 60 * 1000) continue;
++
++                        const messageObject = new Message(msg);
++                        if (messageObject.isSelf && !this.selfListen) continue;
++
++                        // Re-emit only recent historical/direct-request messages through
++                        // the same event used by live traffic. The CRM's durable external_ref
++                        // constraint handles duplicates, while previously unseen sender UIDs
++                        // become normal inbound events and create LEAD_NEW conversations.
++                        this.onMessageCallback(messageObject);
++                        this.emit("message", messageObject);
++                    }
++                }
++
+                 if (n == 1 && cmd == 601 && s == 0) {
+                     const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
+                     const { controls } = parsedData;
+@@ -210,6 +249,27 @@
+             }
+         };
+     }
++
++    private requestOldDirectMessages() {
++        const ws = this.ws;
++        if (!ws || ws.readyState !== WebSocket.OPEN) return;
++
++        const request = {
++            first: true,
++            lastId: null,
++            preIds: [],
++            req_id: `req_${this.oldMessageRequestId++}`,
++        };
++        const encoded = Buffer.from(JSON.stringify(request), "utf-8");
++        const frame = Buffer.alloc(4 + encoded.length);
++
++        frame.writeUInt8(1, 0);
++        frame.writeUInt16LE(510, 1);
++        frame.writeUInt8(1, 3);
++        encoded.copy(frame, 4);
++
++        ws.send(frame);
++    }
+ }
+ 
+ function getHeader(buffer: Buffer) {
