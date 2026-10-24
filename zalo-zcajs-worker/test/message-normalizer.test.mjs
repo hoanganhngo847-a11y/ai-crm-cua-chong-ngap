@@ -18,7 +18,28 @@ test('normalizes inbound text message', () => {
 
   assert.equal(result?.direction, 'inbound');
   assert.equal(result?.externalUserId, 'customer-1');
+  assert.equal(result?.senderName, 'Khách A');
+  assert.equal(result?.senderNameSource, 'message_dname');
   assert.equal(result?.content, 'xin chào');
+});
+
+test('preserves the Zalo profile-resolved display name source', () => {
+  const result = normalizeDirectMessage({
+    type: 0,
+    isSelf: false,
+    threadId: 'customer-profile',
+    data: {
+      msgId: 'm-profile-1',
+      uidFrom: 'customer-profile',
+      dName: 'Tên hiển thị trên Zalo PC',
+      __zaloNameSource: 'profile_resolved',
+      ts: '1792335600000',
+      content: 'hello',
+    },
+  });
+
+  assert.equal(result?.senderName, 'Tên hiển thị trên Zalo PC');
+  assert.equal(result?.senderNameSource, 'profile_resolved');
 });
 
 test('normalizes Zalo photo attachment into a safe image marker', () => {

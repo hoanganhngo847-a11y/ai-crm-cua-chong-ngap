@@ -28,6 +28,65 @@ function normalizeTimestamp(value: string): string {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
+function normalizeZaloDisplayName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const clean = value.replace(/\s+/g, ' ').trim();
+  return clean ? clean.slice(0, 160) : undefined;
+}
+
+async function persistZaloConversationDisplayName(
+  supabase: ReturnType<typeof createAdminClient>,
+  companyId: string,
+  conversationId: string | undefined,
+  displayName: string | undefined,
+  displayNameSource: string | undefined,
+  observedAt: string
+): Promise<void> {
+  const cleanName = normalizeZaloDisplayName(displayName);
+  if (!conversationId || !cleanName) return;
+
+  const { data: conversation, error: readError } = await supabase
+    .from('conversations')
+    .select('metadata')
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .eq('channel', 'ZALO')
+    .maybeSingle();
+
+  if (readError || !conversation) {
+    console.warn(
+      '[ZCAJS inbound] could not read conversation metadata for display-name sync:',
+      readError?.message || 'conversation not found'
+    );
+    return;
+  }
+
+  const currentMetadata =
+    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+  const nextMetadata: Record<string, unknown> = {
+    ...currentMetadata,
+    zalo_display_name: cleanName,
+    zalo_display_name_source: displayNameSource || 'message_dname',
+    zalo_display_name_updated_at: observedAt,
+  };
+
+  const { error: updateError } = await supabase
+    .from('conversations')
+    .update({ metadata: nextMetadata })
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .eq('channel', 'ZALO');
+
+  if (updateError) {
+    console.warn(
+      '[ZCAJS inbound] could not persist Zalo display name:',
+      updateError.message
+    );
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (getZaloTransportMode() !== 'ZCAJS') {
@@ -73,6 +132,7 @@ export async function POST(request: NextRequest) {
           messageId?: unknown;
           externalUserId?: unknown;
           senderName?: unknown;
+          senderNameSource?: unknown;
           content?: unknown;
           timestamp?: unknown;
           direction?: unknown;
@@ -86,9 +146,16 @@ export async function POST(request: NextRequest) {
 
     const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : '';
     const externalUserId = typeof body.externalUserId === 'string' ? body.externalUserId.trim() : '';
-    const senderName = typeof body.senderName === 'string' ? body.senderName.trim() : undefined;
+    const senderName = normalizeZaloDisplayName(
+      typeof body.senderName === 'string' ? body.senderName : undefined
+    );
+    const rawSenderNameSource =
+      typeof body.senderNameSource === 'string' ? body.senderNameSource.trim() : '';
+    const senderNameSource =
+      rawSenderNameSource === 'profile_resolved' ? 'profile_resolved' : 'message_dname';
     const content = typeof body.content === 'string' ? body.content.trim() : '';
     const timestamp = typeof body.timestamp === 'string' ? body.timestamp.trim() : '';
+    const normalizedObservedAt = normalizeTimestamp(timestamp);
     const requestedDirection = typeof body.direction === 'string' ? body.direction.trim().toLowerCase() : 'inbound';
     const direction = requestedDirection === 'outbound' ? 'outbound' : 'inbound';
 
@@ -107,6 +174,8 @@ export async function POST(request: NextRequest) {
       source: 'ngogiaphat/ZCAJS',
       direction,
       observed_self_message: direction === 'outbound',
+      ...(senderName ? { zalo_display_name: senderName } : {}),
+      ...(senderName ? { zalo_display_name_source: senderNameSource } : {}),
     };
 
     // Self-listener messages are observations of messages already sent from the native Zalo account.
@@ -119,7 +188,7 @@ export async function POST(request: NextRequest) {
         p_sanitized_content: sanitizePhoneInText(content),
         p_raw_content: content,
         p_source_metadata: sourceMetadata,
-        p_timestamp: normalizeTimestamp(timestamp),
+        p_timestamp: normalizedObservedAt,
       });
 
       if (error) {
@@ -149,7 +218,7 @@ export async function POST(request: NextRequest) {
         sender_name: senderName || `Khách Zalo ${externalUserId.slice(-4)}`,
         message_id: messageId,
         content,
-        timestamp: normalizeTimestamp(timestamp),
+        timestamp: normalizedObservedAt,
         metadata: sourceMetadata,
       },
       { client: supabase }
@@ -161,6 +230,15 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    await persistZaloConversationDisplayName(
+      supabase,
+      companyId,
+      result.conversation_id,
+      senderName,
+      senderNameSource,
+      normalizedObservedAt
+    );
 
     return NextResponse.json({
       success: true,

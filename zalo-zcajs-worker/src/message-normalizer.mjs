@@ -120,10 +120,16 @@ export function normalizeDirectMessage(message) {
     if (!Number.isNaN(parsed.getTime())) timestamp = parsed.toISOString();
   }
 
+  const senderName = message.isSelf ? undefined : (String(data.dName || '').trim() || undefined);
+  const senderNameSource = message.isSelf
+    ? undefined
+    : (String(data.__zaloNameSource || '').trim() || (senderName ? 'message_dname' : undefined));
+
   return {
     messageId,
     externalUserId,
-    senderName: message.isSelf ? undefined : (String(data.dName || '').trim() || undefined),
+    senderName,
+    senderNameSource,
     content,
     timestamp,
     direction: message.isSelf ? 'outbound' : 'inbound',
