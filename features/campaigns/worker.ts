@@ -4,7 +4,6 @@ import { createAdminClient } from "../../lib/supabase/admin";
 import { z } from "zod";
 import {
   campaignAdapters,
-  channelEnabled,
   type CampaignAdapter,
   type DeliveryJob,
   type DeliveryResult,
@@ -27,11 +26,23 @@ export async function processCampaignBatch(
     .strict()
     .parse(input);
 
-  if (!channelEnabled(parsed.channel))
-    return { status: "DISABLED", processed: 0 };
+  const configured =
+    parsed.channel === "ZALO_PERSONAL"
+      ? process.env.ZALO_PERSONAL_CAMPAIGNS_ENABLED === "true" &&
+        process.env.ZALO_TRANSPORT?.trim().toUpperCase() === "ZCAJS"
+      : process.env.BULK_MESSAGING_ENABLED === "true" &&
+        process.env[
+          parsed.channel === "FACEBOOK"
+            ? "FACEBOOK_CAMPAIGNS_ENABLED"
+            : "ZALO_OA_CAMPAIGNS_ENABLED"
+        ] === "true";
+
+  if (!configured) return { status: "DISABLED", processed: 0 };
 
   const adapter = dependencies.adapter ?? campaignAdapters[parsed.channel];
-  if (!adapter.verified) return { status: "TRANSPORT_DISABLED", processed: 0 };
+  if (!adapter.verified)
+    return { status: "TRANSPORT_DISABLED", processed: 0 };
+
   const db = dependencies.db ?? createAdminClient();
   let processed = 0;
   for (let n = 0; n < parsed.limit; n++) {
