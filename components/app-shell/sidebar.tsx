@@ -46,6 +46,7 @@ export interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onOpenCommandPalette: () => void;
+  onNavigate?: () => void;
   className?: string;
 }
 
@@ -57,6 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   onOpenCommandPalette,
+  onNavigate,
   className = '',
 }) => {
   const currentRole = userRole || 'SALE';
@@ -183,7 +185,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Workspace Header */}
       <div className="h-14 px-3 flex items-center justify-between border-b border-[var(--border-subtle)] shrink-0">
         {!isCollapsed && (
-          <Link href="/crm" className="flex items-center gap-2.5 min-w-0 group">
+          <Link href="/crm" onClick={onNavigate} className="flex items-center gap-2.5 min-w-0 group">
             <div className="w-7 h-7 rounded-lg bg-[var(--accent)] flex items-center justify-center text-white shrink-0 shadow-xs">
               <Sparkles className="w-4 h-4" />
             </div>
@@ -199,7 +201,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {isCollapsed && (
-          <Link href="/crm" className="mx-auto" title={companyName}>
+          <Link href="/crm" onClick={onNavigate} className="mx-auto" title={companyName}>
             <div className="w-8 h-8 rounded-lg bg-[var(--accent)] flex items-center justify-center text-white shadow-xs">
               <Sparkles className="w-4 h-4" />
             </div>
@@ -277,6 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={onNavigate}
                     aria-current={active ? 'page' : undefined}
                     className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors relative group ${
                       active
@@ -332,6 +335,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-2 border-t border-[var(--border-subtle)] shrink-0">
         <Link
           href="/account"
+          onClick={onNavigate}
           className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group ${
             isCollapsed ? 'justify-center' : ''
           }`}

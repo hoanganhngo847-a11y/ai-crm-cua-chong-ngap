@@ -5,6 +5,7 @@ import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { CustomerService } from '../../../features/crm/services/customer.service';
+import { PIPELINE_STAGE_GROUPS } from '../../../features/crm/types/customer.types';
 import {
   Users,
   Flame,
@@ -55,36 +56,98 @@ export default async function CrmDashboardPage() {
   const db = createAdminClient();
   const companyId = actor.companyId!;
 
-  // Fetch metrics and urgent customers in parallel
-  let urgentCustomers: Awaited<ReturnType<typeof CustomerService.getUrgentClosingCustomers>> = [];
-  let totalCustomers = 0;
-  let newLeadsCount = 0;
-  let negotiatingCount = 0;
-  let wonOrdersCount = 0;
+  // Fail-closed metric results: do NOT silently fallback DB errors to 0
+  type MetricResult<T> = {
+    status: 'success' | 'error';
+    value: T;
+  };
 
-  try {
-    const [urgent, totalRes, newRes, negRes, ordersRes] = await Promise.allSettled([
-      CustomerService.getUrgentClosingCustomers(companyId, 6, actor.role),
-      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId).in('stage', ['LEAD_NEW', 'CONTACT_CYCLE_1']),
-      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId).in('stage', ['NEGOTIATING', 'PRICE_OFFERED', 'PRICE_CALCULATED']),
-      db.from('orders').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-    ]);
+  const parseCountResult = (
+    result: PromiseSettledResult<{ count: number | null; error: unknown }>,
+    metricName: string
+  ): MetricResult<number | null> => {
+    if (result.status === 'fulfilled' && !result.value.error && typeof result.value.count === 'number') {
+      return { status: 'success', value: result.value.count };
+    }
+    const errorDetails =
+      result.status === 'rejected' ? result.reason : (result.value as { error: unknown })?.error;
+    console.error(`[CRM Dashboard] Lỗi truy vấn ${metricName}:`, errorDetails);
+    return { status: 'error', value: null };
+  };
 
-    if (urgent.status === 'fulfilled') urgentCustomers = urgent.value;
-    if (totalRes.status === 'fulfilled') totalCustomers = totalRes.value.count || 0;
-    if (newRes.status === 'fulfilled') newLeadsCount = newRes.value.count || 0;
-    if (negRes.status === 'fulfilled') negotiatingCount = negRes.value.count || 0;
-    if (ordersRes.status === 'fulfilled') wonOrdersCount = ordersRes.value.count || 0;
-  } catch (err) {
-    console.error('Error fetching CRM dashboard data:', err);
+  const [
+    urgentRes,
+    totalRes,
+    newLeadsRes,
+    surveyRes,
+    pricingRes,
+    wonRes,
+    ordersRes,
+  ] = await Promise.allSettled([
+    CustomerService.getUrgentClosingCustomers(companyId, 6, actor.role),
+    db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.NEW_LEADS]),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.SURVEY]),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.PRICING]),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.WON]),
+    db.from('orders').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+  ]);
+
+  let urgentCustomersResult: MetricResult<
+    Awaited<ReturnType<typeof CustomerService.getUrgentClosingCustomers>>
+  >;
+  if (urgentRes.status === 'fulfilled') {
+    urgentCustomersResult = { status: 'success', value: urgentRes.value };
+  } else {
+    console.error('[CRM Dashboard] Lỗi truy vấn urgent customers:', urgentRes.reason);
+    urgentCustomersResult = { status: 'error', value: [] };
   }
 
+  const totalCustomers = parseCountResult(totalRes, 'totalCustomers');
+  const newLeadsCount = parseCountResult(newLeadsRes, 'newLeadsCount');
+  const surveyCount = parseCountResult(surveyRes, 'surveyCount');
+  const pricingCount = parseCountResult(pricingRes, 'pricingCount');
+  const wonCount = parseCountResult(wonRes, 'wonCount');
+  const totalOrders = parseCountResult(ordersRes, 'totalOrders');
+
+  // Explicit canonical pipeline groups: Direction A (Zero subtraction, no cardinality mismatch)
   const pipelineStages = [
-    { label: 'Khách mới / Tiếp cận', count: newLeadsCount, color: 'bg-blue-500' },
-    { label: 'Khảo sát / Đang tính giá', count: Math.max(0, totalCustomers - newLeadsCount - negotiatingCount - wonOrdersCount), color: 'bg-indigo-500' },
-    { label: 'Báo giá & Đàm phán', count: negotiatingCount, color: 'bg-amber-500' },
-    { label: 'Đơn hàng & Hợp đồng', count: wonOrdersCount, color: 'bg-emerald-500' },
+    {
+      label: 'Khách mới / Tiếp cận',
+      result: newLeadsCount,
+      color: 'bg-blue-500',
+    },
+    {
+      label: 'Khảo sát / Nhu cầu',
+      result: surveyCount,
+      color: 'bg-indigo-500',
+    },
+    {
+      label: 'Báo giá & Đàm phán',
+      result: pricingCount,
+      color: 'bg-amber-500',
+    },
+    {
+      label: 'Đã chốt & Triển khai',
+      result: wonCount,
+      color: 'bg-emerald-500',
+    },
   ];
 
   return (
@@ -113,28 +176,61 @@ export default async function CrmDashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Metric
           label="Tổng hồ sơ khách hàng"
-          value={totalCustomers}
+          value={totalCustomers.status === 'success' ? totalCustomers.value : '—'}
           icon={<Users className="w-4 h-4 text-blue-600" />}
-          subtitle="Đang quản lý trong công ty"
+          subtitle={
+            totalCustomers.status === 'success' ? (
+              'Đang quản lý trong công ty'
+            ) : (
+              <span className="text-amber-600 font-normal">Không tải được</span>
+            )
+          }
         />
         <Metric
           label="Cơ hội cần chốt gấp"
-          value={urgentCustomers.length}
+          value={
+            urgentCustomersResult.status === 'success'
+              ? urgentCustomersResult.value.length
+              : '—'
+          }
           icon={<Flame className="w-4 h-4 text-rose-600" />}
-          subtitle="Ưu tiên gọi & phản hồi hôm nay"
-          trend={urgentCustomers.length > 0 ? { value: 'Cần chú ý', isPositive: false } : undefined}
+          subtitle={
+            urgentCustomersResult.status === 'success' ? (
+              'Ưu tiên gọi & phản hồi hôm nay'
+            ) : (
+              <span className="text-amber-600 font-normal">Không tải được</span>
+            )
+          }
+          trend={
+            urgentCustomersResult.status === 'success' &&
+            urgentCustomersResult.value.length > 0
+              ? { value: 'Cần chú ý', isPositive: false }
+              : undefined
+          }
         />
         <Metric
           label="Đang báo giá & đàm phán"
-          value={negotiatingCount}
+          value={pricingCount.status === 'success' ? pricingCount.value : '—'}
           icon={<TrendingUp className="w-4 h-4 text-amber-600" />}
-          subtitle="Khách hàng đã nhận phương án"
+          subtitle={
+            pricingCount.status === 'success' ? (
+              'Khách hàng trong giai đoạn chốt giá'
+            ) : (
+              <span className="text-amber-600 font-normal">Không tải được</span>
+            )
+          }
         />
         <Metric
-          label="Đơn hàng & Chốt hợp đồng"
-          value={wonOrdersCount}
+          label="Tổng đơn hàng"
+          value={totalOrders.status === 'success' ? totalOrders.value : '—'}
           icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-          subtitle="Đã tạo đơn thành công"
+          subtitle={
+            totalOrders.status === 'success' ? (
+              'Đơn hàng đã phát sinh'
+            ) : (
+              <span className="text-amber-600 font-normal">Không tải được</span>
+            )
+          }
         />
       </div>
 
@@ -161,14 +257,19 @@ export default async function CrmDashboardPage() {
             </CardHeader>
 
             <CardContent className="p-0">
-              {urgentCustomers.length === 0 ? (
+              {urgentCustomersResult.status === 'error' ? (
+                <div className="p-8 text-center text-xs text-[var(--text-tertiary)]">
+                  <AlertCircle className="w-8 h-8 mx-auto mb-2 text-amber-500 opacity-80" />
+                  Không thể tải danh sách khách hàng cần chú ý lúc này.
+                </div>
+              ) : urgentCustomersResult.value.length === 0 ? (
                 <div className="p-8 text-center text-xs text-[var(--text-tertiary)]">
                   <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-emerald-500 opacity-80" />
                   Không có khách hàng nào quá hạn hoặc cần xử lý gấp tại thời điểm này.
                 </div>
               ) : (
                 <div className="divide-y divide-[var(--border-subtle)]">
-                  {urgentCustomers.map((cust) => (
+                  {urgentCustomersResult.value.map((cust) => (
                     <div
                       key={cust.id}
                       className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--surface-hover)] transition-colors"
@@ -228,22 +329,48 @@ export default async function CrmDashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {pipelineStages.map((stg, i) => (
-                  <div key={i} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[var(--text-secondary)] font-medium">{stg.label}</span>
-                      <span className="font-semibold font-mono text-[var(--text-primary)]">{stg.count}</span>
+                {pipelineStages.map((stg, i) => {
+                  const isOk = stg.result.status === 'success' && stg.result.value !== null;
+                  const countVal = isOk ? stg.result.value : '—';
+                  const percentage =
+                    isOk &&
+                    totalCustomers.status === 'success' &&
+                    totalCustomers.value &&
+                    totalCustomers.value > 0
+                      ? Math.min(
+                          100,
+                          Math.round(((stg.result.value as number) / totalCustomers.value) * 100)
+                        )
+                      : 0;
+
+                  return (
+                    <div key={i} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-[var(--text-secondary)] font-medium">
+                          {stg.label}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {!isOk && (
+                            <span className="text-[10px] text-amber-600 font-normal">
+                              Không tải được
+                            </span>
+                          )}
+                          <span className="font-semibold font-mono text-[var(--text-primary)]">
+                            {countVal}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="w-full h-2 bg-[var(--surface-secondary)] rounded-full overflow-hidden border border-[var(--border-subtle)]">
+                        <div
+                          className={`h-full ${stg.color} rounded-full transition-all duration-300`}
+                          style={{
+                            width: `${percentage}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full h-2 bg-[var(--surface-secondary)] rounded-full overflow-hidden border border-[var(--border-subtle)]">
-                      <div
-                        className={`h-full ${stg.color} rounded-full transition-all duration-300`}
-                        style={{
-                          width: `${totalCustomers > 0 ? Math.min(100, Math.round((stg.count / totalCustomers) * 100)) : 0}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

@@ -4,6 +4,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import type { CustomerResponse } from '../types/customer.types';
 import {
+  CANONICAL_STAGE_LIST,
+  CUSTOMER_STAGE_LABELS,
+} from '../types/customer.types';
+import {
   Users,
   Search,
   Plus,
@@ -400,21 +404,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               className="w-full h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             >
               <option value="">Tất cả giai đoạn</option>
-              <option value="LEAD_NEW">Khách mới</option>
-              <option value="CONTACT_CYCLE_1">Đang liên hệ (Gọi 1)</option>
-              <option value="CONTACT_CYCLE_2">Đang liên hệ (Gọi 2)</option>
-              <option value="CONTACT_CYCLE_3">Đang liên hệ (Gọi 3)</option>
-              <option value="UNREACHABLE">Không liên lạc được</option>
-              <option value="SURVEY_SCHEDULED">Lịch khảo sát</option>
-              <option value="SURVEY_COMPLETED">Đã khảo sát</option>
-              <option value="PRICE_OFFERED">Đã báo giá</option>
-              <option value="NEGOTIATING">Đang thương lượng</option>
-              <option value="ORDER_CREATED">Đã tạo đơn</option>
-              <option value="DEPOSIT_CONFIRMED">Đã đặt cọc</option>
-              <option value="CONTRACT_SIGNED">Đã ký hợp đồng</option>
-              <option value="IN_PRODUCTION">Đang sản xuất</option>
-              <option value="INSTALLING">Đang lắp đặt</option>
-              <option value="HANDOVER_COMPLETED">Hoàn tất bàn giao</option>
+              {CANONICAL_STAGE_LIST.map((stg) => (
+                <option key={stg.value} value={stg.value}>
+                  {stg.label}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -436,7 +430,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               )}
               {selectedStage && (
                 <span className="px-2 py-0.5 rounded bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[11px]">
-                  Giai đoạn: {selectedStage}
+                  Giai đoạn: {CUSTOMER_STAGE_LABELS[selectedStage] || selectedStage}
                 </span>
               )}
             </div>
@@ -742,24 +736,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
             value={targetStage}
             onChange={(e) => setTargetStage(e.target.value)}
           >
-            <option value="LEAD_NEW">Khách mới</option>
-            <option value="CONTACT_CYCLE_1">Đang liên hệ (Gọi 1)</option>
-            <option value="CONTACT_CYCLE_2">Đang liên hệ (Gọi 2)</option>
-            <option value="CONTACT_CYCLE_3">Đang liên hệ (Gọi 3)</option>
-            <option value="UNREACHABLE">Không liên lạc được</option>
-            <option value="SURVEY_REQUESTED">Yêu cầu khảo sát</option>
-            <option value="SURVEY_SCHEDULED">Đã lên lịch khảo sát</option>
-            <option value="SURVEY_COMPLETED">Đã khảo sát hiện trường</option>
-            <option value="PRICE_OFFERED">Đã báo giá phương án</option>
-            <option value="NEGOTIATING">Đang đàm phán chốt giá</option>
-            <option value="ORDER_CREATED">Đã tạo đơn hàng</option>
-            <option value="DEPOSIT_CONFIRMED">Đã đặt cọc</option>
-            <option value="CONTRACT_SIGNED">Đã ký hợp đồng</option>
-            <option value="IN_PRODUCTION">Đang sản xuất</option>
-            <option value="READY_FOR_INSTALL">Sẵn sàng lắp đặt</option>
-            <option value="INSTALLING">Đang thi công lắp đặt</option>
-            <option value="HANDOVER_COMPLETED">Hoàn tất bàn giao</option>
-            <option value="LOST">Mất khách / Đã hủy</option>
+            {CANONICAL_STAGE_LIST.map((stg) => (
+              <option key={stg.value} value={stg.value}>
+                {stg.label}
+              </option>
+            ))}
           </Select>
 
           <div className="flex flex-col gap-1">

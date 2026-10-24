@@ -45,6 +45,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
   const baseCommands: CommandItem[] = [
@@ -163,16 +164,51 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       }, 0);
       document.body.style.overflow = 'hidden';
 
-      const handleKeyDown = (e: KeyboardEvent) => {
+      const handleGlobalKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Escape') {
+          e.preventDefault();
           onClose();
+          return;
+        }
+
+        if (e.key === 'Tab') {
+          const dialog = dialogRef.current;
+          if (!dialog) return;
+
+          const focusableElements = dialog.querySelectorAll<HTMLElement>(
+            'input, button, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          const focusable = Array.from(focusableElements).filter(
+            (el) => !el.hasAttribute('disabled') && el.offsetParent !== null
+          );
+
+          if (focusable.length === 0) {
+            e.preventDefault();
+            return;
+          }
+
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+
+          if (e.shiftKey) {
+            if (document.activeElement === first || !dialog.contains(document.activeElement)) {
+              e.preventDefault();
+              last.focus();
+            }
+          } else {
+            if (document.activeElement === last || !dialog.contains(document.activeElement)) {
+              e.preventDefault();
+              first.focus();
+            }
+          }
         }
       };
-      window.addEventListener('keydown', handleKeyDown);
+
+      window.addEventListener('keydown', handleGlobalKeyDown);
 
       return () => {
         clearTimeout(timer);
-        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('keydown', handleGlobalKeyDown);
         document.body.style.overflow = '';
         previousFocus.current?.focus?.();
       };
@@ -180,13 +216,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   }, [isOpen, onClose]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (filteredCommands.length === 0) {
+      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+      }
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev + 1) % Math.max(1, filteredCommands.length));
+      setSelectedIndex((prev) => (prev + 1) % filteredCommands.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSelectedIndex((prev) =>
-        prev === 0 ? filteredCommands.length - 1 : prev - 1
+        prev <= 0 ? filteredCommands.length - 1 : prev - 1
       );
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -212,18 +255,31 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     <div
       role="dialog"
       aria-modal="true"
+      aria-label="Tìm kiếm nhanh hoặc điều hướng"
       className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-100"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl shadow-modal overflow-hidden flex flex-col focus:outline-none animate-in zoom-in-95 duration-150">
+      <div
+        ref={dialogRef}
+        className="w-full max-w-lg bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl shadow-modal overflow-hidden flex flex-col focus:outline-none animate-in zoom-in-95 duration-150"
+      >
         {/* Search Input Bar */}
         <div className="flex items-center px-3.5 py-2.5 border-b border-[var(--border-subtle)] gap-2.5">
           <Search className="w-4 h-4 text-[var(--text-tertiary)] shrink-0" />
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="command-palette-results"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              filteredCommands[selectedIndex]
+                ? `cmd-option-${filteredCommands[selectedIndex].id}`
+                : undefined
+            }
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -236,7 +292,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           {query ? (
             <button
               onClick={() => setQuery('')}
-              className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+              aria-label="Xóa từ khóa tìm kiếm"
+              className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -250,6 +307,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         {/* Results List */}
         <div
           ref={listRef}
+          id="command-palette-results"
+          role="listbox"
+          aria-label="Danh sách kết quả tìm kiếm"
           className="max-h-80 overflow-y-auto p-2 divide-y divide-[var(--border-subtle)]/50"
         >
           {filteredCommands.length === 0 ? (
@@ -262,6 +322,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               return (
                 <div
                   key={cmd.id}
+                  id={`cmd-option-${cmd.id}`}
+                  role="option"
+                  aria-selected={isSelected}
                   onClick={() => executeCommand(cmd)}
                   onMouseEnter={() => setSelectedIndex(idx)}
                   className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs cursor-pointer transition-colors ${

@@ -76,6 +76,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 setIsMobileMenuOpen(false);
                 setIsCommandPaletteOpen(true);
               }}
+              onNavigate={() => setIsMobileMenuOpen(false)}
               className="w-full border-r-0 h-full"
             />
           </div>
