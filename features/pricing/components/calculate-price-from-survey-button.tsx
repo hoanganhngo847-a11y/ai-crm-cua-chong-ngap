@@ -77,7 +77,7 @@ export default function CalculatePriceFromSurveyButton({
           type="button"
           onClick={handleCalculate}
           disabled={isPending}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-xs font-semibold shadow-md shadow-teal-600/20 disabled:opacity-50 transition active:scale-95"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-subtle disabled:opacity-50 transition cursor-pointer"
           title="Kích hoạt tính giá tự động từ số đo kỹ thuật chuẩn khảo sát"
         >
           {isPending ? (
@@ -103,7 +103,7 @@ export default function CalculatePriceFromSurveyButton({
         {result?.status === 'CALCULATED' && (
           <Link
             href="/quotations"
-            className="text-[11px] text-blue-400 hover:text-blue-300 underline font-medium"
+            className="text-[11px] text-blue-600 hover:text-blue-700 underline font-medium"
           >
             Xem bảng báo giá &rarr;
           </Link>
@@ -114,21 +114,21 @@ export default function CalculatePriceFromSurveyButton({
       {result && (
         <div className="text-[11px]">
           {result.status === 'CALCULATED' ? (
-            <div className="p-2 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-emerald-300 flex items-center justify-between gap-2">
+            <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-between gap-2 shadow-subtle">
               <span className="font-medium">
                 ✓ Giá dự toán: <strong>{result.amount != null ? Number(result.amount).toLocaleString('vi-VN') + ' đ' : '-'}</strong>
               </span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-800/40 text-emerald-200">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 border border-emerald-200 text-emerald-800 font-semibold">
                 ĐÃ TÍNH GIÁ
               </span>
             </div>
           ) : result.status === 'NEED_INFO' ? (
-            <div className="p-2 rounded-lg bg-amber-950/40 border border-amber-800/50 text-amber-300 space-y-1">
+            <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 space-y-1 shadow-subtle">
               <div className="font-semibold flex items-center gap-1">
                 <span>⚠️ Cần bổ sung thông tin kỹ thuật</span>
               </div>
               {result.missingFields && result.missingFields.length > 0 && (
-                <div className="text-[10px] font-mono text-amber-200">
+                <div className="text-[10px] font-mono text-amber-900">
                   Thiếu: {result.missingFields.join(', ')}
                 </div>
               )}
@@ -138,7 +138,7 @@ export default function CalculatePriceFromSurveyButton({
       )}
 
       {errorMsg && (
-        <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-800/50 text-rose-300 text-[11px]">
+        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px]">
           {errorMsg}
         </div>
       )}

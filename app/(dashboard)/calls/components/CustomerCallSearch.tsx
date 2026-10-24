@@ -4,6 +4,9 @@ import { FormEvent, useState, useTransition } from 'react';
 import { searchCustomersForCallAction } from '../../../actions/voice';
 import type { CustomerSearchResultDTO } from '../../../../shared/contracts/voice';
 import CallToCustomerButton from './CallToCustomerButton';
+import { Card, CardTitle } from '../../../../components/ui/card';
+import { Button } from '../../../../components/ui/button';
+import { Search, PhoneCall } from 'lucide-react';
 
 export default function CustomerCallSearch({ provider }: { provider: string }) {
   const [query, setQuery] = useState('');
@@ -28,46 +31,92 @@ export default function CustomerCallSearch({ provider }: { provider: string }) {
   }
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900 p-5 space-y-4">
+    <Card className="p-5 space-y-4">
       <div>
-        <h2 className="font-semibold text-white">Tìm khách để gọi</h2>
-        <p className="mt-1 text-xs text-slate-400">Tìm bằng tên hoặc mã khách; số thật chỉ được xử lý phía máy chủ.</p>
+        <CardTitle className="flex items-center gap-2">
+          <PhoneCall className="w-4 h-4 text-emerald-600" />
+          <span>Tìm kiếm khách hàng để gọi điện</span>
+        </CardTitle>
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+          Tìm theo tên hoặc mã khách hàng. Số điện thoại thực được bảo vệ tuyệt đối theo chính sách Zero-Phone.
+        </p>
       </div>
-      <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          minLength={2}
-          maxLength={100}
-          required
-          placeholder="Nguyễn Văn A hoặc KH-000123"
-          aria-label="Tên hoặc mã khách hàng"
-          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-blue-500"
-        />
-        <button
+
+      <form onSubmit={submit} className="flex flex-col sm:flex-row gap-2.5">
+        <div className="relative flex-1">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[var(--text-tertiary)] pointer-events-none" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            minLength={2}
+            maxLength={100}
+            required
+            placeholder="Nhập tên khách hàng hoặc mã KH-xxxxxx..."
+            aria-label="Tên hoặc mã khách hàng"
+            className="w-full h-8 pl-8 pr-3 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+          />
+        </div>
+
+        <Button
           type="submit"
-          disabled={pending}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-wait disabled:bg-blue-900"
+          variant="primary"
+          size="sm"
+          isLoading={pending}
+          leftIcon={<Search className="w-3.5 h-3.5" />}
         >
-          {pending ? 'Đang tìm…' : 'Tìm khách'}
-        </button>
+          Tìm khách hàng
+        </Button>
       </form>
-      {error && <p className="text-sm text-red-400">{error}</p>}
-      {searched && !error && items.length === 0 && <p className="text-sm text-slate-400">Không tìm thấy khách phù hợp.</p>}
-      {items.length > 0 && (
-        <div className="divide-y divide-slate-800 rounded-lg border border-slate-800">
-          {items.map((customer) => (
-            <div key={customer.id} className="p-4">
-              <CallToCustomerButton
-                customerId={customer.id}
-                customerCode={customer.customerCode}
-                customerName={customer.name}
-                provider={provider}
-              />
-            </div>
-          ))}
+
+      {error && (
+        <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800">
+          {error}
         </div>
       )}
-    </section>
+
+      {searched && (
+        <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+          <div className="text-[11px] font-medium text-[var(--text-secondary)]">
+            Kết quả tìm kiếm ({items.length})
+          </div>
+
+          {items.length === 0 ? (
+            <div className="p-4 text-center text-xs text-[var(--text-tertiary)] italic">
+              Không tìm thấy khách hàng nào khớp với từ khóa &ldquo;{query}&rdquo;.
+            </div>
+          ) : (
+            <ul className="divide-y divide-[var(--border-subtle)] border border-[var(--border-subtle)] rounded-lg overflow-hidden">
+              {items.map((c) => (
+                <li
+                  key={c.id}
+                  className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[var(--surface-primary)] hover:bg-[var(--surface-hover)] transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-full bg-[var(--surface-secondary)] border border-[var(--border-subtle)] flex items-center justify-center text-[var(--text-secondary)] text-xs font-semibold">
+                      {c.name ? c.name[0].toUpperCase() : 'K'}
+                    </div>
+                    <div>
+                      <div className="font-medium text-xs text-[var(--text-primary)]">
+                        {c.name || 'Chưa có tên'}
+                      </div>
+                      <div className="text-[11px] font-mono text-[var(--text-tertiary)]">
+                        {c.customerCode || c.id}
+                      </div>
+                    </div>
+                  </div>
+
+                  <CallToCustomerButton
+                    customerId={c.id}
+                    customerCode={c.customerCode}
+                    customerName={c.name}
+                    provider={provider}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

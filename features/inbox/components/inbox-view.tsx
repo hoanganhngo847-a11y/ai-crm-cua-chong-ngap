@@ -43,7 +43,7 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
 
   if (s === 'SENT' || s === 'DELIVERED') {
     return (
-      <span className="text-emerald-400 font-medium flex items-center gap-0.5" title="Đã gửi tới khách hàng">
+      <span className="text-emerald-600 font-medium flex items-center gap-0.5" title="Đã gửi tới khách hàng">
         <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
         Đã gửi
       </span>
@@ -52,7 +52,7 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
 
   if (s === 'FAILED') {
     return (
-      <span className="text-rose-400 font-semibold flex items-center gap-0.5" title="Gửi thất bại - Khách chưa nhận được">
+      <span className="text-rose-600 font-semibold flex items-center gap-0.5" title="Gửi thất bại - Khách chưa nhận được">
         <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         Gửi thất bại
       </span>
@@ -61,7 +61,7 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
 
   if (s === 'RECONCILE_REQUIRED') {
     return (
-      <span className="text-amber-400 font-medium flex items-center gap-0.5" title="Đang đối soát phiên gửi">
+      <span className="text-amber-600 font-medium flex items-center gap-0.5" title="Đang đối soát phiên gửi">
         <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
         Cần đối soát
       </span>
@@ -70,7 +70,7 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
 
   if (isPendingDelivery(s)) {
     return (
-      <span className="text-amber-300 font-medium flex items-center gap-0.5" title="Tin nhắn đang trong hàng đợi xử lý">
+      <span className="text-amber-600 font-medium flex items-center gap-0.5" title="Tin nhắn đang trong hàng đợi xử lý">
         <svg className="w-3 h-3 inline animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
         Đang gửi
       </span>
@@ -1036,12 +1036,12 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
   const currentSendError = selectedConversationId ? sendErrorByConversation[selectedConversationId] : null;
 
   return (
-    <div className="h-[calc(100vh-8.5rem)] flex flex-col bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+    <div className="h-[calc(100vh-8rem)] flex flex-col bg-[var(--surface-primary)] rounded-xl border border-[var(--border-subtle)] overflow-hidden shadow-card">
       {/* Top Header Bar */}
-      <div className="px-6 py-3.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+      <div className="px-5 py-3 bg-[var(--surface-primary)] border-b border-[var(--border-subtle)] flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 font-bold text-xs">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -1051,13 +1051,13 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
             </svg>
           </div>
           <div>
-            <h1 className="text-base font-bold text-white flex items-center gap-2">
+            <h1 className="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-2">
               <span>Hộp Thư Tích Hợp Đa Kênh</span>
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 font-medium">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-medium">
                 Facebook & Zalo OA
               </span>
             </h1>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[var(--text-secondary)]">
               Màn hình chung cho Sale tư vấn, chốt đơn và giám sát AI phản hồi sau 5 phút.
             </p>
           </div>
@@ -1066,10 +1066,10 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         <div className="flex items-center gap-3">
           <button
             onClick={() => fetchConversations()}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs flex items-center gap-1.5 border border-slate-700"
+            className="p-1.5 px-2.5 rounded-lg bg-[var(--surface-primary)] hover:bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition text-xs flex items-center gap-1.5 border border-[var(--border-subtle)]"
             title="Làm mới hộp thư"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             <span className="hidden sm:inline">Làm mới</span>
@@ -1082,9 +1082,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         {/* ================================================================== */}
         {/* CỘT TRÁI (3.5 cols): Danh sách hội thoại & Bộ lọc                  */}
         {/* ================================================================== */}
-        <div className="md:col-span-4 lg:col-span-3 border-r border-slate-800 flex flex-col min-h-0 h-full bg-slate-900/50 overflow-hidden">
+        <div className="md:col-span-4 lg:col-span-3 border-r border-[var(--border-subtle)] flex flex-col min-h-0 h-full bg-[var(--surface-secondary)] overflow-hidden">
           {/* Filter Bar */}
-          <div className="shrink-0 p-3 border-b border-slate-800 space-y-2.5">
+          <div className="shrink-0 p-3 border-b border-[var(--border-subtle)] bg-[var(--surface-primary)] space-y-2">
             {/* Search */}
             <div className="relative">
               <input
@@ -1092,10 +1092,10 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Tìm theo tên hoặc mã KH..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full bg-[var(--surface-secondary)] border border-[var(--border-subtle)] rounded-lg pl-8 pr-3 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
               />
               <svg
-                className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5"
+                className="w-3.5 h-3.5 text-[var(--text-tertiary)] absolute left-2.5 top-2.5"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -1105,53 +1105,53 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
             </div>
 
             {/* Channel Tabs */}
-            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+            <div className="grid grid-cols-3 gap-1 bg-[var(--app-canvas)] p-1 rounded-lg border border-[var(--border-subtle)] text-xs">
               <button
                 onClick={() => setChannelFilter('all')}
-                className={`py-1 rounded-lg font-medium transition ${
+                className={`py-1 rounded-md font-medium transition ${
                   channelFilter === 'all'
-                    ? 'bg-slate-800 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-[var(--surface-primary)] text-[var(--text-primary)] shadow-subtle'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                 }`}
               >
                 Tất cả
               </button>
               <button
                 onClick={() => setChannelFilter('zalo')}
-                className={`py-1 rounded-lg font-medium transition flex items-center justify-center gap-1 ${
+                className={`py-1 rounded-md font-medium transition flex items-center justify-center gap-1 ${
                   channelFilter === 'zalo'
-                    ? 'bg-cyan-950/60 text-cyan-300 border border-cyan-800/50'
-                    : 'text-slate-400 hover:text-cyan-300'
+                    ? 'bg-cyan-50 text-cyan-800 border border-cyan-200 shadow-subtle'
+                    : 'text-[var(--text-secondary)] hover:text-cyan-700'
                 }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
                 Zalo OA
               </button>
               <button
                 onClick={() => setChannelFilter('facebook')}
-                className={`py-1 rounded-lg font-medium transition flex items-center justify-center gap-1 ${
+                className={`py-1 rounded-md font-medium transition flex items-center justify-center gap-1 ${
                   channelFilter === 'facebook'
-                    ? 'bg-blue-950/60 text-blue-300 border border-blue-800/50'
-                    : 'text-slate-400 hover:text-blue-300'
+                    ? 'bg-blue-50 text-blue-800 border border-blue-200 shadow-subtle'
+                    : 'text-[var(--text-secondary)] hover:text-blue-700'
                 }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Facebook
               </button>
             </div>
           </div>
 
           {/* Conversations List */}
-          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/50">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-[var(--border-subtle)]">
             {loadingConversations ? (
-              <div className="p-3 space-y-3">
+              <div className="p-3 space-y-2">
                 {[...Array(5)].map((_, i) => (
-                  <div key={i} className="h-14 bg-slate-800/40 rounded-xl animate-pulse" />
+                  <div key={i} className="h-14 bg-[var(--surface-primary)] rounded-lg animate-pulse border border-[var(--border-subtle)]" />
                 ))}
               </div>
             ) : conversations.length === 0 ? (
               <div className="p-6 text-center space-y-3">
-                <div className="w-10 h-10 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
+                <div className="w-10 h-10 rounded-xl bg-[var(--surface-primary)] border border-[var(--border-subtle)] flex items-center justify-center mx-auto text-[var(--text-tertiary)] shadow-subtle">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
                       strokeLinecap="round"
@@ -1161,8 +1161,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     />
                   </svg>
                 </div>
-                <div className="text-xs font-semibold text-slate-300">Chưa có hội thoại</div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
+                <div className="text-xs font-semibold text-[var(--text-primary)]">Chưa có hội thoại</div>
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                   {search.trim()
                     ? `Không tìm thấy kết quả phù hợp cho "${search}".`
                     : channelFilter !== 'all'
@@ -1180,7 +1180,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     key={conv.id}
                     role="button"
                     tabIndex={0}
-                    aria-selected={isSelected}
+                    aria-current={isSelected ? 'true' : undefined}
                     onClick={() => handleSelectConversation(conv.id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -1188,31 +1188,31 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         handleSelectConversation(conv.id);
                       }
                     }}
-                    className={`p-3.5 transition cursor-pointer relative flex flex-col gap-1 focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${
+                    className={`p-3 transition cursor-pointer relative flex flex-col gap-1 focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${
                       isSelected
-                        ? 'bg-slate-800/80 border-l-4 border-blue-500'
-                        : 'hover:bg-slate-800/30'
+                        ? 'bg-[var(--surface-primary)] border-l-2 border-blue-600 shadow-subtle'
+                        : 'hover:bg-[var(--surface-hover)]'
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         {/* Channel Badge Icon */}
                         <span
-                          className={`w-5 h-5 rounded-lg flex items-center justify-center text-[10px] font-bold ${
+                          className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 ${
                             isZalo
-                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                              : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                              ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                              : 'bg-blue-50 text-blue-700 border border-blue-200'
                           }`}
                           title={isZalo ? 'Zalo OA' : 'Facebook Messenger'}
                         >
                           {isZalo ? 'Z' : 'F'}
                         </span>
-                        <span className="font-semibold text-white text-xs truncate max-w-[120px]">
+                        <span className="font-medium text-[var(--text-primary)] text-xs truncate max-w-[120px]">
                           {conv.customer_name || 'Khách hàng'}
                         </span>
                         {conv.metadata?.provider === 'facebook_browser' && (
                           <span
-                            className="px-1 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
+                            className="px-1 py-0.2 rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0"
                             title="Đồng bộ từ Meta Business Suite"
                           >
                             Browser
@@ -1220,8 +1220,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-slate-500">
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] text-[var(--text-tertiary)]">
                           {formatMessageTime(conv.updated_at)}
                         </span>
                         {conv.unread_count > 0 && (
@@ -1232,24 +1232,24 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                    <p className="text-xs text-[var(--text-secondary)] line-clamp-1 mt-0.5">
                       {conv.last_message}
                     </p>
 
-                    <div className="flex items-center gap-2 mt-1 text-[10px] min-w-0">
-                      <span className="font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 shrink-0">
+                    <div className="flex items-center gap-1.5 mt-1 text-[10px] min-w-0">
+                      <span className="font-mono text-[var(--text-secondary)] bg-[var(--surface-secondary)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] shrink-0">
                         {conv.customer_code}
                       </span>
                       {!isZalo && conv.channel_page_name && (
                         <span
-                          className="truncate text-blue-300 bg-blue-950/40 px-1.5 py-0.5 rounded border border-blue-800/40"
+                          className="truncate text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200"
                           title={`Khách nhắn vào Page: ${conv.channel_page_name}`}
                         >
                           {conv.channel_page_name}
                         </span>
                       )}
                       {conv.status === 'AI_HANDLING' && (
-                        <span className="text-purple-400 bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-800/40 shrink-0">
+                        <span className="text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200 shrink-0 font-medium">
                           AI hỗ trợ
                         </span>
                       )}
@@ -1264,25 +1264,25 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         {/* ================================================================== */}
         {/* CỘT GIỮA (5.5 cols): Khung tin nhắn & Ô nhập trả lời              */}
         {/* ================================================================== */}
-        <div className="md:col-span-8 lg:col-span-6 flex flex-col min-h-0 h-full bg-slate-950 border-r border-slate-800 overflow-hidden">
+        <div className="md:col-span-8 lg:col-span-6 flex flex-col min-h-0 h-full bg-[var(--surface-primary)] border-r border-[var(--border-subtle)] overflow-hidden">
           {selectedConversation ? (
             <>
               {/* Chat Header */}
-              <div className="shrink-0 p-3.5 px-5 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
+              <div className="shrink-0 p-3 px-4 bg-[var(--surface-primary)] border-b border-[var(--border-subtle)] flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-white">
+                  <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-xs text-blue-700">
                     {getInitials(selectedConversation.customer_name)}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-sm">
+                      <span className="font-semibold text-[var(--text-primary)] text-sm">
                         {selectedConversation.customer_name}
                       </span>
                       <span
                         className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border max-w-[240px] truncate ${
                           selectedConversation.channel === 'zalo'
-                            ? 'bg-cyan-950/50 text-cyan-300 border-cyan-800/50'
-                            : 'bg-blue-950/50 text-blue-300 border-blue-800/50'
+                            ? 'bg-cyan-50 text-cyan-800 border-cyan-200'
+                            : 'bg-blue-50 text-blue-800 border-blue-200'
                         }`}
                         title={
                           selectedConversation.channel === 'facebook' && selectedConversation.channel_page_name
@@ -1295,23 +1295,28 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                           : `Facebook · ${selectedConversation.channel_page_name || 'Messenger'}`}
                       </span>
                     </div>
-                    <span className="text-xs text-slate-400 font-mono">
+                    <span className="text-xs text-[var(--text-secondary)] font-mono">
                       {selectedConversation.customer_code}
                     </span>
                   </div>
                 </div>
 
-                <div className="text-xs text-slate-400 flex items-center gap-2">
+                <div className="text-xs text-[var(--text-secondary)] flex items-center gap-2">
                   {selectedConversation.customer_id && (userRole === 'SALE' || userRole === 'BOSS_ADMIN') && (
-                    <Link href={`/calls/${selectedConversation.customer_id}`} className="rounded-lg bg-emerald-700 px-3 py-2 text-white">Gọi khách</Link>
+                    <Link
+                      href={`/calls/${selectedConversation.customer_id}`}
+                      className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-white font-medium text-xs transition shadow-subtle"
+                    >
+                      Gọi khách
+                    </Link>
                   )}
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span>Trực tuyến</span>
                 </div>
               </div>
 
               {/* Chat Stream (Independent Scroll, Isolated Messages) */}
-              <div className="flex-1 min-h-0 relative flex flex-col bg-slate-950">
+              <div className="flex-1 min-h-0 relative flex flex-col bg-[var(--app-canvas)]">
                 <div
                   ref={scrollContainerRef}
                   onScroll={handleScroll}
@@ -1320,11 +1325,11 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 {loadingMessages ? (
                   <div className="space-y-3">
                     {[...Array(4)].map((_, i) => (
-                      <div key={i} className="h-12 bg-slate-900 rounded-xl animate-pulse" />
+                      <div key={i} className="h-12 bg-[var(--surface-primary)] rounded-xl animate-pulse border border-[var(--border-subtle)]" />
                     ))}
                   </div>
                 ) : visibleMessages.length === 0 ? (
-                  <div className="text-center py-12 text-xs text-slate-500">
+                  <div className="text-center py-12 text-xs text-[var(--text-tertiary)]">
                     Chưa có tin nhắn nào trong cuộc hội thoại này.
                   </div>
                 ) : (
@@ -1340,9 +1345,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         }`}
                       >
                         {/* Sender Label & Delivery Status */}
-                        <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mb-1 px-1">
+                        <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)] mb-1 px-1">
                           {isAiMsg && (
-                            <span className="px-1.5 py-0.2 rounded bg-purple-900/60 border border-purple-700/50 text-purple-300 font-semibold flex items-center gap-1">
+                            <span className="px-1.5 py-0.2 rounded bg-purple-50 border border-purple-200 text-purple-700 font-semibold flex items-center gap-1">
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                               </svg>
@@ -1350,17 +1355,17 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                             </span>
                           )}
                           {isSaleMsg && (
-                            <span className="text-blue-400 font-medium">Bạn (Sale)</span>
+                            <span className="text-blue-600 font-medium">Bạn (Sale)</span>
                           )}
                           {!isSaleMsg && !isAiMsg && (
-                            <span className="text-slate-300 font-medium">{msg.sender_name}</span>
+                            <span className="text-[var(--text-primary)] font-medium">{msg.sender_name}</span>
                           )}
                           <span>•</span>
                           <span>
                             {formatMessageTime(msg.created_at)}
                           </span>
 
-                          {/* Outbound Delivery Status (Phase 2B.1 Hardening & UX Polish) */}
+                          {/* Outbound Delivery Status */}
                           {isSaleMsg && renderDeliveryBadge(msg.delivery_status) && (
                             <>
                               <span>•</span>
@@ -1374,22 +1379,22 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                           className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed ${
                             isSaleMsg
                               ? (msg.delivery_status || '').toUpperCase() === 'FAILED'
-                                ? 'bg-rose-950/70 border border-rose-500/80 text-rose-100 rounded-tr-none shadow-md shadow-rose-900/20'
+                                ? 'bg-rose-50 border border-rose-300 text-rose-900 rounded-tr-none shadow-subtle'
                                 : (msg.delivery_status || '').toUpperCase() === 'RECONCILE_REQUIRED'
-                                  ? 'bg-amber-950/70 border border-amber-500/80 text-amber-100 rounded-tr-none'
+                                  ? 'bg-amber-50 border border-amber-300 text-amber-900 rounded-tr-none shadow-subtle'
                                   : isPendingDelivery(msg.delivery_status)
-                                    ? 'bg-blue-700/80 border border-blue-400/50 text-white rounded-tr-none'
-                                    : 'bg-blue-600 text-white rounded-tr-none shadow-md shadow-blue-600/10'
+                                    ? 'bg-blue-600 text-white rounded-tr-none shadow-subtle opacity-90'
+                                    : 'bg-blue-600 text-white rounded-tr-none shadow-subtle'
                               : isAiMsg
-                                ? 'bg-purple-950/40 border border-purple-700/40 text-purple-100 rounded-tl-none'
-                                : 'bg-slate-800 text-slate-100 border border-slate-700/60 rounded-tl-none'
+                                ? 'bg-purple-50 border border-purple-200 text-purple-900 rounded-tl-none shadow-subtle'
+                                : 'bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-tl-none shadow-subtle'
                           }`}
                         >
                           <MessageContent content={msg.content} isOutbound={isSaleMsg} />
                         </div>
 
                         {isSaleMsg && msg.delivery_status === 'FAILED' && (
-                          <span className="text-[10px] text-rose-400 mt-0.5 font-medium">⚠️ Khách chưa nhận được tin nhắn. Có thể thử lại.</span>
+                          <span className="text-[10px] text-rose-600 mt-0.5 font-medium">⚠️ Khách chưa nhận được tin nhắn. Có thể thử lại.</span>
                         )}
                       </div>
                     );
@@ -1401,13 +1406,13 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     aria-label="Đang đồng bộ tin nhắn mới"
                     className="flex flex-col items-start space-y-1 animate-pulse"
                   >
-                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-0.5 px-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                    <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-secondary)] mb-0.5 px-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
                       <span>Đang đồng bộ tin nhắn mới…</span>
                     </div>
-                    <div className="h-9 w-44 rounded-2xl rounded-tl-none bg-slate-800/60 border border-slate-700/40 flex items-center px-3.5 gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-slate-700 animate-pulse" />
-                      <div className="h-2 w-28 bg-slate-700/70 rounded" />
+                    <div className="h-9 w-44 rounded-2xl rounded-tl-none bg-[var(--surface-primary)] border border-[var(--border-subtle)] flex items-center px-3.5 gap-2 shadow-subtle">
+                      <div className="w-2.5 h-2.5 rounded-full bg-slate-300 animate-pulse" />
+                      <div className="h-2 w-28 bg-slate-200 rounded" />
                     </div>
                   </div>
                 )}
@@ -1418,7 +1423,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   <button
                     type="button"
                     onClick={scrollToBottom}
-                    className="absolute bottom-4 right-6 z-20 px-3.5 py-1.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-xl flex items-center gap-1.5 transition-all duration-200 animate-bounce"
+                    className="absolute bottom-4 right-6 z-20 px-3.5 py-1.5 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-lg flex items-center gap-1.5 transition-all duration-200 animate-bounce"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
@@ -1429,21 +1434,21 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               </div>
 
               {/* Message Input Box (Fixed at bottom) */}
-              <div className="shrink-0 p-3 border-t border-slate-800 bg-slate-900/80">
+              <div className="shrink-0 p-3 border-t border-[var(--border-subtle)] bg-[var(--surface-primary)]">
                 <form onSubmit={handleSendMessage} className="space-y-2">
                   {/* AI Draft Suggestion Box */}
                   {aiError && (
-                    <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex justify-between items-center">
+                    <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex justify-between items-center">
                       <span>{aiError}</span>
                       <button type="button" onClick={() => setAiError(null)} className="underline text-[10px]">Đóng</button>
                     </div>
                   )}
 
                   {aiSuggestion && (
-                    <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-800/60 text-xs space-y-2">
-                      <div className="flex items-center justify-between text-purple-300 font-semibold">
+                    <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 text-xs space-y-2">
+                      <div className="flex items-center justify-between text-purple-800 font-semibold">
                         <div className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>
+                          <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></span>
                           <span>Gợi ý trả lời từ AI (Bản nháp - Chưa gửi khách)</span>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1453,23 +1458,23 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                               handleDraftChange(aiSuggestion);
                               setAiSuggestion(null);
                             }}
-                            className="px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-medium transition"
+                            className="px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-medium transition"
                           >
                             Dùng gợi ý
                           </button>
                           <button
                             type="button"
                             onClick={() => setAiSuggestion(null)}
-                            className="text-slate-400 hover:text-white text-[11px]"
+                            className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-[11px]"
                           >
                             Bỏ qua
                           </button>
                         </div>
                       </div>
-                      <p className="text-slate-200 italic bg-purple-950/60 p-2 rounded border border-purple-900/40">
+                      <p className="text-[var(--text-primary)] italic bg-[var(--surface-primary)] p-2 rounded border border-purple-200">
                         &ldquo;{aiSuggestion}&rdquo;
                       </p>
-                      <div className="flex items-center gap-3 text-[10px] text-purple-300/80">
+                      <div className="flex items-center gap-3 text-[10px] text-purple-700">
                         <span>Phong cách: {aiSuggestionMeta?.isNeutralDefault ? 'Chuẩn mực mặc định' : 'Cá nhân hóa'}</span>
                         {aiSuggestionMeta?.analysisSummary && <span>• Đã áp dụng phân tích hành trình</span>}
                       </div>
@@ -1477,9 +1482,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   )}
 
                   {currentSendError && (
-                    <div className="mb-2 p-2 bg-rose-950/60 border border-rose-800/60 rounded-xl flex items-center justify-between text-xs text-rose-300 animate-fadeIn">
+                    <div className="mb-2 p-2 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between text-xs text-rose-700 animate-fadeIn">
                       <div className="flex items-center gap-1.5">
-                        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-rose-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <span>{currentSendError}</span>
@@ -1491,7 +1496,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                             setSendErrorByConversation((prev) => ({ ...prev, [selectedConversationId]: null }));
                           }
                         }}
-                        className="text-rose-400 hover:text-white px-1 text-xs"
+                        className="text-rose-600 hover:text-rose-800 px-1 text-xs font-bold"
                       >
                         ✕
                       </button>
@@ -1512,19 +1517,18 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     onRequestAi={handleRequestAiSuggestion}
                   />
 
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
+                  <div className="flex items-center justify-between text-[11px] text-[var(--text-tertiary)] px-1">
                     <span>Quy tắc 5 phút: Nếu Sale trả lời, AI tự động nhường quyền xử lý.</span>
-                    <span className="text-slate-400">Khung chat hỗ trợ dán ảnh trực tiếp từ clipboard trên Zalo.</span>
+                    <span className="text-[var(--text-secondary)]">Khung chat hỗ trợ dán ảnh trực tiếp từ clipboard trên Zalo.</span>
                   </div>
                 </form>
               </div>
             </>
           ) : conversations.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-slate-950 overflow-y-auto">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-[var(--app-canvas)] overflow-y-auto">
               <div className="max-w-lg space-y-6">
-                <div className="relative mx-auto w-20 h-20 flex items-center justify-center">
-                  <div className="absolute inset-0 rounded-3xl bg-blue-500/10 border border-blue-500/20 animate-pulse" />
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600/30 to-cyan-600/30 border border-blue-500/30 flex items-center justify-center text-blue-400 shadow-xl">
+                <div className="relative mx-auto w-16 h-16 flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shadow-subtle">
                     <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
                         strokeLinecap="round"
@@ -1534,69 +1538,69 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                       />
                     </svg>
                   </div>
-                  <span className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-[10px] font-bold flex items-center justify-center shadow">
+                  <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-cyan-100 border border-cyan-200 text-cyan-800 text-[10px] font-bold flex items-center justify-center shadow-subtle">
                     Z
                   </span>
-                  <span className="absolute -bottom-1 -left-1 w-6 h-6 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-bold flex items-center justify-center shadow">
+                  <span className="absolute -bottom-1 -left-1 w-5 h-5 rounded-full bg-blue-100 border border-blue-200 text-blue-800 text-[10px] font-bold flex items-center justify-center shadow-subtle">
                     F
                   </span>
                 </div>
 
                 <div className="space-y-2">
-                  <h3 className="text-base sm:text-lg font-bold text-white">
+                  <h3 className="text-base sm:text-lg font-semibold text-[var(--text-primary)]">
                     Hộp Thư Đa Kênh — Chưa Có Hội Thoại
                   </h3>
-                  <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                  <p className="text-xs sm:text-sm text-[var(--text-secondary)] font-medium">
                     Chưa có hội thoại. Hãy kết nối Facebook Page hoặc Zalo OA để bắt đầu nhận tin nhắn.
                   </p>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                  <p className="text-xs text-[var(--text-tertiary)] max-w-sm mx-auto leading-relaxed">
                     Hệ thống AI CRM Cửa Chống Ngập sẵn sàng tiếp nhận tin nhắn từ Facebook Messenger và Zalo Official Account qua Webhook thời gian thực.
                   </p>
                 </div>
 
                 {/* Omnichannel Channels Overview Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
-                  <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-blue-500/40 transition space-y-1.5">
+                  <div className="p-3.5 rounded-xl bg-[var(--surface-primary)] border border-[var(--border-subtle)] hover:border-blue-300 transition space-y-1.5 shadow-subtle">
                     <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-md bg-blue-500/20 text-blue-400 font-bold text-xs flex items-center justify-center">
+                      <span className="w-5 h-5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-bold text-xs flex items-center justify-center">
                         F
                       </span>
-                      <span className="font-semibold text-white text-xs">Facebook Messenger</span>
+                      <span className="font-semibold text-[var(--text-primary)] text-xs">Facebook Messenger</span>
                     </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                       Tiếp nhận tin nhắn tư vấn từ Fanpage Facebook. Tự động liên kết khách hàng và kích hoạt AI sau 5 phút.
                     </p>
-                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-blue-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-blue-600 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
                       <span>Sẵn sàng kết nối qua Webhook Meta</span>
                     </div>
                   </div>
 
-                  <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/40 transition space-y-1.5">
+                  <div className="p-3.5 rounded-xl bg-[var(--surface-primary)] border border-[var(--border-subtle)] hover:border-cyan-300 transition space-y-1.5 shadow-subtle">
                     <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-md bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">
+                      <span className="w-5 h-5 rounded-md bg-cyan-50 text-cyan-700 border border-cyan-200 font-bold text-xs flex items-center justify-center">
                         Z
                       </span>
-                      <span className="font-semibold text-white text-xs">Zalo OA</span>
+                      <span className="font-semibold text-[var(--text-primary)] text-xs">Zalo OA</span>
                     </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                       Tiếp nhận tương tác từ Zalo Official Account. Tư vấn kích thước cửa, tính giá và chuyển giao Sale.
                     </p>
-                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-cyan-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] text-cyan-600 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-600" />
                       <span>Sẵn sàng kết nối qua Zalo Webhook</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="p-3 rounded-xl bg-slate-900/50 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <div className="p-3 rounded-xl bg-[var(--surface-primary)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-secondary)] flex items-center justify-center gap-2 shadow-subtle">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
                   <span>Cơ chế bảo mật Zero-Phone &amp; SLA 5 phút luôn hoạt động</span>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-center p-8 text-slate-500 text-xs">
+            <div className="flex-1 flex items-center justify-center text-center p-8 text-[var(--text-tertiary)] text-xs bg-[var(--app-canvas)]">
               Vui lòng chọn một cuộc hội thoại từ danh sách bên trái để bắt đầu chat.
             </div>
           )}
@@ -1605,26 +1609,26 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         {/* ================================================================== */}
         {/* CỘT PHẢI (3 cols): Thông tin vắn tắt khách hàng                    */}
         {/* ================================================================== */}
-        <div className="hidden lg:flex lg:flex-col lg:col-span-3 min-h-0 h-full p-4 bg-slate-900/40 overflow-y-auto space-y-4 text-xs">
+        <div className="hidden lg:flex lg:flex-col lg:col-span-3 min-h-0 h-full p-4 bg-[var(--surface-secondary)] overflow-y-auto space-y-4 text-xs border-l border-[var(--border-subtle)]">
           {selectedConversation ? (
             <>
               {/* Profile Card */}
-              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 mx-auto flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-600/20">
+              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-3 shadow-subtle">
+                <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 mx-auto flex items-center justify-center font-bold text-sm">
                   {getInitials(selectedConversation.customer_name)}
                 </div>
                 <div>
-                  <h3 className="font-bold text-white text-sm">
+                  <h3 className="font-semibold text-[var(--text-primary)] text-sm">
                     {selectedConversation.customer_name || 'Khách hàng'}
                   </h3>
-                  <span className="font-mono text-slate-400 text-xs">
+                  <span className="font-mono text-[var(--text-secondary)] text-xs">
                     {selectedConversation.customer_code}
                   </span>
                 </div>
 
                 <Link
                   href={`/customers/${selectedConversation.customer_id}`}
-                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600 hover:text-white font-medium transition"
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-medium transition text-xs"
                 >
                   <span>Xem Hồ Sơ 360</span>
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1634,31 +1638,31 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               </div>
 
               {/* Details List */}
-              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl space-y-3">
-                <h4 className="font-semibold text-slate-300 uppercase tracking-wider text-[10px]">
+              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle">
+                <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px]">
                   Thông tin liên hệ
                 </h4>
 
-                <div className="space-y-2 text-slate-300">
-                  <div className="flex justify-between py-1 border-b border-slate-800/60">
-                    <span className="text-slate-500">Số điện thoại:</span>
-                    <span className="font-mono text-amber-300">
+                <div className="space-y-2 text-[var(--text-primary)]">
+                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                    <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
+                    <span className="font-mono font-medium text-amber-700">
                       {selectedConversation.customer_phone || 'Chưa có'}
                     </span>
                   </div>
 
-                  <div className="flex justify-between py-1 border-b border-slate-800/60">
-                    <span className="text-slate-500">Kênh hội thoại:</span>
-                    <span className="capitalize font-medium text-white">
+                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                    <span className="text-[var(--text-secondary)]">Kênh hội thoại:</span>
+                    <span className="capitalize font-medium text-[var(--text-primary)]">
                       {selectedConversation.channel === 'zalo' ? 'Zalo OA' : 'Facebook Messenger'}
                     </span>
                   </div>
 
                   {selectedConversation.channel === 'facebook' && (
-                    <div className="flex justify-between gap-3 py-1 border-b border-slate-800/60">
-                      <span className="text-slate-500 shrink-0">Khách nhắn vào Page:</span>
+                    <div className="flex justify-between gap-3 py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)] shrink-0">Khách nhắn vào Page:</span>
                       <span
-                        className="font-medium text-blue-300 text-right break-words"
+                        className="font-medium text-blue-700 text-right break-words"
                         title={selectedConversation.channel_page_id || undefined}
                       >
                         {selectedConversation.channel_page_name ||
@@ -1668,16 +1672,16 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1 border-b border-slate-800/60">
-                    <span className="text-slate-500">Nguồn ban đầu:</span>
-                    <span className="font-medium text-white">
+                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                    <span className="text-[var(--text-secondary)]">Nguồn ban đầu:</span>
+                    <span className="font-medium text-[var(--text-primary)]">
                       {selectedConversation.customer_source || 'MANUAL'}
                     </span>
                   </div>
 
                   <div className="flex justify-between py-1">
-                    <span className="text-slate-500">Giai đoạn:</span>
-                    <span className="font-semibold text-blue-400">
+                    <span className="text-[var(--text-secondary)]">Giai đoạn:</span>
+                    <span className="font-semibold text-blue-700">
                       {selectedConversation.customer_stage || 'LEAD_NEW'}
                     </span>
                   </div>
@@ -1685,51 +1689,51 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               </div>
 
               {/* Quick Business Note */}
-              <div className="p-4 bg-slate-900/80 border border-slate-800 rounded-2xl space-y-2">
-                <div className="flex items-center gap-1.5 text-slate-300 font-semibold text-[11px]">
-                  <svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-2 shadow-subtle">
+                <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold text-[11px]">
+                  <svg className="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <span>Quy trình nghiệp vụ</span>
                 </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                   Khi khách hỏi giá hoặc lịch khảo sát, AI sẽ ghi nhận thông số. Khảo sát đo đạc thực tế do Kỹ thuật viên phụ trách, giá được tính tự động từ bảng giá chính sách.
                 </p>
               </div>
             </>
           ) : (
             <div className="space-y-4 text-xs">
-              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-2 shadow-subtle">
+                <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center mx-auto">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <h4 className="font-bold text-white text-xs">Trung Tâm Hỗ Trợ Đa Kênh</h4>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
+                <h4 className="font-semibold text-[var(--text-primary)] text-xs">Trung Tâm Hỗ Trợ Đa Kênh</h4>
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
                   Chọn một cuộc trò chuyện để xem hồ sơ 360 khách hàng, lịch sử trao đổi và tạo gợi ý phản hồi AI.
                 </p>
               </div>
 
-              <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl space-y-3">
-                <h4 className="font-semibold text-slate-300 uppercase tracking-wider text-[10px]">
+              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle">
+                <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px]">
                   Quy trình nghiệp vụ đa kênh
                 </h4>
-                <ul className="space-y-2.5 text-[11px] text-slate-400">
+                <ul className="space-y-2.5 text-[11px] text-[var(--text-secondary)]">
                   <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">1</span>
+                    <span className="w-4 h-4 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">1</span>
                     <span>Khách gửi tin nhắn từ Facebook Messenger hoặc Zalo OA.</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">2</span>
+                    <span className="w-4 h-4 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">2</span>
                     <span>Webhook tiếp nhận, tự động liên kết khách hàng theo Zero-Phone.</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">3</span>
+                    <span className="w-4 h-4 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">3</span>
                     <span>Chuyên viên Sale trả lời trực tiếp hoặc nhận gợi ý trả lời từ AI.</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-blue-950 text-blue-400 border border-blue-800 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">4</span>
+                    <span className="w-4 h-4 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center font-bold text-[9px] shrink-0 mt-0.5">4</span>
                     <span>Nếu Sale bận quá 5 phút, AI tự động phản hồi theo Policy Firewall.</span>
                   </li>
                 </ul>

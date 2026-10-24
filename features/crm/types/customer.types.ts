@@ -90,6 +90,103 @@ export function toCanonicalStage(stage: unknown): CustomerStage {
 }
 
 /**
+ * Vietnamese human-readable labels for Customer Stages
+ */
+export const CUSTOMER_STAGE_LABELS: Record<string, string> = {
+  LEAD_NEW: 'Khách mới',
+  CONTACT_CYCLE_1: 'Liên hệ lần 1',
+  CONTACT_CYCLE_2: 'Liên hệ lần 2',
+  CONTACT_CYCLE_3: 'Liên hệ lần 3',
+  UNREACHABLE: 'Không nghe máy',
+  SURVEY_REQUESTED: 'Yêu cầu khảo sát',
+  SURVEY_SCHEDULED: 'Đã hẹn khảo sát',
+  SURVEY_COMPLETED: 'Đã khảo sát hiện trường',
+  PRICE_CALCULATED: 'Đã lên giá / tính giá',
+  NEED_INFO: 'Cần bổ sung thông tin',
+  PRICE_OFFERED: 'Đã báo giá phương án',
+  NEGOTIATING: 'Đang đàm phán chốt giá',
+  ORDER_CREATED: 'Đã tạo đơn hàng',
+  DEPOSIT_CONFIRMED: 'Đã đặt cọc',
+  CONTRACT_SIGNED: 'Đã ký hợp đồng',
+  IN_PRODUCTION: 'Đang sản xuất',
+  READY_FOR_INSTALL: 'Sẵn sàng lắp đặt',
+  INSTALLING: 'Đang thi công lắp đặt',
+  HANDOVER_COMPLETED: 'Hoàn tất bàn giao',
+  WARRANTY_ACTIVE: 'Đang bảo hành',
+  LOST: 'Mất khách / Đã hủy',
+  CARE_NURTURING: 'Đang chăm sóc sau bán',
+  // Business Aliases
+  KHACH_MOI: 'Khách mới',
+  DA_CO_GIA: 'Đã báo giá phương án',
+  DANG_THUONG_LUONG: 'Đang đàm phán chốt giá',
+};
+
+/**
+ * Full Canonical Stage list with value and display label
+ * Strictly covers 100% of canonical stages defined in the DB schema check constraint.
+ */
+export const CANONICAL_STAGE_LIST: ReadonlyArray<{ value: CustomerStage; label: string }> = [
+  { value: 'LEAD_NEW', label: 'Khách mới' },
+  { value: 'CONTACT_CYCLE_1', label: 'Liên hệ lần 1' },
+  { value: 'CONTACT_CYCLE_2', label: 'Liên hệ lần 2' },
+  { value: 'CONTACT_CYCLE_3', label: 'Liên hệ lần 3' },
+  { value: 'UNREACHABLE', label: 'Không nghe máy' },
+  { value: 'SURVEY_REQUESTED', label: 'Yêu cầu khảo sát' },
+  { value: 'SURVEY_SCHEDULED', label: 'Đã hẹn khảo sát' },
+  { value: 'SURVEY_COMPLETED', label: 'Đã khảo sát hiện trường' },
+  { value: 'PRICE_CALCULATED', label: 'Đã lên giá / tính giá' },
+  { value: 'NEED_INFO', label: 'Cần bổ sung thông tin' },
+  { value: 'PRICE_OFFERED', label: 'Đã báo giá phương án' },
+  { value: 'NEGOTIATING', label: 'Đang đàm phán chốt giá' },
+  { value: 'ORDER_CREATED', label: 'Đã tạo đơn hàng' },
+  { value: 'DEPOSIT_CONFIRMED', label: 'Đã đặt cọc' },
+  { value: 'CONTRACT_SIGNED', label: 'Đã ký hợp đồng' },
+  { value: 'IN_PRODUCTION', label: 'Đang sản xuất' },
+  { value: 'READY_FOR_INSTALL', label: 'Sẵn sàng lắp đặt' },
+  { value: 'INSTALLING', label: 'Đang thi công lắp đặt' },
+  { value: 'HANDOVER_COMPLETED', label: 'Hoàn tất bàn giao' },
+  { value: 'WARRANTY_ACTIVE', label: 'Đang bảo hành' },
+  { value: 'LOST', label: 'Mất khách / Đã hủy' },
+  { value: 'CARE_NURTURING', label: 'Đang chăm sóc sau bán' },
+];
+
+/**
+ * Canonical Pipeline Stage Groups for CRM Dashboard
+ * Direction A: Each group consists of explicit canonical customer stages (no subtractions, no guessing).
+ */
+export const PIPELINE_STAGE_GROUPS = {
+  NEW_LEADS: [
+    'LEAD_NEW',
+    'CONTACT_CYCLE_1',
+    'CONTACT_CYCLE_2',
+    'CONTACT_CYCLE_3',
+    'UNREACHABLE',
+  ],
+  SURVEY: [
+    'SURVEY_REQUESTED',
+    'SURVEY_SCHEDULED',
+    'SURVEY_COMPLETED',
+    'NEED_INFO',
+  ],
+  PRICING: [
+    'PRICE_CALCULATED',
+    'PRICE_OFFERED',
+    'NEGOTIATING',
+  ],
+  WON: [
+    'ORDER_CREATED',
+    'DEPOSIT_CONFIRMED',
+    'CONTRACT_SIGNED',
+    'IN_PRODUCTION',
+    'READY_FOR_INSTALL',
+    'INSTALLING',
+    'HANDOVER_COMPLETED',
+    'WARRANTY_ACTIVE',
+    'CARE_NURTURING',
+  ],
+} as const;
+
+/**
  * Identity Channels (public.identities.channel)
  * Database check constraint: CHECK (channel IN ('ZALO', 'FACEBOOK', 'WEBSITE', 'PHONE'))
  */

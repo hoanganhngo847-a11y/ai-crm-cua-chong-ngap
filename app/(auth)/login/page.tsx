@@ -4,6 +4,8 @@ import React, { Suspense, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { loginAction } from './actions';
 import { sanitizeRedirectPath } from '../../../lib/auth/redirect';
+import { Button } from '@/components/ui/button';
+import { ShieldCheck, AlertCircle } from 'lucide-react';
 
 function LoginForm() {
   const router = useRouter();
@@ -36,28 +38,16 @@ function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-slate-800/80 backdrop-blur-xl border border-slate-700/60 rounded-2xl shadow-2xl p-8 transition-all">
+    <div className="min-h-screen flex items-center justify-center bg-[var(--app-canvas)] p-4">
+      <div className="w-full max-w-sm bg-white border border-border-subtle rounded-2xl shadow-xs p-8 transition-all">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 mb-4 shadow-inner">
-            <svg
-              className="w-7 h-7"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-              />
-            </svg>
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-accent-soft text-accent border border-accent/20 mb-3.5 shadow-xs">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">
+          <h1 className="text-xl font-semibold tracking-tight text-text-primary">
             AI CRM Đa Kênh
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             Hệ thống quản lý khách hàng sản xuất cửa chống ngập
           </p>
         </div>
@@ -65,31 +55,19 @@ function LoginForm() {
         {errorMessage && (
           <div
             id="login-error-alert"
-            className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-start gap-3"
+            className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5"
             role="alert"
           >
-            <svg
-              className="w-5 h-5 text-red-400 shrink-0 mt-0.5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <span>{errorMessage}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label
               htmlFor="email"
-              className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2"
+              className="block text-xs font-medium text-text-secondary mb-1.5"
             >
               Email công việc
             </label>
@@ -100,17 +78,19 @@ function LoginForm() {
               required
               autoComplete="email"
               placeholder="ten@cuachongngap.vn"
-              className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              className="w-full px-3 py-2 text-xs rounded-lg bg-surface-primary border border-border-subtle text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent transition-colors"
             />
           </div>
 
           <div>
-            <label
-              htmlFor="password"
-              className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2"
-            >
-              Mật khẩu
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label
+                htmlFor="password"
+                className="block text-xs font-medium text-text-secondary"
+              >
+                Mật khẩu
+              </label>
+            </div>
             <input
               id="password"
               name="password"
@@ -118,47 +98,26 @@ function LoginForm() {
               required
               autoComplete="current-password"
               placeholder="••••••••"
-              className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              className="w-full px-3 py-2 text-xs rounded-lg bg-surface-primary border border-border-subtle text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent transition-colors"
             />
           </div>
 
-          <button
-            id="login-submit-button"
-            type="submit"
-            disabled={isPending}
-            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium shadow-lg shadow-blue-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {isPending ? (
-              <>
-                <svg
-                  className="animate-spin h-5 w-5 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  />
-                </svg>
-                <span>Đang xử lý...</span>
-              </>
-            ) : (
-              <span>Đăng nhập</span>
-            )}
-          </button>
+          <div className="pt-1">
+            <Button
+              id="login-submit-button"
+              type="submit"
+              variant="primary"
+              size="md"
+              className="w-full justify-center"
+              disabled={isPending}
+            >
+              {isPending ? 'Đang xử lý...' : 'Đăng nhập'}
+            </Button>
+          </div>
         </form>
 
-        <div className="mt-6 pt-6 border-t border-slate-700/50 text-center">
-          <p className="text-xs text-slate-500">
+        <div className="mt-6 pt-5 border-t border-border-subtle text-center">
+          <p className="text-[11px] text-text-tertiary leading-relaxed">
             Hệ thống nội bộ được bảo vệ bởi Supabase Auth & RLS.
             <br />
             Chỉ nhân sự được cấp quyền mới có thể truy cập.
@@ -173,7 +132,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400">
+        <div className="min-h-screen flex items-center justify-center bg-[var(--app-canvas)] text-text-tertiary text-sm">
           Đang tải...
         </div>
       }

@@ -12,9 +12,25 @@ import {
   retryZaloTranscription,
   searchZaloCustomers,
 } from '../../../actions/zalo-recordings';
+import { Card, CardTitle } from '../../../../components/ui/card';
+import { Button } from '../../../../components/ui/button';
+import { Badge } from '../../../../components/ui/badge';
+import {
+  Play,
+  RotateCcw,
+  Sparkles,
+  FileText,
+  Phone,
+  PhoneIncoming,
+  PhoneOutgoing,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 
 type Call = Awaited<ReturnType<typeof listZaloCalls>>['items'][number];
-type Candidate = {id:string;name:string;customer_code:string};
+type Candidate = { id: string; name: string; customer_code: string };
+
 function formatTranscriptTime(ms: number): string {
   const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -22,41 +38,65 @@ function formatTranscriptTime(ms: number): string {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
-  const [candidates,setCandidates]=useState<Candidate[]>([]);
-  const [selected,setSelected]=useState('');
-  const [search,setSearch]=useState('');
-  const [remember,setRemember]=useState(false);
-  const [newName,setNewName]=useState(call.remote_display_name || '');
-  const [creating,setCreating]=useState(false);
-  const [busy,setBusy]=useState(false);
-  const [error,setError]=useState('');
-  const [audio,setAudio]=useState('');
-  const initialStatus = (call as { transcript_status?: string }).transcript_status || 'PENDING';
+function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [selected, setSelected] = useState('');
+  const [search, setSearch] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [newName, setNewName] = useState(call.remote_display_name || '');
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [audio, setAudio] = useState('');
+  const initialStatus =
+    (call as { transcript_status?: string }).transcript_status || 'PENDING';
   const [transcriptStatus, setTranscriptStatus] = useState<string>(initialStatus);
-  const [transcript, setTranscript] = useState<Awaited<ReturnType<typeof getZaloTranscription>> | null>(null);
+  const [transcript, setTranscript] =
+    useState<Awaited<ReturnType<typeof getZaloTranscription>> | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
 
-  const initialSummaryStatus = (call as { summary_status?: string }).summary_status || 'NOT_STARTED';
+  const initialSummaryStatus =
+    (call as { summary_status?: string }).summary_status || 'NOT_STARTED';
   const [summaryStatus, setSummaryStatus] = useState<string>(initialSummaryStatus);
-  const [summary, setSummary] = useState<Awaited<ReturnType<typeof getZaloCallSummary>> | null>(null);
+  const [summary, setSummary] =
+    useState<Awaited<ReturnType<typeof getZaloCallSummary>> | null>(null);
   const [expandedSummary, setExpandedSummary] = useState(false);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [retrySummaryBusy, setRetrySummaryBusy] = useState(false);
 
-  const customer=(Array.isArray(call.customers)?call.customers[0]:call.customers) as {name:string;customer_code:string}|null;
-  useEffect(()=>{
-    if(call.customer_id) return;
-    let active=true;
-    searchZaloCustomers(call.id).then(items=>{if(active) setCandidates(items);}).catch(()=>{if(active) setError('Không tải được gợi ý.');});
-    return ()=>{active=false;};
-  },[call.id,call.customer_id]);
-  async function perform(operation:()=>Promise<void>) {
-    setBusy(true);setError('');
-    try {await operation();} catch {setError('Thao tác chưa thành công. Vui lòng thử lại.');} finally {setBusy(false);}
+  const customer = (
+    Array.isArray(call.customers) ? call.customers[0] : call.customers
+  ) as { name: string; customer_code: string } | null;
+
+  useEffect(() => {
+    if (call.customer_id) return;
+    let active = true;
+    searchZaloCustomers(call.id)
+      .then((items) => {
+        if (active) setCandidates(items);
+      })
+      .catch(() => {
+        if (active) setError('Không tải được gợi ý.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [call.id, call.customer_id]);
+
+  async function perform(operation: () => Promise<void>) {
+    setBusy(true);
+    setError('');
+    try {
+      await operation();
+    } catch {
+      setError('Thao tác chưa thành công. Vui lòng thử lại.');
+    } finally {
+      setBusy(false);
+    }
   }
+
   async function toggleTranscript() {
     if (expanded) {
       setExpanded(false);
@@ -78,6 +118,7 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
       setExpanded(true);
     }
   }
+
   async function handleRetryTranscription() {
     setRetryBusy(true);
     setError('');
@@ -92,6 +133,7 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
       setRetryBusy(false);
     }
   }
+
   async function toggleSummary() {
     if (expandedSummary) {
       setExpandedSummary(false);
@@ -113,6 +155,7 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
       setExpandedSummary(true);
     }
   }
+
   async function handleRetrySummary() {
     setRetrySummaryBusy(true);
     setError('');
@@ -127,255 +170,541 @@ function CallCard({call,onLinked}:{call:Call;onLinked:()=>void}) {
       setRetrySummaryBusy(false);
     }
   }
-  return <article className="rounded-xl border border-slate-700 bg-slate-900 p-4 space-y-3">
-    <div className="flex justify-between flex-wrap gap-2">
-      <div><h3 className="font-semibold text-white">{call.remote_display_name || 'Chưa xác định tên'} · Zalo Personal</h3>
-        <p className="text-sm text-slate-400">{new Date(call.started_at).toLocaleString('vi-VN')} · {Math.round(call.duration_seconds)} giây · {{INBOUND:'Gọi đến',OUTBOUND:'Gọi đi',UNKNOWN:'Chưa rõ hướng'}[call.direction as string] || 'Chưa rõ hướng'}</p>
+
+  return (
+    <article className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-primary)] shadow-xs space-y-4 hover:border-[var(--border-strong)] transition-all">
+      {/* Top Header: Participant & Play button */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-full bg-cyan-50 border border-cyan-200 text-cyan-700 flex items-center justify-center font-bold text-xs shrink-0">
+            Zalo
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-semibold text-xs sm:text-sm text-[var(--text-primary)]">
+                {call.remote_display_name || 'Chưa xác định tên'}
+              </h3>
+              <Badge variant="info" size="xs">
+                Zalo Personal
+              </Badge>
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono font-medium ${
+                  call.direction === 'INBOUND'
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'bg-purple-50 text-purple-700'
+                }`}
+              >
+                {call.direction === 'INBOUND' ? (
+                  <>
+                    <PhoneIncoming className="w-2.5 h-2.5" />
+                    <span>Gọi đến</span>
+                  </>
+                ) : (
+                  <>
+                    <PhoneOutgoing className="w-2.5 h-2.5" />
+                    <span>Gọi đi</span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5 font-mono">
+              {new Date(call.started_at).toLocaleString('vi-VN')} • {Math.round(call.duration_seconds)}s
+            </p>
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            perform(async () => setAudio(await playZaloRecording(call.id)))
+          }
+          variant="secondary"
+          size="xs"
+          leftIcon={<Play className="w-3 h-3 fill-current text-[var(--accent)]" />}
+        >
+          Nghe ghi âm
+        </Button>
       </div>
-      <button type="button" disabled={busy} onClick={()=>perform(async()=>setAudio(await playZaloRecording(call.id)))} className="rounded bg-blue-800 px-3 py-2 text-sm disabled:opacity-50">▶ Nghe ghi âm</button>
-    </div>
-    {audio && <audio controls autoPlay src={audio} className="w-full" onError={()=>setError('Liên kết nghe đã hết hạn hoặc file chưa tải được. Bấm Nghe ghi âm để lấy lại.')} />}
-    {call.identity_ambiguous && <p role="status" className="text-sm text-amber-300">Tên này có liên kết hoặc khách hàng trùng nhau. Các cuộc gọi sau vẫn cần xác nhận.</p>}
-    {call.customer_id ? <p className="text-sm">Khách hàng: <Link href={`/customers/${call.customer_id}`} className="text-blue-300 underline">{customer?.name || 'Xem khách hàng'}</Link></p> : <>
-      <p className="text-sm font-medium">Cuộc gọi Zalo mới · Khách hàng: Chưa xác định</p>
-      <p className="text-xs text-slate-400">Tên hiển thị có thể trùng. Hãy xác nhận khách hàng trước khi ghi nhớ liên kết.</p>
-      <form onSubmit={event=>{event.preventDefault();perform(async()=>{setCandidates(await searchZaloCustomers(call.id,search));setSelected('');});}} className="flex gap-2">
-        <input aria-label="Tìm khách hàng" value={search} onChange={e=>setSearch(e.target.value)} minLength={2} maxLength={200} placeholder="Tên hoặc mã khách hàng" className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-800 p-2 text-sm" />
-        <button disabled={busy || search.trim().length<2} className="rounded bg-slate-700 px-3 text-sm disabled:opacity-50">Tìm khách hàng</button>
-      </form>
-      <fieldset className="space-y-2"><legend className="text-xs text-slate-400">Gợi ý (tối đa 20, chỉ để tham khảo)</legend>
-        {candidates.map(candidate=><label key={candidate.id} className="flex gap-2 text-sm"><input type="radio" name={`customer-${call.id}`} value={candidate.id} checked={selected===candidate.id} onChange={()=>{setSelected(candidate.id);setCreating(false);}} />{candidate.name} · {candidate.customer_code}</label>)}
-        {candidates.length===0 && <p className="text-xs text-slate-500">Chưa có gợi ý. Tìm khách hàng hoặc tạo mới.</p>}
-      </fieldset>
-      <label className="flex gap-2 text-sm"><input type="checkbox" checked={remember} disabled={!call.remote_display_name} onChange={e=>setRemember(e.target.checked)} />Ghi nhớ liên kết Zalo này cho các cuộc gọi sau</label>
-      <div className="flex gap-3 flex-wrap">
-        <button disabled={busy || !selected || creating} onClick={()=>perform(async()=>{await linkZaloCustomer(call.id,selected,remember);onLinked();})} className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-50">Xác nhận khách hàng</button>
-        <button disabled={busy} onClick={()=>{setCreating(!creating);setSelected('');}} className="text-sm text-blue-300 underline">Tạo khách hàng mới</button>
-      </div>
-      {creating && <form className="flex gap-2" onSubmit={event=>{event.preventDefault();perform(async()=>{await linkZaloCustomer(call.id,null,remember,newName);onLinked();});}}>
-        <input aria-label="Tên khách hàng mới" required maxLength={200} value={newName} onChange={e=>setNewName(e.target.value)} className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-800 p-2 text-sm" />
-        <button disabled={busy || !newName.trim()} className="rounded bg-blue-700 px-3 text-sm disabled:opacity-50">Tạo và liên kết</button>
-      </form>}
-    </>}
-    <div className="pt-2 border-t border-slate-800 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Bóc băng:</span>
-          {transcriptStatus === 'COMPLETED' ? (
-            <span className="inline-flex items-center rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
-              Đã hoàn thành
-            </span>
-          ) : transcriptStatus === 'FAILED' ? (
-            <span className="inline-flex items-center rounded-full bg-red-950 px-2.5 py-0.5 text-xs font-medium text-red-400 border border-red-800">
-              Thất bại
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full bg-amber-950 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
-              Đang xử lý…
+
+      {/* Audio Player */}
+      {audio && (
+        <div className="p-2.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
+          <audio
+            controls
+            autoPlay
+            src={audio}
+            className="w-full h-8"
+            onError={() =>
+              setError(
+                'Liên kết nghe đã hết hạn hoặc file chưa tải được. Bấm Nghe ghi âm để lấy lại.'
+              )
+            }
+          />
+        </div>
+      )}
+
+      {error && (
+        <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800">
+          {error}
+        </div>
+      )}
+
+      {/* Customer Linking Section */}
+      {call.customer_id ? (
+        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <span>Khách hàng gắn kết:</span>
+          <Link
+            href={`/customers/${call.customer_id}/dossier`}
+            className="font-medium text-[var(--accent)] hover:underline"
+          >
+            {customer?.name || 'Xem hồ sơ 360'}
+          </Link>
+          {customer?.customer_code && (
+            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
+              ({customer.customer_code})
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {transcriptStatus === 'COMPLETED' && (
-            <button
-              type="button"
-              disabled={loadingTranscript}
-              onClick={toggleTranscript}
-              className="text-xs text-blue-400 hover:text-blue-300 underline disabled:opacity-50"
+      ) : (
+        <div className="p-3 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-2.5 text-xs">
+          <div className="flex items-center gap-1.5 text-amber-700 font-medium">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>Cuộc gọi Zalo mới • Khách hàng chưa liên kết</span>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              perform(async () => {
+                setCandidates(await searchZaloCustomers(call.id, search));
+                setSelected('');
+              });
+            }}
+            className="flex gap-2"
+          >
+            <input
+              aria-label="Tìm khách hàng"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              minLength={2}
+              maxLength={200}
+              placeholder="Tìm theo tên hoặc mã KH..."
+              className="min-w-0 flex-1 h-8 px-2.5 text-xs bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+            />
+            <Button
+              type="submit"
+              variant="outline"
+              size="xs"
+              disabled={busy || search.trim().length < 2}
             >
-              {loadingTranscript ? 'Đang tải…' : expanded ? 'Ẩn nội dung' : 'Xem nội dung'}
-            </button>
-          )}
-          {transcriptStatus === 'FAILED' && (
-            <button
-              type="button"
-              disabled={busy || retryBusy}
-              onClick={handleRetryTranscription}
-              className="rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
-            >
-              {retryBusy ? 'Đang gửi…' : 'Thử lại'}
-            </button>
-          )}
-        </div>
-      </div>
-      {expanded && transcript && (
-        <div className="rounded-lg bg-slate-950/80 p-3 space-y-3 text-sm border border-slate-800 max-h-96 overflow-y-auto">
-          {transcript.utterances.length === 0 ? (
-            <p className="text-xs text-slate-400">Không có giọng nói được phát hiện.</p>
-          ) : (
-            transcript.utterances.map((u) => (
-              <div key={u.id || u.sequence} className="space-y-1">
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="font-mono text-slate-400">{formatTranscriptTime(u.start_ms)}</span>
-                  <span
-                    className={`font-semibold ${
-                      u.speaker_role === 'STAFF' ? 'text-blue-400' : 'text-emerald-400'
-                    }`}
+              Tìm
+            </Button>
+          </form>
+
+          {candidates.length > 0 && (
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[11px] text-[var(--text-tertiary)] block">
+                Gợi ý khách hàng phù hợp:
+              </span>
+              <div className="space-y-1">
+                {candidates.map((candidate) => (
+                  <label
+                    key={candidate.id}
+                    className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-[var(--surface-hover)] transition-colors"
                   >
-                    {u.speaker_role === 'STAFF' ? 'Staff' : 'Customer'}
-                  </span>
-                </div>
-                <p className="text-slate-200 pl-2 border-l border-slate-700 text-sm whitespace-pre-wrap">
-                  {u.text}
-                </p>
+                    <input
+                      type="radio"
+                      name={`customer-${call.id}`}
+                      value={candidate.id}
+                      checked={selected === candidate.id}
+                      onChange={() => {
+                        setSelected(candidate.id);
+                        setCreating(false);
+                      }}
+                      className="text-[var(--accent)] focus:ring-[var(--accent)]"
+                    />
+                    <span className="font-medium text-[var(--text-primary)]">
+                      {candidate.name}
+                    </span>
+                    <span className="font-mono text-[var(--text-tertiary)] text-[11px]">
+                      ({candidate.customer_code})
+                    </span>
+                  </label>
+                ))}
               </div>
-            ))
+            </div>
+          )}
+
+          <label className="flex items-center gap-2 cursor-pointer pt-1">
+            <input
+              type="checkbox"
+              checked={remember}
+              disabled={!call.remote_display_name}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="rounded text-[var(--accent)] focus:ring-[var(--accent)]"
+            />
+            <span className="text-[11px] text-[var(--text-secondary)]">
+              Ghi nhớ liên kết Zalo này cho các cuộc gọi sau
+            </span>
+          </label>
+
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            <Button
+              disabled={busy || !selected || creating}
+              onClick={() =>
+                perform(async () => {
+                  await linkZaloCustomer(call.id, selected, remember);
+                  onLinked();
+                })
+              }
+              variant="primary"
+              size="xs"
+            >
+              Xác nhận liên kết
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              onClick={() => {
+                setCreating(!creating);
+                setSelected('');
+              }}
+            >
+              Tạo khách mới
+            </Button>
+          </div>
+
+          {creating && (
+            <form
+              className="flex gap-2 pt-2 border-t border-[var(--border-subtle)]"
+              onSubmit={(e) => {
+                e.preventDefault();
+                perform(async () => {
+                  await linkZaloCustomer(call.id, null, remember, newName);
+                  onLinked();
+                });
+              }}
+            >
+              <input
+                aria-label="Tên khách hàng mới"
+                required
+                maxLength={200}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Tên khách hàng mới..."
+                className="min-w-0 flex-1 h-8 px-2.5 text-xs bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                size="xs"
+                disabled={busy || !newName.trim()}
+              >
+                Tạo &amp; liên kết
+              </Button>
+            </form>
           )}
         </div>
       )}
-    </div>
-    <div className="pt-2 border-t border-slate-800 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">AI Summary:</span>
-          {summaryStatus === 'COMPLETED' ? (
-            <span className="inline-flex items-center rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
-              Đã hoàn thành
+
+      {/* SECTION 1: AI SUMMARY (Placed BEFORE raw transcript per instructions) */}
+      <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="text-xs font-semibold text-[var(--text-primary)]">
+              Tóm tắt AI (Summary)
             </span>
-          ) : summaryStatus === 'FAILED' ? (
-            <span className="inline-flex items-center rounded-full bg-red-950 px-2.5 py-0.5 text-xs font-medium text-red-400 border border-red-800">
-              Thất bại
-            </span>
-          ) : summaryStatus === 'PROCESSING' ? (
-            <span className="inline-flex items-center rounded-full bg-blue-950 px-2.5 py-0.5 text-xs font-medium text-blue-400 border border-blue-800">
-              Đang phân tích…
-            </span>
-          ) : summaryStatus === 'PENDING' ? (
-            <span className="inline-flex items-center rounded-full bg-amber-950 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
-              Đang chờ xử lý…
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-slate-400 border border-slate-700">
-              Chưa bắt đầu
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {summaryStatus === 'COMPLETED' && (
-            <button
-              type="button"
-              disabled={loadingSummary}
-              onClick={toggleSummary}
-              className="text-xs text-blue-400 hover:text-blue-300 underline disabled:opacity-50"
+            <Badge
+              variant={
+                summaryStatus === 'COMPLETED'
+                  ? 'success'
+                  : summaryStatus === 'FAILED'
+                  ? 'danger'
+                  : 'warning'
+              }
+              size="xs"
             >
-              {loadingSummary ? 'Đang tải…' : expandedSummary ? 'Ẩn tóm tắt' : 'Xem tóm tắt'}
-            </button>
-          )}
-          {summaryStatus === 'FAILED' && (
-            <button
-              type="button"
-              disabled={busy || retrySummaryBusy}
-              onClick={handleRetrySummary}
-              className="rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
-            >
-              {retrySummaryBusy ? 'Đang gửi…' : 'Thử lại'}
-            </button>
-          )}
-        </div>
-      </div>
-      {expandedSummary && summary && summary.status === 'COMPLETED' && (
-        <div className="rounded-lg bg-slate-950/80 p-3 space-y-3 text-sm border border-slate-800">
-          <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-slate-800 text-xs">
-            {summary.lead_temperature && (
-              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium border ${
-                summary.lead_temperature === 'HOT'
-                  ? 'bg-rose-950/80 text-rose-300 border-rose-800'
-                  : summary.lead_temperature === 'WARM'
-                  ? 'bg-amber-950/80 text-amber-300 border-amber-800'
-                  : 'bg-slate-800 text-slate-300 border-slate-700'
-              }`}>
-                Nhiệt độ lead: <strong>{summary.lead_temperature}</strong>
-              </span>
+              {summaryStatus === 'COMPLETED'
+                ? 'Đã tóm tắt'
+                : summaryStatus === 'FAILED'
+                ? 'Thất bại'
+                : 'Đang xử lý'}
+            </Badge>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {summaryStatus === 'COMPLETED' && (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={loadingSummary}
+                onClick={toggleSummary}
+                rightIcon={
+                  expandedSummary ? (
+                    <ChevronUp className="w-3 h-3" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3" />
+                  )
+                }
+              >
+                {loadingSummary
+                  ? 'Đang tải…'
+                  : expandedSummary
+                  ? 'Thu gọn'
+                  : 'Xem tóm tắt'}
+              </Button>
             )}
-            {summary.confidence && (
-              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium border ${
-                summary.confidence === 'HIGH'
-                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
-                  : summary.confidence === 'MEDIUM'
-                  ? 'bg-amber-950/80 text-amber-300 border-amber-800'
-                  : 'bg-slate-800 text-slate-400 border-slate-700'
-              }`}>
-                Độ tin cậy: <strong>{summary.confidence}</strong>
-              </span>
+            {summaryStatus === 'FAILED' && (
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={busy || retrySummaryBusy}
+                onClick={handleRetrySummary}
+                isLoading={retrySummaryBusy}
+                leftIcon={<RotateCcw className="w-3 h-3" />}
+              >
+                Thử lại
+              </Button>
             )}
           </div>
-          {summary.summary && (
-            <div className="space-y-1">
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tóm tắt</h4>
-              <p className="text-slate-200 text-sm whitespace-pre-wrap">{summary.summary}</p>
-            </div>
-          )}
-          {Array.isArray(summary.key_points) && summary.key_points.length > 0 && (
-            <div className="space-y-1">
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Điểm chính</h4>
-              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
-                {summary.key_points.map((kp: string, idx: number) => (
-                  <li key={idx}>{kp}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {Array.isArray(summary.customer_needs) && summary.customer_needs.length > 0 && (
-            <div className="space-y-1">
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Nhu cầu khách hàng</h4>
-              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
-                {summary.customer_needs.map((item: string, idx: number) => (
-                  <li key={idx}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {Array.isArray(summary.objections) && summary.objections.length > 0 && (
-            <div className="space-y-1">
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Phản đối / Băn khoăn</h4>
-              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
-                {summary.objections.map((item: string, idx: number) => (
-                  <li key={idx}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {Array.isArray(summary.next_actions) && summary.next_actions.length > 0 && (
-            <div className="space-y-1">
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Việc cần làm tiếp (Gợi ý AI)</h4>
-              <ul className="list-disc list-inside space-y-0.5 text-xs text-slate-300">
-                {summary.next_actions.map((item: string, idx: number) => (
-                  <li key={idx}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {summary.follow_up_required && (
-            <div className="rounded border border-amber-800/60 bg-amber-950/30 p-2 space-y-1 text-xs">
-              <span className="font-semibold text-amber-300">Cần liên hệ lại (Follow-up):</span>
-              {summary.follow_up_suggested_time && (
-                <p className="text-slate-300">Thời gian: {summary.follow_up_suggested_time}</p>
-              )}
-              {summary.follow_up_reason && (
-                <p className="text-slate-300">Lý do: {summary.follow_up_reason}</p>
-              )}
-            </div>
-          )}
+        </div>
+
+        {expandedSummary && summary && summary.status === 'COMPLETED' && (
+          <div className="p-3.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-3 text-xs">
+            {summary.lead_temperature && (
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--text-secondary)]">Độ nóng lead:</span>
+                <Badge
+                  variant={
+                    summary.lead_temperature === 'HOT'
+                      ? 'danger'
+                      : summary.lead_temperature === 'WARM'
+                      ? 'warning'
+                      : 'neutral'
+                  }
+                  size="xs"
+                >
+                  {summary.lead_temperature}
+                </Badge>
+              </div>
+            )}
+
+            {summary.summary && (
+              <p className="text-[var(--text-primary)] leading-relaxed">
+                {summary.summary}
+              </p>
+            )}
+
+            {summary.key_points && Array.isArray(summary.key_points) && summary.key_points.length > 0 && (
+              <div>
+                <span className="font-semibold text-[var(--text-primary)] block mb-1">
+                  Điểm mấu chốt:
+                </span>
+                <ul className="list-disc list-inside space-y-1 text-[var(--text-secondary)]">
+                  {summary.key_points.map((pt: unknown, i: number) => (
+                    <li key={i}>{typeof pt === 'string' ? pt : JSON.stringify(pt)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {summary.next_actions && Array.isArray(summary.next_actions) && summary.next_actions.length > 0 && (
+              <div className="p-2.5 rounded bg-blue-50/50 border border-blue-200">
+                <span className="font-semibold text-blue-900 block mb-1">
+                  Hành động tiếp theo:
+                </span>
+                <ul className="list-disc list-inside space-y-1 text-blue-800">
+                  {summary.next_actions.map((item: unknown, i: number) => (
+                    <li key={i}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 2: TRANSCRIPT (Collapsed by default, opens with toggle) */}
+      <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+            <span className="text-xs font-semibold text-[var(--text-primary)]">
+              Bóc băng (Transcript)
+            </span>
+            <Badge
+              variant={
+                transcriptStatus === 'COMPLETED'
+                  ? 'success'
+                  : transcriptStatus === 'FAILED'
+                  ? 'danger'
+                  : 'warning'
+              }
+              size="xs"
+            >
+              {transcriptStatus === 'COMPLETED'
+                ? 'Đã hoàn thành'
+                : transcriptStatus === 'FAILED'
+                ? 'Thất bại'
+                : 'Đang xử lý'}
+            </Badge>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {transcriptStatus === 'COMPLETED' && (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={loadingTranscript}
+                onClick={toggleTranscript}
+                rightIcon={
+                  expanded ? (
+                    <ChevronUp className="w-3 h-3" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3" />
+                  )
+                }
+              >
+                {loadingTranscript
+                  ? 'Đang tải…'
+                  : expanded
+                  ? 'Ẩn nội dung'
+                  : 'Xem nội dung'}
+              </Button>
+            )}
+            {transcriptStatus === 'FAILED' && (
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={busy || retryBusy}
+                onClick={handleRetryTranscription}
+                isLoading={retryBusy}
+                leftIcon={<RotateCcw className="w-3 h-3" />}
+              >
+                Thử lại
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {expanded && transcript && (
+          <div className="p-3.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] max-h-80 overflow-y-auto space-y-2.5 text-xs">
+            {transcript.utterances.length === 0 ? (
+              <p className="text-[var(--text-tertiary)] italic">
+                Không phát hiện giọng nói trong bản ghi.
+              </p>
+            ) : (
+              transcript.utterances.map((u) => (
+                <div key={u.id || u.sequence} className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
+                      {formatTranscriptTime(u.start_ms)}
+                    </span>
+                    <span
+                      className={`font-semibold text-[11px] ${
+                        u.speaker_role === 'STAFF'
+                          ? 'text-[var(--accent)]'
+                          : 'text-emerald-600'
+                      }`}
+                    >
+                      {u.speaker_role === 'STAFF' ? 'Chuyên viên' : 'Khách hàng'}
+                    </span>
+                  </div>
+                  <p className="pl-3 border-l-2 border-[var(--border-subtle)] text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
+                    {u.text}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export default function ZaloRecordingHistory({
+  customerId,
+}: {
+  customerId?: string;
+}) {
+  const [calls, setCalls] = useState<Call[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [refreshIndex, setRefreshIndex] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    listZaloCalls(1, customerId)
+      .then((res) => {
+        if (active) setCalls(res.items);
+      })
+      .catch(() => {
+        if (active) setError('Không tải được danh sách ghi âm Zalo.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [customerId, refreshIndex]);
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Phone className="w-4 h-4 text-cyan-600" />
+            <span>Ghi âm &amp; Hội thoại Zalo Personal</span>
+          </CardTitle>
+          <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+            Các cuộc gọi Zalo được Agent ghi âm và bóc băng tự động bằng AI.
+          </p>
+        </div>
+
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => setRefreshIndex((i) => i + 1)}
+          leftIcon={<RotateCcw className="w-3 h-3" />}
+        >
+          Làm mới
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="py-8 space-y-3">
+          {[...Array(3)].map((_, i) => (
+            <div
+              key={i}
+              className="h-20 bg-[var(--surface-secondary)] rounded-lg animate-pulse"
+            />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800">
+          {error}
+        </div>
+      ) : calls.length === 0 ? (
+        <div className="py-8 text-center text-xs text-[var(--text-tertiary)] italic">
+          Chưa có cuộc gọi Zalo nào được ghi nhận.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {calls.map((call) => (
+            <CallCard
+              key={call.id}
+              call={call}
+              onLinked={() => setRefreshIndex((i) => i + 1)}
+            />
+          ))}
         </div>
       )}
-    </div>
-    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
-  </article>;
-}
-export default function ZaloRecordingHistory({customerId}:{customerId?:string}) {
-  const [result,setResult]=useState<Awaited<ReturnType<typeof listZaloCalls>>|null>(null);
-  const [page,setPage]=useState(1),[version,setVersion]=useState(0),[error,setError]=useState('');
-  useEffect(()=>{
-    let active=true;
-    listZaloCalls(page,customerId).then(data=>{if(active){setResult(data);setError('');}}).catch(()=>{if(active) setError('Không tải được lịch sử Zalo. Kiểm tra kết nối hoặc cấu hình hệ thống.');});
-    return ()=>{active=false;};
-  },[page,customerId,version]);
-  return <section aria-label="Cuộc gọi Zalo Personal" className="space-y-3">
-    <div className="flex items-center justify-between"><h2 className="font-semibold text-lg">Cuộc gọi Zalo Personal</h2><button onClick={()=>setVersion(v=>v+1)} className="text-sm text-blue-300 underline">Làm mới</button></div>
-    {error && <p role="alert" className="text-red-300 text-sm">{error}</p>}
-    {!result && !error && <p role="status" className="text-slate-400 text-sm">Đang tải cuộc gọi Zalo…</p>}
-    {result?.items.map(call=><CallCard key={call.id} call={call} onLinked={()=>setVersion(v=>v+1)} />)}
-    {result?.items.length===0 && <p className="text-slate-400 text-sm">Chưa có bản ghi Zalo trong phạm vi quyền của bạn.</p>}
-    {result && result.total>20 && <div className="flex items-center gap-3 text-sm"><button disabled={page<=1} onClick={()=>setPage(p=>p-1)} className="disabled:opacity-40">← Trước</button><span>Trang {page} / {Math.ceil(result.total/20)}</span><button disabled={page*20>=result.total} onClick={()=>setPage(p=>p+1)} className="disabled:opacity-40">Sau →</button></div>}
-  </section>;
+    </Card>
+  );
 }
