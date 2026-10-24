@@ -34,6 +34,26 @@ interface PageAwareConversation {
   [key: string]: unknown;
 }
 
+function applyZaloDisplayName<T extends PageAwareConversation>(conversation: T): T {
+  if (conversation.channel !== 'zalo') return conversation;
+
+  const metadata =
+    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+  const displayName =
+    typeof metadata.zalo_display_name === 'string'
+      ? metadata.zalo_display_name.replace(/\s+/g, ' ').trim().slice(0, 160)
+      : '';
+  if (!displayName) return conversation;
+
+  return {
+    ...conversation,
+    crm_customer_name: conversation.customer_name,
+    customer_name: displayName,
+  };
+}
+
 async function attachFacebookPageInfo<T extends PageAwareConversation>(
   companyId: string,
   conversations: T[],
@@ -263,7 +283,7 @@ export async function GET(request: NextRequest, context?: unknown) {
         throw err;
       }
 
-      const sanitizedConv = {
+      const sanitizedConv = applyZaloDisplayName({
         ...conversation,
         customer_phone:
           role === APPLICATION_ROLES.SALE && conversation.customer_phone
@@ -273,7 +293,7 @@ export async function GET(request: NextRequest, context?: unknown) {
           role === APPLICATION_ROLES.SALE
             ? sanitizePhoneInText(conversation.last_message)
             : conversation.last_message,
-      };
+      });
       const [pageAwareConversation] = await attachFacebookPageInfo(
         companyId,
         [sanitizedConv],
@@ -292,17 +312,19 @@ export async function GET(request: NextRequest, context?: unknown) {
       role
     );
 
-    const sanitizedConversations = conversations.map((conversation) => ({
-      ...conversation,
-      customer_phone:
-        role === APPLICATION_ROLES.SALE && conversation.customer_phone
-          ? maskPhone(conversation.customer_phone)
-          : conversation.customer_phone,
-      last_message:
-        role === APPLICATION_ROLES.SALE
-          ? sanitizePhoneInText(conversation.last_message)
-          : conversation.last_message,
-    }));
+    const sanitizedConversations = conversations.map((conversation) =>
+      applyZaloDisplayName({
+        ...conversation,
+        customer_phone:
+          role === APPLICATION_ROLES.SALE && conversation.customer_phone
+            ? maskPhone(conversation.customer_phone)
+            : conversation.customer_phone,
+        last_message:
+          role === APPLICATION_ROLES.SALE
+            ? sanitizePhoneInText(conversation.last_message)
+            : conversation.last_message,
+      })
+    );
     const pageAwareConversations = await attachFacebookPageInfo(
       companyId,
       sanitizedConversations,
