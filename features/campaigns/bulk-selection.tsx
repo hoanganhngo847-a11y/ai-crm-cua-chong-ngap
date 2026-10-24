@@ -4,7 +4,6 @@ import {
   createContext,
   useContext,
   useEffect,
-  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -32,8 +31,6 @@ export function BulkSelection({
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const pageIds = useMemo(() => new Set(ids), [ids]);
-  const selectedOnPage = selected.filter((id) => pageIds.has(id));
 
   // Customer selection is campaign authoring, not message delivery. Persist it
   // across Customer 360 filter/pagination reloads so applying a filter does not
