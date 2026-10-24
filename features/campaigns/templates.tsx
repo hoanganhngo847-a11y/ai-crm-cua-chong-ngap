@@ -51,8 +51,8 @@ function TemplateEditor({
             {editing ? "Chỉnh sửa mẫu" : "Tạo mẫu tin nhắn mới"}
           </h2>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Viết nội dung theo ý bạn. Mẫu được lưu trong CRM trước; trạng thái gửi
-            thật được kiểm tra riêng.
+            Viết nội dung theo ý bạn. Mẫu mới mặc định sẵn sàng để chọn trong
+            chiến dịch CRM; việc gửi thật vẫn được kiểm tra riêng.
           </p>
         </div>
 
@@ -207,12 +207,12 @@ function TemplateEditor({
                     editing.status,
                   )
                     ? editing.status
-                    : "DRAFT"
+                    : "ACTIVE"
                 }
                 className={field}
               >
+                <option value="ACTIVE">Sẵn sàng dùng trong CRM — không tự gửi</option>
                 <option value="DRAFT">Bản nháp</option>
-                <option value="ACTIVE">Sẵn sàng dùng trong CRM</option>
                 <option value="PROVIDER_PENDING">Đang chờ provider duyệt</option>
                 <option value="DISABLED">Tắt mẫu</option>
               </select>
