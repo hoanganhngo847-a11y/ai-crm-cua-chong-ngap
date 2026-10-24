@@ -3,6 +3,7 @@ import { campaignRead } from "../../../../features/campaigns/service";
 import { CampaignNav, CampaignOff } from "../../../../features/campaigns/ui";
 import { CampaignWizard } from "../../../../features/campaigns/wizard";
 import { PageHeader } from "../../../../components/ui/page-header";
+
 export default async function NewCampaign({
   searchParams,
 }: {
@@ -15,16 +16,18 @@ export default async function NewCampaign({
     .safeParse(typeof raw === "string" && raw ? raw.split(",") : []);
   if (!ids.success)
     return <p role="alert">Danh sách người nhận không hợp lệ.</p>;
+
   const { data, actor, readiness } = await campaignRead({
     customer_ids: [...new Set(ids.data)],
   });
   const deliveryEnabled =
     Boolean(data?.enabled) && process.env.BULK_MESSAGING_ENABLED === "true";
+
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Tạo chiến dịch"
-        description="Chọn khách hàng, kênh, mẫu tin và lưu bản nháp. Gửi thật chỉ mở khi provider đã sẵn sàng."
+        title="Tạo chiến dịch tin nhắn"
+        description="Chọn khách hàng → chọn hoặc tạo mẫu tin nhắn → kiểm tra → gửi. Sau khi gửi, trang chiến dịch sẽ thống kê số đã gửi và số khách phản hồi."
       />
       <CampaignNav />
       {!deliveryEnabled && <CampaignOff />}
@@ -32,6 +35,7 @@ export default async function NewCampaign({
         <CampaignWizard
           data={data}
           readiness={readiness}
+          canManageTemplates={actor.role === "BOSS_ADMIN"}
           canExecute={
             deliveryEnabled &&
             (actor.role === "BOSS_ADMIN" || data.sale_execute)
