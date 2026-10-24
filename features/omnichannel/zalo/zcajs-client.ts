@@ -13,6 +13,11 @@ export interface ZaloTransportFactoryOptions {
   fetchFn?: typeof fetch;
 }
 
+export interface ZcaJsDirectoryContact {
+  externalUserId: string;
+  displayName?: string;
+}
+
 interface ZcaJsWorkerResponse {
   outcome?: 'ACCEPTED' | 'REJECTED' | 'UNCERTAIN';
   providerMessageId?: string | number | null;
@@ -59,21 +64,10 @@ function requireZcaJsConfig(companyId: string): ZcaJsConfig {
   return { companyId: configuredCompanyId, workerUrl: parsed.toString(), workerSecret };
 }
 
-/**
- * Internal routing alias used only by the existing durable Zalo outbox.
- * It is not a real Zalo OA id. Keeping the alias company-scoped avoids collisions
- * with real OA ids while allowing the existing DB fencing/idempotency machinery
- * to remain authoritative when the transport is ZCAJS.
- */
 export function getZcaJsLogicalOaId(companyId: string): string {
   return `zcajs:${companyId}`;
 }
 
-/**
- * The current durable outbox resolves an ACTIVE row from public.zalo_oa_configs before
- * provider dispatch. In ZCAJS mode we register a non-secret logical route there.
- * No cookie, IMEI, user-agent or worker secret is stored in the database.
- */
 export async function ensureZcaJsRoutingConfig(
   supabase: SupabaseClient,
   companyId: string
@@ -121,6 +115,44 @@ export async function ensureZcaJsRoutingConfig(
   }
 
   return logicalOaId;
+}
+
+export async function fetchZcaJsContacts(
+  companyId: string,
+  options: { fetchFn?: typeof fetch } = {}
+): Promise<ZcaJsDirectoryContact[]> {
+  const config = requireZcaJsConfig(companyId);
+  const fetchFn = options.fetchFn || fetch;
+  const url = new URL('/v1/contacts', config.workerUrl);
+  url.searchParams.set('companyId', companyId);
+
+  const response = await fetchFn(url, {
+    headers: { Authorization: `Bearer ${config.workerSecret}` },
+    signal: AbortSignal.timeout(DEFAULT_ZCAJS_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`ZCAJS_CONTACT_DIRECTORY_HTTP_${response.status}`);
+
+  const body = await response.json().catch(() => null) as
+    | { success?: unknown; companyId?: unknown; contacts?: unknown }
+    | null;
+  if (!body || body.success !== true || body.companyId !== companyId || !Array.isArray(body.contacts)) {
+    throw new Error('ZCAJS_CONTACT_DIRECTORY_INVALID_RESPONSE');
+  }
+
+  const seen = new Set<string>();
+  const contacts: ZcaJsDirectoryContact[] = [];
+  for (const value of body.contacts.slice(0, 5000)) {
+    if (!value || typeof value !== 'object') continue;
+    const row = value as Record<string, unknown>;
+    const externalUserId = typeof row.externalUserId === 'string' ? row.externalUserId.trim() : '';
+    if (!/^[0-9]{5,40}$/.test(externalUserId) || seen.has(externalUserId)) continue;
+    seen.add(externalUserId);
+    const displayName = typeof row.displayName === 'string'
+      ? row.displayName.replace(/\s+/g, ' ').trim().slice(0, 160)
+      : '';
+    contacts.push({ externalUserId, ...(displayName ? { displayName } : {}) });
+  }
+  return contacts;
 }
 
 export class ZcaJsTransportClient implements ZaloTransportClient {
