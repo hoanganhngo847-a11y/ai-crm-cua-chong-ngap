@@ -84,7 +84,9 @@
     "start:javis-brain": "node --conditions=react-server .javis-brain/services/javis-brain/main.js",
     "test:javis-brain": "tsx --conditions=react-server --test tests/javis-brain/server.test.ts tests/javis-brain/e2e.test.ts tests/javis-brain/model.test.ts tests/javis-brain/runtime.test.ts tests/javis-brain/grounding.test.ts",
     "test:customer-360": "tsx --conditions=react-server --test tests/customer-360/contracts.test.ts tests/customer-360/javis.test.ts",
-    "test:customer-360:db": "tsx --conditions=react-server --test tests/customer-360/database.test.ts"
+    "test:customer-360:db": "tsx --conditions=react-server --test tests/customer-360/database.test.ts",
+    "test:campaigns": "tsx --conditions=react-server --test tests/campaigns/runtime.test.ts",
+    "test:campaigns:db": "tsx --conditions=react-server --test tests/campaigns/database.test.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",

@@ -86,6 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: <Users className="w-4 h-4 shrink-0" />,
           roles: ['BOSS_ADMIN', 'SALE'],
         },
+        { label: 'Chiến dịch tin nhắn', href: '/campaigns', icon: <Share2 className="w-4 h-4 shrink-0" />, roles: ['BOSS_ADMIN', 'SALE'] },
         {
           label: 'Cuộc gọi & Ghi âm',
           href: '/calls',
