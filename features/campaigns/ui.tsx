@@ -2,21 +2,32 @@ import Link from "next/link";
 import { Card } from "../../components/ui/card";
 export function CampaignOff() {
   return (
-    <Card className="p-8 space-y-3">
-      <h2 className="font-semibold">Chiến dịch tin nhắn chưa được bật</h2>
-      <p>
-        Liên hệ quản trị viên để kiểm tra cấu hình chiến dịch cho công ty này.
+    <Card className="space-y-2 border-amber-200 bg-amber-50 p-4 text-amber-950">
+      <h2 className="font-semibold">Đang ở chế độ soạn thảo an toàn</h2>
+      <p className="text-sm">
+        Bạn vẫn có thể chọn khách hàng, tự tạo mẫu tin, lưu bản nháp và kiểm tra
+        eligibility. Gửi thật / đặt lịch vẫn đang khóa cho tới khi kênh provider
+        được quản trị viên bật và xác minh.
       </p>
-      <Link className="text-[var(--accent)]" href="/customers/dossier">
-        Về Customer 360
-      </Link>
+      <div className="flex flex-wrap gap-4 text-sm font-medium">
+        <Link className="text-[var(--accent)]" href="/customers/dossier">
+          Chọn khách hàng
+        </Link>
+        <Link className="text-[var(--accent)]" href="/campaigns/templates">
+          Tạo mẫu tin nhắn
+        </Link>
+        <Link className="text-[var(--accent)]" href="/campaigns/new">
+          Tạo chiến dịch
+        </Link>
+      </div>
     </Card>
   );
 }
 export function CampaignNav() {
   return (
-    <nav className="flex gap-5 text-sm">
+    <nav className="flex flex-wrap gap-5 text-sm">
       <Link href="/campaigns">Chiến dịch</Link>
+      <Link href="/campaigns/new">Tạo chiến dịch</Link>
       <Link href="/campaigns/templates">Thư viện mẫu</Link>
       <Link href="/customers/dossier">Chọn khách hàng</Link>
     </nav>

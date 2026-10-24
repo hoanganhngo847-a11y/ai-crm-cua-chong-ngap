@@ -62,12 +62,9 @@ export async function campaignRead(
     })
     .strict()
     .parse(input);
-  if (process.env.BULK_MESSAGING_ENABLED !== "true")
-    return {
-      actor,
-      data: null,
-      readiness: { FACEBOOK: false, ZALO_OA: false },
-    };
+
+  // Authoring remains available while live transports are disabled. Sender sync only
+  // stores trusted Page/OA registry metadata and never dispatches a message.
   let pages: { id: string; name: string; connected: boolean }[] = [];
   try {
     pages = bindingsForCompany(actor.companyId).map((b) => ({
@@ -90,19 +87,19 @@ export async function campaignRead(
     p_input: data,
   });
   if (result.error || !result.data) throw new Error("CAMPAIGN_UNAVAILABLE");
+  const deliveryEnabled = process.env.BULK_MESSAGING_ENABLED === "true";
   return {
     actor,
     data: safeCampaignDto(result.data) as CampaignData,
     readiness: {
-      FACEBOOK: channelEnabled("FACEBOOK"),
-      ZALO_OA: channelEnabled("ZALO_OA"),
+      FACEBOOK: deliveryEnabled && channelEnabled("FACEBOOK"),
+      ZALO_OA: deliveryEnabled && channelEnabled("ZALO_OA"),
     },
   };
 }
 export async function campaignCommand(command: string, input: unknown) {
   const actor = await recordingActor();
-  if (process.env.BULK_MESSAGING_ENABLED !== "true")
-    throw new Error("MODULE_DISABLED");
+  const deliveryEnabled = process.env.BULK_MESSAGING_ENABLED === "true";
   let parsed: unknown;
   switch (command) {
     case "create":
@@ -115,12 +112,14 @@ export async function campaignCommand(command: string, input: unknown) {
       break;
     }
     case "confirm": {
+      if (!deliveryEnabled) throw new Error("TRANSPORT_DISABLED");
       parsed = confirmSchema.parse(input);
       const { data } = await campaignRead({
         id: (parsed as { id: string }).id,
       });
       if (
-        !data?.campaign ||
+        !data?.enabled ||
+        !data.campaign ||
         !channelEnabled(data.campaign.channel) ||
         !campaignAdapters[data.campaign.channel].verified
       )
@@ -148,9 +147,12 @@ export async function campaignCommand(command: string, input: unknown) {
         .parse(input);
       break;
     case "validate":
+      parsed = z.object({ id: z.string().uuid() }).strict().parse(input);
+      break;
     case "pause":
     case "resume":
     case "cancel":
+      if (!deliveryEnabled) throw new Error("TRANSPORT_DISABLED");
       parsed = z.object({ id: z.string().uuid() }).strict().parse(input);
       break;
     default:

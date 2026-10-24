@@ -18,20 +18,24 @@ export default async function NewCampaign({
   const { data, actor, readiness } = await campaignRead({
     customer_ids: [...new Set(ids.data)],
   });
+  const deliveryEnabled =
+    Boolean(data?.enabled) && process.env.BULK_MESSAGING_ENABLED === "true";
   return (
     <div className="space-y-5">
       <PageHeader
         title="Tạo chiến dịch"
-        description="Chọn mẫu đã duyệt, kiểm tra eligibility và xác nhận số tin trước khi gửi."
+        description="Chọn khách hàng, kênh, mẫu tin và lưu bản nháp. Gửi thật chỉ mở khi provider đã sẵn sàng."
       />
       <CampaignNav />
-      {!data?.enabled ? (
-        <CampaignOff />
-      ) : (
+      {!deliveryEnabled && <CampaignOff />}
+      {data && (
         <CampaignWizard
           data={data}
           readiness={readiness}
-          canExecute={actor.role === "BOSS_ADMIN" || data.sale_execute}
+          canExecute={
+            deliveryEnabled &&
+            (actor.role === "BOSS_ADMIN" || data.sale_execute)
+          }
         />
       )}
     </div>
