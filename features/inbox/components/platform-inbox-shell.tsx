@@ -221,8 +221,11 @@ export default function PlatformInboxShell({
       }
     }
 
-    setSearchMatches(matches);
-    if (firstMatch) firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const frame = requestAnimationFrame(() => {
+      setSearchMatches(matches);
+      if (firstMatch) firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [searchTerm, channel, getWorkspaceParts]);
 
   const openZaloHandoff = useCallback(
