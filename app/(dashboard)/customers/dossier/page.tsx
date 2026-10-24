@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BulkSelection, BulkHeader, BulkCell } from '../../../../features/campaigns/bulk-selection';
 import { createAdminClient } from '../../../../lib/supabase/admin';
 import { recordingActor } from '../../../../features/zalo-recordings/access';
 import { dossierOwners, listCustomersForActor, listFilters } from '../../../../features/customer-360/service';
@@ -322,10 +323,12 @@ export default async function CustomerDossierList({
       </Card>
 
       {/* Data Table */}
+      <BulkSelection key={data.items.map(c => c.id).join(',')} ids={data.items.map(c => c.id)} enabled={process.env.BULK_MESSAGING_ENABLED === 'true'}>
       <Card className="overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>
+              <BulkHeader />
               <TableHead className="min-w-[220px]">Khách hàng</TableHead>
               <TableHead className="min-w-[130px]">Giai đoạn</TableHead>
               <TableHead className="w-[80px]" alignRight>Điểm</TableHead>
@@ -341,7 +344,7 @@ export default async function CustomerDossierList({
           <TableBody>
             {data.items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="p-0">
+                <TableCell colSpan={process.env.BULK_MESSAGING_ENABLED === 'true' ? 10 : 9} className="p-0">
                   <EmptyState
                     type={hasActiveFilters ? 'no-results' : 'empty'}
                     title={
@@ -382,6 +385,7 @@ export default async function CustomerDossierList({
 
                 return (
                   <TableRow key={c.id}>
+                    <BulkCell id={c.id} name={c.name} />
                     {/* Customer Primary Cell */}
                     <TableCell>
                       <div className="flex items-center gap-2.5">
@@ -516,6 +520,7 @@ export default async function CustomerDossierList({
           className="border-t"
         />
       </Card>
+      </BulkSelection>
     </div>
   );
 }
