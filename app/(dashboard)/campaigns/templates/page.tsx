@@ -8,12 +8,11 @@ export default async function TemplatesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Thư viện mẫu tin nhắn"
-        description="Mẫu do người dùng tạo và duyệt. Phê duyệt provider được xác minh độc lập."
+        description="Tự soạn nội dung dùng lại cho chiến dịch. Gửi thật vẫn tuân theo trạng thái provider và eligibility."
       />
       <CampaignNav />
-      {!data?.enabled ? (
-        <CampaignOff />
-      ) : (
+      {!data?.enabled && <CampaignOff />}
+      {data && (
         <TemplateLibrary data={data} boss={actor.role === "BOSS_ADMIN"} />
       )}
     </div>
