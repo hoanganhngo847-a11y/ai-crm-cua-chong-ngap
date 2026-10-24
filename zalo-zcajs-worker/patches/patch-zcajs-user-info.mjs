@@ -9,6 +9,7 @@ import { encodeAES, handleZaloResponse, request } from "../utils.js";
 
 export type ZaloUserProfile = {
     userId?: string;
+    uid?: string;
     username?: string;
     displayName?: string;
     zaloName?: string;
@@ -35,7 +36,7 @@ export function getUserInfoFactory(serviceURL: string) {
         if (userIds.length === 0) throw new ZaloApiError("Missing user id");
 
         // phonebook_version=0 intentionally asks Zalo for a fresh profile snapshot.
-        // If the endpoint or payload changes, callers fail soft and keep dName fallback.
+        // Callers fail soft to the message dName if this unofficial endpoint changes.
         const params = {
             phonebook_version: 0,
             friend_pversion_map: userIds,
@@ -75,8 +76,11 @@ if (!zalo.includes(propertyLine)) zalo = zalo.replace(propertyAnchor, `${propert
 
 const ctorAnchor = '        this.getCookie = getCookieFactory();';
 if (!zalo.includes(ctorAnchor)) throw new Error('ZCAJS user-info patch anchor missing: getCookie constructor');
-if (!zalo.includes('this.getUserInfo = getUserInfoFactory(')) {
+if (!zalo.includes('ZALO_PC_DISPLAY_NAME_RESOLUTION')) {
     const block = `
+        // ZALO_PC_DISPLAY_NAME_RESOLUTION
+        // Resolve the current per-account display name before external message listeners run.
+        // This mirrors Zalo Web/PC more closely than the potentially stale message dName.
         const profileBase = zpwServiceMap.profile?.[0] || zpwServiceMap.friend?.[0];
         if (!profileBase) throw new Error("Zalo profile service is unavailable");
         this.getUserInfo = getUserInfoFactory(
@@ -84,7 +88,80 @@ if (!zalo.includes('this.getUserInfo = getUserInfoFactory(')) {
                 zpw_ver: Zalo.API_VERSION,
                 zpw_type: Zalo.API_TYPE,
             }),
-        );`;
+        );
+
+        const displayNameCache = new Map<string, { name?: string; expiresAt: number }>();
+        const displayNameInflight = new Map<string, Promise<string | undefined>>();
+        const positiveTtlMs = 6 * 60 * 60 * 1000;
+        const negativeTtlMs = 10 * 60 * 1000;
+
+        const cleanDisplayName = (value: unknown) => {
+            if (typeof value !== "string") return undefined;
+            const name = value.replace(/\\s+/g, " ").trim();
+            return name ? name.slice(0, 160) : undefined;
+        };
+
+        const resolveDisplayName = async (uid: string): Promise<string | undefined> => {
+            const now = Date.now();
+            const cached = displayNameCache.get(uid);
+            if (cached && cached.expiresAt > now) return cached.name;
+            if (cached) displayNameCache.delete(uid);
+            const pending = displayNameInflight.get(uid);
+            if (pending) return pending;
+
+            const lookup = (async () => {
+                try {
+                    const response = await this.getUserInfo(uid);
+                    const changed = response?.changed_profiles || {};
+                    const profile =
+                        changed[uid] ||
+                        changed[\`${'${uid}'}_0\`] ||
+                        Object.values(changed).find((candidate: any) => {
+                            const candidateUid = String(candidate?.userId || candidate?.uid || "").replace(/_0$/, "");
+                            return candidateUid === uid;
+                        });
+                    const profileRecord = profile as any;
+                    const name =
+                        cleanDisplayName(profileRecord?.displayName) ||
+                        cleanDisplayName(profileRecord?.display_name) ||
+                        cleanDisplayName(profileRecord?.zaloName) ||
+                        cleanDisplayName(profileRecord?.zalo_name) ||
+                        cleanDisplayName(profileRecord?.username);
+                    displayNameCache.set(uid, {
+                        name,
+                        expiresAt: Date.now() + (name ? positiveTtlMs : negativeTtlMs),
+                    });
+                    return name;
+                } catch {
+                    displayNameCache.set(uid, { expiresAt: Date.now() + negativeTtlMs });
+                    return undefined;
+                } finally {
+                    displayNameInflight.delete(uid);
+                }
+            })();
+            displayNameInflight.set(uid, lookup);
+            return lookup;
+        };
+
+        const originalListenerEmit = this.listener.emit.bind(this.listener) as (...args: any[]) => boolean;
+        (this.listener as any).emit = (eventName: string, ...args: any[]) => {
+            const message = args[0];
+            if (eventName !== "message" || !message || message.type !== 0 || message.isSelf) {
+                return originalListenerEmit(eventName, ...args);
+            }
+
+            const uid = String(message.threadId || message?.data?.uidFrom || "").trim();
+            if (!uid) return originalListenerEmit(eventName, ...args);
+
+            const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2500));
+            void Promise.race([resolveDisplayName(uid), timeout])
+                .then((name) => {
+                    if (name && message?.data) message.data.dName = name;
+                    originalListenerEmit(eventName, ...args);
+                })
+                .catch(() => originalListenerEmit(eventName, ...args));
+            return true;
+        };`;
     zalo = zalo.replace(ctorAnchor, `${ctorAnchor}${block}`);
 }
 
