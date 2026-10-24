@@ -3,15 +3,65 @@
 import {
   createContext,
   useContext,
-  useEffect,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import Link from "next/link";
 import { Button } from "../../components/ui/button";
 
 const STORAGE_KEY = "campaign:selected-customers";
+const STORAGE_EVENT = "campaign-selection-change";
 const MAX_RECIPIENTS = 500;
+
+function subscribeSelection(onStoreChange: () => void) {
+  window.addEventListener(STORAGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStoreChange);
+  return () => {
+    window.removeEventListener(STORAGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStoreChange);
+  };
+}
+
+function selectionSnapshot() {
+  try {
+    return window.sessionStorage.getItem(STORAGE_KEY) || "[]";
+  } catch {
+    return "[]";
+  }
+}
+
+function parseSelection(snapshot: string): string[] {
+  try {
+    const parsed = JSON.parse(snapshot);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is string => typeof value === "string")
+      .slice(0, MAX_RECIPIENTS);
+  } catch {
+    return [];
+  }
+}
+
+function writeSelection(selected: string[]) {
+  try {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(selected.slice(0, MAX_RECIPIENTS)),
+    );
+    window.dispatchEvent(new Event(STORAGE_EVENT));
+  } catch {
+    // Storage is a UX convenience; no delivery behavior depends on it.
+  }
+}
+
+function clearSelection() {
+  try {
+    window.sessionStorage.removeItem(STORAGE_KEY);
+    window.dispatchEvent(new Event(STORAGE_EVENT));
+  } catch {
+    // Navigation must not depend on sessionStorage availability.
+  }
+}
 
 const Selection = createContext<{
   enabled: boolean;
@@ -29,49 +79,13 @@ export function BulkSelection({
   enabled?: boolean;
   children: ReactNode;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [hydrated, setHydrated] = useState(false);
-
-  // Customer selection is campaign authoring, not message delivery. Persist it
-  // across Customer 360 filter/pagination reloads so applying a filter does not
-  // silently discard the recipients the user already ticked.
-  useEffect(() => {
-    try {
-      const raw = window.sessionStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setSelected(
-            parsed
-              .filter((value): value is string => typeof value === "string")
-              .slice(0, MAX_RECIPIENTS),
-          );
-        }
-      }
-    } catch {
-      // Storage is only a UX convenience; selection still works without it.
-    } finally {
-      setHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    try {
-      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(selected));
-    } catch {
-      // Ignore storage failures and keep the in-memory selection.
-    }
-  }, [hydrated, selected]);
-
+  const snapshot = useSyncExternalStore(
+    subscribeSelection,
+    selectionSnapshot,
+    () => "[]",
+  );
+  const selected = parseSelection(snapshot);
   const enabled = true;
-  const clearStoredSelection = () => {
-    try {
-      window.sessionStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // Navigation must not depend on sessionStorage availability.
-    }
-  };
 
   return (
     <Selection.Provider
@@ -79,21 +93,25 @@ export function BulkSelection({
         ids,
         enabled,
         selected,
-        toggle: (id) =>
-          setSelected((old) => {
-            if (old.includes(id)) return old.filter((value) => value !== id);
-            if (old.length >= MAX_RECIPIENTS) return old;
-            return [...old, id];
-          }),
-        all: () =>
-          setSelected((old) => {
-            const allCurrentSelected = ids.every((id) => old.includes(id));
-            if (allCurrentSelected) {
-              const current = new Set(ids);
-              return old.filter((id) => !current.has(id));
-            }
-            return [...new Set([...old, ...ids])].slice(0, MAX_RECIPIENTS);
-          }),
+        toggle: (id) => {
+          if (selected.includes(id)) {
+            writeSelection(selected.filter((value) => value !== id));
+            return;
+          }
+          if (selected.length >= MAX_RECIPIENTS) return;
+          writeSelection([...selected, id]);
+        },
+        all: () => {
+          const allCurrentSelected = ids.every((id) => selected.includes(id));
+          if (allCurrentSelected) {
+            const current = new Set(ids);
+            writeSelection(selected.filter((id) => !current.has(id)));
+            return;
+          }
+          writeSelection(
+            [...new Set([...selected, ...ids])].slice(0, MAX_RECIPIENTS),
+          );
+        },
       }}
     >
       {children}
@@ -110,17 +128,11 @@ export function BulkSelection({
           </div>
           <Link
             href={`/campaigns/new?customers=${selected.join(",")}`}
-            onClick={clearStoredSelection}
+            onClick={clearSelection}
           >
             <Button>Tiếp tục: chọn mẫu tin nhắn</Button>
           </Link>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setSelected([]);
-              clearStoredSelection();
-            }}
-          >
+          <Button variant="ghost" onClick={clearSelection}>
             Bỏ chọn
           </Button>
         </div>
