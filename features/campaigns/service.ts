@@ -137,6 +137,16 @@ export async function campaignCommand(command: string, input: unknown) {
         .strict()
         .parse(input);
       break;
+    case "unsuppress":
+      parsed = z
+        .object({
+          customer_id: z.string().uuid(),
+          channel: z.enum(["FACEBOOK", "ZALO_OA"]),
+          reason: z.string().trim().min(3).max(500).optional(),
+        })
+        .strict()
+        .parse(input);
+      break;
     case "validate":
     case "pause":
     case "resume":
@@ -154,4 +164,37 @@ export async function campaignCommand(command: string, input: unknown) {
   });
   if (result.error) throw new Error("CAMPAIGN_COMMAND_REJECTED");
   return result.data as { id: string };
+}
+
+// Trusted server-side provider identity verification helper. Never exposed to browser actions.
+export async function verifyProviderIdentity(input: {
+  companyId: string;
+  channel: "FACEBOOK" | "ZALO_OA";
+  senderAccountExternalId: string;
+  externalCustomerId: string;
+  evidence?: Record<string, unknown>;
+}) {
+  const schema = z
+    .object({
+      companyId: z.string().uuid(),
+      channel: z.enum(["FACEBOOK", "ZALO_OA"]),
+      senderAccountExternalId: z.string().regex(/^[0-9]+$/),
+      externalCustomerId: z.string().regex(/^[0-9]+$/),
+      evidence: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict();
+  const parsed = schema.parse(input);
+  const result = await createAdminClient().rpc("campaign_verify_identity", {
+    p_company: parsed.companyId,
+    p_channel: parsed.channel,
+    p_sender_id: parsed.senderAccountExternalId,
+    p_recipient_id: parsed.externalCustomerId,
+    p_evidence: parsed.evidence || {},
+  });
+  if (result.error) throw new Error(result.error.message);
+  return result.data as {
+    ok: boolean;
+    identity_id: string;
+    customer_id: string;
+  };
 }

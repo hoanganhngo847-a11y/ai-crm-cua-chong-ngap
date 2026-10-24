@@ -316,7 +316,68 @@ SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('i
 SELECT pg_temp.ok((SELECT eligibility_reason='TEMPLATE_DISABLED' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp2) AND customer_id='${cust}'),'disabled template');
 INSERT INTO public.interactions(company_id,customer_id,conversation_id,channel,type,direction,actor_type,sanitized_content,sanitization_status)
 VALUES('${A}','${cust}','${conversation}','FACEBOOK','MESSAGE','INBOUND','CUSTOMER','Dừng nhắn tin cho tôi','SUCCEEDED');
-SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id='${A}' AND customer_id='${cust}' AND channel='FACEBOOK'),'Vietnamese optout captured');
+SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id='${A}' AND customer_id='${cust}' AND channel='FACEBOOK' AND source='CUSTOMER_OPT_OUT'),'Vietnamese optout captured with provenance');
+`));
+
+test("opt-out false positive prevention, explicit signals, provenance and safe restore", () =>
+  run(`
+DO $$
+DECLARE
+  phrases text[] := ARRAY['Không', 'Không ạ', 'Không nhé', 'Không phải', 'Không biết', 'Chưa', 'Không cần đâu'];
+  p text;
+BEGIN
+  FOREACH p IN ARRAY phrases LOOP
+    INSERT INTO public.interactions(company_id,customer_id,conversation_id,channel,type,direction,actor_type,sanitized_content,sanitization_status)
+    VALUES('${A}','${cust}','${conversation}','FACEBOOK','MESSAGE','INBOUND','CUSTOMER',p,'SUCCEEDED');
+  END LOOP;
+END $$;
+SELECT pg_temp.ok(NOT EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id='${A}' AND customer_id='${cust}'),'negative phrases do not suppress');
+
+INSERT INTO public.interactions(id,company_id,customer_id,conversation_id,channel,type,direction,actor_type,sanitized_content,sanitization_status)
+VALUES('bc000000-0000-4000-8000-000000000099','${A}','${cust}','${conversation}','FACEBOOK','MESSAGE','INBOUND','CUSTOMER','Dừng gửi tin cho tôi','SUCCEEDED');
+SELECT pg_temp.ok((SELECT source='CUSTOMER_OPT_OUT' AND source_interaction_id='bc000000-0000-4000-8000-000000000099' AND status='UNSUBSCRIBED' AND revoked_at IS NULL FROM public.messaging_suppressions WHERE company_id='${A}' AND customer_id='${cust}'),'optout provenance recorded');
+SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_campaign_audit WHERE company_id='${A}' AND event='customer_optout_detected'),'optout detected audit');
+
+CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign(recipients=>'["${cust}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
+SELECT pg_temp.ok((SELECT eligibility_status='UNSUBSCRIBED' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'suppressed blocks eligibility');
+
+SELECT pg_temp.denied($q$SELECT public.campaign_command('${A}','${sale}','unsuppress',jsonb_build_object('customer_id','${cust}','channel','FACEBOOK','reason','test'))$q$);
+SELECT pg_temp.denied($q$SELECT public.campaign_command('${A}','${boss}','unsuppress',jsonb_build_object('customer_id','${cust}','channel','FACEBOOK'))$q$);
+SELECT pg_temp.denied($q$SELECT public.campaign_command('${A}','${boss}','unsuppress',jsonb_build_object('customer_id','${cust}','channel','FACEBOOK','reason','no'))$q$);
+
+SELECT public.campaign_command('${A}','${boss}','unsuppress',jsonb_build_object('customer_id','${cust}','channel','FACEBOOK','reason','Khach dong y qua dien thoai'));
+SELECT pg_temp.ok((SELECT revoked_at IS NOT NULL AND revoked_by='${boss}' AND revoke_reason='Khach dong y qua dien thoai' FROM public.messaging_suppressions WHERE company_id='${A}' AND customer_id='${cust}'),'suppression revoked metadata');
+SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_campaign_audit WHERE company_id='${A}' AND event='suppression_revoked'),'suppression_revoked audit');
+SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_campaign_audit WHERE company_id='${A}' AND event='customer_optin_restored'),'customer_optin_restored audit');
+
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
+SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'restored customer is eligible');
+`));
+
+test("Facebook and Zalo provider identity verification, cross-tenant denial and ZCAJS rejection", () =>
+  run(`
+UPDATE public.identities SET verified=false WHERE id='${identity}';
+CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign(recipients=>'["${cust}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
+SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'unverified identity blocked with IDENTITY_UNVERIFIED');
+
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${B}','FACEBOOK','111','12345','{"verified":true}')$q$);
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','999','12345','{"verified":true}')$q$);
+
+SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','12345','{"verified":true}');
+SELECT pg_temp.ok((SELECT verified FROM public.identities WHERE id='${identity}'),'identity promoted to verified');
+SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_campaign_audit WHERE company_id='${A}' AND event='identity_verified'),'identity_verified audit logged');
+
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
+SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'verified identity eligible');
+
+INSERT INTO public.identities(id,company_id,customer_id,channel,external_id,verified,metadata)
+VALUES('bc000000-0000-4000-8000-000000000098','${A}','${cust}','ZALO','333:9999',false,jsonb_build_object('source','ZCAJS','provider','zcajs'));
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999','{"verified":true}')$q$);
+CREATE TEMP TABLE camp_oa AS SELECT pg_temp.make_campaign(chan=>'ZALO_OA',sid=>'${oa}',tid=>'${zaloTemplate}',recipients=>'["${cust}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_oa)));
+SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' OR eligibility_reason='SENDER_UNAVAILABLE' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa) AND customer_id='${cust}'),'ZCAJS identity never eligible for OA campaign');
 `));
 test('provider IDs, retry budget and company rate limits fail closed',()=>run(`
 CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign() id;

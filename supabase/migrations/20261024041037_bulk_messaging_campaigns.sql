@@ -60,8 +60,15 @@ CREATE INDEX campaign_queue_due ON public.messaging_campaign_recipients(campaign
 CREATE INDEX campaign_company_recent ON public.messaging_campaigns(company_id,created_at DESC);
 CREATE TABLE public.messaging_suppressions (
  company_id uuid NOT NULL, customer_id uuid NOT NULL, channel text NOT NULL CHECK(channel IN ('FACEBOOK','ZALO_OA')),
- status text NOT NULL CHECK(status IN ('DO_NOT_MESSAGE','UNSUBSCRIBED','BLOCKED')), created_by uuid REFERENCES public.user_profiles(id),
- created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(company_id,customer_id,channel),
+ status text NOT NULL CHECK(status IN ('DO_NOT_MESSAGE','UNSUBSCRIBED','BLOCKED')),
+ source text NOT NULL DEFAULT 'SYSTEM' CHECK(source IN ('CUSTOMER_OPT_OUT','BOSS_ADMIN','SALE_ACTION','PROVIDER','SYSTEM')),
+ source_interaction_id uuid REFERENCES public.interactions(id),
+ created_by uuid REFERENCES public.user_profiles(id),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ revoked_at timestamptz,
+ revoked_by uuid REFERENCES public.user_profiles(id),
+ revoke_reason text,
+ PRIMARY KEY(company_id,customer_id,channel),
  FOREIGN KEY(company_id,customer_id) REFERENCES public.customers(company_id,id)
 );
 -- OA/ZBS eligibility is verified by an official provider integration, never by client checkboxes.
@@ -93,11 +100,19 @@ DECLARE normalized text; BEGIN
  IF NEW.direction<>'INBOUND' OR NEW.actor_type<>'CUSTOMER' OR NEW.channel NOT IN ('FACEBOOK','ZALO')
  OR NEW.sanitization_status NOT IN ('SUCCEEDED','NOT_REQUIRED') OR NEW.sanitized_content IS NULL THEN RETURN NEW; END IF;
  normalized:=btrim(regexp_replace(replace(lower(regexp_replace(normalize(NEW.sanitized_content,NFD),U&'[\0300-\036f]','','g')),'đ','d'),'[^a-z0-9]+',' ','g'));
- IF normalized IN ('huy','dung','ngung','tu choi','khong','stop') OR (' '||normalized||' ') ~
- ' (dung lam phien|ngung lam phien|dung gui|ngung gui|dung nhan tin|ngung nhan tin|khong nhan tin nua|khong muon nhan tin|khong co nhu cau|huy dang ky|huy nhan tin|tu choi nhan tin|unsubscribe|stop) ' THEN
- INSERT INTO public.messaging_suppressions(company_id,customer_id,channel,status)
- VALUES(NEW.company_id,NEW.customer_id,CASE NEW.channel WHEN 'ZALO' THEN 'ZALO_OA' ELSE 'FACEBOOK' END,'UNSUBSCRIBED')
- ON CONFLICT(company_id,customer_id,channel) DO NOTHING;
+ IF normalized IN ('stop','unsubscribe','huy','dung','ngung') OR (' '||normalized||' ') ~
+ ' (dung lam phien|ngung lam phien|dung gui tin|ngung gui tin|dung gui tin nua|dung nhan tin|ngung nhan tin|dung nhan tin nua|dung nhan nua|ngung nhan nua|khong nhan tin nua|khong muon nhan tin|khong muon nhan tin nua|khong co nhu cau nhan tin|huy dang ky|huy nhan tin|tu choi nhan tin|unsubscribe|stop) ' THEN
+ INSERT INTO public.messaging_suppressions(company_id,customer_id,channel,status,source,source_interaction_id)
+ VALUES(NEW.company_id,NEW.customer_id,CASE NEW.channel WHEN 'ZALO' THEN 'ZALO_OA' ELSE 'FACEBOOK' END,'UNSUBSCRIBED','CUSTOMER_OPT_OUT',NEW.id)
+ ON CONFLICT(company_id,customer_id,channel) DO UPDATE
+ SET status='UNSUBSCRIBED',source='CUSTOMER_OPT_OUT',source_interaction_id=NEW.id,created_at=clock_timestamp(),
+     revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL;
+ INSERT INTO public.messaging_campaign_audit(company_id,campaign_id,event,metadata)
+ VALUES(NEW.company_id,NULL,'customer_optout_detected',jsonb_build_object(
+   'customer_id',NEW.customer_id,
+   'channel',CASE NEW.channel WHEN 'ZALO' THEN 'ZALO_OA' ELSE 'FACEBOOK' END,
+   'interaction_id',NEW.id
+ ));
  END IF;
  RETURN NEW;
 END $$;
@@ -143,16 +158,25 @@ CREATE TRIGGER campaign_snapshot_frozen BEFORE UPDATE ON public.messaging_campai
 CREATE FUNCTION public.campaign_eligibility(p_campaign uuid,p_customer uuid) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
 DECLARE c public.messaging_campaigns; s public.messaging_sender_accounts; t public.message_templates; i public.identities;
- conv public.conversations; values jsonb; parameters jsonb; payload text; BEGIN
+ conv public.conversations; values jsonb; parameters jsonb; payload text;
+ v_chan text; v_cust_identities int; v_conflict_count int;
+BEGIN
  SELECT * INTO STRICT c FROM public.messaging_campaigns WHERE id=p_campaign;
  SELECT * INTO STRICT s FROM public.messaging_sender_accounts WHERE company_id=c.company_id AND id=c.sender_account_id;
- IF EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id=c.company_id AND customer_id=p_customer AND channel=c.channel)
+ IF EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id=c.company_id AND customer_id=p_customer AND channel=c.channel AND revoked_at IS NULL)
  OR EXISTS(SELECT 1 FROM public.care_schedules WHERE company_id=c.company_id AND customer_id=p_customer AND channel=CASE c.channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END AND NOT enabled)
  THEN RETURN '{"status":"UNSUBSCRIBED","reason":"UNSUBSCRIBED"}'; END IF;
- SELECT * INTO i FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer AND verified=true
- AND channel=CASE c.channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END
- AND split_part(external_id,':',1)=s.external_id AND external_id ~ '^[0-9]+:[0-9]+$' ORDER BY id LIMIT 1;
- IF i.id IS NULL THEN RETURN '{"status":"MISSING_IDENTITY","reason":"MISSING_IDENTITY"}'; END IF;
+ v_chan := CASE c.channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END;
+ SELECT count(*) INTO v_cust_identities FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer AND channel=v_chan;
+ IF v_cust_identities = 0 THEN RETURN '{"status":"MISSING_IDENTITY","reason":"MISSING_IDENTITY"}'; END IF;
+ SELECT * INTO i FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer
+ AND channel=v_chan AND split_part(external_id,':',1)=s.external_id AND external_id ~ '^[0-9]+:[0-9]+$' ORDER BY verified DESC, id LIMIT 1;
+ IF i.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_MISMATCH"}'; END IF;
+ SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=c.company_id AND channel=v_chan AND external_id=i.external_id;
+ IF v_conflict_count > 1 THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_CONFLICT"}'; END IF;
+ IF NOT i.verified THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
+ IF c.channel='ZALO_OA' AND ((i.metadata->>'source'='ZCAJS') OR (i.metadata->>'provider'='zcajs')) THEN
+ RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
  SELECT * INTO t FROM public.message_templates WHERE company_id=c.company_id AND id=c.template_id;
  IF (t.sender_account_id IS NOT NULL AND t.sender_account_id<>c.sender_account_id) OR t.channel IS DISTINCT FROM c.channel OR t.template_type IS DISTINCT FROM c.template_snapshot->>'template_type' OR t.status NOT IN ('ACTIVE','PROVIDER_APPROVED') OR (c.template_snapshot->>'template_type'='ZBS_TEMPLATE' AND
  (t.status<>'PROVIDER_APPROVED' OR t.parameter_mapping IS DISTINCT FROM c.template_snapshot->'parameter_mapping' OR t.provider_template_id IS DISTINCT FROM c.template_snapshot->>'provider_template_id'))
@@ -215,7 +239,8 @@ END $$;
 CREATE FUNCTION public.campaign_command(p_company uuid,p_actor uuid,p_command text,p_input jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
 DECLARE role text; c public.messaging_campaigns; t public.message_templates; s public.messaging_sender_accounts;
- cid uuid; tid uuid; ids uuid[]; event text; scheduled timestamptz; content text; vars jsonb; before_validation text; after_validation text; BEGIN
+ cid uuid; tid uuid; ids uuid[]; event text; scheduled timestamptz; content text; vars jsonb; before_validation text; after_validation text;
+ v_supp public.messaging_suppressions; v_reason text; BEGIN
  role:=public.campaign_actor(p_company,p_actor);
  IF NOT EXISTS(SELECT 1 FROM public.messaging_campaign_settings WHERE company_id=p_company AND enabled) THEN RAISE EXCEPTION 'MODULE_DISABLED'; END IF;
  IF octet_length(p_input::text)>50000 THEN RAISE EXCEPTION 'INPUT_TOO_LARGE'; END IF;
@@ -239,10 +264,40 @@ DECLARE role text; c public.messaging_campaigns; t public.message_templates; s p
  RETURN jsonb_build_object('id',tid);
  ELSIF p_command='suppress' THEN
  IF role<>'BOSS_ADMIN' THEN RAISE EXCEPTION 'FORBIDDEN'; END IF;
- INSERT INTO public.messaging_suppressions(company_id,customer_id,channel,status,created_by)
- VALUES(p_company,(p_input->>'customer_id')::uuid,p_input->>'channel',p_input->>'status',p_actor)
- ON CONFLICT(company_id,customer_id,channel) DO UPDATE SET status=EXCLUDED.status,created_by=p_actor,created_at=clock_timestamp();
- INSERT INTO public.messaging_campaign_audit(company_id,actor_user_id,event,metadata) VALUES(p_company,p_actor,'suppression_added',jsonb_build_object('customer_id',p_input->>'customer_id','channel',p_input->>'channel'));
+ INSERT INTO public.messaging_suppressions(company_id,customer_id,channel,status,source,created_by)
+ VALUES(p_company,(p_input->>'customer_id')::uuid,p_input->>'channel',p_input->>'status','BOSS_ADMIN',p_actor)
+ ON CONFLICT(company_id,customer_id,channel) DO UPDATE
+ SET status=EXCLUDED.status,source='BOSS_ADMIN',created_by=p_actor,created_at=clock_timestamp(),
+     revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL;
+ INSERT INTO public.messaging_campaign_audit(company_id,actor_user_id,event,metadata) VALUES(p_company,p_actor,'suppression_added',jsonb_build_object('customer_id',p_input->>'customer_id','channel',p_input->>'channel','status',p_input->>'status'));
+ RETURN '{}';
+ ELSIF p_command='unsuppress' THEN
+ IF role<>'BOSS_ADMIN' THEN RAISE EXCEPTION 'FORBIDDEN'; END IF;
+ v_reason:=btrim(coalesce(p_input->>'reason',''));
+ SELECT * INTO v_supp FROM public.messaging_suppressions
+ WHERE company_id=p_company AND customer_id=(p_input->>'customer_id')::uuid AND channel=p_input->>'channel' AND revoked_at IS NULL;
+ IF v_supp.company_id IS NULL THEN RAISE EXCEPTION 'NOT_FOUND'; END IF;
+ IF v_supp.source = 'CUSTOMER_OPT_OUT' AND length(v_reason) < 3 THEN
+   RAISE EXCEPTION 'REVOKE_REASON_REQUIRED';
+ END IF;
+ UPDATE public.messaging_suppressions
+ SET revoked_at=clock_timestamp(), revoked_by=p_actor, revoke_reason=nullif(v_reason,'')
+ WHERE company_id=p_company AND customer_id=v_supp.customer_id AND channel=v_supp.channel;
+ INSERT INTO public.messaging_campaign_audit(company_id,actor_user_id,event,metadata)
+ VALUES(p_company,p_actor,'suppression_revoked',jsonb_build_object(
+   'customer_id',p_input->>'customer_id',
+   'channel',p_input->>'channel',
+   'source',v_supp.source,
+   'reason',nullif(v_reason,'')
+ ));
+ IF v_supp.source = 'CUSTOMER_OPT_OUT' THEN
+   INSERT INTO public.messaging_campaign_audit(company_id,actor_user_id,event,metadata)
+   VALUES(p_company,p_actor,'customer_optin_restored',jsonb_build_object(
+     'customer_id',p_input->>'customer_id',
+     'channel',p_input->>'channel',
+     'reason',v_reason
+   ));
+ END IF;
  RETURN '{}';
  ELSIF p_command='create' THEN
  -- Serialize same-actor request ID before checking it: double-click creates one draft.
@@ -323,6 +378,34 @@ BEGIN
  ON CONFLICT(channel,external_id) DO UPDATE SET connected=true WHERE public.messaging_sender_accounts.company_id=p_company;
 END $$;
 
+-- Trusted server-side identity verification based on authoritative provider evidence. Never callable from browser.
+CREATE FUNCTION public.campaign_verify_identity(p_company uuid,p_channel text,p_sender_id text,p_recipient_id text,p_evidence jsonb DEFAULT '{}') RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
+DECLARE v_channel text; v_ext text; v_identity public.identities; v_conflict_count int; v_sender public.messaging_sender_accounts; BEGIN
+ IF p_channel NOT IN ('FACEBOOK','ZALO_OA') THEN RAISE EXCEPTION 'INVALID_CHANNEL'; END IF;
+ IF p_sender_id !~ '^[0-9]{1,100}$' OR p_recipient_id !~ '^[0-9]{1,100}$' THEN RAISE EXCEPTION 'INVALID_IDENTIFIER'; END IF;
+ v_channel:=CASE p_channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END;
+ v_ext:=p_sender_id||':'||p_recipient_id;
+ SELECT * INTO v_sender FROM public.messaging_sender_accounts WHERE company_id=p_company AND channel=p_channel AND external_id=p_sender_id;
+ IF v_sender.id IS NULL OR NOT v_sender.connected THEN RAISE EXCEPTION 'SENDER_NOT_FOUND_OR_DISCONNECTED'; END IF;
+ IF p_channel='ZALO_OA' AND NOT EXISTS(SELECT 1 FROM public.zalo_oa_configs WHERE company_id=p_company AND oa_id=p_sender_id AND status='ACTIVE' AND app_id<>'ZCAJS') THEN
+ RAISE EXCEPTION 'OA_NOT_ACTIVE_OR_ZCAJS'; END IF;
+ IF EXISTS(SELECT 1 FROM public.identities WHERE channel=v_channel AND external_id=v_ext AND company_id<>p_company) THEN
+ RAISE EXCEPTION 'IDENTITY_CROSS_TENANT_CONFLICT'; END IF;
+ SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=p_company AND channel=v_channel AND external_id=v_ext;
+ IF v_conflict_count>1 THEN RAISE EXCEPTION 'IDENTITY_CONFLICT'; END IF;
+ SELECT * INTO v_identity FROM public.identities WHERE company_id=p_company AND channel=v_channel AND external_id=v_ext LIMIT 1;
+ IF v_identity.id IS NULL THEN RAISE EXCEPTION 'IDENTITY_NOT_FOUND'; END IF;
+ IF p_channel='ZALO_OA' AND ((v_identity.metadata->>'source'='ZCAJS') OR (v_identity.metadata->>'provider'='zcajs')) THEN
+ RAISE EXCEPTION 'ZCAJS_CANNOT_BE_VERIFIED_AS_OA'; END IF;
+ IF coalesce(p_evidence->>'verified','false')<>'true' AND NOT EXISTS(
+ SELECT 1 FROM public.interactions WHERE company_id=p_company AND customer_id=v_identity.customer_id AND channel=v_channel AND direction='INBOUND' AND actor_type='CUSTOMER') THEN
+ RAISE EXCEPTION 'AUTHORITATIVE_EVIDENCE_REQUIRED'; END IF;
+ UPDATE public.identities SET verified=true WHERE id=v_identity.id AND company_id=p_company;
+ INSERT INTO public.messaging_campaign_audit(company_id,event,metadata) VALUES(p_company,'identity_verified',jsonb_build_object('identity_id',v_identity.id,'customer_id',v_identity.customer_id,'channel',p_channel,'external_id',v_ext));
+ RETURN jsonb_build_object('ok',true,'identity_id',v_identity.id,'customer_id',v_identity.customer_id);
+END $$;
+
 CREATE FUNCTION public.campaign_read(p_company uuid,p_actor uuid,p_input jsonb DEFAULT '{}') RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
 DECLARE role text; cid uuid:=(p_input->>'id')::uuid; result jsonb; page int:=coalesce((p_input->>'page')::int,1); filter text:=coalesce(p_input->>'status','ALL'); BEGIN
@@ -346,7 +429,8 @@ DECLARE role text; cid uuid:=(p_input->>'id')::uuid; result jsonb; page int:=coa
  'recipients',coalesce((SELECT jsonb_agg(jsonb_build_object('id',r.id,'customer_id',customer_id,'recipient_snapshot',recipient_snapshot,'personalized_payload',personalized_payload,
  'eligibility_status',eligibility_status,'eligibility_reason',eligibility_reason,'delivery_status',delivery_status,'attempt_count',attempt_count,
  'provider_message_id',provider_message_id,'provider_error_code',provider_error_code,'provider_error_message_sanitized',provider_error_message_sanitized,
- 'sent_at',sent_at,'delivered_at',delivered_at,'read_at',read_at)) FROM public.messaging_campaign_recipients r WHERE company_id=p_company AND campaign_id=cid),'[]'),
+ 'sent_at',sent_at,'delivered_at',delivered_at,'read_at',read_at,
+ 'suppression',(SELECT jsonb_build_object('status',su.status,'source',su.source,'created_at',su.created_at,'revoked_at',su.revoked_at) FROM public.messaging_suppressions su WHERE su.company_id=p_company AND su.customer_id=r.customer_id AND su.channel=(SELECT channel FROM public.messaging_campaigns WHERE id=cid) AND su.revoked_at IS NULL LIMIT 1))) FROM public.messaging_campaign_recipients r WHERE company_id=p_company AND campaign_id=cid),'[]'),
  'audit',coalesce((SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT event,actor_user_id,created_at FROM public.messaging_campaign_audit WHERE company_id=p_company AND campaign_id=cid ORDER BY created_at DESC LIMIT 100)x),'[]')
  ) INTO result;
  RETURN result;
@@ -477,5 +561,5 @@ DO $$ DECLARE t text; f record; BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION public.campaign_sync_senders(uuid,uuid,jsonb),public.campaign_read(uuid,uuid,jsonb),public.campaign_command(uuid,uuid,text,jsonb),
  public.campaign_claim(uuid,text),public.campaign_begin(uuid,uuid,uuid),public.campaign_finish(uuid,uuid,uuid,text,text,text),
- public.campaign_receipt(uuid,uuid,text,text) TO service_role;
+ public.campaign_receipt(uuid,uuid,text,text),public.campaign_verify_identity(uuid,text,text,text,jsonb) TO service_role;
 COMMIT;

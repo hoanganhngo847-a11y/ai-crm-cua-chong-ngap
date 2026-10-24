@@ -89,6 +89,12 @@ export type Campaign = {
   started_at: string | null;
   finished_at: string | null;
 };
+export type SuppressionInfo = {
+  status: string;
+  source: string;
+  created_at: string;
+  revoked_at: string | null;
+};
 export type Recipient = {
   id: string;
   customer_id: string;
@@ -110,6 +116,7 @@ export type Recipient = {
   sent_at: string | null;
   delivered_at: string | null;
   read_at: string | null;
+  suppression?: SuppressionInfo | null;
 };
 export type Template = z.infer<typeof templateSchema> & {
   id: string;
@@ -145,6 +152,9 @@ export type CampaignData = {
 export const reasonLabels: Record<string, string> = {
   ELIGIBLE: "Có thể gửi",
   MISSING_IDENTITY: "Không có định danh kênh",
+  IDENTITY_UNVERIFIED: "Định danh chưa được xác minh bởi provider",
+  IDENTITY_CONFLICT: "Định danh mâu thuẫn giữa các khách hàng",
+  SENDER_MISMATCH: "Định danh thuộc Page/OA khác",
   BLOCKED_POLICY: "Không đủ điều kiện policy",
   UNSUBSCRIBED: "Đã unsubscribe / chặn liên hệ",
   DUPLICATE: "Trùng người nhận",

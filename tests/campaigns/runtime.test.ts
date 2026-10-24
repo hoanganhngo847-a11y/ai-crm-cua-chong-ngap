@@ -7,6 +7,7 @@ import {
   renderTemplate,
   templateVariables,
   vietnamSchedule,
+  reasonLabels,
 } from "../../features/campaigns/contracts";
 import {
   campaignAdapters,
@@ -84,6 +85,11 @@ test("strict schemas reject tenant authority, personal Zalo and unbounded input"
     templateSchema.safeParse({ name: "bad", channel: "ZCAJS" }).success,
     false,
   );
+});
+test("reasonLabels include enhanced identity and policy distinction", () => {
+  assert.ok(reasonLabels.IDENTITY_UNVERIFIED);
+  assert.ok(reasonLabels.IDENTITY_CONFLICT);
+  assert.ok(reasonLabels.SENDER_MISMATCH);
 });
 test("browser DTO masks phones including malicious customer names and frozen preview content", () => {
   const dto = safeCampaignDto({

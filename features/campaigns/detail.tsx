@@ -35,6 +35,12 @@ export function CampaignDetail({
   const [confirm, setConfirm] = useState(false);
   const [schedule, setSchedule] = useState("");
   const [onlyExcluded, setOnlyExcluded] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<{
+    customerId: string;
+    source: string;
+    name: string;
+  } | null>(null);
+  const [restoreReason, setRestoreReason] = useState("");
   const c = data.campaign!;
   async function command(cmd: string, input: unknown = { id: c.id }) {
     if (inFlight.current) return;
@@ -205,7 +211,33 @@ export function CampaignDetail({
                 Gửi: {date(r.sent_at)} · Delivered: {date(r.delivered_at)} ·
                 Read: {date(r.read_at)}
               </p>
-              {boss && (
+              {r.suppression ? (
+                <div className="rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2.5 text-xs text-amber-900 dark:text-amber-200">
+                  <p className="font-semibold">Đã chặn nhận tin ({r.suppression.status})</p>
+                  <p className="mt-0.5">
+                    Nguồn: {r.suppression.source === "CUSTOMER_OPT_OUT" ? "Khách hàng yêu cầu dừng nhận tin" : r.suppression.source === "BOSS_ADMIN" ? "Quản trị viên chặn" : r.suppression.source}
+                    {r.suppression.created_at && ` · ${date(r.suppression.created_at)}`}
+                  </p>
+                  {boss && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-2 text-xs"
+                      disabled={busy}
+                      onClick={() => {
+                        setRestoreReason("");
+                        setRestoreTarget({
+                          customerId: r.customer_id,
+                          source: r.suppression!.source,
+                          name: r.recipient_snapshot.name,
+                        });
+                      }}
+                    >
+                      Khôi phục quyền nhận tin
+                    </Button>
+                  )}
+                </div>
+              ) : boss && (
                 <form
                   action={async (f) => {
                     await command("suppress", {
@@ -296,6 +328,73 @@ export function CampaignDetail({
             />
           </label>
           <p>Bạn chuẩn bị gửi {c.eligible_count} tin nhắn.</p>
+        </div>
+      </Modal>
+      <Modal
+        isOpen={Boolean(restoreTarget)}
+        onClose={() => {
+          if (!busy) setRestoreTarget(null);
+        }}
+        title="Khôi phục quyền nhận tin"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => setRestoreTarget(null)}
+            >
+              Hủy
+            </Button>
+            <Button
+              disabled={
+                busy ||
+                (restoreTarget?.source === "CUSTOMER_OPT_OUT" &&
+                  restoreReason.trim().length < 3)
+              }
+              onClick={async () => {
+                if (!restoreTarget) return;
+                await command("unsuppress", {
+                  customer_id: restoreTarget.customerId,
+                  channel: c.channel,
+                  reason: restoreReason.trim() || undefined,
+                });
+                setRestoreTarget(null);
+                setRestoreReason("");
+              }}
+            >
+              Xác nhận khôi phục
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm">
+          <p>
+            Bạn đang chuẩn bị khôi phục quyền nhận tin cho khách hàng{" "}
+            <strong>{restoreTarget?.name}</strong> trên kênh{" "}
+            <strong>{c.channel}</strong>.
+          </p>
+          {restoreTarget?.source === "CUSTOMER_OPT_OUT" && (
+            <div className="space-y-2 rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-xs text-amber-900 dark:text-amber-200">
+              <p className="font-semibold">
+                Khách hàng đã chủ động yêu cầu dừng nhận tin (CUSTOMER_OPT_OUT).
+              </p>
+              <p>
+                Để khôi phục, bạn phải cung cấp lý do xác đáng (ví dụ: khách hàng
+                đã xác nhận đồng ý nhận tin trở lại qua điện thoại / kênh khác).
+              </p>
+              <label className="block font-medium">
+                Lý do khôi phục (bắt buộc, tối thiểu 3 ký tự):
+                <input
+                  aria-label="Lý do khôi phục"
+                  type="text"
+                  className="mt-1 w-full rounded border p-2 text-sm text-[var(--text-primary)] bg-[var(--surface-primary)]"
+                  placeholder="Ví dụ: Khách đồng ý qua cuộc gọi tư vấn ngày 24/10"
+                  value={restoreReason}
+                  onChange={(e) => setRestoreReason(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
         </div>
       </Modal>
     </div>
