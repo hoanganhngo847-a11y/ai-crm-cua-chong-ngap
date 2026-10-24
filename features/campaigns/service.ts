@@ -42,6 +42,57 @@ export function safeCampaignDto(value: unknown): unknown {
     );
   return value;
 }
+
+async function campaignReplyCount(
+  companyId: string,
+  data: CampaignData,
+): Promise<number | null> {
+  const campaign = data.campaign;
+  if (!campaign) return null;
+
+  const sentRecipients = data.recipients.filter(
+    (recipient) => recipient.sent_at && recipient.customer_id,
+  );
+  if (sentRecipients.length === 0) return 0;
+
+  const sentAtByCustomer = new Map<string, number>();
+  for (const recipient of sentRecipients) {
+    const sentAt = recipient.sent_at
+      ? new Date(recipient.sent_at).getTime()
+      : Number.NaN;
+    if (!Number.isFinite(sentAt)) continue;
+    const current = sentAtByCustomer.get(recipient.customer_id);
+    if (current === undefined || sentAt < current)
+      sentAtByCustomer.set(recipient.customer_id, sentAt);
+  }
+  if (sentAtByCustomer.size === 0) return 0;
+
+  const earliestSentAt = Math.min(...sentAtByCustomer.values());
+  const interactionChannel = campaign.channel === "ZALO_OA" ? "ZALO" : "FACEBOOK";
+  const result = await createAdminClient()
+    .from("interactions")
+    .select("customer_id,created_at")
+    .eq("company_id", companyId)
+    .eq("type", "MESSAGE")
+    .eq("direction", "INBOUND")
+    .eq("channel", interactionChannel)
+    .in("customer_id", [...sentAtByCustomer.keys()])
+    .gte("created_at", new Date(earliestSentAt).toISOString());
+
+  if (result.error) return null;
+
+  const replied = new Set<string>();
+  for (const row of result.data || []) {
+    if (!row.customer_id || !row.created_at) continue;
+    const sentAt = sentAtByCustomer.get(row.customer_id);
+    if (sentAt === undefined) continue;
+    const inboundAt = new Date(row.created_at).getTime();
+    if (Number.isFinite(inboundAt) && inboundAt >= sentAt)
+      replied.add(row.customer_id);
+  }
+  return replied.size;
+}
+
 export async function campaignRead(
   input: {
     id?: string;
@@ -75,28 +126,41 @@ export async function campaignRead(
   } catch {
     /* Missing/invalid bindings fail closed. */
   }
-  const sync = await createAdminClient().rpc("campaign_sync_senders", {
+  const db = createAdminClient();
+  const sync = await db.rpc("campaign_sync_senders", {
     p_company: actor.companyId,
     p_actor: actor.userId,
     p_pages: pages,
   });
   if (sync.error) throw new Error("CAMPAIGN_SENDERS_UNAVAILABLE");
-  const result = await createAdminClient().rpc("campaign_read", {
+  const result = await db.rpc("campaign_read", {
     p_company: actor.companyId,
     p_actor: actor.userId,
     p_input: data,
   });
   if (result.error || !result.data) throw new Error("CAMPAIGN_UNAVAILABLE");
+
+  const dto = safeCampaignDto(result.data) as CampaignData;
+  if (dto.campaign) {
+    const repliedCount = await campaignReplyCount(actor.companyId, dto);
+    (
+      dto.campaign as typeof dto.campaign & {
+        replied_count?: number | null;
+      }
+    ).replied_count = repliedCount;
+  }
+
   const deliveryEnabled = process.env.BULK_MESSAGING_ENABLED === "true";
   return {
     actor,
-    data: safeCampaignDto(result.data) as CampaignData,
+    data: dto,
     readiness: {
       FACEBOOK: deliveryEnabled && channelEnabled("FACEBOOK"),
       ZALO_OA: deliveryEnabled && channelEnabled("ZALO_OA"),
     },
   };
 }
+
 export async function campaignCommand(command: string, input: unknown) {
   const actor = await recordingActor();
   const deliveryEnabled = process.env.BULK_MESSAGING_ENABLED === "true";
