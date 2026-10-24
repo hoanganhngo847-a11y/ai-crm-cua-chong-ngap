@@ -1,5 +1,3 @@
-'use client';
-
 import React from 'react';
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
@@ -110,7 +108,22 @@ export const TablePagination: React.FC<PaginationProps> = ({
     icon: React.ReactNode,
     label: string
   ) => {
-    if (getPageHref && !disabled) {
+    // When href generation is supplied by a Server Component, keep the whole
+    // pagination branch server-renderable. Never pass callbacks across the
+    // Server -> Client boundary just to render a disabled navigation control.
+    if (getPageHref) {
+      if (disabled) {
+        return (
+          <span
+            className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-primary)] text-xs text-[var(--text-tertiary)] opacity-50 cursor-not-allowed"
+            aria-label={label}
+            aria-disabled="true"
+          >
+            {icon}
+          </span>
+        );
+      }
+
       return (
         <Link
           href={getPageHref(page)}
