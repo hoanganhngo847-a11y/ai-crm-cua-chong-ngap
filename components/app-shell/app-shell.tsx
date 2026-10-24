@@ -51,21 +51,17 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [prevPathname, setPrevPathname] = useState(pathname);
   const isInbox = Boolean(pathname?.startsWith('/inbox'));
 
-  // Auto-close mobile navigation drawer on route change during render.
+  // Keep route-derived UI resets in the existing route-change render guard so
+  // we do not synchronously cascade setState calls from an effect.
   if (pathname !== prevPathname) {
     setPrevPathname(pathname);
     setIsMobileMenuOpen(false);
-  }
-
-  // Inbox is a workspace-first screen: start with the global sidebar compact.
-  // Leaving Inbox always exits focus mode so other screens keep the normal shell.
-  useEffect(() => {
     if (isInbox) {
       setIsCollapsed(true);
     } else {
       setIsFocusMode(false);
     }
-  }, [isInbox]);
+  }
 
   // Global Keyboard Shortcut: ⌘K or Ctrl+K
   useEffect(() => {
