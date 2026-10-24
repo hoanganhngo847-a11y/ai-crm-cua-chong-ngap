@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { enrollMfaAction, verifyMfaAction } from '../../../../(auth)/actions';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { ShieldCheck, AlertCircle } from 'lucide-react';
 
 export default function MfaEnrollPage() {
   const router = useRouter();
@@ -62,52 +65,56 @@ export default function MfaEnrollPage() {
 
   if (isInitializing) {
     return (
-      <div className="max-w-md mx-auto p-8 text-center text-slate-400">
+      <div className="max-w-md mx-auto p-8 text-center text-text-tertiary text-sm">
         Đang khởi tạo mã bí mật TOTP...
       </div>
     );
   }
 
   return (
-    <div className="max-w-md mx-auto space-y-6">
-      <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-6">
+    <div className="max-w-md mx-auto space-y-6 pt-6">
+      <Card className="p-6 shadow-sm space-y-6">
         <div className="text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/30 mb-3">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-accent-soft text-accent border border-accent/20 mb-3">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <h1 className="text-xl font-bold text-white">Kích hoạt Xác thực 2 Yếu tố (MFA)</h1>
-          <p className="text-xs text-slate-400 mt-1">
+          <h1 className="text-lg font-semibold text-text-primary">Kích hoạt Xác thực 2 Yếu tố (MFA)</h1>
+          <p className="text-xs text-text-secondary mt-1 leading-relaxed">
             Theo chính sách bảo mật AUTH DECISION 01, tài khoản Quản trị viên (Sếp) bắt buộc đạt cấp độ AAL2 để truy cập dữ liệu nhạy cảm.
           </p>
         </div>
 
         {errorMessage && (
-          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
-            {errorMessage}
+          <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMessage}</span>
           </div>
         )}
 
         {enrollData && (
           <div className="space-y-4">
-            <div className="text-center p-4 bg-slate-950/80 rounded-xl border border-slate-800">
-              <p className="text-xs font-medium text-slate-300 mb-3">
+            <div className="text-center p-4 bg-surface-secondary rounded-xl border border-border-subtle">
+              <p className="text-xs font-medium text-text-primary mb-3">
                 1. Quét mã QR bằng ứng dụng Authenticator (Google Authenticator, Authy, Apple):
               </p>
               {enrollData.qrCode ? (
-                <div className="flex justify-center my-2 p-2 bg-white rounded-lg inline-block mx-auto">
+                <div className="flex justify-center my-2 p-2 bg-white rounded-lg border border-border-subtle inline-block mx-auto shadow-xs">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={enrollData.qrCode}
                     alt="Mã QR TOTP"
-                    className="w-44 h-44 object-contain"
+                    className="w-48 h-48 object-contain"
                   />
                 </div>
-              ) : null}
-              <div className="mt-2 text-left">
-                <p className="text-[11px] text-slate-500 mb-1">Hoặc nhập mã khóa thủ công:</p>
-                <code className="block p-2 rounded bg-slate-900 font-mono text-xs text-blue-400 break-all select-all border border-slate-800">
+              ) : (
+                <div className="text-xs text-text-tertiary italic">Đang tải mã QR...</div>
+              )}
+
+              <div className="mt-3 pt-3 border-t border-border-subtle text-left">
+                <span className="text-[11px] text-text-tertiary block mb-1">
+                  Hoặc nhập khóa bảo mật thủ công:
+                </span>
+                <code className="text-xs font-mono font-bold text-accent bg-surface-primary px-2 py-1 rounded border border-border-subtle block text-center break-all select-all">
                   {enrollData.secret}
                 </code>
               </div>
@@ -115,8 +122,8 @@ export default function MfaEnrollPage() {
 
             <form onSubmit={handleVerify} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
-                  2. Nhập mã 6 chữ số từ ứng dụng
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  2. Nhập mã gồm 6 chữ số từ ứng dụng xác thực:
                 </label>
                 <input
                   type="text"
@@ -127,21 +134,23 @@ export default function MfaEnrollPage() {
                   placeholder="123456"
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                  className="w-full text-center tracking-[0.5em] font-mono text-2xl py-3 rounded-xl bg-slate-950 border border-slate-700 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full text-center tracking-[0.5em] text-xl font-mono py-2.5 rounded-lg border border-border-subtle bg-surface-primary text-text-primary focus:outline-none focus:border-accent"
                 />
               </div>
 
-              <button
+              <Button
                 type="submit"
+                variant="primary"
+                size="md"
+                className="w-full"
                 disabled={isPending || code.length !== 6}
-                className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {isPending ? 'Đang xác thực...' : 'Xác nhận & Kích hoạt AAL2'}
-              </button>
+                {isPending ? 'Đang xác thực...' : 'Kích hoạt và Tiếp tục'}
+              </Button>
             </form>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

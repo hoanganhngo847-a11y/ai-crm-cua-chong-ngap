@@ -59,8 +59,8 @@ function ToolbarButton({
       onClick={onClick}
       className={`w-9 h-9 rounded-lg flex items-center justify-center transition border ${
         active
-          ? 'bg-blue-600/20 border-blue-500/60 text-blue-300'
-          : 'border-transparent text-slate-300 hover:text-white hover:bg-slate-800'
+          ? 'bg-blue-50 border-blue-200 text-blue-600'
+          : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
       } disabled:opacity-35 disabled:cursor-not-allowed`}
     >
       {children}
@@ -296,7 +296,7 @@ export default function ZaloComposer({
   };
 
   return (
-    <div className="relative rounded-xl border border-slate-700/80 bg-slate-950 overflow-visible shadow-inner">
+    <div className="relative rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-primary)] overflow-visible shadow-subtle">
       <input
         ref={imageInputRef}
         type="file"
@@ -320,7 +320,7 @@ export default function ZaloComposer({
       />
 
       {/* Toolbar styled after the familiar Zalo desktop composer. */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-slate-800 bg-slate-900/95 overflow-x-auto">
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--surface-secondary)] overflow-x-auto rounded-t-xl">
         <ToolbarButton title="Nhãn dán / biểu cảm" active={panel === 'sticker'} onClick={() => setPanel(panel === 'sticker' ? null : 'sticker')} disabled={busy}>
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" strokeWidth="1.8"/><path d="M8 10h.01M16 10h.01M8.5 14.5c1 .9 2.2 1.4 3.5 1.4s2.5-.5 3.5-1.4" strokeWidth="1.8" strokeLinecap="round"/></svg>
         </ToolbarButton>
@@ -353,20 +353,20 @@ export default function ZaloComposer({
       </div>
 
       {panel && (
-        <div className="absolute left-2 bottom-[calc(100%+8px)] z-50 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-slate-900 shadow-2xl p-2 text-xs">
+        <div className="absolute left-2 bottom-[calc(100%+8px)] z-50 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-primary)] shadow-dropdown p-2 text-xs">
           {panel === 'emoji' && (
             <div className="grid grid-cols-6 gap-1">
               {EMOJIS.map((emoji) => (
-                <button key={emoji} type="button" className="h-9 rounded-lg text-xl hover:bg-slate-800" onClick={() => { insertText(emoji); closePanels(); }}>{emoji}</button>
+                <button key={emoji} type="button" className="h-9 rounded-lg text-xl hover:bg-[var(--surface-hover)]" onClick={() => { insertText(emoji); closePanels(); }}>{emoji}</button>
               ))}
             </div>
           )}
           {panel === 'sticker' && (
             <div>
-              <div className="px-1 pb-2 text-slate-400">Biểu cảm nhanh</div>
+              <div className="px-1 pb-2 text-[var(--text-secondary)]">Biểu cảm nhanh</div>
               <div className="grid grid-cols-6 gap-1">
                 {STICKER_LIKE.map((emoji) => (
-                  <button key={emoji} type="button" className="h-10 rounded-lg text-2xl hover:bg-slate-800" onClick={() => { insertText(emoji); closePanels(); }}>{emoji}</button>
+                  <button key={emoji} type="button" className="h-10 rounded-lg text-2xl hover:bg-[var(--surface-hover)]" onClick={() => { insertText(emoji); closePanels(); }}>{emoji}</button>
                 ))}
               </div>
             </div>
@@ -377,12 +377,12 @@ export default function ZaloComposer({
                 type="button"
                 disabled={aiLoading}
                 onClick={() => { closePanels(); void onRequestAi(); }}
-                className="w-full text-left rounded-lg px-3 py-2 bg-purple-950/40 border border-purple-800/50 text-purple-200 hover:bg-purple-900/50 disabled:opacity-50"
+                className="w-full text-left rounded-lg px-3 py-2 bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 disabled:opacity-50 font-medium"
               >
                 ⚡ {aiLoading ? 'Đang tạo gợi ý AI…' : 'Tạo gợi ý trả lời bằng AI'}
               </button>
               {QUICK_REPLIES.map((reply) => (
-                <button key={reply} type="button" onClick={() => { onDraftChange(reply); closePanels(); requestAnimationFrame(() => textareaRef.current?.focus()); }} className="w-full text-left rounded-lg px-3 py-2 text-slate-200 hover:bg-slate-800 leading-relaxed">
+                <button key={reply} type="button" onClick={() => { onDraftChange(reply); closePanels(); requestAnimationFrame(() => textareaRef.current?.focus()); }} className="w-full text-left rounded-lg px-3 py-2 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] leading-relaxed">
                   {reply}
                 </button>
               ))}
@@ -390,31 +390,31 @@ export default function ZaloComposer({
           )}
           {panel === 'format' && (
             <div className="grid grid-cols-3 gap-1">
-              <button type="button" onClick={() => transformSelection('bullet')} className="rounded-lg px-2 py-2 hover:bg-slate-800 text-slate-200">• Danh sách</button>
-              <button type="button" onClick={() => transformSelection('quote')} className="rounded-lg px-2 py-2 hover:bg-slate-800 text-slate-200">› Trích dẫn</button>
-              <button type="button" onClick={() => transformSelection('upper')} className="rounded-lg px-2 py-2 hover:bg-slate-800 text-slate-200">AA Viết hoa</button>
+              <button type="button" onClick={() => transformSelection('bullet')} className="rounded-lg px-2 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)]">• Danh sách</button>
+              <button type="button" onClick={() => transformSelection('quote')} className="rounded-lg px-2 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)]">› Trích dẫn</button>
+              <button type="button" onClick={() => transformSelection('upper')} className="rounded-lg px-2 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)]">AA Viết hoa</button>
             </div>
           )}
           {panel === 'more' && (
             <div className="space-y-1">
-              <button type="button" onClick={() => void readImageFromClipboard()} className="w-full text-left rounded-lg px-3 py-2 hover:bg-slate-800 text-slate-200">📋 Dán ảnh từ clipboard</button>
-              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={!canUseZaloMedia} className="w-full text-left rounded-lg px-3 py-2 hover:bg-slate-800 text-slate-200 disabled:opacity-40">🖼️ Chọn ảnh từ máy</button>
-              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={!canUseZaloMedia} className="w-full text-left rounded-lg px-3 py-2 hover:bg-slate-800 text-slate-200 disabled:opacity-40">📎 Chọn tệp</button>
-              {attachments.length > 0 && <button type="button" onClick={() => { clearAttachments(); closePanels(); }} className="w-full text-left rounded-lg px-3 py-2 hover:bg-slate-800 text-rose-300">Xóa toàn bộ tệp đã chọn</button>}
+              <button type="button" onClick={() => void readImageFromClipboard()} className="w-full text-left rounded-lg px-3 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)]">📋 Dán ảnh từ clipboard</button>
+              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={!canUseZaloMedia} className="w-full text-left rounded-lg px-3 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)] disabled:opacity-40">🖼️ Chọn ảnh từ máy</button>
+              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={!canUseZaloMedia} className="w-full text-left rounded-lg px-3 py-2 hover:bg-[var(--surface-hover)] text-[var(--text-primary)] disabled:opacity-40">📎 Chọn tệp</button>
+              {attachments.length > 0 && <button type="button" onClick={() => { clearAttachments(); closePanels(); }} className="w-full text-left rounded-lg px-3 py-2 hover:bg-[var(--surface-hover)] text-rose-600">Xóa toàn bộ tệp đã chọn</button>}
             </div>
           )}
         </div>
       )}
 
       {attachments.length > 0 && (
-        <div className="flex gap-2 p-2.5 overflow-x-auto border-b border-slate-800 bg-slate-950/80">
+        <div className="flex gap-2 p-2.5 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--surface-secondary)]">
           {attachments.map((item) => (
-            <div key={item.id} className="relative shrink-0 w-24 h-24 rounded-xl border border-slate-700 bg-slate-900 overflow-hidden group">
+            <div key={item.id} className="relative shrink-0 w-24 h-24 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-primary)] overflow-hidden group">
               {item.previewUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={item.previewUrl} alt={item.file.name || 'Ảnh đính kèm'} className="w-full h-full object-cover" />
               ) : (
-                <div className="h-full p-2 flex flex-col items-center justify-center text-center gap-1 text-slate-300">
+                <div className="h-full p-2 flex flex-col items-center justify-center text-center gap-1 text-[var(--text-secondary)]">
                   <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z" strokeWidth="1.7"/><path d="M14 3v5h5" strokeWidth="1.7"/><path d="M9 13h6M9 16h4" strokeWidth="1.7" strokeLinecap="round"/></svg>
                   <span className="text-[10px] line-clamp-2 break-all">{item.file.name}</span>
                 </div>
@@ -422,16 +422,16 @@ export default function ZaloComposer({
               <button type="button" onClick={() => removeAttachment(item.id)} title="Bỏ tệp" className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 text-white text-xs opacity-90 hover:opacity-100">✕</button>
             </div>
           ))}
-          <div className="shrink-0 flex items-end text-[10px] text-slate-500 pb-1">
+          <div className="shrink-0 flex items-end text-[10px] text-[var(--text-tertiary)] pb-1">
             {attachments.length}/{MAX_ATTACHMENTS} · {bytesLabel(totalBytes)}
           </div>
         </div>
       )}
 
       {localError && (
-        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs flex items-center justify-between gap-3">
+        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between gap-3">
           <span>{localError}</span>
-          <button type="button" className="text-rose-200" onClick={() => setLocalError(null)}>✕</button>
+          <button type="button" className="text-rose-600 font-bold" onClick={() => setLocalError(null)}>✕</button>
         </div>
       )}
 
@@ -450,8 +450,8 @@ export default function ZaloComposer({
               void submit();
             }
           }}
-          placeholder={canUseZaloMedia ? 'Nhập @, tin nhắn tới đi xe k ôm' : 'Nhập nội dung tư vấn phản hồi…'}
-          className="flex-1 min-h-[52px] max-h-36 bg-transparent border-0 p-1 text-sm text-white placeholder-slate-500 focus:outline-none resize-none disabled:opacity-60"
+          placeholder={canUseZaloMedia ? 'Nhập tin nhắn tư vấn…' : 'Nhập nội dung tư vấn phản hồi…'}
+          className="flex-1 min-h-[52px] max-h-36 bg-transparent border-0 p-1 text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none resize-none disabled:opacity-60"
         />
 
         <ToolbarButton title="Biểu tượng cảm xúc" active={panel === 'emoji'} onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')} disabled={busy}>
@@ -464,7 +464,7 @@ export default function ZaloComposer({
             onClick={() => void submit()}
             disabled={busy}
             title="Gửi"
-            className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition disabled:opacity-40"
+            className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center transition shadow-subtle disabled:opacity-40"
           >
             {busy ? (
               <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -473,11 +473,11 @@ export default function ZaloComposer({
             )}
           </button>
         ) : (
-          <button type="button" onClick={() => void sendThumb()} disabled={busy} title="Gửi 👍" className="w-10 h-10 rounded-full text-2xl flex items-center justify-center hover:bg-slate-800 disabled:opacity-40">👍</button>
+          <button type="button" onClick={() => void sendThumb()} disabled={busy} title="Gửi 👍" className="w-10 h-10 rounded-full text-2xl flex items-center justify-center hover:bg-[var(--surface-hover)] disabled:opacity-40">👍</button>
         )}
       </div>
 
-      <div className="flex items-center justify-between px-3 pb-2 text-[10px] text-slate-500">
+      <div className="flex items-center justify-between px-3 pb-2 text-[10px] text-[var(--text-tertiary)]">
         <span>{canUseZaloMedia ? 'Có thể kéo/chọn ảnh hoặc dán ảnh bằng Cmd/Ctrl + V' : 'Ảnh/tệp đang ưu tiên cho kênh Zalo'}</span>
         <span>Shift + Enter để xuống dòng</span>
       </div>

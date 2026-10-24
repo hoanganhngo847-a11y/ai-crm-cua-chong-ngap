@@ -6,6 +6,9 @@ import {
   getEnrolledFactorIdAction,
   verifyMfaAction,
 } from '../../../../(auth)/actions';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { ShieldCheck, AlertCircle } from 'lucide-react';
 
 export default function MfaVerifyPage() {
   const router = useRouter();
@@ -58,36 +61,35 @@ export default function MfaVerifyPage() {
 
   if (isInitializing) {
     return (
-      <div className="max-w-md mx-auto p-8 text-center text-slate-400">
+      <div className="max-w-md mx-auto p-8 text-center text-text-tertiary text-sm">
         Đang kiểm tra trạng thái xác thực...
       </div>
     );
   }
 
   return (
-    <div className="max-w-md mx-auto space-y-6">
-      <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-6">
+    <div className="max-w-md mx-auto space-y-6 pt-6">
+      <Card className="p-6 shadow-sm space-y-6">
         <div className="text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/30 mb-3">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-accent-soft text-accent border border-accent/20 mb-3">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <h1 className="text-xl font-bold text-white">Xác thực Hai Yếu tố (MFA / AAL2)</h1>
-          <p className="text-xs text-slate-400 mt-1">
+          <h1 className="text-lg font-semibold text-text-primary">Xác thực Hai Yếu tố (MFA / AAL2)</h1>
+          <p className="text-xs text-text-secondary mt-1 leading-relaxed">
             Nhập mã gồm 6 chữ số từ ứng dụng Authenticator của bạn để tiếp tục vào Khu vực Quản trị.
           </p>
         </div>
 
         {errorMessage && (
-          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
-            {errorMessage}
+          <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMessage}</span>
           </div>
         )}
 
         <form onSubmit={handleVerify} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2 text-center">
+            <label className="block text-xs font-medium text-text-secondary mb-2 text-center">
               Mã bảo mật TOTP (6 chữ số)
             </label>
             <input
@@ -100,28 +102,27 @@ export default function MfaVerifyPage() {
               placeholder="123456"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-              className="w-full text-center tracking-[0.5em] font-mono text-3xl py-3.5 rounded-xl bg-slate-950 border border-slate-700 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full text-center tracking-[0.5em] text-2xl font-mono py-2.5 rounded-lg border border-border-subtle bg-surface-primary text-text-primary focus:outline-none focus:border-accent"
             />
           </div>
 
-          <button
+          <Button
             type="submit"
+            variant="primary"
+            size="md"
+            className="w-full"
             disabled={isPending || code.length !== 6}
-            className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25"
           >
-            {isPending ? 'Đang xác thực...' : 'Xác thực & Truy cập'}
-          </button>
+            {isPending ? 'Đang xác thực...' : 'Xác nhận và Đăng nhập'}
+          </Button>
         </form>
 
-        <div className="text-center pt-2 border-t border-slate-800">
-          <a
-            href="/admin/mfa/enroll"
-            className="text-xs text-slate-400 hover:text-blue-400 transition"
-          >
-            Đăng ký lại thiết bị Authenticator mới?
-          </a>
+        <div className="text-center pt-2 border-t border-border-subtle">
+          <p className="text-[11px] text-text-tertiary">
+            Mất quyền truy cập thiết bị xác thực? Vui lòng liên hệ bộ phận hỗ trợ kỹ thuật để khôi phục.
+          </p>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

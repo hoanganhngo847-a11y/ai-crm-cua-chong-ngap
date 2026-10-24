@@ -14,6 +14,13 @@ import type {
   WarrantyEligibleOrder,
 } from '../warranty-service';
 import type { WarrantyTicketStatus } from '../types';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ShieldCheck, Plus, AlertCircle, CheckCircle2, UserCheck, Clock } from 'lucide-react';
 
 interface WarrantyViewProps {
   initialData: WarrantyDashboardData;
@@ -59,6 +66,25 @@ export function WarrantyView({ initialData }: WarrantyViewProps) {
     REOPENED: ['ASSIGNED', 'IN_PROGRESS'],
     CANCELLED: [],
     FAILED: [],
+  };
+
+  const getStatusBadgeVariant = (st: WarrantyTicketStatus): 'neutral' | 'success' | 'warning' | 'danger' | 'info' => {
+    switch (st) {
+      case 'CLOSED':
+      case 'RESOLVED':
+        return 'success';
+      case 'IN_PROGRESS':
+        return 'info';
+      case 'OPEN':
+      case 'ASSIGNED':
+      case 'REOPENED':
+        return 'warning';
+      case 'CANCELLED':
+      case 'FAILED':
+        return 'danger';
+      default:
+        return 'neutral';
+    }
   };
 
   const handleCreateTicket = async (e: React.FormEvent) => {
@@ -200,57 +226,68 @@ export function WarrantyView({ initialData }: WarrantyViewProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Quản lý Bảo hành & Hậu mãi</h1>
-          <p className="text-sm text-slate-400">
-            Tiếp nhận sự cố, phân công kỹ thuật viên xử lý và quản lý vòng đời phiếu bảo hành.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-400">
-            Vai trò: {data.role}
-          </span>
-          {canCreateTicket && (
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs shadow-lg transition-all"
-            >
-              + Tiếp nhận bảo hành
-            </button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Vận hành', href: '/field' },
+          { label: 'Bảo hành & Hậu mãi' },
+        ]}
+        title="Quản lý Bảo hành & Hậu mãi"
+        description="Tiếp nhận sự cố, phân công kỹ thuật viên xử lý và quản lý vòng đời phiếu bảo hành."
+        primaryAction={
+          <div className="flex items-center gap-3">
+            <Badge variant="neutral">
+              Vai trò: {data.role}
+            </Badge>
+            {canCreateTicket && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowCreateModal(true)}
+              >
+                <Plus className="w-4 h-4 mr-1.5" />
+                Tiếp nhận bảo hành
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       {errorMsg && (
-        <div className="p-4 rounded-lg bg-rose-950/50 border border-rose-800 text-rose-300 text-sm flex items-center justify-between">
-          <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="text-xs underline text-rose-400">Đóng</button>
+        <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <button onClick={() => setErrorMsg(null)} className="text-xs font-medium text-rose-700 hover:underline">Đóng</button>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-4 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300 text-sm flex items-center justify-between">
-          <span>{successMsg}</span>
-          <button onClick={() => setSuccessMsg(null)} className="text-xs underline text-emerald-400">Đóng</button>
+        <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+          <button onClick={() => setSuccessMsg(null)} className="text-xs font-medium text-emerald-700 hover:underline">Đóng</button>
         </div>
       )}
 
       {data.tickets.length === 0 ? (
-        <div className="p-12 text-center rounded-xl bg-slate-900 border border-slate-800">
-          <p className="text-slate-400 text-sm">
-            {isTech ? 'Bạn không có phiếu bảo hành nào được phân công.' : 'Chưa có phiếu bảo hành nào trong hệ thống.'}
-          </p>
-        </div>
+        <Card className="p-12 text-center">
+          <EmptyState
+            icon={<ShieldCheck className="w-8 h-8 text-text-tertiary" />}
+            title="Chưa có phiếu bảo hành"
+            description={
+              isTech
+                ? 'Bạn không có phiếu bảo hành nào được phân công.'
+                : 'Chưa có phiếu bảo hành nào trong hệ thống.'
+            }
+          />
+        </Card>
       ) : (
         <div className="space-y-4">
           {data.tickets.map((t) => {
             const rawTransitions = VALID_TRANSITIONS[t.status] || [];
-            // Role filtering for transitions:
-            // BOSS_ADMIN can do all valid transitions.
-            // SALE can only reopen when resolved/closed.
-            // TECHNICIAN can do IN_PROGRESS, RESOLVED, FAILED.
             const transitions = rawTransitions.filter((st) => {
               if (isBoss) return true;
               if (isTech) return ['IN_PROGRESS', 'RESOLVED', 'FAILED'].includes(st);
@@ -259,74 +296,70 @@ export function WarrantyView({ initialData }: WarrantyViewProps) {
             });
 
             return (
-              <div
+              <Card
                 key={t.id}
-                className="p-6 rounded-xl bg-slate-900 border border-slate-800 space-y-4 shadow-lg"
+                className="p-5 space-y-4 hover:border-border-strong transition-colors"
               >
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-border-subtle pb-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-white text-base">{t.customerName}</span>
-                      <span className="text-xs font-mono text-slate-400">({t.customerCode})</span>
+                      <span className="font-semibold text-text-primary text-base">{t.customerName}</span>
+                      <span className="text-xs font-mono text-text-tertiary">({t.customerCode})</span>
                     </div>
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      Đơn hàng: <span className="font-mono text-cyan-400">{t.orderCode}</span> | Mở lúc:{' '}
-                      <span className="text-slate-300">{new Date(t.openedAt).toLocaleString('vi-VN')}</span>
+                    <div className="text-xs text-text-secondary mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>Đơn hàng: <strong className="font-mono text-accent">{t.orderCode}</strong></span>
+                      <span className="text-border-strong">•</span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-text-tertiary" />
+                        Mở lúc: {new Date(t.openedAt).toLocaleString('vi-VN')}
+                      </span>
                       {t.resolvedAt && (
-                        <span> | Đã giải quyết lúc: {new Date(t.resolvedAt).toLocaleString('vi-VN')}</span>
+                        <>
+                          <span className="text-border-strong">•</span>
+                          <span className="text-emerald-700">Giải quyết lúc: {new Date(t.resolvedAt).toLocaleString('vi-VN')}</span>
+                        </>
                       )}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                        t.status === 'CLOSED'
-                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
-                          : t.status === 'RESOLVED'
-                          ? 'bg-blue-950 text-blue-300 border border-blue-700'
-                          : t.status === 'IN_PROGRESS'
-                          ? 'bg-amber-950 text-amber-300 border border-amber-700'
-                          : t.status === 'REOPENED'
-                          ? 'bg-purple-950 text-purple-300 border border-purple-700'
-                          : t.status === 'CANCELLED' || t.status === 'FAILED'
-                          ? 'bg-rose-950 text-rose-300 border border-rose-700'
-                          : 'bg-slate-800 text-slate-300 border border-slate-700'
-                      }`}
-                    >
+                    <Badge variant={getStatusBadgeVariant(t.status)}>
                       {STATUS_LABELS[t.status] || t.status}
-                    </span>
+                    </Badge>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950/60 p-4 rounded-lg border border-slate-800/60 text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-surface-secondary p-4 rounded-lg border border-border-subtle text-xs">
                   <div>
-                    <div className="text-slate-400 font-medium mb-1">Mô tả sự cố:</div>
-                    <div className="text-slate-200 whitespace-pre-wrap">{t.issue}</div>
+                    <div className="text-text-tertiary font-medium mb-1">Mô tả sự cố:</div>
+                    <div className="text-text-primary whitespace-pre-wrap leading-relaxed">{t.issue}</div>
                     {t.notes && (
-                      <div className="mt-2 text-slate-400">
-                        <span className="font-medium text-slate-400">Ghi chú: </span>
-                        <span className="text-slate-300">{t.notes}</span>
+                      <div className="mt-2 text-text-secondary">
+                        <span className="font-medium text-text-tertiary">Ghi chú: </span>
+                        <span>{t.notes}</span>
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <div className="text-slate-400 font-medium mb-1">Kỹ thuật viên phụ trách:</div>
+                    <div className="text-text-tertiary font-medium mb-1">Kỹ thuật viên phụ trách:</div>
                     <div className="flex items-center gap-2">
-                      <span className="text-slate-200">
+                      <span className="text-text-primary font-medium">
                         {t.assignedTechnicianName || 'Chưa phân công'}
                       </span>
                       {isBoss && ['OPEN', 'ASSIGNED', 'REOPENED'].includes(t.status) && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => {
                             setAssigningTicket(t);
                             setSelectedTechId(t.assignedTo || '');
                           }}
-                          className="px-2 py-0.5 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700"
+                          className="h-6 text-[11px] px-2"
                         >
+                          <UserCheck className="w-3 h-3 mr-1" />
                           {t.assignedTo ? 'Đổi KTV' : 'Phân công'}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -335,195 +368,210 @@ export function WarrantyView({ initialData }: WarrantyViewProps) {
                 {/* Actions row */}
                 {transitions.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <span className="text-xs text-slate-400">Chuyển trạng thái:</span>
+                    <span className="text-xs text-text-tertiary">Chuyển trạng thái:</span>
                     {transitions.map((st) => (
-                      <button
+                      <Button
                         key={st}
+                        variant="secondary"
+                        size="sm"
                         disabled={loading}
                         onClick={() => handleStatusTransition(t, st)}
-                        className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
                       >
                         {STATUS_LABELS[st] || st}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 )}
-              </div>
+              </Card>
             );
           })}
         </div>
       )}
 
       {/* CREATE TICKET MODAL */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4 shadow-2xl">
-            <h2 className="text-lg font-bold text-white">Mở phiếu tiếp nhận bảo hành</h2>
-            <form onSubmit={handleCreateTicket} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Chọn đơn hàng hoàn tất (COMPLETED):</label>
-                {data.eligibleOrders.length === 0 ? (
-                  <p className="text-amber-400 text-xs italic">
-                    Không có đơn hàng nào đã hoàn tất nghiệm thu (COMPLETED) trong tổ chức.
-                  </p>
-                ) : (
-                  <select
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200"
-                    value={selectedOrder?.id || ''}
-                    onChange={(e) => {
-                      const found = data.eligibleOrders.find((o) => o.id === e.target.value);
-                      setSelectedOrder(found || null);
-                    }}
-                    required
-                  >
-                    <option value="">-- Chọn đơn hàng --</option>
-                    {data.eligibleOrders.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.code} - {o.customerName} ({o.customerCode})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Mô tả sự cố:</label>
-                <textarea
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200"
-                  rows={3}
-                  value={issueText}
-                  onChange={(e) => setIssueText(e.target.value)}
-                  placeholder="Mô tả chi tiết hiện tượng lỗi/sự cố của khách hàng..."
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Ghi chú thêm (tùy chọn):</label>
-                <input
-                  type="text"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200"
-                  value={notesText}
-                  onChange={(e) => setNotesText(e.target.value)}
-                  placeholder="Ghi chú hẹn giờ, phản ánh của khách..."
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || !selectedOrder || !issueText.trim()}
-                  className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium disabled:opacity-50"
-                >
-                  {loading ? 'Đang tạo...' : 'Tạo phiếu'}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        title="Mở phiếu tiếp nhận bảo hành"
+        description="Chọn đơn hàng đã hoàn tất nghiệm thu và mô tả sự cố kỹ thuật."
+        size="md"
+      >
+        <form onSubmit={handleCreateTicket} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-text-secondary font-medium mb-1">
+              Chọn đơn hàng hoàn tất (COMPLETED): <span className="text-danger">*</span>
+            </label>
+            {data.eligibleOrders.length === 0 ? (
+              <p className="text-amber-700 text-xs italic bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                Không có đơn hàng nào đã hoàn tất nghiệm thu (COMPLETED) trong tổ chức.
+              </p>
+            ) : (
+              <select
+                className="w-full bg-surface-primary border border-border-subtle rounded-lg p-2.5 text-text-primary text-xs focus:outline-none focus:border-accent"
+                value={selectedOrder?.id || ''}
+                onChange={(e) => {
+                  const found = data.eligibleOrders.find((o) => o.id === e.target.value);
+                  setSelectedOrder(found || null);
+                }}
+                required
+              >
+                <option value="">-- Chọn đơn hàng --</option>
+                {data.eligibleOrders.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.code} - {o.customerName} ({o.customerCode})
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-        </div>
-      )}
+
+          <div>
+            <label className="block text-text-secondary font-medium mb-1">
+              Mô tả sự cố: <span className="text-danger">*</span>
+            </label>
+            <textarea
+              className="w-full bg-surface-primary border border-border-subtle rounded-lg p-2.5 text-text-primary text-xs focus:outline-none focus:border-accent resize-none"
+              rows={3}
+              value={issueText}
+              onChange={(e) => setIssueText(e.target.value)}
+              placeholder="Mô tả chi tiết hiện tượng lỗi/sự cố của khách hàng..."
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-text-secondary font-medium mb-1">Ghi chú thêm (tùy chọn):</label>
+            <input
+              type="text"
+              className="w-full bg-surface-primary border border-border-subtle rounded-lg p-2.5 text-text-primary text-xs focus:outline-none focus:border-accent"
+              value={notesText}
+              onChange={(e) => setNotesText(e.target.value)}
+              placeholder="Ghi chú hẹn giờ, phản ánh của khách..."
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border-subtle">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowCreateModal(false)}
+              disabled={loading}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={loading || !selectedOrder || !issueText.trim()}
+            >
+              {loading ? 'Đang tạo...' : 'Tạo phiếu'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* ASSIGN TECH MODAL */}
-      {assigningTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4 shadow-2xl">
-            <h2 className="text-lg font-bold text-white">Phân công Kỹ thuật viên</h2>
-            <p className="text-xs text-slate-400">
-              Phiếu bảo hành: <span className="text-white font-mono">{assigningTicket.orderCode}</span>
-            </p>
-            <form onSubmit={handleAssignTechnician} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Chọn kỹ thuật viên:</label>
-                {data.technicians.length === 0 ? (
-                  <p className="text-amber-400 text-xs italic">
-                    Chưa có kỹ thuật viên nào trong tổ chức.
-                  </p>
-                ) : (
-                  <select
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200"
-                    value={selectedTechId}
-                    onChange={(e) => setSelectedTechId(e.target.value)}
-                    required
-                  >
-                    <option value="">-- Chọn kỹ thuật viên --</option>
-                    {data.technicians.map((t) => (
-                      <option key={t.userId} value={t.userId}>
-                        {t.fullName}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setAssigningTicket(null)}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || !selectedTechId}
-                  className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium disabled:opacity-50"
-                >
-                  {loading ? 'Đang phân công...' : 'Xác nhận'}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={!!assigningTicket}
+        onClose={() => setAssigningTicket(null)}
+        title="Phân công Kỹ thuật viên"
+        description={assigningTicket ? `Phiếu bảo hành: ${assigningTicket.orderCode}` : undefined}
+        size="sm"
+      >
+        <form onSubmit={handleAssignTechnician} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-text-secondary font-medium mb-1">
+              Chọn kỹ thuật viên: <span className="text-danger">*</span>
+            </label>
+            {data.technicians.length === 0 ? (
+              <p className="text-amber-700 text-xs italic bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                Chưa có kỹ thuật viên nào trong tổ chức.
+              </p>
+            ) : (
+              <select
+                className="w-full bg-surface-primary border border-border-subtle rounded-lg p-2.5 text-text-primary text-xs focus:outline-none focus:border-accent"
+                value={selectedTechId}
+                onChange={(e) => setSelectedTechId(e.target.value)}
+                required
+              >
+                <option value="">-- Chọn kỹ thuật viên --</option>
+                {data.technicians.map((t) => (
+                  <option key={t.userId} value={t.userId}>
+                    {t.fullName}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-        </div>
-      )}
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border-subtle">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setAssigningTicket(null)}
+              disabled={loading}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={loading || !selectedTechId}
+            >
+              {loading ? 'Đang phân công...' : 'Xác nhận'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* REOPEN MODAL */}
-      {reopeningTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4 shadow-2xl">
-            <h2 className="text-lg font-bold text-white">Mở lại phiếu bảo hành</h2>
-            <form onSubmit={handleReopenTicket} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Lý do mở lại:</label>
-                <textarea
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200"
-                  rows={3}
-                  value={reopenReason}
-                  onChange={(e) => setReopenReason(e.target.value)}
-                  placeholder="Khách phản hồi sự cố tái diễn..."
-                  required
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setReopeningTicket(null)}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || !reopenReason.trim()}
-                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium disabled:opacity-50"
-                >
-                  {loading ? 'Đang xử lý...' : 'Mở lại'}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={!!reopeningTicket}
+        onClose={() => setReopeningTicket(null)}
+        title="Mở lại phiếu bảo hành"
+        description="Nhập lý do khách phản hồi để mở lại quy trình xử lý bảo hành."
+        size="sm"
+      >
+        <form onSubmit={handleReopenTicket} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-text-secondary font-medium mb-1">
+              Lý do mở lại: <span className="text-danger">*</span>
+            </label>
+            <textarea
+              className="w-full bg-surface-primary border border-border-subtle rounded-lg p-2.5 text-text-primary text-xs focus:outline-none focus:border-accent resize-none"
+              rows={3}
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              placeholder="Khách phản hồi sự cố tái diễn..."
+              required
+            />
           </div>
-        </div>
-      )}
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border-subtle">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setReopeningTicket(null)}
+              disabled={loading}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={loading || !reopenReason.trim()}
+            >
+              {loading ? 'Đang xử lý...' : 'Mở lại'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

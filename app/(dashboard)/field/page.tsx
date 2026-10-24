@@ -14,9 +14,9 @@ export default async function FieldDashboardPage() {
   // Permitted roles: BOSS_ADMIN, TECHNICIAN
   if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.TECHNICIAN) {
     return (
-      <div className="p-8 text-center bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-        <h2 className="text-lg font-bold text-rose-400">Không có quyền truy cập</h2>
-        <p className="text-sm text-slate-400">
+      <div className="p-8 text-center bg-white border border-border-subtle rounded-xl space-y-3 max-w-lg mx-auto my-12 shadow-xs">
+        <h2 className="text-base font-semibold text-danger">Không có quyền truy cập</h2>
+        <p className="text-sm text-text-secondary">
           Khu vực Hiện trường chỉ dành cho Kỹ thuật viên (TECHNICIAN) và Quản trị viên (BOSS_ADMIN).
         </p>
       </div>

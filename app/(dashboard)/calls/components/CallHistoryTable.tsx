@@ -1,8 +1,28 @@
 'use client';
 
 import React, { useState, useTransition } from 'react';
+import Link from 'next/link';
 import type { CallHistoryItemDTO, CallHistoryFilters } from '../../../../shared/contracts/voice';
 import { getAuthorizedSignedUrlAction } from '../../../actions/sensitive';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  TablePagination,
+} from '../../../../components/ui/data-table';
+import { Card } from '../../../../components/ui/card';
+import { Button } from '../../../../components/ui/button';
+import { StatusBadge } from '../../../../components/ui/status-badge';
+import { EmptyState } from '../../../../components/ui/empty-state';
+import {
+  PhoneIncoming,
+  PhoneOutgoing,
+  Play,
+  FileText,
+} from 'lucide-react';
 
 interface Props {
   initialItems: CallHistoryItemDTO[];
@@ -14,38 +34,32 @@ interface Props {
   onFilterChange?: (filters: CallHistoryFilters) => void;
 }
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  INITIATED: { label: 'Đang khởi tạo', color: 'text-blue-400' },
-  RINGING: { label: 'Đang đổ chuông', color: 'text-yellow-400' },
-  CONNECTED: { label: 'Đang nói', color: 'text-emerald-400' },
-  NO_ANSWER: { label: 'Không nghe', color: 'text-red-400' },
-  BUSY: { label: 'Máy bận', color: 'text-orange-400' },
-  FAILED: { label: 'Lỗi', color: 'text-red-500' },
-  COMPLETED: { label: 'Hoàn thành', color: 'text-emerald-300' },
-};
-
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    day: '2-digit',
-    month: '2-digit',
-    year: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  try {
+    return new Date(iso).toLocaleString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function formatDuration(seconds: number | null): string {
-  if (!seconds) return '–';
+  if (!seconds) return '—';
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 function RecordingButton({ callId }: { callId: string }) {
-  const [isPending, startTransition] = useTransition();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
   const handleGetRecording = () => {
     startTransition(async () => {
@@ -57,7 +71,6 @@ function RecordingButton({ callId }: { callId: string }) {
 
       if (result.success && result.data) {
         setUrl(result.data.signedUrl);
-        // Mở trong tab mới
         window.open(result.data.signedUrl, '_blank', 'noopener,noreferrer');
       } else {
         setError(result.error || result.message || 'Không thể tải ghi âm.');
@@ -71,33 +84,30 @@ function RecordingButton({ callId }: { callId: string }) {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-xs text-blue-400 hover:underline"
+        className="inline-flex items-center gap-1 text-xs text-[var(--accent)] hover:underline font-medium"
       >
-        🎵 Nghe lại
+        <Play className="w-3 h-3 fill-current" />
+        <span>Nghe lại</span>
       </a>
     );
   }
 
   return (
     <div>
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={handleGetRecording}
-        disabled={isPending}
-        className="text-xs text-slate-400 hover:text-blue-400 transition"
+        isLoading={isPending}
+        leftIcon={<Play className="w-3 h-3" />}
       >
-        {isPending ? '⏳' : '🎵 Xem ghi âm'}
-      </button>
-      {error && <div className="text-xs text-red-400 mt-0.5">{error}</div>}
+        Nghe ghi âm
+      </Button>
+      {error && <div className="text-[10px] text-[var(--danger)] mt-0.5">{error}</div>}
     </div>
   );
 }
 
-/**
- * Bảng lịch sử cuộc gọi — phân tầng theo role.
- *
- * BOSS_ADMIN: thấy cột Ghi âm + Transcript status.
- * SALE: không thấy những cột này.
- */
 export default function CallHistoryTable({
   initialItems,
   total,
@@ -106,146 +116,146 @@ export default function CallHistoryTable({
   isBossAdmin,
   onPageChange,
 }: Props) {
-  const totalPages = Math.ceil(total / pageSize);
+  const totalPages = Math.ceil(total / pageSize) || 1;
 
   if (initialItems.length === 0) {
     return (
-      <div className="text-center py-12 text-slate-500">
-        <div className="text-4xl mb-3">📞</div>
-        <p>Chưa có cuộc gọi nào.</p>
-      </div>
+      <Card className="p-8">
+        <EmptyState
+          type="empty"
+          title="Chưa có cuộc gọi nào"
+          description="Lịch sử các cuộc gọi qua tổng đài và Zalo sẽ xuất hiện tại đây."
+        />
+      </Card>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {/* Bảng */}
-      <div className="overflow-x-auto rounded-xl border border-slate-800">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-900/60">
-              <th className="px-4 py-3">Thời gian</th>
-              <th className="px-4 py-3">Khách hàng</th>
-              <th className="px-4 py-3">Hướng</th>
-              <th className="px-4 py-3">Loại</th>
-              <th className="px-4 py-3">Trạng thái</th>
-              <th className="px-4 py-3">Thời lượng</th>
-              {isBossAdmin && <th className="px-4 py-3">Ghi âm</th>}
-              {isBossAdmin && <th className="px-4 py-3">Transcript</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60">
-            {initialItems.map((call) => {
-              const status = STATUS_LABELS[call.status] || { label: call.status, color: 'text-slate-400' };
+    <Card className="overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="min-w-[140px]">Thời gian</TableHead>
+            <TableHead className="min-w-[180px]">Khách hàng</TableHead>
+            <TableHead className="w-[110px]">Hướng gọi</TableHead>
+            <TableHead className="w-[110px]">Loại cuộc gọi</TableHead>
+            <TableHead className="min-w-[120px]">Trạng thái</TableHead>
+            <TableHead className="w-[90px]" alignRight>
+              Thời lượng
+            </TableHead>
+            {isBossAdmin && <TableHead className="w-[120px]">Ghi âm</TableHead>}
+            {isBossAdmin && <TableHead className="w-[110px]">Transcript</TableHead>}
+          </TableRow>
+        </TableHeader>
 
-              return (
-                <tr key={call.id} className="hover:bg-slate-900/40 transition">
-                  <td className="px-4 py-3 text-slate-300 text-xs whitespace-nowrap">
-                    {formatTime(call.startedAt)}
-                  </td>
+        <TableBody>
+          {initialItems.map((call) => (
+            <TableRow key={call.id}>
+              {/* Timestamp */}
+              <TableCell>
+                <span className="font-mono text-xs text-[var(--text-secondary)]">
+                  {formatTime(call.startedAt)}
+                </span>
+              </TableCell>
 
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-white">{call.customerName}</div>
-                    <div className="text-xs text-slate-500 font-mono">{call.customerCode}</div>
-                  </td>
-
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                        call.direction === 'INBOUND'
-                          ? 'bg-blue-900/40 text-blue-400'
-                          : 'bg-purple-900/40 text-purple-400'
-                      }`}
-                    >
-                      {call.direction === 'INBOUND' ? '↙ Vào' : '↗ Ra'}
+              {/* Customer */}
+              <TableCell>
+                <div className="flex flex-col">
+                  <Link
+                    href={`/customers/${call.customerId || ''}`}
+                    className="font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors truncate"
+                  >
+                    {call.customerName || 'Khách vãng lai'}
+                  </Link>
+                  {call.customerCode && (
+                    <span className="text-[11px] font-mono text-[var(--text-tertiary)]">
+                      {call.customerCode}
                     </span>
-                  </td>
+                  )}
+                </div>
+              </TableCell>
 
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                        call.agentType === 'AI'
-                          ? 'bg-indigo-900/40 text-indigo-400'
-                          : 'bg-slate-800 text-slate-300'
-                      }`}
-                    >
-                      {call.agentType === 'AI' ? '🤖 AI' : '👤 Sale'}
+              {/* Direction */}
+              <TableCell>
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
+                    call.direction === 'INBOUND'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : 'bg-purple-50 text-purple-700 border-purple-200'
+                  }`}
+                >
+                  {call.direction === 'INBOUND' ? (
+                    <>
+                      <PhoneIncoming className="w-3 h-3" />
+                      <span>Gọi vào</span>
+                    </>
+                  ) : (
+                    <>
+                      <PhoneOutgoing className="w-3 h-3" />
+                      <span>Gọi ra</span>
+                    </>
+                  )}
+                </span>
+              </TableCell>
+
+              {/* Call Type */}
+              <TableCell>
+                <span className="text-xs text-[var(--text-secondary)]">
+                  {call.agentType === 'AI' ? 'AI gọi ra' : 'Sale gọi khách'}
+                </span>
+              </TableCell>
+
+              {/* Status */}
+              <TableCell>
+                <StatusBadge status={call.status} size="xs" />
+              </TableCell>
+
+              {/* Duration */}
+              <TableCell alignRight>
+                <span className="font-mono text-xs text-[var(--text-primary)]">
+                  {formatDuration(call.durationSeconds)}
+                </span>
+              </TableCell>
+
+              {/* Recording (Boss only) */}
+              {isBossAdmin && (
+                <TableCell>
+                  {call.hasRecording ? (
+                    <RecordingButton callId={call.id} />
+                  ) : (
+                    <span className="text-[var(--text-tertiary)] text-xs">—</span>
+                  )}
+                </TableCell>
+              )}
+
+              {/* Transcript Status (Boss only) */}
+              {isBossAdmin && (
+                <TableCell>
+                  {call.transcriptStatus === 'COMPLETED' ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
+                      <FileText className="w-3 h-3" />
+                      <span>Có bản ghi</span>
                     </span>
-                  </td>
-
-                  <td className={`px-4 py-3 text-xs font-medium ${status.color}`}>
-                    {status.label}
-                  </td>
-
-                  <td className="px-4 py-3 text-slate-400 text-xs tabular-nums">
-                    {formatDuration(call.durationSeconds)}
-                  </td>
-
-                  {isBossAdmin && (
-                    <td className="px-4 py-3">
-                      {call.hasRecording ? (
-                        <RecordingButton callId={call.id} />
-                      ) : (
-                        <span className="text-xs text-slate-600">–</span>
-                      )}
-                    </td>
+                  ) : call.transcriptStatus ? (
+                    <StatusBadge status={call.transcriptStatus} size="xs" />
+                  ) : (
+                    <span className="text-[var(--text-tertiary)] text-xs">Chưa có</span>
                   )}
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
 
-                  {isBossAdmin && (
-                    <td className="px-4 py-3 text-xs">
-                      {call.transcriptStatus === 'COMPLETED' ? (
-                        <a
-                          href={`/calls/${call.customerId}#transcript-${call.id}`}
-                          className="text-blue-400 hover:underline"
-                        >
-                          Xem
-                        </a>
-                      ) : call.transcriptStatus === 'PENDING' ? (
-                        <span className="text-yellow-600">Đang xử lý</span>
-                      ) : call.transcriptStatus === 'PROCESSING' ? (
-                        <span className="text-blue-600 animate-pulse">Processing...</span>
-                      ) : call.transcriptStatus === 'FAILED' ? (
-                        <span className="text-red-600">Lỗi</span>
-                      ) : (
-                        <span className="text-slate-600">–</span>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Phân trang */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-slate-400">
-          <span>
-            Hiển thị {(currentPage - 1) * pageSize + 1}–
-            {Math.min(currentPage * pageSize, total)} / {total} cuộc gọi
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onPageChange?.(currentPage - 1)}
-              disabled={currentPage <= 1}
-              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-            >
-              ←
-            </button>
-            <span className="px-3 py-1">
-              {currentPage} / {totalPages}
-            </span>
-            <button
-              onClick={() => onPageChange?.(currentPage + 1)}
-              disabled={currentPage >= totalPages}
-              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-            >
-              →
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+      {/* Pagination */}
+      <TablePagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={total}
+        pageSize={pageSize}
+        onPageChange={onPageChange}
+      />
+    </Card>
   );
 }

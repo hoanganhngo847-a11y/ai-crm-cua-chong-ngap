@@ -6,6 +6,11 @@ import { getCompanyCallHistoryAction } from '../../actions/voice';
 import CallHistoryTable from './components/CallHistoryTable';
 import CustomerCallSearch from './components/CustomerCallSearch';
 import ZaloRecordingHistory from './components/ZaloRecordingHistory';
+import { PageHeader } from '../../../components/ui/page-header';
+import { EmptyState } from '../../../components/ui/empty-state';
+import { Button } from '../../../components/ui/button';
+import { Card } from '../../../components/ui/card';
+import { Smartphone, TestTube } from 'lucide-react';
 
 export default async function CallsPage() {
   const actor = await getActorContext();
@@ -21,39 +26,62 @@ export default async function CallsPage() {
   // TECHNICIAN không có quyền xem trang này
   if (actor.role === 'TECHNICIAN') {
     return (
-      <div className="flex items-center justify-center min-h-64">
-        <div className="p-6 bg-slate-900 border border-red-500/30 rounded-xl text-center">
-          <h2 className="text-red-400 font-bold mb-2">Truy cập bị từ chối</h2>
-          <p className="text-slate-400 text-sm">Kỹ thuật viên không có quyền xem lịch sử cuộc gọi.</p>
-        </div>
-      </div>
+      <EmptyState
+        type="permission"
+        title="Truy Cập Bị Từ Chối"
+        description="Kỹ thuật viên không có quyền xem lịch sử cuộc gọi trong hệ thống."
+        action={{
+          label: 'Về trang Hiện trường',
+          href: '/field',
+        }}
+      />
     );
   }
 
   const isBossAdmin = actor.role === 'BOSS_ADMIN';
-
   const result = await getCompanyCallHistoryAction({ page: 1, pageSize: 20 });
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">Lịch sử cuộc gọi</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          {isBossAdmin
+      {/* Page Header */}
+      <PageHeader
+        title="Lịch Sử Cuộc Gọi & Ghi Âm"
+        description={
+          isBossAdmin
             ? 'Toàn bộ cuộc gọi — AI gọi ra, Hotline gọi vào, Sale gọi khách.'
-            : 'Cuộc gọi trong hệ thống — tìm khách và bấm GỌI KHÁCH để liên hệ.'}
-        </p>
-      </div>
+            : 'Cuộc gọi trong hệ thống — tìm khách và bấm GỌI KHÁCH để liên hệ.'
+        }
+        breadcrumbs={[
+          { label: 'CRM', href: '/crm' },
+          { label: 'Cuộc gọi & Ghi âm', isCurrent: true },
+        ]}
+        secondaryActions={
+          isBossAdmin ? (
+            <div className="flex items-center gap-2">
+              <Link href="/calls/zalo-devices">
+                <Button variant="outline" size="sm" leftIcon={<Smartphone className="w-3.5 h-3.5" />}>
+                  Thiết bị Zalo
+                </Button>
+              </Link>
+              {process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID && (
+                <Link href="/calls/test">
+                  <Button variant="outline" size="sm" leftIcon={<TestTube className="w-3.5 h-3.5" />}>
+                    Kiểm tra Web SDK
+                  </Button>
+                </Link>
+              )}
+            </div>
+          ) : undefined
+        }
+      />
 
+      {/* Customer Call Search */}
       <CustomerCallSearch provider={(process.env.VOICE_PROVIDER || 'MANUAL').toUpperCase()} />
-      {isBossAdmin && <Link href="/calls/zalo-devices" className="inline-block text-sm text-blue-300 underline">Thiết bị ghi âm Zalo</Link>}
-      <ZaloRecordingHistory />
-      {isBossAdmin && process.env.STRINGEE_APP_TO_APP_TEST_PROJECT_ID && (
-        <Link href="/calls/test" className="inline-block text-sm text-blue-300 underline">Kiểm tra Web SDK App-to-App</Link>
-      )}
 
-      {/* Kết quả */}
+      {/* Zalo Recordings */}
+      <ZaloRecordingHistory />
+
+      {/* Company Call History Table */}
       {result.success && result.data ? (
         <CallHistoryTable
           initialItems={result.data.items}
@@ -63,9 +91,13 @@ export default async function CallsPage() {
           isBossAdmin={isBossAdmin}
         />
       ) : (
-        <div className="p-6 bg-slate-900 border border-red-500/20 rounded-xl text-center text-red-400">
-          {result.error || 'Không thể tải lịch sử cuộc gọi.'}
-        </div>
+        <Card className="p-8">
+          <EmptyState
+            type="error"
+            title="Không thể tải lịch sử cuộc gọi"
+            description={result.error || 'Đã xảy ra lỗi khi truy vấn dữ liệu.'}
+          />
+        </Card>
       )}
     </div>
   );

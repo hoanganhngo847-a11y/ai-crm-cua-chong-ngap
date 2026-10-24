@@ -124,10 +124,10 @@ function LinkWithHoverCard({
       {showHover && (
         <span
           role="tooltip"
-          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-30 w-64 max-w-[calc(100vw-3rem)] p-2.5 rounded-xl bg-slate-900 text-slate-100 border border-slate-700/80 shadow-2xl text-xs"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-30 w-64 max-w-[calc(100vw-3rem)] p-2.5 rounded-xl bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] shadow-dropdown text-xs"
         >
           <span className="block font-semibold truncate">{hostname}</span>
-          <span className="block text-[11px] text-slate-400 truncate font-mono mt-1">{url}</span>
+          <span className="block text-[11px] text-[var(--text-tertiary)] truncate font-mono mt-1">{url}</span>
         </span>
       )}
     </span>
@@ -143,12 +143,12 @@ function SingleUrlLinkCard({ url, isOutbound }: { url: string; isOutbound?: bool
       rel="noopener noreferrer"
       className={`group block p-3 rounded-xl border transition-all ${
         isOutbound
-          ? 'bg-blue-700/60 hover:bg-blue-700/90 border-blue-400/40 text-white'
-          : 'bg-slate-900/90 border-slate-700/80 text-slate-100 hover:border-slate-600'
+          ? 'bg-blue-700/80 hover:bg-blue-700 border-blue-400/40 text-white'
+          : 'bg-[var(--surface-secondary)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--border-strong)]'
       }`}
     >
       <div className="font-semibold text-xs truncate group-hover:underline">{hostname} ↗</div>
-      <div className={`text-[11px] truncate font-mono mt-1 ${isOutbound ? 'text-blue-100/80' : 'text-slate-400'}`}>
+      <div className={`text-[11px] truncate font-mono mt-1 ${isOutbound ? 'text-blue-100/90' : 'text-[var(--text-secondary)]'}`}>
         {url}
       </div>
     </a>

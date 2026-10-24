@@ -3,6 +3,11 @@
 import React, { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { createOrderFromCalculationAction } from '@/features/order/actions';
+import { Card } from '@/components/ui/card';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/data-table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { CheckCircle2 } from 'lucide-react';
 
 export interface PriceCalculationItem {
   id: string;
@@ -70,45 +75,53 @@ export default function QuotationsTable({ calculations, userRole }: QuotationsTa
   return (
     <div className="space-y-4">
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Lọc trạng thái:</span>
-          <div className="flex gap-1.5">
-            {['ALL', 'CALCULATED', 'NEED_INFO'].map((st) => (
-              <button
-                key={st}
-                onClick={() => setFilterStatus(st)}
-                className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
-                  filterStatus === st
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                {st === 'ALL' ? 'Tất cả' : st === 'CALCULATED' ? 'Đã tính giá' : 'Cần thông tin'}
-              </button>
-            ))}
+      <Card className="p-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">
+              Lọc trạng thái:
+            </span>
+            <div className="flex gap-1.5">
+              {[
+                { id: 'ALL', label: 'Tất cả' },
+                { id: 'CALCULATED', label: 'Đã tính giá' },
+                { id: 'NEED_INFO', label: 'Cần thông tin' },
+              ].map((st) => (
+                <button
+                  key={st.id}
+                  onClick={() => setFilterStatus(st.id)}
+                  className={`px-3 py-1 text-xs rounded-lg font-medium transition cursor-pointer ${
+                    filterStatus === st.id
+                      ? 'bg-blue-600 text-white shadow-subtle'
+                      : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)] border border-[var(--border-subtle)]'
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-xs text-[var(--text-secondary)]">
+            Tổng số: <strong className="text-[var(--text-primary)]">{filtered.length}</strong> bảng tính
           </div>
         </div>
-        <div className="text-xs text-slate-400">
-          Tổng số: <strong className="text-white">{filtered.length}</strong> bảng tính
-        </div>
-      </div>
+      </Card>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 shadow">
-        <table className="min-w-full divide-y divide-slate-800 text-sm">
-          <thead className="bg-slate-950/60 text-slate-400 text-xs uppercase font-medium">
-            <tr>
-              <th className="py-3 px-4 text-left">Mã Bảng Tính</th>
-              <th className="py-3 px-4 text-left">Khách Hàng</th>
-              <th className="py-3 px-4 text-right">Số Tiền (VNĐ)</th>
-              <th className="py-3 px-4 text-center">Trạng Thái</th>
-              <th className="py-3 px-4 text-left">Trường Thiếu</th>
-              <th className="py-3 px-4 text-left">Ngày Tạo</th>
-              <th className="py-3 px-4 text-center">Tác Vụ Thương Mại</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60">
+      <Card className="overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[120px]">Mã Bảng Tính</TableHead>
+              <TableHead>Khách Hàng</TableHead>
+              <TableHead className="text-right">Số Tiền (VNĐ)</TableHead>
+              <TableHead className="text-center">Trạng Thái</TableHead>
+              <TableHead>Trường Thiếu</TableHead>
+              <TableHead>Ngày Tạo</TableHead>
+              <TableHead className="text-center">Tác Vụ Thương Mại</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {filtered.map((calc) => {
               const isNeedInfo = calc.status === 'NEED_INFO';
               const isCalculated = calc.status === 'CALCULATED';
@@ -117,128 +130,122 @@ export default function QuotationsTable({ calculations, userRole }: QuotationsTa
               const isLoading = loadingId === calc.id;
 
               return (
-                <tr key={calc.id} className="hover:bg-slate-800/40 transition">
+                <TableRow key={calc.id}>
                   {/* Mã bảng tính */}
-                  <td className="py-3 px-4 font-mono text-xs text-slate-400">
+                  <TableCell className="font-mono text-xs text-[var(--text-secondary)]">
                     <span title={calc.id}>{calc.id.substring(0, 8)}...</span>
-                  </td>
+                  </TableCell>
 
                   {/* Khách hàng */}
-                  <td className="py-3 px-4">
-                    <div className="font-medium text-white">
+                  <TableCell>
+                    <div className="font-medium text-[var(--text-primary)]">
                       {calc.customers?.name || 'Khách hàng'}
                     </div>
-                    <div className="text-xs text-slate-400 font-mono">
+                    <div className="text-xs text-[var(--text-tertiary)] font-mono">
                       {calc.customers?.customer_code || calc.customer_id.substring(0, 8)}
                     </div>
-                  </td>
+                  </TableCell>
 
                   {/* Số tiền */}
-                  <td className="py-3 px-4 text-right font-medium text-slate-200">
+                  <TableCell className="text-right font-medium text-[var(--text-primary)]">
                     {calc.amount != null ? Number(calc.amount).toLocaleString('vi-VN') : '-'}
-                  </td>
+                  </TableCell>
 
                   {/* Trạng thái */}
-                  <td className="py-3 px-4 text-center">
+                  <TableCell className="text-center">
                     {isNeedInfo ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-950/70 border border-rose-800 text-rose-300">
+                      <Badge variant="danger" size="sm">
                         CẦN BỔ SUNG THÔNG TIN
-                      </span>
+                      </Badge>
                     ) : isCalculated ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/70 border border-emerald-800 text-emerald-300">
+                      <Badge variant="success" size="sm">
                         ĐÃ TÍNH GIÁ
-                      </span>
+                      </Badge>
                     ) : (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300">
+                      <Badge variant="neutral" size="sm">
                         {calc.status}
-                      </span>
+                      </Badge>
                     )}
-                  </td>
+                  </TableCell>
 
                   {/* Trường thiếu */}
-                  <td className="py-3 px-4 text-xs text-slate-400 max-w-[200px]">
+                  <TableCell className="text-xs text-[var(--text-secondary)] max-w-[200px]">
                     {calc.missing_fields && Array.isArray(calc.missing_fields) && calc.missing_fields.length > 0 ? (
-                      <span className="text-amber-400 font-mono">
+                      <span className="text-amber-600 font-mono text-[11px]">
                         {calc.missing_fields.join(', ')}
                       </span>
                     ) : (
-                      <span className="text-slate-500">-</span>
+                      <span className="text-[var(--text-tertiary)]">-</span>
                     )}
-                  </td>
+                  </TableCell>
 
                   {/* Ngày tạo */}
-                  <td className="py-3 px-4 text-xs text-slate-400">
+                  <TableCell className="text-xs text-[var(--text-secondary)]">
                     {new Date(calc.created_at).toLocaleString('vi-VN')}
-                  </td>
+                  </TableCell>
 
                   {/* Action */}
-                  <td className="py-3 px-4 text-center">
+                  <TableCell className="text-center">
                     {succ ? (
                       <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-emerald-400 font-medium">
-                          ✓ Đã tạo đơn {succ.orderCode || ''}
+                        <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 inline" />
+                          Đã tạo đơn {succ.orderCode || ''}
                         </span>
                         <Link
                           href="/orders"
-                          className="text-xs text-blue-400 hover:text-blue-300 underline font-medium"
+                          className="text-xs text-blue-600 hover:text-blue-700 underline font-medium inline-flex items-center gap-1"
                         >
                           Xem đơn hàng &amp; cọc &rarr;
                         </Link>
                       </div>
                     ) : isNeedInfo ? (
                       <div className="flex flex-col items-center">
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           disabled
-                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
+                          className="text-xs opacity-60 cursor-not-allowed"
                           title="Không thể tạo đơn hàng khi chưa đủ thông tin kỹ thuật"
                         >
                           Cần bổ sung thông tin
-                        </button>
+                        </Button>
                       </div>
                     ) : isCalculated ? (
                       <div className="flex flex-col items-center gap-1">
-                        <button
+                        <Button
+                          variant="primary"
+                          size="sm"
                           onClick={() => handleCreateOrder(calc.id)}
                           disabled={!isAuthorized || isLoading}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                            isAuthorized && !isLoading
-                              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm hover:shadow'
-                              : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                          }`}
+                          isLoading={isLoading}
                         >
-                          {isLoading ? (
-                            <span className="inline-flex items-center gap-1.5">
-                              <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              Đang tạo...
-                            </span>
-                          ) : (
-                            'Tạo Đơn Hàng'
-                          )}
-                        </button>
+                          Tạo Đơn Hàng
+                        </Button>
                         {err && (
-                          <span className="text-[11px] text-rose-400 max-w-xs mt-1">
+                          <span className="text-[11px] text-rose-600 max-w-xs mt-1">
                             {err}
                           </span>
                         )}
                       </div>
                     ) : (
-                      <span className="text-xs text-slate-500">-</span>
+                      <span className="text-xs text-[var(--text-tertiary)]">-</span>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
 
             {filtered.length === 0 && (
-              <tr>
-                <td colSpan={7} className="py-10 text-center text-slate-500">
+              <TableRow>
+                <TableCell colSpan={7} className="py-12 text-center text-[var(--text-tertiary)]">
                   Chưa có dữ liệu tính giá nào.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }

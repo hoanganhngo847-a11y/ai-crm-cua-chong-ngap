@@ -2,6 +2,10 @@
 
 import React, { useState, useTransition } from 'react';
 import { selfChangePasswordAction } from '../../(auth)/actions';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Lock, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function AccountPage() {
   const [newPassword, setNewPassword] = useState('');
@@ -40,34 +44,48 @@ export default function AccountPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">Quản lý Tài khoản Cá nhân</h1>
-        <p className="text-sm text-slate-400">
-          Cập nhật thông tin bảo mật và quản lý phiên đăng nhập.
-        </p>
-      </div>
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Cá nhân' },
+          { label: 'Tài khoản' },
+        ]}
+        title="Quản lý Tài khoản Cá nhân"
+        description="Cập nhật thông tin bảo mật và quản lý phiên đăng nhập."
+      />
 
-      <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
-        <h2 className="text-lg font-semibold text-white">Đổi mật khẩu</h2>
-        <p className="text-xs text-slate-400">
-          Theo AUTH DECISION 03: Khi bạn tự đổi mật khẩu, phiên làm việc hiện tại được tiếp tục, toàn bộ các phiên đăng nhập trên thiết bị khác sẽ bị thu hồi ngay lập tức (scope: others).
-        </p>
+      <Card className="p-6 space-y-5">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-accent-soft text-accent flex items-center justify-center shrink-0 mt-0.5">
+            <Lock className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">Đổi mật khẩu</h2>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
+              Theo AUTH DECISION 03: Khi bạn tự đổi mật khẩu, phiên làm việc hiện tại được tiếp tục, toàn bộ các phiên đăng nhập trên thiết bị khác sẽ bị thu hồi ngay lập tức (scope: others).
+            </p>
+          </div>
+        </div>
 
         {statusMessage && (
           <div
-            className={`p-3 rounded-lg text-sm ${
+            className={`p-3.5 rounded-lg text-xs flex items-center gap-2.5 ${
               statusMessage.type === 'success'
-                ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
-                : 'bg-red-500/10 border border-red-500/30 text-red-300'
+                ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border border-rose-200 text-rose-800'
             }`}
           >
-            {statusMessage.text}
+            {statusMessage.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{statusMessage.text}</span>
           </div>
         )}
 
-        <form onSubmit={handlePasswordChange} className="space-y-4">
+        <form onSubmit={handlePasswordChange} className="space-y-4 pt-2">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">
+            <label className="block text-xs font-medium text-text-secondary mb-1">
               Mật khẩu mới (tối thiểu 8 ký tự)
             </label>
             <input
@@ -75,12 +93,12 @@ export default function AccountPage() {
               required
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg bg-surface-primary border border-border-subtle text-text-primary text-xs placeholder:text-text-tertiary focus:outline-none focus:border-accent"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">
+            <label className="block text-xs font-medium text-text-secondary mb-1">
               Xác nhận mật khẩu mới
             </label>
             <input
@@ -88,19 +106,22 @@ export default function AccountPage() {
               required
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg bg-surface-primary border border-border-subtle text-text-primary text-xs placeholder:text-text-tertiary focus:outline-none focus:border-accent"
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={isPending}
-            className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition disabled:opacity-50"
-          >
-            {isPending ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
-          </button>
+          <div className="pt-2">
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={isPending}
+            >
+              {isPending ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
+            </Button>
+          </div>
         </form>
-      </div>
+      </Card>
     </div>
   );
 }

@@ -5,6 +5,12 @@ import Link from 'next/link';
 import type { ContractListItemDTO } from '../services';
 import { getContractDownloadUrlAction, signContractAction } from '../actions';
 import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
+import { Card } from '@/components/ui/card';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/data-table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
+import { ShieldCheck, AlertTriangle, Download, CheckCircle2 } from 'lucide-react';
 
 interface ContractsViewProps {
   contracts: ContractListItemDTO[];
@@ -103,22 +109,22 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
   });
 
   return (
-    <div className="space-y-6">
-      {/* Header Notification if Boss without AAL2 */}
+    <div className="space-y-4">
+      {/* AAL2 Warning Banner for BOSS_ADMIN without AAL2 */}
       {isBossAdmin && !hasAal2 && (
-        <div className="p-4 bg-amber-950/50 border border-amber-800 rounded-xl flex items-center justify-between">
+        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between gap-4 shadow-subtle">
           <div className="flex items-center gap-3">
-            <span className="text-xl">⚠️</span>
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
             <div>
-              <div className="text-sm font-bold text-amber-300">Yêu cầu xác thực MFA AAL2</div>
-              <p className="text-xs text-slate-300">
+              <div className="text-sm font-semibold text-amber-900">Yêu cầu xác thực MFA AAL2</div>
+              <p className="text-xs text-amber-700">
                 Theo quy định bảo mật, thao tác Ký hợp đồng kinh tế bắt buộc tài khoản Quản trị viên (Boss) phải đạt cấp độ xác thực AAL2.
               </p>
             </div>
           </div>
           <Link
             href="/account"
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition whitespace-nowrap"
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white transition whitespace-nowrap shadow-subtle"
           >
             Bật xác thực MFA &rarr;
           </Link>
@@ -126,136 +132,148 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
       )}
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Lọc trạng thái:</span>
-          <div className="flex gap-1.5">
-            {[
-              { id: 'ALL', label: 'Tất cả' },
-              { id: 'SIGNED', label: 'Đã ký' },
-              { id: 'UNSIGNED', label: 'Chưa ký' },
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setFilterStatus(f.id)}
-                className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
-                  filterStatus === f.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+      <Card className="p-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">
+              Lọc trạng thái:
+            </span>
+            <div className="flex gap-1.5">
+              {[
+                { id: 'ALL', label: 'Tất cả' },
+                { id: 'SIGNED', label: 'Đã ký' },
+                { id: 'UNSIGNED', label: 'Chưa ký' },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFilterStatus(f.id)}
+                  className={`px-3 py-1 text-xs rounded-lg font-medium transition cursor-pointer ${
+                    filterStatus === f.id
+                      ? 'bg-blue-600 text-white shadow-subtle'
+                      : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)] border border-[var(--border-subtle)]'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-xs text-[var(--text-secondary)]">
+            Tổng số: <strong className="text-[var(--text-primary)]">{filtered.length}</strong> hợp đồng
           </div>
         </div>
-        <div className="text-xs text-slate-400">
-          Tổng số: <strong className="text-white">{filtered.length}</strong> hợp đồng
-        </div>
-      </div>
+      </Card>
 
       {/* Contracts Table */}
-      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 shadow">
-        <table className="min-w-full divide-y divide-slate-800 text-sm">
-          <thead className="bg-slate-950/60 text-slate-400 text-xs uppercase font-medium">
-            <tr>
-              <th className="py-3 px-4 text-left">Mã Đơn / Hợp Đồng</th>
-              <th className="py-3 px-4 text-center">Phiên Bản</th>
-              <th className="py-3 px-4 text-left">Khách Hàng</th>
-              <th className="py-3 px-4 text-right">Tổng Tiền (VNĐ)</th>
-              <th className="py-3 px-4 text-right">Công Nợ Còn Lại</th>
-              <th className="py-3 px-4 text-center">Trạng Thái Ký</th>
-              <th className="py-3 px-4 text-center">Trạng Thái HĐ</th>
-              <th className="py-3 px-4 text-center">Tác Vụ Hợp Đồng</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60">
+      <Card className="overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[130px]">Mã Đơn / HĐ</TableHead>
+              <TableHead className="text-center w-[90px]">Phiên Bản</TableHead>
+              <TableHead>Khách Hàng</TableHead>
+              <TableHead className="text-right">Tổng Tiền (VNĐ)</TableHead>
+              <TableHead className="text-right">Công Nợ Còn Lại</TableHead>
+              <TableHead className="text-center">Trạng Thái Ký</TableHead>
+              <TableHead className="text-center">Trạng Thái HĐ</TableHead>
+              <TableHead className="text-center">Tác Vụ Hợp Đồng</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {filtered.map((contract) => {
               const isDownloadingGen = downloadingId === `${contract.id}_generated`;
               const isDownloadingSigned = downloadingId === `${contract.id}_signed`;
 
               return (
-                <tr key={contract.id} className="hover:bg-slate-800/40 transition">
+                <TableRow key={contract.id}>
                   {/* Mã đơn */}
-                  <td className="py-3 px-4 font-mono text-xs font-semibold text-blue-400">
+                  <TableCell className="font-mono text-xs font-semibold text-blue-600">
                     <span title={contract.id}>{contract.orderCode}</span>
-                  </td>
+                  </TableCell>
 
                   {/* Phiên bản */}
-                  <td className="py-3 px-4 text-center text-xs font-mono text-slate-400">
+                  <TableCell className="text-center text-xs font-mono text-[var(--text-secondary)]">
                     Rev {contract.revisionNo}
-                  </td>
+                  </TableCell>
 
                   {/* Khách hàng */}
-                  <td className="py-3 px-4 font-medium text-white">
+                  <TableCell className="font-medium text-[var(--text-primary)]">
                     {contract.customerName}
-                  </td>
+                  </TableCell>
 
                   {/* Tổng tiền */}
-                  <td className="py-3 px-4 text-right font-medium text-slate-200">
+                  <TableCell className="text-right font-medium text-[var(--text-primary)]">
                     {contract.contractValue.toLocaleString('vi-VN')}
-                  </td>
+                  </TableCell>
 
                   {/* Công nợ còn lại */}
-                  <td className="py-3 px-4 text-right text-xs font-bold text-rose-400">
+                  <TableCell className="text-right text-xs font-semibold text-rose-600">
                     {contract.receivableAmount.toLocaleString('vi-VN')}
-                  </td>
+                  </TableCell>
 
                   {/* Trạng thái ký */}
-                  <td className="py-3 px-4 text-center">
+                  <TableCell className="text-center">
                     {contract.isSigned ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-950/70 border border-emerald-800 text-emerald-300">
+                      <Badge variant="success" size="sm">
                         ĐÃ KÝ
-                      </span>
+                      </Badge>
                     ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-950/70 border border-amber-800 text-amber-300">
+                      <Badge variant="warning" size="sm">
                         CHƯA KÝ
-                      </span>
+                      </Badge>
                     )}
-                  </td>
+                  </TableCell>
 
                   {/* Trạng thái HĐ */}
-                  <td className="py-3 px-4 text-center">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-mono bg-slate-800 text-slate-300">
+                  <TableCell className="text-center">
+                    <Badge variant="neutral" size="sm" className="font-mono">
                       {contract.status || 'DRAFT'}
-                    </span>
-                  </td>
+                    </Badge>
+                  </TableCell>
 
                   {/* Tác vụ */}
-                  <td className="py-3 px-4 text-center">
-                    <div className="flex items-center justify-center gap-2 flex-wrap">
+                  <TableCell className="text-center">
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
                       {/* Tải bản nháp PDF */}
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         onClick={() => handleDownload(contract.id, 'generated')}
                         disabled={isDownloadingGen}
-                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs font-medium text-blue-300 hover:text-blue-200 border border-slate-700 transition"
+                        leftIcon={<Download className="w-3.5 h-3.5" />}
+                        className="text-xs"
                       >
-                        {isDownloadingGen ? 'Đang mở...' : 'Tải HĐ Nháp'}
-                      </button>
+                        {isDownloadingGen ? 'Đang mở...' : 'HĐ Nháp'}
+                      </Button>
 
                       {/* Nếu đã ký -> Tải bản ký */}
                       {contract.isSigned && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => handleDownload(contract.id, 'signed')}
                           disabled={isDownloadingSigned}
-                          className="px-2.5 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/60 text-xs font-medium text-emerald-300 border border-emerald-800 transition"
+                          leftIcon={<CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                          className="text-xs text-emerald-700 border-emerald-200 hover:bg-emerald-50"
                         >
-                          {isDownloadingSigned ? 'Đang mở...' : 'Tải Bản Ký'}
-                        </button>
+                          {isDownloadingSigned ? 'Đang mở...' : 'Bản Ký'}
+                        </Button>
                       )}
 
                       {/* Nếu chưa ký & BOSS_ADMIN */}
                       {!contract.isSigned && isBossAdmin && (
                         hasAal2 ? (
-                          <button
+                          <Button
+                            variant="primary"
+                            size="sm"
                             onClick={() => handleOpenSignModal(contract)}
-                            className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white transition shadow-sm"
+                            className="text-xs bg-amber-600 hover:bg-amber-700"
                           >
                             Ký duyệt HĐ
-                          </button>
+                          </Button>
                         ) : (
                           <span
-                            className="px-2 py-1 rounded bg-slate-800 text-[11px] text-amber-400/80 border border-amber-800/40 cursor-help"
+                            className="px-2 py-1 rounded-md bg-amber-50 text-[11px] text-amber-700 border border-amber-200 cursor-help font-medium"
                             title="Yêu cầu MFA cấp độ AAL2 để ký hợp đồng"
                           >
                             Cần AAL2
@@ -263,67 +281,63 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
                         )
                       )}
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
 
             {filtered.length === 0 && (
-              <tr>
-                <td colSpan={8} className="py-10 text-center text-slate-500">
+              <TableRow>
+                <TableCell colSpan={8} className="py-12 text-center text-[var(--text-tertiary)]">
                   Chưa có dữ liệu hợp đồng nào phù hợp bộ lọc.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Card>
 
       {/* Signing Modal (BOSS_ADMIN ONLY + AAL2) */}
       {selectedContract && isBossAdmin && hasAal2 && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white">Ký &amp; Phê duyệt Hợp đồng chính thức</h3>
-              <button
-                onClick={() => setSelectedContract(null)}
-                className="text-slate-400 hover:text-white text-lg font-bold"
-              >
-                &times;
-              </button>
-            </div>
-
-            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 text-xs space-y-1.5">
+        <Modal
+          isOpen={true}
+          onClose={() => setSelectedContract(null)}
+          title="Ký & Phê duyệt Hợp đồng chính thức"
+          size="md"
+        >
+          <div className="space-y-4">
+            <div className="bg-[var(--surface-secondary)] p-3 rounded-lg border border-[var(--border-subtle)] text-xs space-y-1.5">
               <div>
-                Mã đơn hàng: <strong className="text-blue-400 font-mono">{selectedContract.orderCode}</strong>
+                Mã đơn hàng: <strong className="text-blue-600 font-mono">{selectedContract.orderCode}</strong>
               </div>
               <div>
-                Khách hàng: <strong className="text-white">{selectedContract.customerName}</strong>
+                Khách hàng: <strong className="text-[var(--text-primary)]">{selectedContract.customerName}</strong>
               </div>
               <div>
                 Giá trị hợp đồng: <strong>{selectedContract.contractValue.toLocaleString('vi-VN')} VNĐ</strong>
               </div>
               <div>
-                Phiên bản: <strong className="text-slate-300">Revision {selectedContract.revisionNo}</strong>
+                Phiên bản: <strong className="text-[var(--text-secondary)]">Revision {selectedContract.revisionNo}</strong>
               </div>
-              <div className="text-[11px] text-emerald-400 font-mono">
+              <div className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 inline" />
                 Xác thực danh tính: {userRole} (MFA AAL2 ĐÃ XÁC THỰC)
               </div>
             </div>
 
             <form onSubmit={handleSignSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Chọn tệp PDF hợp đồng đã ký (Tối đa 10MB) <span className="text-rose-400">*</span>
+                <label className="block text-xs font-medium text-[var(--text-primary)] mb-1">
+                  Chọn tệp PDF hợp đồng đã ký (Tối đa 10MB) <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="file"
                   accept="application/pdf"
                   required
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                  className="w-full bg-[var(--surface-secondary)] border border-[var(--border-subtle)] rounded-lg p-2 text-xs text-[var(--text-primary)] file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
+                <p className="text-[11px] text-[var(--text-tertiary)] mt-1">
                   Đường dẫn lưu trữ và phiên bản revision được máy chủ tính toán tự động. Không thể ghi đè tùy tiện.
                 </p>
               </div>
@@ -332,8 +346,8 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
                 <div
                   className={`p-3 rounded-lg text-xs ${
                     feedback.type === 'success'
-                      ? 'bg-emerald-950/80 border border-emerald-800 text-emerald-300'
-                      : 'bg-rose-950/80 border border-rose-800 text-rose-300'
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border border-rose-200 text-rose-800'
                   }`}
                 >
                   {feedback.message}
@@ -341,25 +355,29 @@ export default function ContractsView({ contracts, userRole, userAal }: Contract
               )}
 
               <div className="flex items-center justify-end gap-3 pt-2">
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
                   onClick={() => setSelectedContract(null)}
                   disabled={signingId !== null}
-                  className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
                 >
                   Hủy
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
+                  variant="primary"
+                  size="sm"
                   disabled={signingId !== null || !selectedFile}
-                  className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50"
+                  isLoading={signingId !== null}
+                  className="bg-emerald-600 hover:bg-emerald-700"
                 >
-                  {signingId ? 'Đang xác thực & lưu trữ...' : 'Ký & Phê duyệt HĐ'}
-                </button>
+                  Ký & Phê duyệt HĐ
+                </Button>
               </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

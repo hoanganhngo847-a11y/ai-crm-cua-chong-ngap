@@ -6,6 +6,11 @@ import {
   getConfiguredFacebookConnections,
   readFacebookConnectSession,
 } from '@/features/omnichannel/facebook/connect';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { CheckCircle2, AlertCircle, MessageSquare } from 'lucide-react';
 
 const ERROR_MESSAGES: Record<string, string> = {
   NO_COMPANY: 'Không xác định được doanh nghiệp hiện tại.',
@@ -53,182 +58,166 @@ export default async function FacebookConnectionPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-400">
-            Meta Messenger Integration
-          </p>
-          <h1 className="mt-2 text-3xl font-bold text-white">
-            Kết nối Facebook Page
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-            Boss Admin đăng nhập Facebook một lần để xác minh các Page mình quản lý. CRM
-            hỗ trợ nhiều Page cùng lúc; mỗi hội thoại luôn giữ Page nguồn để Sale biết khách
-            đang nhắn vào Page nào và trả lời đúng Page đó.
-          </p>
-        </div>
-        <Link
-          href="/inbox"
-          className="inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-slate-200 hover:border-slate-600 hover:bg-slate-800"
-        >
-          Mở Hộp thư
-        </Link>
-      </div>
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Quản trị hệ thống', href: '/admin' },
+          { label: 'Kết nối Facebook Page' },
+        ]}
+        title="Kết nối Facebook Page"
+        description="Đăng nhập Facebook để xác minh các Page quản lý. CRM hỗ trợ nhiều Page cùng lúc, tin nhắn phản hồi luôn giữ đúng Page nguồn."
+        primaryAction={
+          <Link
+            href="/inbox"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-border-subtle bg-surface-primary hover:bg-surface-hover text-text-primary text-xs font-medium transition shadow-xs"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Mở Hộp thư</span>
+          </Link>
+        }
+      />
 
       {errorCode && (
-        <div className="rounded-xl border border-red-800/60 bg-red-950/40 p-4 text-sm text-red-200">
-          <div className="font-semibold">Không thể hoàn tất kết nối</div>
-          <div className="mt-1 text-red-300">
-            {ERROR_MESSAGES[errorCode] || errorCode}
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">Không thể hoàn tất kết nối</div>
+            <div className="mt-0.5 text-xs text-rose-700">
+              {ERROR_MESSAGES[errorCode] || errorCode}
+            </div>
           </div>
         </div>
       )}
 
       {connected && (
-        <div className="rounded-xl border border-emerald-700/60 bg-emerald-950/30 p-4 text-sm text-emerald-200">
-          <div className="font-semibold">Kết nối thành công</div>
-          <div className="mt-1 text-emerald-300">
-            Đã đăng ký webhook Messenger cho {connectedCount || 1} Page
-            {connectedPages ? `: ${connectedPages}` : '.'}
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">Kết nối thành công</div>
+            <div className="mt-0.5 text-xs text-emerald-700">
+              Đã đăng ký webhook Messenger cho {connectedCount || 1} Page
+              {connectedPages ? `: ${connectedPages}` : '.'}
+            </div>
           </div>
         </div>
       )}
 
+      {/* Guide Steps */}
       <section className="grid gap-4 lg:grid-cols-3">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 1</div>
-          <h2 className="mt-2 text-lg font-semibold text-white">Đăng nhập Facebook</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            Boss Admin có AAL2 đăng nhập và cấp pages_show_list, pages_manage_metadata,
-            pages_messaging.
+        <Card className="p-5 space-y-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Bước 1</div>
+          <h2 className="text-sm font-semibold text-text-primary">Đăng nhập Facebook</h2>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Boss Admin có AAL2 đăng nhập và cấp pages_show_list, pages_manage_metadata, pages_messaging.
           </p>
-        </div>
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 2</div>
-          <h2 className="mt-2 text-lg font-semibold text-white">Xác minh các Page</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            Nếu workspace chỉ có một Page, Page đó được chọn sẵn. Khi có nhiều Page, Boss
-            có thể kết nối nhiều Page trong cùng một lần.
+        </Card>
+        <Card className="p-5 space-y-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Bước 2</div>
+          <h2 className="text-sm font-semibold text-text-primary">Xác minh các Page</h2>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Nếu workspace chỉ có một Page, Page đó được chọn sẵn. Khi có nhiều Page, Boss có thể kết nối nhiều Page trong cùng một lần.
           </p>
-        </div>
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bước 3</div>
-          <h2 className="mt-2 text-lg font-semibold text-white">Đăng ký webhook</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            CRM subscribe trường messages cho từng Page đã chọn. Tin nhắn sau đó được định
-            tuyến theo Page ID riêng, không trộn giữa các Page.
+        </Card>
+        <Card className="p-5 space-y-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Bước 3</div>
+          <h2 className="text-sm font-semibold text-text-primary">Đăng ký webhook</h2>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            CRM subscribe trường messages cho từng Page đã chọn. Tin nhắn sau đó được định tuyến theo Page ID riêng.
           </p>
-        </div>
+        </Card>
       </section>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+      {/* Configured Pages Section */}
+      <Card className="p-6 space-y-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-white">Các Page của workspace</h2>
-            <p className="mt-1 text-sm text-slate-400">
+            <h2 className="text-base font-semibold text-text-primary">Các Page của workspace</h2>
+            <p className="mt-1 text-xs text-text-secondary">
               Runtime có thể nhận và gửi song song trên tất cả Page đã cấu hình.
             </p>
           </div>
-          <div
-            className={`inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold ${
-              fullyConnected
-                ? 'bg-emerald-500/15 text-emerald-300'
-                : connections.length > 0
-                  ? 'bg-amber-500/15 text-amber-300'
-                  : 'bg-slate-800 text-slate-400'
-            }`}
-          >
+          <Badge variant={fullyConnected ? 'success' : connections.length > 0 ? 'warning' : 'neutral'}>
             {fullyConnected
               ? `${connections.length} Page đã kết nối webhook`
               : connections.length > 0
                 ? `${connections.length} Page đã cấu hình · cần kiểm tra subscription`
                 : 'Chưa cấu hình Page'}
-          </div>
+          </Badge>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2">
           {connections.length === 0 ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400 md:col-span-2">
+            <div className="rounded-lg border border-border-subtle bg-surface-secondary p-4 text-xs text-text-secondary md:col-span-2 text-center">
               Chưa có Facebook Page nào được cấu hình cho workspace.
             </div>
           ) : (
             connections.map((connection) => (
               <div
                 key={connection.pageId || 'unknown'}
-                className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"
+                className="rounded-lg border border-border-subtle bg-surface-secondary p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs text-slate-500">Facebook Page</div>
-                    <div className="mt-1 font-medium text-slate-100">
+                    <div className="text-[11px] text-text-tertiary">Facebook Page</div>
+                    <div className="mt-1 font-semibold text-text-primary text-sm">
                       {connection.pageName || 'Chưa lấy được tên Page'}
                     </div>
-                    <div className="mt-1 break-all font-mono text-xs text-slate-500">
+                    <div className="mt-1 font-mono text-xs text-text-secondary">
                       {connection.pageId}
                     </div>
                   </div>
-                  <span
-                    className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                      connection.subscribed
-                        ? 'bg-emerald-500/15 text-emerald-300'
-                        : 'bg-amber-500/15 text-amber-300'
-                    }`}
-                  >
+                  <Badge variant={connection.subscribed ? 'success' : 'warning'}>
                     {connection.subscribed ? 'Webhook OK' : 'Cần xác minh'}
-                  </span>
+                  </Badge>
                 </div>
               </div>
             ))
           )}
         </div>
 
-        <div className="mt-5">
+        <div className="pt-2 border-t border-border-subtle">
           <a
             href="/api/facebook/connect/start"
-            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500"
+            className="inline-flex items-center justify-center rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-accent-hover transition"
           >
             Kết nối / xác minh các Facebook Page
           </a>
-          <p className="mt-2 text-xs text-slate-500">
-            Access token onboarding chỉ tồn tại trong cookie HttpOnly mã hóa tối đa 10 phút.
-            Token runtime của từng Page vẫn nằm trong cấu hình secret phía server.
+          <p className="mt-2 text-[11px] text-text-tertiary">
+            Access token onboarding chỉ tồn tại trong cookie HttpOnly mã hóa tối đa 10 phút. Token runtime của từng Page vẫn nằm trong cấu hình secret phía server.
           </p>
         </div>
-      </section>
+      </Card>
 
+      {/* Found Pages in Current Session */}
       {session && session.companyId === companyId && (
-        <section className="rounded-2xl border border-blue-800/60 bg-blue-950/20 p-6">
+        <Card className="p-6 space-y-5 border-accent/40 bg-accent-soft/30">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-semibold text-white">Các Facebook Page tìm thấy</h2>
-              <p className="mt-1 text-sm text-slate-400">
-                Meta trả về {session.pages.length} Page mà tài khoản vừa đăng nhập đang quản
-                lý. Page thuộc workspace được chọn sẵn; khi có nhiều Page bạn có thể kết nối
-                nhiều Page cùng một lúc.
+              <h2 className="text-base font-semibold text-text-primary">Các Facebook Page tìm thấy</h2>
+              <p className="mt-1 text-xs text-text-secondary">
+                Meta trả về {session.pages.length} Page mà tài khoản vừa đăng nhập đang quản lý.
               </p>
             </div>
-            <span className="rounded-full bg-blue-500/15 px-3 py-1 text-xs font-semibold text-blue-300">
+            <Badge variant="info">
               pages_show_list
-            </span>
+            </Badge>
           </div>
 
           {session.pages.length === 0 ? (
-            <div className="mt-5 rounded-xl border border-amber-800/50 bg-amber-950/30 p-4 text-sm text-amber-200">
-              Facebook không trả về Page nào. Hãy kiểm tra tài khoản vừa đăng nhập có quyền
-              quản lý Page hay không.
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+              Facebook không trả về Page nào. Hãy kiểm tra tài khoản vừa đăng nhập có quyền quản lý Page hay không.
             </div>
           ) : (
-            <form action="/api/facebook/connect/select" method="post" className="mt-5 space-y-4">
+            <form action="/api/facebook/connect/select" method="post" className="space-y-4">
               <div className="grid gap-3">
                 {session.pages.map((page) => {
                   const allowed = configuredPageIds.has(page.id);
                   return (
                     <label
                       key={page.id}
-                      className={`flex items-center gap-3 rounded-xl border p-4 ${
+                      className={`flex items-center gap-3 rounded-lg border p-3.5 transition ${
                         allowed
-                          ? 'cursor-pointer border-slate-700 bg-slate-950/60'
-                          : 'cursor-not-allowed border-slate-800 bg-slate-950/30 opacity-60'
+                          ? 'cursor-pointer border-border-subtle bg-surface-primary hover:border-accent'
+                          : 'cursor-not-allowed border-border-subtle bg-surface-secondary opacity-60'
                       }`}
                     >
                       <input
@@ -237,48 +226,48 @@ export default async function FacebookConnectionPage({
                         value={page.id}
                         defaultChecked={allowed}
                         disabled={!allowed}
-                        className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                        className="h-4 w-4 rounded border-border-strong text-accent focus:ring-accent"
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-slate-100">{page.name}</span>
+                          <span className="font-semibold text-text-primary text-xs">{page.name}</span>
                           {allowed ? (
-                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                            <Badge variant="success">
                               Thuộc workspace
-                            </span>
+                            </Badge>
                           ) : (
-                            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-500">
+                            <Badge variant="neutral">
                               Chưa cấu hình runtime
-                            </span>
+                            </Badge>
                           )}
                         </div>
-                        <div className="mt-1 font-mono text-xs text-slate-500">{page.id}</div>
+                        <div className="mt-0.5 font-mono text-[11px] text-text-tertiary">{page.id}</div>
                       </div>
                     </label>
                   );
                 })}
               </div>
 
-              <button
+              <Button
                 type="submit"
+                variant="primary"
+                size="sm"
                 disabled={!session.pages.some((page) => configuredPageIds.has(page.id))}
-                className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
               >
                 Kết nối các Page đã chọn
-              </button>
+              </Button>
             </form>
           )}
-        </section>
+        </Card>
       )}
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 text-sm text-slate-400">
-        <div className="font-semibold text-slate-200">Dùng cho Meta App Review</div>
-        <p className="mt-2 leading-6">
-          Khi quay screencast: mở trang này → bấm “Kết nối / xác minh các Facebook Page” →
-          hoàn tất Facebook Login → cho reviewer thấy danh sách Page từ Meta → Page của
-          workspace được chọn → bấm kết nối → mở Hộp thư và chứng minh Messenger hai chiều.
+      {/* Meta App Review Note */}
+      <Card className="p-4 text-xs text-text-secondary bg-surface-secondary">
+        <div className="font-semibold text-text-primary mb-1">Dùng cho Meta App Review</div>
+        <p className="leading-relaxed">
+          Khi quay screencast: mở trang này → bấm “Kết nối / xác minh các Facebook Page” → hoàn tất Facebook Login → cho reviewer thấy danh sách Page từ Meta → Page của workspace được chọn → bấm kết nối → mở Hộp thư và chứng minh Messenger hai chiều.
         </p>
-      </section>
+      </Card>
     </div>
   );
 }

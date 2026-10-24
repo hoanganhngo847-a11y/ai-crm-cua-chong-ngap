@@ -1,76 +1,155 @@
 import React from 'react';
+import Link from 'next/link';
 import { getActorContext } from '../../../lib/auth/context';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { BarChart3, Bot, PhoneCall, Key, ArrowRight } from 'lucide-react';
 
 export default async function AdminDashboardPage() {
   const actor = await getActorContext();
 
   return (
     <div className="space-y-6">
-      <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">Bảng điều khiển Quản trị viên (Sếp)</h1>
-        <p className="text-sm text-slate-400">
-          Khu vực bảo mật cao nhất: Quản lý nhân sự, chính sách giá và tài chính doanh nghiệp.
-        </p>
-      </div>
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Quản trị hệ thống' },
+        ]}
+        title="Bảng điều khiển Quản trị viên"
+        description="Khu vực bảo mật: Quản lý nhân sự, chính sách giá, trung tâm AI và tài chính doanh nghiệp."
+        primaryAction={
+          <Badge variant="neutral">
+            Vai trò: {actor?.role || 'BOSS_ADMIN'}
+          </Badge>
+        }
+      />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl">
-          <div className="text-sm font-medium text-slate-400 mb-1">Xác thực 2 yếu tố (MFA)</div>
-          <div className="text-lg font-semibold text-white">
-            Cấp độ hiện tại: <span className="text-emerald-400 font-mono">{actor?.aal?.toUpperCase() || 'AAL1'}</span>
+      {/* Security Status Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="p-5 space-y-2">
+          <div className="text-xs font-medium text-text-tertiary">Xác thực 2 yếu tố (MFA)</div>
+          <div className="text-base font-semibold text-text-primary flex items-center gap-2">
+            <span>Cấp độ:</span>
+            <Badge variant="success">
+              {actor?.aal?.toUpperCase() || 'AAL1'}
+            </Badge>
           </div>
-          <p className="text-xs text-slate-500 mt-2">Theo AUTH DECISION 01, tài khoản BOSS_ADMIN yêu cầu AAL2 khi truy cập dữ liệu nhạy cảm.</p>
-        </div>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Theo AUTH DECISION 01, tài khoản BOSS_ADMIN yêu cầu AAL2 khi truy cập dữ liệu nhạy cảm.
+          </p>
+        </Card>
 
-        <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl">
-          <div className="text-sm font-medium text-slate-400 mb-1">Quyền hạn Doanh nghiệp</div>
-          <div className="text-lg font-semibold text-blue-400 font-mono">{actor?.role}</div>
-          <p className="text-xs text-slate-500 mt-2">Được ủy quyền quản trị toàn bộ dữ liệu thuộc Company: {actor?.companyId}</p>
-        </div>
+        <Card className="p-5 space-y-2">
+          <div className="text-xs font-medium text-text-tertiary">Quyền hạn Doanh nghiệp</div>
+          <div className="text-base font-semibold text-accent font-mono">{actor?.role}</div>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Ủy quyền quản trị toàn bộ dữ liệu thuộc Company: <span className="font-mono text-text-primary">{actor?.companyId?.slice(0, 8)}...</span>
+          </p>
+        </Card>
 
-        <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl">
-          <div className="text-sm font-medium text-slate-400 mb-1">Trạng thái Hồ sơ</div>
-          <div className="text-lg font-semibold text-emerald-400">{actor?.profileStatus}</div>
-          <p className="text-xs text-slate-500 mt-2">Hồ sơ người dùng ứng dụng và tư cách thành viên đều đang ACTIVE.</p>
-        </div>
-      </div>
-
-      <div className="p-6 bg-gradient-to-r from-blue-950/40 via-slate-900 to-indigo-950/40 border border-blue-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white">Analytics doanh nghiệp (Báo cáo & Thống kê)</h2>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">M9.5</span>
+        <Card className="p-5 space-y-2">
+          <div className="text-xs font-medium text-text-tertiary">Trạng thái Hồ sơ</div>
+          <div className="text-base font-semibold text-emerald-700 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span>{actor?.profileStatus}</span>
           </div>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">Theo dõi toàn diện các chỉ số kinh doanh, phễu khách hàng, thời gian phản hồi SLA 5 phút, hoạt động khảo sát, và ảnh chụp tình hình tài chính doanh nghiệp.</p>
-        </div>
-        <a href="/admin/analytics" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở Dashboard →</a>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Hồ sơ người dùng ứng dụng và tư cách thành viên đều đang ACTIVE.
+          </p>
+        </Card>
       </div>
 
-      <div className="p-6 bg-gradient-to-r from-indigo-950/40 via-slate-900 to-purple-950/40 border border-purple-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white">AI Control Center (Trung tâm Điều khiển AI)</h2>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">Phase 8</span>
+      {/* Navigation Sections */}
+      <div className="space-y-3">
+        <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-lg bg-accent-soft text-accent flex items-center justify-center shrink-0 mt-0.5">
+              <BarChart3 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-text-primary">Analytics doanh nghiệp (Báo cáo & Thống kê)</h2>
+                <Badge variant="neutral">M9.5</Badge>
+              </div>
+              <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
+                Theo dõi toàn diện các chỉ số kinh doanh, phễu khách hàng, thời gian phản hồi SLA 5 phút, hoạt động khảo sát, và ảnh chụp tình hình tài chính doanh nghiệp.
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">Quản trị toàn diện tự động trả lời đa kênh (Zalo, Messenger, Voice), ngắt khẩn cấp Kill Switch, ngưỡng độ tin cậy, model routing, và hộp thư chuyển giao tư vấn viên.</p>
-        </div>
-        <a href="/admin/ai" className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở AI Control Center →</a>
-      </div>
+          <Link
+            href="/admin/analytics"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover text-xs font-medium transition shrink-0 self-start md:self-auto"
+          >
+            <span>Mở Dashboard</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </Card>
 
-      <div className="p-6 bg-slate-900 border border-cyan-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-white">AI Call Pipeline</h2>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">Theo dõi read-only luồng Recording → Transcription → AI Summary, lỗi canonical và trạng thái Gemini pool mà không cần vào Supabase/Render.</p>
-        </div>
-        <a href="/admin/ai-call-pipeline" className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở AI Pipeline →</a>
-      </div>
+        <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 mt-0.5 border border-purple-200">
+              <Bot className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-text-primary">AI Control Center (Trung tâm Điều khiển AI)</h2>
+                <Badge variant="ai">Phase 8</Badge>
+              </div>
+              <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
+                Quản trị toàn diện tự động trả lời đa kênh (Zalo, Messenger, Voice), ngắt khẩn cấp Kill Switch, ngưỡng độ tin cậy, model routing, và hộp thư chuyển giao tư vấn viên.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/admin/ai"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-secondary text-text-primary hover:bg-surface-hover border border-border-subtle text-xs font-medium transition shrink-0 self-start md:self-auto"
+          >
+            <span>Mở AI Control Center</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </Card>
 
-      <div className="p-6 bg-slate-900 border border-emerald-500/20 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-white">Gemini Pool</h2>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">Quản lý 30 slot Gemini và theo dõi trạng thái xoay vòng/cooldown.</p>
-        </div>
-        <a href="/admin/gemini-keys" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold transition shrink-0 text-center">Mở Gemini Pool →</a>
+        <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5 border border-blue-200">
+              <PhoneCall className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary">AI Call Pipeline</h2>
+              <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
+                Theo dõi luồng Recording → Transcription → AI Summary, lỗi canonical và trạng thái Gemini pool.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/admin/ai-call-pipeline"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-secondary text-text-primary hover:bg-surface-hover border border-border-subtle text-xs font-medium transition shrink-0 self-start md:self-auto"
+          >
+            <span>Mở AI Pipeline</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </Card>
+
+        <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-200">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary">Gemini Pool</h2>
+              <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
+                Quản lý 30 slot Gemini và theo dõi trạng thái xoay vòng/cooldown.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/admin/gemini-keys"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-secondary text-text-primary hover:bg-surface-hover border border-border-subtle text-xs font-medium transition shrink-0 self-start md:self-auto"
+          >
+            <span>Mở Gemini Pool</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </Card>
       </div>
     </div>
   );

@@ -7,6 +7,23 @@ import {
   startSurveyAppointmentAction,
   cancelSurveyAppointmentAction,
 } from './actions';
+import CalculatePriceFromSurveyButton from '../../../features/pricing/components/calculate-price-from-survey-button';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  ShieldCheck,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+  ArrowRight,
+  ClipboardEdit,
+} from 'lucide-react';
 
 export interface SurveyAppointmentItem {
   id: string;
@@ -21,8 +38,6 @@ export interface SurveyAppointmentItem {
   assignee_name: string;
   survey_id?: string | null;
 }
-
-import CalculatePriceFromSurveyButton from '../../../features/pricing/components/calculate-price-from-survey-button';
 
 interface Props {
   initialAppointments: SurveyAppointmentItem[];
@@ -220,145 +235,127 @@ export default function SurveyListClient({
       {/* Toast Notification */}
       {toastMessage && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl border text-sm flex items-center gap-3 transition-all ${
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg border text-sm flex items-center gap-3 transition-all ${
             toastMessage.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
-              : 'bg-rose-950/90 border-rose-500/50 text-rose-200'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
           }`}
         >
-          <span>{toastMessage.type === 'success' ? '✓' : '⚠'}</span>
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          )}
           <span>{toastMessage.text}</span>
         </div>
       )}
 
-      {/* Header & Persona Card */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-5">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight">
-              Lịch Khảo Sát Hiện Trường
-            </h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30">
+      {/* Header & Persona */}
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Vận hành', href: '/field' },
+          { label: 'Khảo sát hiện trường' },
+        ]}
+        title="Lịch Khảo Sát Hiện Trường"
+        description="Quản lý hành trình khảo sát, tiếp nhận công việc và nộp kết quả đo đạc kỹ thuật chính xác."
+        primaryAction={
+          <div className="flex items-center gap-3">
+            <Badge variant="neutral">
               {userRole === 'TECHNICIAN' ? 'Kỹ thuật viên' : userRole}
-            </span>
+            </Badge>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>Zero-Phone PII</span>
+            </div>
+            <div className="text-right hidden sm:block pl-2 border-l border-border-subtle">
+              <div className="text-[11px] text-text-tertiary">Đang đăng nhập</div>
+              <div className="text-xs font-semibold text-text-primary">{userName}</div>
+            </div>
           </div>
-          <p className="text-sm text-slate-400 mt-1">
-            Quản lý hành trình khảo sát, tiếp nhận công việc và nộp kết quả đo đạc chính xác.
-          </p>
-        </div>
-
-        {/* Security & User Badge */}
-        <div className="flex items-center gap-3 self-start md:self-auto">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-xs font-medium">
-            <svg
-              className="w-4 h-4 text-emerald-400 shrink-0"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
-              />
-            </svg>
-            <span>Bảo mật PII: Zero-Phone</span>
-          </div>
-          <div className="text-right hidden sm:block">
-            <div className="text-xs text-slate-400">Đang đăng nhập</div>
-            <div className="text-sm font-semibold text-slate-200">{userName}</div>
-          </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Metrics Counter Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
-        <div
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <button
+          type="button"
           onClick={() => setStatusFilter('ALL')}
-          className={`cursor-pointer p-4 rounded-xl border transition-all ${
+          className={`text-left p-4 rounded-xl border transition-all ${
             statusFilter === 'ALL'
-              ? 'bg-slate-800/90 border-blue-500/50 shadow-lg shadow-blue-500/10'
-              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+              ? 'bg-accent-soft border-accent shadow-xs'
+              : 'bg-surface-primary border-border-subtle hover:border-border-strong'
           }`}
         >
-          <div className="text-xs text-slate-400 font-medium">Tổng lịch hẹn</div>
-          <div className="text-2xl font-bold text-white mt-1">{stats.total}</div>
-        </div>
+          <div className="text-xs text-text-secondary font-medium">Tổng lịch hẹn</div>
+          <div className="text-2xl font-bold text-text-primary mt-1">{stats.total}</div>
+        </button>
 
-        <div
+        <button
+          type="button"
           onClick={() => setStatusFilter('ASSIGNED')}
-          className={`cursor-pointer p-4 rounded-xl border transition-all ${
+          className={`text-left p-4 rounded-xl border transition-all ${
             statusFilter === 'ASSIGNED'
-              ? 'bg-amber-950/40 border-amber-500/50 shadow-lg shadow-amber-500/10'
-              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+              ? 'bg-amber-50 border-amber-300 shadow-xs'
+              : 'bg-surface-primary border-border-subtle hover:border-border-strong'
           }`}
         >
-          <div className="text-xs text-amber-400 font-medium flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <div className="text-xs text-amber-700 font-medium flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
             Chờ nhận việc
           </div>
-          <div className="text-2xl font-bold text-amber-300 mt-1">{stats.assigned}</div>
-        </div>
+          <div className="text-2xl font-bold text-amber-900 mt-1">{stats.assigned}</div>
+        </button>
 
-        <div
+        <button
+          type="button"
           onClick={() => setStatusFilter('IN_PROGRESS')}
-          className={`cursor-pointer p-4 rounded-xl border transition-all ${
+          className={`text-left p-4 rounded-xl border transition-all ${
             statusFilter === 'IN_PROGRESS'
-              ? 'bg-purple-950/40 border-purple-500/50 shadow-lg shadow-purple-500/10'
-              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+              ? 'bg-blue-50 border-blue-300 shadow-xs'
+              : 'bg-surface-primary border-border-subtle hover:border-border-strong'
           }`}
         >
-          <div className="text-xs text-purple-400 font-medium flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+          <div className="text-xs text-accent font-medium flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-accent" />
             Đang đo đạc
           </div>
-          <div className="text-2xl font-bold text-purple-300 mt-1">{stats.inProgress}</div>
-        </div>
+          <div className="text-2xl font-bold text-accent-hover mt-1">{stats.inProgress}</div>
+        </button>
 
-        <div
+        <button
+          type="button"
           onClick={() => setStatusFilter('COMPLETED')}
-          className={`cursor-pointer p-4 rounded-xl border transition-all ${
+          className={`text-left p-4 rounded-xl border transition-all ${
             statusFilter === 'COMPLETED'
-              ? 'bg-emerald-950/40 border-emerald-500/50 shadow-lg shadow-emerald-500/10'
-              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+              ? 'bg-emerald-50 border-emerald-300 shadow-xs'
+              : 'bg-surface-primary border-border-subtle hover:border-border-strong'
           }`}
         >
-          <div className="text-xs text-emerald-400 font-medium">Đã hoàn thành</div>
-          <div className="text-2xl font-bold text-emerald-300 mt-1">{stats.completed}</div>
-        </div>
+          <div className="text-xs text-emerald-700 font-medium flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            Đã hoàn thành
+          </div>
+          <div className="text-2xl font-bold text-emerald-900 mt-1">{stats.completed}</div>
+        </button>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="p-4 bg-slate-900/80 border border-slate-800 rounded-2xl space-y-4 shadow-xl">
-        {/* Top filter row: Search & Quick Dates */}
+      <Card className="p-4 space-y-3">
         <div className="flex flex-col md:flex-row gap-3">
           {/* Search Box */}
           <div className="relative flex-1">
-            <svg
-              className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
-            </svg>
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
             <input
               type="text"
               placeholder="Tìm theo Mã KH (KH-...), Tên khách, hoặc Địa chỉ..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950/90 border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition"
+              className="w-full bg-surface-primary border border-border-subtle rounded-lg pl-9 pr-8 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent transition"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary text-xs"
               >
                 ✕
               </button>
@@ -366,7 +363,7 @@ export default function SurveyListClient({
           </div>
 
           {/* Quick Date Tabs */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+          <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0">
             {(
               [
                 { id: 'ALL', label: 'Tất cả ngày' },
@@ -381,10 +378,10 @@ export default function SurveyListClient({
                   setDateFilter(tab.id);
                   setCustomDate('');
                 }}
-                className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
                   dateFilter === tab.id && !customDate
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
-                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                    ? 'bg-text-primary text-white font-semibold'
+                    : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-hover'
                 }`}
               >
                 {tab.label}
@@ -399,15 +396,15 @@ export default function SurveyListClient({
                 setCustomDate(e.target.value);
                 setDateFilter('ALL');
               }}
-              className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+              className="px-2.5 py-1.5 bg-surface-secondary border border-border-subtle rounded-md text-xs text-text-primary focus:outline-none focus:border-accent"
               title="Chọn ngày cụ thể"
             />
           </div>
         </div>
 
         {/* Status Pills */}
-        <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-slate-800/60">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider shrink-0 mr-1">
+        <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-border-subtle">
+          <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider shrink-0 mr-1">
             Trạng thái:
           </span>
           {(
@@ -422,180 +419,115 @@ export default function SurveyListClient({
             <button
               key={s.id}
               onClick={() => setStatusFilter(s.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+              className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
                 statusFilter === s.id
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-sm'
-                  : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  ? 'bg-accent text-white font-semibold'
+                  : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-hover'
               }`}
             >
               {s.label}
             </button>
           ))}
         </div>
-      </div>
+      </Card>
 
       {/* Appointments List */}
       <div className="space-y-4">
         {filteredAppointments.length === 0 ? (
-          <div className="p-12 text-center bg-slate-900/50 border border-slate-800/80 rounded-2xl">
-            <div className="w-16 h-16 mx-auto rounded-full bg-slate-800/60 flex items-center justify-center text-slate-500 mb-3">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-            </div>
-            <h3 className="text-base font-semibold text-white">Không tìm thấy lịch hẹn phù hợp</h3>
-            <p className="text-sm text-slate-400 mt-1 max-w-sm mx-auto">
-              Thử thay đổi bộ lọc ngày, trạng thái hoặc từ khóa tìm kiếm để xem các lịch hẹn khác.
-            </p>
-            {(statusFilter !== 'ALL' || dateFilter !== 'ALL' || searchQuery || customDate) && (
-              <button
-                onClick={() => {
-                  setStatusFilter('ALL');
-                  setDateFilter('ALL');
-                  setSearchQuery('');
-                  setCustomDate('');
-                }}
-                className="mt-4 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-blue-400 transition"
-              >
-                Đặt lại bộ lọc
-              </button>
-            )}
-          </div>
+          <Card className="p-12 text-center">
+            <EmptyState
+              icon={<Calendar className="w-8 h-8 text-text-tertiary" />}
+              title="Không tìm thấy lịch hẹn phù hợp"
+              description="Thử thay đổi bộ lọc ngày, trạng thái hoặc từ khóa tìm kiếm để xem các lịch hẹn khác."
+              action={
+                (statusFilter !== 'ALL' || dateFilter !== 'ALL' || searchQuery || customDate) ? {
+                  label: 'Đặt lại bộ lọc',
+                  onClick: () => {
+                    setStatusFilter('ALL');
+                    setDateFilter('ALL');
+                    setSearchQuery('');
+                    setCustomDate('');
+                  },
+                } : undefined
+              }
+            />
+          </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredAppointments.map((item) => {
               const isItemLoading = loadingId === item.id && isPending;
 
-              // Color configs based on status
-              const statusBadgeConfig = {
-                ASSIGNED: {
-                  badge: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
-                  dot: 'bg-amber-400',
-                  label: 'Chờ nhận việc',
-                  border: 'hover:border-amber-500/40',
-                },
-                ACCEPTED: {
-                  badge: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
-                  dot: 'bg-sky-400',
-                  label: 'Đã nhận việc',
-                  border: 'hover:border-sky-500/40',
-                },
-                IN_PROGRESS: {
-                  badge: 'bg-purple-500/10 text-purple-300 border-purple-500/30',
-                  dot: 'bg-purple-400 animate-ping',
-                  label: 'Đang đến đo đạc',
-                  border: 'border-purple-500/40 shadow-lg shadow-purple-500/5',
-                },
-                COMPLETED: {
-                  badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-                  dot: 'bg-emerald-400',
-                  label: 'Đã hoàn tất đo',
-                  border: 'hover:border-emerald-500/40',
-                },
-                CANCELLED: {
-                  badge: 'bg-slate-800 text-slate-400 border-slate-700',
-                  dot: 'bg-slate-500',
-                  label: 'Đã hủy',
-                  border: 'opacity-60',
-                },
-                REJECTED: {
-                  badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
-                  dot: 'bg-rose-400',
-                  label: 'Từ chối',
-                  border: 'opacity-60',
-                },
-              }[item.status] || {
-                badge: 'bg-slate-800 text-slate-300 border-slate-700',
-                dot: 'bg-slate-400',
-                label: item.status,
-                border: '',
+              const getBadgeVariant = (st: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' => {
+                switch (st) {
+                  case 'COMPLETED':
+                    return 'success';
+                  case 'IN_PROGRESS':
+                    return 'info';
+                  case 'ASSIGNED':
+                  case 'ACCEPTED':
+                    return 'warning';
+                  case 'CANCELLED':
+                  case 'REJECTED':
+                    return 'danger';
+                  default:
+                    return 'neutral';
+                }
+              };
+
+              const statusLabels: Record<string, string> = {
+                ASSIGNED: 'Chờ nhận việc',
+                ACCEPTED: 'Đã nhận việc',
+                IN_PROGRESS: 'Đang đến đo đạc',
+                COMPLETED: 'Đã hoàn tất đo',
+                CANCELLED: 'Đã hủy',
+                REJECTED: 'Từ chối',
               };
 
               return (
-                <div
+                <Card
                   key={item.id}
-                  className={`p-5 rounded-2xl bg-slate-900 border border-slate-800/90 transition-all flex flex-col justify-between gap-4 ${statusBadgeConfig.border}`}
+                  className="p-5 flex flex-col justify-between gap-4 hover:border-border-strong transition-colors"
                 >
                   {/* Card Header: Status & Schedule Time */}
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-3">
-                      {/* Status Tag */}
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${statusBadgeConfig.badge}`}
-                      >
-                        <span className={`w-2 h-2 rounded-full ${statusBadgeConfig.dot}`} />
-                        {statusBadgeConfig.label}
-                      </span>
+                      <Badge variant={getBadgeVariant(item.status)}>
+                        {statusLabels[item.status] || item.status}
+                      </Badge>
 
-                      {/* Scheduled Time */}
-                      <div className="flex items-center gap-1.5 text-xs text-slate-300 font-mono font-medium">
-                        <svg
-                          className="w-4 h-4 text-blue-400 shrink-0"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
+                      <div className="flex items-center gap-1.5 text-xs text-text-secondary font-mono">
+                        <Clock className="w-3.5 h-3.5 text-accent shrink-0" />
                         <span>{formatDateTime(item.start_time)}</span>
                       </div>
                     </div>
 
-                    {/* Customer Info (PII Safe: Only Name + Code + Address) */}
-                    <div className="space-y-2 mt-2">
+                    {/* Customer Info */}
+                    <div className="space-y-2.5 mt-2">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center font-bold text-xs text-white uppercase">
+                          <div className="w-7 h-7 rounded-full bg-accent-soft text-accent font-semibold text-xs flex items-center justify-center uppercase">
                             {item.customer_name.charAt(0) || 'K'}
                           </div>
-                          <span className="font-bold text-white text-base">
+                          <span className="font-semibold text-text-primary text-base">
                             {item.customer_name}
                           </span>
                         </div>
-                        <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-blue-400 font-mono text-xs font-semibold">
+                        <span className="px-2 py-0.5 rounded bg-surface-secondary border border-border-subtle text-accent font-mono text-xs font-semibold">
                           {item.customer_code}
                         </span>
                       </div>
 
-                      {/* Address with Map Icon */}
-                      <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex items-start gap-2 text-slate-300 text-xs leading-relaxed">
-                        <svg
-                          className="w-4 h-4 text-rose-400 shrink-0 mt-0.5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                          />
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                          />
-                        </svg>
+                      {/* Address */}
+                      <div className="p-2.5 rounded-lg bg-surface-secondary border border-border-subtle flex items-start gap-2 text-text-secondary text-xs leading-relaxed">
+                        <MapPin className="w-4 h-4 text-text-tertiary shrink-0 mt-0.5" />
                         <span className="break-words font-medium">{item.address}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Card Actions Footer */}
-                  <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-slate-500 font-mono">
+                  <div className="pt-3 border-t border-border-subtle flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-text-tertiary font-mono">
                       ID: {item.id.slice(0, 8)}...
                     </span>
 
@@ -603,77 +535,50 @@ export default function SurveyListClient({
                       {/* Action 1: Nhận lịch (ASSIGNED -> ACCEPTED) */}
                       {item.status === 'ASSIGNED' && (
                         <>
-                          <button
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             disabled={isItemLoading}
                             onClick={() => handleCancel(item.id)}
-                            className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-rose-400 hover:bg-slate-800 border border-transparent hover:border-rose-900/30 transition disabled:opacity-50"
+                            className="text-danger hover:text-danger hover:bg-rose-50"
                           >
                             Hủy
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            variant="primary"
+                            size="sm"
                             disabled={isItemLoading}
                             onClick={() => handleAccept(item.id)}
-                            className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-50"
                           >
-                            {isItemLoading ? (
-                              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <span>✓</span>
-                            )}
-                            <span>Nhận lịch</span>
-                          </button>
+                            {isItemLoading ? 'Đang xử lý...' : '✓ Nhận lịch'}
+                          </Button>
                         </>
                       )}
 
                       {/* Action 2: Bắt đầu đến đo (ACCEPTED -> IN_PROGRESS -> Form) */}
                       {item.status === 'ACCEPTED' && (
-                        <button
+                        <Button
+                          variant="primary"
+                          size="sm"
                           disabled={isItemLoading}
                           onClick={() => handleStart(item.id)}
-                          className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-600/20 transition flex items-center gap-1.5 disabled:opacity-50"
                         >
-                          {isItemLoading ? (
-                            <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <svg
-                              className="w-3.5 h-3.5"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M13 5l7 7-7 7M5 5l7 7-7 7"
-                              />
-                            </svg>
-                          )}
-                          <span>Bắt đầu đến đo</span>
-                        </button>
+                          {isItemLoading ? 'Đang chuyển hướng...' : 'Bắt đầu đến đo'}
+                          <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                        </Button>
                       )}
 
                       {/* Action 3: Tiếp tục đo đạc (IN_PROGRESS) */}
                       {item.status === 'IN_PROGRESS' && (
-                        <button
+                        <Button
+                          variant="primary"
+                          size="sm"
                           onClick={() => router.push(`/surveys/${item.id}`)}
-                          className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
-                          <svg
-                            className="w-3.5 h-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                            />
-                          </svg>
-                          <span>Nhập số đo</span>
-                        </button>
+                          <ClipboardEdit className="w-3.5 h-3.5 mr-1.5" />
+                          Nhập số đo
+                        </Button>
                       )}
 
                       {/* Action 4: Xem kết quả & Tính giá (COMPLETED) */}
@@ -685,17 +590,18 @@ export default function SurveyListClient({
                               userRole={userRole}
                             />
                           )}
-                          <button
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => router.push(`/surveys/${item.id}`)}
-                            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
                           >
                             Xem kết quả
-                          </button>
+                          </Button>
                         </div>
                       )}
                     </div>
                   </div>
-                </div>
+                </Card>
               );
             })}
           </div>

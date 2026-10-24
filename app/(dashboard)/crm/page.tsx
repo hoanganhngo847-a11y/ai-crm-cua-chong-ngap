@@ -1,7 +1,34 @@
+import React from 'react';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
-import Link from 'next/link';
+import { createAdminClient } from '../../../lib/supabase/admin';
+import { CustomerService } from '../../../features/crm/services/customer.service';
+import {
+  Users,
+  Flame,
+  AlertCircle,
+  PhoneCall,
+  Inbox,
+  ArrowRight,
+  Sparkles,
+  ChevronRight,
+  TrendingUp,
+  CheckCircle2,
+} from 'lucide-react';
+import { PageHeader } from '../../../components/ui/page-header';
+import { Metric } from '../../../components/ui/metric';
+import { Card, CardHeader, CardTitle, CardContent } from '../../../components/ui/card';
+import { Button } from '../../../components/ui/button';
+import { StatusBadge } from '../../../components/ui/status-badge';
+import { Avatar } from '../../../components/ui/avatar';
+import { EmptyState } from '../../../components/ui/empty-state';
+
+export const metadata = {
+  title: 'CRM Tổng quan | AI CRM Cửa Chống Ngập',
+  description: 'Trung tâm điều hành kinh doanh và quản lý quan hệ khách hàng',
+};
 
 export default async function CrmDashboardPage() {
   const actor = await getActorContext();
@@ -13,52 +40,294 @@ export default async function CrmDashboardPage() {
   // Chặn Kỹ thuật viên (Chỉ BOSS_ADMIN và SALE được truy cập CRM)
   if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
     return (
-      <div className="p-8 max-w-xl mx-auto text-center space-y-4">
-        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
-          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-            />
-          </svg>
-        </div>
-        <h2 className="text-xl font-bold text-white">Truy Cập Bị Từ Chối</h2>
-        <p className="text-sm text-slate-400">
-          Khu vực CRM bán hàng chỉ dành cho Chuyên viên Sale và Ban quản trị. Kỹ thuật viên vui lòng truy cập{' '}
-          <a href="/field" className="text-blue-400 underline hover:text-blue-300">
-            Hiện trường &amp; Khảo sát
-          </a>.
-        </p>
-      </div>
+      <EmptyState
+        type="permission"
+        title="Truy cập bị từ chối"
+        description="Khu vực CRM bán hàng chỉ dành cho Chuyên viên Kinh doanh và Quản trị viên."
+        action={{
+          label: 'Về trang Hiện trường',
+          href: '/field',
+        }}
+      />
     );
   }
 
+  const db = createAdminClient();
+  const companyId = actor.companyId!;
+
+  // Fetch metrics and urgent customers in parallel
+  let urgentCustomers: Awaited<ReturnType<typeof CustomerService.getUrgentClosingCustomers>> = [];
+  let totalCustomers = 0;
+  let newLeadsCount = 0;
+  let negotiatingCount = 0;
+  let wonOrdersCount = 0;
+
+  try {
+    const [urgent, totalRes, newRes, negRes, ordersRes] = await Promise.allSettled([
+      CustomerService.getUrgentClosingCustomers(companyId, 6, actor.role),
+      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId).in('stage', ['LEAD_NEW', 'CONTACT_CYCLE_1']),
+      db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId).in('stage', ['NEGOTIATING', 'PRICE_OFFERED', 'PRICE_CALCULATED']),
+      db.from('orders').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    ]);
+
+    if (urgent.status === 'fulfilled') urgentCustomers = urgent.value;
+    if (totalRes.status === 'fulfilled') totalCustomers = totalRes.value.count || 0;
+    if (newRes.status === 'fulfilled') newLeadsCount = newRes.value.count || 0;
+    if (negRes.status === 'fulfilled') negotiatingCount = negRes.value.count || 0;
+    if (ordersRes.status === 'fulfilled') wonOrdersCount = ordersRes.value.count || 0;
+  } catch (err) {
+    console.error('Error fetching CRM dashboard data:', err);
+  }
+
+  const pipelineStages = [
+    { label: 'Khách mới / Tiếp cận', count: newLeadsCount, color: 'bg-blue-500' },
+    { label: 'Khảo sát / Đang tính giá', count: Math.max(0, totalCustomers - newLeadsCount - negotiatingCount - wonOrdersCount), color: 'bg-indigo-500' },
+    { label: 'Báo giá & Đàm phán', count: negotiatingCount, color: 'bg-amber-500' },
+    { label: 'Đơn hàng & Hợp đồng', count: wonOrdersCount, color: 'bg-emerald-500' },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="border-b border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-white">CRM Khách Hàng &amp; Bán Hàng</h1>
-        <p className="text-sm text-slate-400">
-          Màn hình quản lý khách hàng 360, cơ hội bán hàng và theo dõi chốt đơn.
-        </p>
+      {/* Page Header */}
+      <PageHeader
+        title="CRM Khách Hàng & Bán Hàng"
+        description="Theo dõi hoạt động khách hàng, luồng đàm phán và các tác vụ cần xử lý ngay trong ngày."
+        primaryAction={
+          <Link href="/customers/dossier">
+            <Button variant="primary" size="sm" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
+              Hồ sơ Khách hàng 360
+            </Button>
+          </Link>
+        }
+        secondaryActions={
+          <Link href="/inbox">
+            <Button variant="secondary" size="sm" leftIcon={<Inbox className="w-3.5 h-3.5" />}>
+              Mở Hộp thư
+            </Button>
+          </Link>
+        }
+      />
+
+      {/* Top 4 Meaningful Operational Metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Metric
+          label="Tổng hồ sơ khách hàng"
+          value={totalCustomers}
+          icon={<Users className="w-4 h-4 text-blue-600" />}
+          subtitle="Đang quản lý trong công ty"
+        />
+        <Metric
+          label="Cơ hội cần chốt gấp"
+          value={urgentCustomers.length}
+          icon={<Flame className="w-4 h-4 text-rose-600" />}
+          subtitle="Ưu tiên gọi & phản hồi hôm nay"
+          trend={urgentCustomers.length > 0 ? { value: 'Cần chú ý', isPositive: false } : undefined}
+        />
+        <Metric
+          label="Đang báo giá & đàm phán"
+          value={negotiatingCount}
+          icon={<TrendingUp className="w-4 h-4 text-amber-600" />}
+          subtitle="Khách hàng đã nhận phương án"
+        />
+        <Metric
+          label="Đơn hàng & Chốt hợp đồng"
+          value={wonOrdersCount}
+          icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+          subtitle="Đã tạo đơn thành công"
+        />
       </div>
 
-      <Link href="/customers/dossier" className="block rounded-xl border border-blue-500/30 bg-blue-500/10 p-6 text-blue-200">
-        <h2 className="text-lg font-semibold">Customer 360 — Hồ sơ khách hàng AI →</h2>
-        <p className="mt-2 text-sm text-slate-400">Danh tính đa kênh, tình trạng hiện tại, lịch sử tương tác, cuộc gọi và bước tiếp theo.</p>
-      </Link>
+      {/* Main Workspace Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column (2 Cols): Urgent Work Queue & Attention Items */}
+        <div className="lg:col-span-2 space-y-6">
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-500" />
+                  <span>Danh sách khách hàng cần chú ý gấp</span>
+                </CardTitle>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  Khách hàng có lịch hẹn khảo sát, quá hạn liên hệ hoặc đang chờ chốt giá.
+                </p>
+              </div>
+              <Link href="/customers/dossier?overdue=1">
+                <Button variant="ghost" size="xs" rightIcon={<ChevronRight className="w-3 h-3" />}>
+                  Xem tất cả
+                </Button>
+              </Link>
+            </CardHeader>
 
-      <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="font-semibold text-white">Ngữ cảnh Thành viên Hợp lệ</div>
-          <span className="px-2.5 py-1 rounded bg-blue-900/40 border border-blue-700/50 text-blue-300 font-mono text-xs">
-            {actor?.role}
-          </span>
+            <CardContent className="p-0">
+              {urgentCustomers.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[var(--text-tertiary)]">
+                  <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-emerald-500 opacity-80" />
+                  Không có khách hàng nào quá hạn hoặc cần xử lý gấp tại thời điểm này.
+                </div>
+              ) : (
+                <div className="divide-y divide-[var(--border-subtle)]">
+                  {urgentCustomers.map((cust) => (
+                    <div
+                      key={cust.id}
+                      className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--surface-hover)] transition-colors"
+                    >
+                      <div className="flex items-start gap-3 min-w-0">
+                        <Avatar name={cust.name} size="md" />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={`/customers/${cust.id}/dossier`}
+                              className="text-xs font-semibold text-[var(--text-primary)] hover:text-[var(--accent)] truncate"
+                            >
+                              {cust.name}
+                            </Link>
+                            <span className="text-[10px] font-mono text-[var(--text-tertiary)]">
+                              {cust.customer_code}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-[var(--text-secondary)]">
+                            <StatusBadge status={cust.stage} size="xs" />
+                            <span>•</span>
+                            <span>Nguồn: {cust.source || 'Trực tiếp'}</span>
+                            {cust.phone && (
+                              <>
+                                <span>•</span>
+                                <span className="font-mono">{cust.phone}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <Link href={`/calls/${cust.id}`}>
+                          <Button variant="secondary" size="xs" leftIcon={<PhoneCall className="w-3 h-3 text-emerald-600" />}>
+                            Gọi điện
+                          </Button>
+                        </Link>
+                        <Link href={`/customers/${cust.id}/dossier`}>
+                          <Button variant="primary" size="xs" rightIcon={<ChevronRight className="w-3 h-3" />}>
+                            Chi tiết 360
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Sales Pipeline Distribution Summary */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Tổng quan phễu bán hàng (Sales Pipeline)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {pipelineStages.map((stg, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--text-secondary)] font-medium">{stg.label}</span>
+                      <span className="font-semibold font-mono text-[var(--text-primary)]">{stg.count}</span>
+                    </div>
+                    <div className="w-full h-2 bg-[var(--surface-secondary)] rounded-full overflow-hidden border border-[var(--border-subtle)]">
+                      <div
+                        className={`h-full ${stg.color} rounded-full transition-all duration-300`}
+                        style={{
+                          width: `${totalCustomers > 0 ? Math.min(100, Math.round((stg.count / totalCustomers) * 100)) : 0}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </div>
-        <p className="text-sm text-slate-300">
-          Chào mừng <strong className="text-white">{actor?.fullName}</strong>. Bạn đã được ủy quyền làm việc trên dữ liệu khách hàng của doanh nghiệp theo chính sách Zero-Phone Exposure (không lộ số điện thoại).
-        </p>
+
+        {/* Right Column: AI Assistant & Quick Hub */}
+        <div className="space-y-6">
+          {/* AI Customer 360 Hub Promotion */}
+          <div className="p-5 rounded-xl border border-[var(--ai-border)] bg-gradient-to-br from-[var(--ai-surface)] to-[var(--surface-primary)] shadow-xs space-y-3">
+            <div className="flex items-center gap-2 text-indigo-700">
+              <Sparkles className="w-4 h-4 shrink-0" />
+              <span className="text-xs font-semibold uppercase tracking-wider font-mono">
+                AI Customer 360 & Dossier
+              </span>
+            </div>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+              Hồ sơ khách hàng thông minh
+            </h3>
+            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              Tự động trích xuất nhu cầu, độ tin cậy, pain points và tín hiệu mua hàng từ hội thoại đa kênh &amp; cuộc gọi Zalo.
+            </p>
+            <div className="pt-1">
+              <Link href="/customers/dossier">
+                <Button variant="primary" size="sm" className="w-full" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
+                  Truy cập Customer 360
+                </Button>
+              </Link>
+            </div>
+          </div>
+
+          {/* Quick Actions Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Lối tắt thao tác nhanh</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 p-3">
+              <Link
+                href="/inbox"
+                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Inbox className="w-4 h-4 text-indigo-600" />
+                  <span className="font-medium group-hover:text-[var(--accent)]">Hộp thư tin nhắn đa kênh</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+              </Link>
+
+              <Link
+                href="/calls"
+                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <PhoneCall className="w-4 h-4 text-emerald-600" />
+                  <span className="font-medium group-hover:text-[var(--accent)]">Lịch sử cuộc gọi &amp; Ghi âm</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+              </Link>
+
+              <Link
+                href="/quotations"
+                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <TrendingUp className="w-4 h-4 text-amber-600" />
+                  <span className="font-medium group-hover:text-[var(--accent)]">Bảng báo giá &amp; Phương án</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+              </Link>
+
+              {actor.role === 'BOSS_ADMIN' && (
+                <Link
+                  href="/admin/ai"
+                  className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Sparkles className="w-4 h-4 text-rose-600" />
+                    <span className="font-medium group-hover:text-[var(--accent)]">AI Control Center &amp; Health</span>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+                </Link>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );

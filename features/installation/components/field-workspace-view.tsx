@@ -12,6 +12,12 @@ import {
 import type { FieldWorkspaceData } from '../installation-service';
 import type { SettableInstallationStatus } from '../types';
 import { PRODUCT_UPLOAD_MAX_BYTES } from '@/config/upload-policy';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Wrench, MapPin, FileCheck, Image as ImageIcon, Calendar, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface FieldWorkspaceViewProps {
   initialData: FieldWorkspaceData;
@@ -48,6 +54,28 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
     IN_PROGRESS: 'Đang thực hiện',
     CANCELLED: 'Đã hủy',
     REJECTED: 'Từ chối',
+  };
+
+  const getStatusVariant = (status: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' => {
+    switch (status) {
+      case 'COMPLETED':
+        return 'success';
+      case 'INSTALLING':
+      case 'IN_TRANSIT':
+      case 'TESTING':
+      case 'IN_PROGRESS':
+        return 'info';
+      case 'HANDOVER_PENDING':
+      case 'ASSIGNED':
+      case 'SCHEDULED':
+        return 'warning';
+      case 'FAILED':
+      case 'CANCELLED':
+      case 'REJECTED':
+        return 'danger';
+      default:
+        return 'neutral';
+    }
   };
 
   const handleStatusChange = async (installationId: string, nextStatus: SettableInstallationStatus) => {
@@ -180,62 +208,76 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Không gian Tác nghiệp Hiện trường</h1>
-          <p className="text-sm text-slate-400">
-            Quản lý công việc khảo sát, thi công lắp đặt và nghiệm thu bàn giao theo phân công hiện hành.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-400">
-            Vai trò: {data.role}
-          </span>
-          <div className="flex rounded-lg bg-slate-800 p-1 border border-slate-700">
-            <button
-              onClick={() => setActiveTab('INSTALLATION')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                activeTab === 'INSTALLATION'
-                  ? 'bg-cyan-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Lắp đặt ({data.installations.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('SURVEY')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                activeTab === 'SURVEY'
-                  ? 'bg-cyan-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Khảo sát ({data.surveys.length})
-            </button>
+      <PageHeader
+        breadcrumbs={[
+          { label: 'Vận hành', href: '/field' },
+          { label: 'Hiện trường' },
+        ]}
+        title="Tác nghiệp Hiện trường"
+        description="Quản lý công việc khảo sát, thi công lắp đặt và nghiệm thu bàn giao theo phân công."
+        primaryAction={
+          <div className="flex items-center gap-3">
+            <Badge variant="neutral">
+              Vai trò: {data.role}
+            </Badge>
+            <div className="inline-flex rounded-lg bg-surface-secondary p-1 border border-border-subtle">
+              <button
+                type="button"
+                onClick={() => setActiveTab('INSTALLATION')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'INSTALLATION'
+                    ? 'bg-surface-primary text-text-primary shadow-xs font-semibold'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Lắp đặt ({data.installations.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('SURVEY')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'SURVEY'
+                    ? 'bg-surface-primary text-text-primary shadow-xs font-semibold'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Khảo sát ({data.surveys.length})
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {errorMsg && (
-        <div className="p-4 rounded-lg bg-rose-950/50 border border-rose-800 text-rose-300 text-sm flex items-center justify-between">
-          <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="text-xs underline text-rose-400">Đóng</button>
+        <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <button onClick={() => setErrorMsg(null)} className="text-xs font-medium text-rose-700 hover:underline">Đóng</button>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-4 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300 text-sm flex items-center justify-between">
-          <span>{successMsg}</span>
-          <button onClick={() => setSuccessMsg(null)} className="text-xs underline text-emerald-400">Đóng</button>
+        <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+          <button onClick={() => setSuccessMsg(null)} className="text-xs font-medium text-emerald-700 hover:underline">Đóng</button>
         </div>
       )}
 
       {activeTab === 'INSTALLATION' && (
         <div className="space-y-4">
           {data.installations.length === 0 ? (
-            <div className="p-12 text-center rounded-xl bg-slate-900 border border-slate-800">
-              <p className="text-slate-400 text-sm">Chưa có phân công lắp đặt nào đang hoạt động.</p>
-            </div>
+            <Card className="p-12 text-center">
+              <EmptyState
+                icon={<Wrench className="w-8 h-8 text-text-tertiary" />}
+                title="Chưa có phân công lắp đặt"
+                description="Bạn hiện không có công việc lắp đặt nào đang hoạt động."
+              />
+            </Card>
           ) : (
             data.installations.map((item) => {
               const allowedTransitions = ALLOWED_TRANSITIONS[item.status] || [];
@@ -246,70 +288,55 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
               const isLoading = loadingId === item.id;
 
               return (
-                <div
+                <Card
                   key={item.id}
-                  className="p-6 rounded-xl bg-slate-900 border border-slate-800 space-y-4 shadow-lg"
+                  className="p-5 space-y-4 hover:border-border-strong transition-colors"
                 >
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-border-subtle pb-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white text-base">
+                        <span className="font-semibold text-text-primary text-base">
                           {item.customerName}
                         </span>
-                        <span className="text-xs font-mono text-slate-400">
+                        <span className="text-xs font-mono text-text-tertiary">
                           ({item.customerCode})
                         </span>
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5">
-                        Mã đơn: <span className="font-mono text-cyan-400">{item.orderCode}</span> | Địa chỉ:{' '}
-                        <span className="text-slate-300">{item.address}</span>
+                      <div className="text-xs text-text-secondary mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span>Mã đơn: <strong className="font-mono text-accent">{item.orderCode}</strong></span>
+                        <span className="text-border-strong">•</span>
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3 h-3 text-text-tertiary" />
+                          {item.address}
+                        </span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
                       {item.appointmentStatus && (
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                            item.appointmentStatus === 'COMPLETED'
-                              ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/60'
-                              : item.appointmentStatus === 'IN_PROGRESS'
-                              ? 'bg-blue-950/60 text-blue-300 border-blue-800/60'
-                              : item.appointmentStatus === 'ACCEPTED'
-                              ? 'bg-cyan-950/60 text-cyan-300 border-cyan-800/60'
-                              : 'bg-amber-950/60 text-amber-300 border-amber-800/60'
-                          }`}
-                        >
+                        <Badge variant={getStatusVariant(item.appointmentStatus)}>
                           Lịch hẹn: {STATUS_LABELS[item.appointmentStatus] || item.appointmentStatus}
-                        </span>
+                        </Badge>
                       )}
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          item.status === 'COMPLETED'
-                            ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
-                            : item.status === 'HANDOVER_PENDING'
-                            ? 'bg-purple-950/80 text-purple-300 border border-purple-700/60'
-                            : item.status === 'INSTALLING'
-                            ? 'bg-blue-950/80 text-blue-300 border border-blue-700/60'
-                            : item.status === 'FAILED'
-                            ? 'bg-rose-950/80 text-rose-300 border border-rose-700/60'
-                            : 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
-                        }`}
-                      >
+                      <Badge variant={getStatusVariant(item.status)}>
                         {STATUS_LABELS[item.status] || item.status}
-                      </span>
+                      </Badge>
                     </div>
                   </div>
 
                   {/* Evidence status */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950/60 p-4 rounded-lg border border-slate-800/60">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-surface-secondary p-4 rounded-lg border border-border-subtle">
                     <div>
-                      <div className="text-xs font-medium text-slate-400 mb-2 flex items-center justify-between">
-                        <span>Ảnh hiện trường ({item.photos.length})</span>
+                      <div className="text-xs font-medium text-text-secondary mb-2 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 font-semibold text-text-primary">
+                          <ImageIcon className="w-3.5 h-3.5 text-text-tertiary" />
+                          Ảnh hiện trường ({item.photos.length})
+                        </span>
                         {item.status !== 'COMPLETED' && (
                           item.appointmentStatus === 'ASSIGNED' ? (
-                            <span className="text-[11px] text-amber-400/80 italic">Cần nhận việc trước khi tải ảnh</span>
+                            <span className="text-[11px] text-amber-700 italic">Cần nhận việc trước khi tải ảnh</span>
                           ) : (
-                            <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
+                            <label className="cursor-pointer text-xs font-medium text-accent hover:text-accent-hover">
                               + Tải ảnh mới
                               <input
                                 type="file"
@@ -323,13 +350,13 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                         )}
                       </div>
                       {item.photos.length === 0 ? (
-                        <p className="text-xs text-slate-500 italic">Chưa có ảnh hiện trường được tải lên.</p>
+                        <p className="text-xs text-text-tertiary italic">Chưa có ảnh hiện trường được tải lên.</p>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
                           {item.photos.map((p, idx) => (
                             <span
                               key={idx}
-                              className="px-2 py-0.5 rounded bg-slate-800 text-[10px] font-mono text-slate-300 truncate max-w-[200px]"
+                              className="px-2 py-0.5 rounded bg-surface-primary border border-border-subtle text-[11px] font-mono text-text-secondary truncate max-w-[200px]"
                               title={p}
                             >
                               Ảnh #{idx + 1}
@@ -340,13 +367,16 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                     </div>
 
                     <div>
-                      <div className="text-xs font-medium text-slate-400 mb-2 flex items-center justify-between">
-                        <span>Biên bản nghiệm thu</span>
+                      <div className="text-xs font-medium text-text-secondary mb-2 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 font-semibold text-text-primary">
+                          <FileCheck className="w-3.5 h-3.5 text-text-tertiary" />
+                          Biên bản nghiệm thu
+                        </span>
                         {item.status !== 'COMPLETED' && (
                           item.appointmentStatus === 'ASSIGNED' ? (
-                            <span className="text-[11px] text-amber-400/80 italic">Cần nhận việc trước khi tải biên bản</span>
+                            <span className="text-[11px] text-amber-700 italic">Cần nhận việc trước khi tải biên bản</span>
                           ) : (
-                            <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 underline">
+                            <label className="cursor-pointer text-xs font-medium text-accent hover:text-accent-hover">
                               {item.handoverRef ? 'Thay thế biên bản' : '+ Tải biên bản (PDF/Ảnh)'}
                               <input
                                 type="file"
@@ -361,70 +391,76 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                       </div>
                       {item.handoverRef ? (
                         <div className="flex items-center gap-2">
-                          <span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
-                          <span className="text-xs text-emerald-300 font-mono truncate max-w-[240px]">
+                          <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                          <span className="text-xs text-text-primary font-mono truncate max-w-[240px]">
                             {item.handoverRef.split('/').pop()}
                           </span>
                         </div>
                       ) : (
-                        <p className="text-xs text-amber-400/80 italic">Chưa tải biên bản nghiệm thu bàn giao.</p>
+                        <p className="text-xs text-amber-700 italic">Chưa tải biên bản nghiệm thu bàn giao.</p>
                       )}
                     </div>
                   </div>
 
                   {/* Actions Bar */}
                   {item.status !== 'COMPLETED' && (
-                    <div className="space-y-3 pt-2">
+                    <div className="space-y-3 pt-1">
                       {item.appointmentStatus === 'ASSIGNED' ? (
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-amber-950/30 border border-amber-800/50 rounded-lg">
-                          <div className="text-xs text-amber-300">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <div className="text-xs text-amber-900">
                             <span className="font-semibold">Công việc mới được phân công:</span> Vui lòng nhận việc trước khi triển khai cập nhật trạng thái thi công.
                           </div>
                           {data.role === 'TECHNICIAN' ? (
-                            <button
+                            <Button
                               id={`accept-job-${item.id}`}
                               disabled={isLoading}
                               onClick={() => handleAcceptAppointment(item.appointmentId)}
-                              className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all disabled:opacity-50 whitespace-nowrap"
+                              variant="primary"
+                              size="sm"
+                              className="whitespace-nowrap"
                             >
                               {isLoading ? 'Đang xử lý...' : 'Nhận việc'}
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="text-xs text-amber-400 italic">Đang chờ kỹ thuật viên nhận việc</span>
+                            <span className="text-xs text-amber-800 italic">Đang chờ kỹ thuật viên nhận việc</span>
                           )}
                         </div>
                       ) : (
-                        <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                           <div className="flex flex-wrap items-center gap-2">
                             {item.appointmentStatus === 'ACCEPTED' && data.role === 'TECHNICIAN' && (
-                              <button
+                              <Button
                                 id={`start-work-${item.id}`}
                                 disabled={isLoading}
                                 onClick={() => handleStartWork(item.id)}
-                                className="px-3 py-1 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all disabled:opacity-50"
+                                variant="primary"
+                                size="sm"
                               >
                                 {isLoading ? 'Đang xử lý...' : 'Bắt đầu công việc'}
-                              </button>
+                              </Button>
                             )}
-                            <span className="text-xs text-slate-400">Chuyển trạng thái:</span>
+                            <span className="text-xs text-text-tertiary">Chuyển trạng thái:</span>
                             {allowedTransitions.map((st) => (
-                              <button
+                              <Button
                                 key={st}
                                 disabled={isLoading}
                                 onClick={() => handleStatusChange(item.id, st)}
-                                className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
+                                variant="secondary"
+                                size="sm"
                               >
                                 {STATUS_LABELS[st] || st}
-                              </button>
+                              </Button>
                             ))}
                           </div>
 
                           <div>
                             {item.status === 'HANDOVER_PENDING' && (
-                              <button
+                              <Button
                                 disabled={!canComplete || isLoading}
                                 onClick={() => handleCompleteHandover(item.id)}
-                                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                variant="primary"
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
                                 title={
                                   !canComplete
                                     ? 'Yêu cầu tối thiểu 1 ảnh hiện trường và 1 biên bản nghiệm thu'
@@ -432,7 +468,7 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                                 }
                               >
                                 {isLoading ? 'Đang xử lý...' : 'Nghiệm thu & Hoàn tất bàn giao'}
-                              </button>
+                              </Button>
                             )}
                           </div>
                         </div>
@@ -441,11 +477,12 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
                   )}
 
                   {item.status === 'COMPLETED' && item.completedAt && (
-                    <div className="text-xs text-emerald-400/90 bg-emerald-950/30 p-2.5 rounded border border-emerald-900/50">
-                      Đã hoàn tất nghiệm thu & bàn giao lúc {new Date(item.completedAt).toLocaleString('vi-VN')}. Đơn hàng đã ở trạng thái COMPLETED.
+                    <div className="text-xs text-emerald-800 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Đã hoàn tất nghiệm thu & bàn giao lúc {new Date(item.completedAt).toLocaleString('vi-VN')}. Đơn hàng đã ở trạng thái COMPLETED.</span>
                     </div>
                   )}
-                </div>
+                </Card>
               );
             })
           )}
@@ -455,42 +492,40 @@ export function FieldWorkspaceView({ initialData }: FieldWorkspaceViewProps) {
       {activeTab === 'SURVEY' && (
         <div className="space-y-4">
           {data.surveys.length === 0 ? (
-            <div className="p-12 text-center rounded-xl bg-slate-900 border border-slate-800">
-              <p className="text-slate-400 text-sm">Chưa có phân công khảo sát nào.</p>
-            </div>
+            <Card className="p-12 text-center">
+              <EmptyState
+                icon={<Calendar className="w-8 h-8 text-text-tertiary" />}
+                title="Chưa có phân công khảo sát"
+                description="Bạn hiện không có lịch hẹn khảo sát nào."
+              />
+            </Card>
           ) : (
             data.surveys.map((survey) => (
-              <div
+              <Card
                 key={survey.id}
-                className="p-5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors"
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white">{survey.customerName}</span>
-                    <span className="text-xs font-mono text-slate-400">({survey.customerCode})</span>
+                    <span className="font-semibold text-text-primary text-base">{survey.customerName}</span>
+                    <span className="text-xs font-mono text-text-tertiary">({survey.customerCode})</span>
                   </div>
-                  <div className="text-xs text-slate-400 mt-1">
-                    Địa chỉ: <span className="text-slate-300">{survey.address}</span>
+                  <div className="text-xs text-text-secondary mt-1 flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-text-tertiary" />
+                    <span>{survey.address}</span>
                   </div>
-                  <div className="text-xs text-slate-400 mt-0.5">
-                    Thời gian: <span className="text-slate-300">{new Date(survey.startTime).toLocaleString('vi-VN')}</span>
+                  <div className="text-xs text-text-secondary mt-0.5 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-text-tertiary" />
+                    <span>Thời gian: {new Date(survey.startTime).toLocaleString('vi-VN')}</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <span
-                    className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      survey.status === 'COMPLETED'
-                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                        : survey.status === 'IN_PROGRESS'
-                        ? 'bg-blue-950 text-blue-300 border border-blue-800'
-                        : 'bg-amber-950 text-amber-300 border border-amber-800'
-                    }`}
-                  >
+                  <Badge variant={getStatusVariant(survey.status)}>
                     {STATUS_LABELS[survey.status] || survey.status}
-                  </span>
+                  </Badge>
                 </div>
-              </div>
+              </Card>
             ))
           )}
         </div>

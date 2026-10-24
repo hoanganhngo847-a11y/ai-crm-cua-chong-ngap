@@ -18,9 +18,9 @@ export default async function WarrantyDashboardPage() {
     actor.role !== APPLICATION_ROLES.TECHNICIAN
   ) {
     return (
-      <div className="p-8 text-center bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-        <h2 className="text-lg font-bold text-rose-400">Không có quyền truy cập</h2>
-        <p className="text-sm text-slate-400">
+      <div className="p-8 text-center bg-white border border-border-subtle rounded-xl space-y-3 max-w-lg mx-auto my-12 shadow-xs">
+        <h2 className="text-base font-semibold text-danger">Không có quyền truy cập</h2>
+        <p className="text-sm text-text-secondary">
           Trang bảo hành yêu cầu vai trò Quản trị viên, Sale, hoặc Kỹ thuật viên.
         </p>
       </div>
