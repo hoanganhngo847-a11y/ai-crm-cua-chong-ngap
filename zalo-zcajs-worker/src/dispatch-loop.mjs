@@ -1,4 +1,5 @@
 const PORT = Number(process.env.PORT || 10000);
+const COMPANY_ID = (process.env.ZCAJS_COMPANY_ID || '').trim();
 const CRM_BASE_URL = (process.env.ZCAJS_CRM_BASE_URL || '').trim().replace(/\/$/, '');
 const WORKER_SECRET = process.env.ZCAJS_WORKER_SECRET || '';
 const POLL_INTERVAL_MS = Math.max(
@@ -9,8 +10,13 @@ const DISPATCH_BATCH_LIMIT = Math.max(
   1,
   Math.min(20, Number(process.env.ZCAJS_OUTBOUND_BATCH_LIMIT || 5) || 5)
 );
+const CONTACT_SYNC_INTERVAL_MS = Math.max(
+  60_000,
+  Number(process.env.ZCAJS_CONTACT_SYNC_MS || 300_000) || 300_000
+);
 
 let stopping = false;
+let nextContactSyncAt = 0;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +30,52 @@ async function isLocalWorkerReady() {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+async function syncContacts() {
+  if (!COMPANY_ID || !CRM_BASE_URL || !WORKER_SECRET) return;
+  if (Date.now() < nextContactSyncAt) return;
+  nextContactSyncAt = Date.now() + CONTACT_SYNC_INTERVAL_MS;
+  if (!(await isLocalWorkerReady())) return;
+
+  try {
+    const directoryResponse = await fetch(
+      `http://127.0.0.1:${PORT}/v1/contacts?companyId=${encodeURIComponent(COMPANY_ID)}`,
+      {
+        headers: { authorization: `Bearer ${WORKER_SECRET}` },
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+    if (!directoryResponse.ok) {
+      console.warn(`[ZCAJS] contact directory read failed: local HTTP ${directoryResponse.status}`);
+      return;
+    }
+    const directory = await directoryResponse.json().catch(() => null);
+    const contacts = Array.isArray(directory?.contacts) ? directory.contacts : [];
+
+    const response = await fetch(`${CRM_BASE_URL}/api/inbox/zalo-zcajs/contacts`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${WORKER_SECRET}`,
+      },
+      body: JSON.stringify({ companyId: COMPANY_ID, contacts }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      console.warn(`[ZCAJS] contact sync failed: CRM HTTP ${response.status}`);
+      return;
+    }
+    const result = await response.json().catch(() => null);
+    console.log(
+      `[ZCAJS] contact sync: seen=${Number(result?.seen || 0)} autoLinked=${Number(result?.autoLinked || 0)}`
+    );
+  } catch (error) {
+    console.warn(
+      '[ZCAJS] contact sync error:',
+      error instanceof Error ? error.message : 'unknown'
+    );
   }
 }
 
@@ -63,6 +115,7 @@ async function dispatchPending() {
 
 async function main() {
   while (!stopping) {
+    await syncContacts();
     await dispatchPending();
     if (!stopping) await sleep(POLL_INTERVAL_MS);
   }
