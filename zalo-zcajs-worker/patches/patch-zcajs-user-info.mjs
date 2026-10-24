@@ -82,13 +82,14 @@ if (!zalo.includes('ZALO_PC_DISPLAY_NAME_RESOLUTION')) {
         // Resolve the current per-account display name before external message listeners run.
         // This mirrors Zalo Web/PC more closely than the potentially stale message dName.
         const profileBase = zpwServiceMap.profile?.[0] || zpwServiceMap.friend?.[0];
-        if (!profileBase) throw new Error("Zalo profile service is unavailable");
-        this.getUserInfo = getUserInfoFactory(
-            makeURL(\`${'${profileBase}'}/api/social/friend/getprofiles/v2\`, {
-                zpw_ver: Zalo.API_VERSION,
-                zpw_type: Zalo.API_TYPE,
-            }),
-        );
+        this.getUserInfo = profileBase
+            ? getUserInfoFactory(
+                  makeURL(\`${'${profileBase}'}/api/social/friend/getprofiles/v2\`, {
+                      zpw_ver: Zalo.API_VERSION,
+                      zpw_type: Zalo.API_TYPE,
+                  }),
+              )
+            : async () => ({ changed_profiles: {} });
 
         const displayNameCache = new Map<string, { name?: string; expiresAt: number }>();
         const displayNameInflight = new Map<string, Promise<string | undefined>>();
