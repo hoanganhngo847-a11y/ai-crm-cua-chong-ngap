@@ -83,8 +83,6 @@ const customerA = "bd000000-0000-4000-8000-000000000011";
 const customerB = "bd000000-0000-4000-8000-000000000012";
 const sender = "bd000000-0000-4000-8000-000000000021";
 const template = "bd000000-0000-4000-8000-000000000031";
-const identityA = "bd000000-0000-4000-8000-000000000041";
-const identityB = "bd000000-0000-4000-8000-000000000042";
 const conversationA = "bd000000-0000-4000-8000-000000000051";
 const conversationB = "bd000000-0000-4000-8000-000000000052";
 const logicalSender = `zcajs:${company}`;
@@ -122,16 +120,22 @@ INSERT INTO public.message_templates(
   '${template}','${company}','Personal text','ZALO_PERSONAL','ZALO_PERSONAL_TEXT',
   'Chao {{customer_name}}','ACTIVE','${boss}'
 );
-INSERT INTO public.identities(
-  id,company_id,customer_id,channel,external_id,verified,metadata
-) VALUES
-('${identityA}','${company}','${customerA}','ZALO','700000001',false,'{"source":"ZCAJS","provider":"zcajs"}'),
-('${identityB}','${company}','${customerB}','ZALO','700000002',false,'{"source":"ZCAJS","provider":"zcajs"}');
+-- Mirror production ingress: ZCAJS is identified on the conversation metadata and
+-- no identity row is assumed to exist yet.
 INSERT INTO public.conversations(
-  id,company_id,customer_id,channel,external_conversation_id
+  id,company_id,customer_id,channel,external_conversation_id,metadata
 ) VALUES
-('${conversationA}','${company}','${customerA}','ZALO','700000001'),
-('${conversationB}','${company}','${customerB}','ZALO','700000002');
+('${conversationA}','${company}','${customerA}','ZALO','700000001','{"provider":"zcajs"}'),
+('${conversationB}','${company}','${customerB}','ZALO','700000002','{"provider":"zcajs"}');
+SELECT public.campaign_sync_senders('${company}','${boss}','[]'::jsonb);
+SELECT pg_temp.ok(
+  (SELECT count(*)=2
+     FROM public.identities
+    WHERE company_id='${company}'
+      AND channel='ZALO'
+      AND metadata->>'provider'='zcajs'),
+  'ZCAJS conversations materialize canonical identities'
+);
 CREATE FUNCTION pg_temp.make_personal_campaign() RETURNS uuid LANGUAGE sql AS $$
   SELECT (public.campaign_command(
     '${company}','${boss}','create',jsonb_build_object(
