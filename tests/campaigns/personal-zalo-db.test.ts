@@ -25,8 +25,6 @@ function sql(input: string) {
       "supabase_db_ai-crm-cua-chong-ngap",
       "psql",
       "-X",
-      "-A",
-      "-t",
       "-v",
       "ON_ERROR_STOP=1",
       "-U",
@@ -35,7 +33,7 @@ function sql(input: string) {
       testDb,
     ],
     { input, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
-  ).trim();
+  );
 }
 
 before(() => {
@@ -91,8 +89,11 @@ const conversationA = "bd000000-0000-4000-8000-000000000051";
 const conversationB = "bd000000-0000-4000-8000-000000000052";
 const logicalSender = `zcajs:${company}`;
 
-const setup = `
-BEGIN;
+const setup = `BEGIN;
+CREATE FUNCTION pg_temp.ok(ok boolean,label text) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF ok IS DISTINCT FROM true THEN RAISE EXCEPTION 'ASSERT: %',label; END IF;
+END $$;
 INSERT INTO public.companies(id,name,status)
 VALUES('${company}','Personal Zalo synthetic','ACTIVE');
 INSERT INTO auth.users(id,email)
@@ -131,12 +132,7 @@ INSERT INTO public.conversations(
 ) VALUES
 ('${conversationA}','${company}','${customerA}','ZALO','700000001'),
 ('${conversationB}','${company}','${customerB}','ZALO','700000002');
-`;
-
-function createReadyCampaign() {
-  const campaign = sql(
-    setup + `
-WITH made AS (
+CREATE FUNCTION pg_temp.make_personal_campaign() RETURNS uuid LANGUAGE sql AS $$
   SELECT (public.campaign_command(
     '${company}','${boss}','create',jsonb_build_object(
       'request_id',gen_random_uuid(),
@@ -146,106 +142,88 @@ WITH made AS (
       'template_id','${template}',
       'customer_ids',jsonb_build_array('${customerA}','${customerB}')
     )
-  )->>'id')::uuid AS id
-)
-SELECT id FROM made;
-`,
-  );
-  assert.match(campaign, /^[0-9a-f-]{36}$/i);
-  sql(`
-SELECT public.campaign_command(
-  '${company}','${boss}','validate',jsonb_build_object('id','${campaign}')
-);
-`);
-  return campaign;
+  )->>'id')::uuid
+$$;
+`;
+
+function run(body: string) {
+  const output = sql(setup + body + "\nROLLBACK;");
+  assert.match(output, /ROLLBACK/);
 }
 
-test("personal Zalo confirm schedules recipients five minutes apart", () => {
-  const campaign = createReadyCampaign();
-  const version = Number(
-    sql(`SELECT validation_version FROM public.messaging_campaigns WHERE id='${campaign}';`),
-  );
-  assert.ok(version > 0);
-
-  sql(`
+test("personal Zalo confirm schedules recipients five minutes apart", () =>
+  run(`
+CREATE TEMP TABLE camp AS SELECT pg_temp.make_personal_campaign() AS id;
+SELECT public.campaign_command(
+  '${company}','${boss}','validate',
+  jsonb_build_object('id',(SELECT id FROM camp))
+);
+SELECT pg_temp.ok(
+  (SELECT eligible_count=2 FROM public.messaging_campaigns WHERE id=(SELECT id FROM camp)),
+  'two personal Zalo recipients eligible'
+);
 SELECT public.campaign_command(
   '${company}','${boss}','confirm',jsonb_build_object(
-    'id','${campaign}',
-    'expected_version',${version},
+    'id',(SELECT id FROM camp),
+    'expected_version',(SELECT validation_version FROM public.messaging_campaigns WHERE id=(SELECT id FROM camp)),
     'expected_eligible',2,
     'scheduled_at',NULL
   )
 );
-`);
+SELECT pg_temp.ok(
+  (SELECT count(*)=2 FROM public.messaging_campaign_recipients
+    WHERE campaign_id=(SELECT id FROM camp) AND delivery_status='QUEUED'),
+  'both recipients queued'
+);
+SELECT pg_temp.ok(
+  (SELECT round(extract(epoch FROM (max(next_attempt_at)-min(next_attempt_at))))::int=300
+     FROM public.messaging_campaign_recipients
+    WHERE campaign_id=(SELECT id FROM camp) AND eligibility_status='ELIGIBLE'),
+  'queued recipients are exactly five minutes apart'
+);
+`));
 
-  const spacing = Number(
-    sql(`
-SELECT round(extract(epoch FROM (max(next_attempt_at)-min(next_attempt_at))))::int
-FROM public.messaging_campaign_recipients
-WHERE campaign_id='${campaign}' AND eligibility_status='ELIGIBLE';
-`),
-  );
-  assert.equal(spacing, 300);
-
-  const queued = Number(
-    sql(`
-SELECT count(*) FROM public.messaging_campaign_recipients
-WHERE campaign_id='${campaign}' AND delivery_status='QUEUED';
-`),
-  );
-  assert.equal(queued, 2);
-  sql("ROLLBACK;");
-});
-
-test("sender-wide gate prevents catch-up bursts after overdue work", () => {
-  const campaign = createReadyCampaign();
-  const version = Number(
-    sql(`SELECT validation_version FROM public.messaging_campaigns WHERE id='${campaign}';`),
-  );
-  sql(`
+test("sender-wide gate prevents catch-up bursts after overdue work", () =>
+  run(`
+CREATE TEMP TABLE camp AS SELECT pg_temp.make_personal_campaign() AS id;
+SELECT public.campaign_command(
+  '${company}','${boss}','validate',
+  jsonb_build_object('id',(SELECT id FROM camp))
+);
 SELECT public.campaign_command(
   '${company}','${boss}','confirm',jsonb_build_object(
-    'id','${campaign}',
-    'expected_version',${version},
+    'id',(SELECT id FROM camp),
+    'expected_version',(SELECT validation_version FROM public.messaging_campaigns WHERE id=(SELECT id FROM camp)),
     'expected_eligible',2,
     'scheduled_at',NULL
   )
 );
-`);
-
-  const firstClaim = JSON.parse(
-    sql(`SELECT public.campaign_claim('${company}','ZALO_PERSONAL')::text;`),
-  ) as { id: string; lock_token: string };
-  assert.ok(firstClaim.id);
-
-  const begun = sql(`
+CREATE TEMP TABLE first_claim AS
+SELECT public.campaign_claim('${company}','ZALO_PERSONAL') AS job;
+SELECT pg_temp.ok((SELECT job IS NOT NULL FROM first_claim),'first recipient claimed');
+CREATE TEMP TABLE first_begin AS
 SELECT public.campaign_begin(
-  '${company}','${firstClaim.id}','${firstClaim.lock_token}'
-) IS NOT NULL;
-`);
-  assert.equal(begun, "t");
-
-  sql(`
+  '${company}',
+  ((SELECT job FROM first_claim)->>'id')::uuid,
+  ((SELECT job FROM first_claim)->>'lock_token')::uuid
+) AS job;
+SELECT pg_temp.ok((SELECT job IS NOT NULL FROM first_begin),'first recipient began dispatch');
 UPDATE public.messaging_campaign_recipients
-SET next_attempt_at=clock_timestamp()-interval '1 minute'
-WHERE campaign_id='${campaign}' AND id<>'${firstClaim.id}';
-`);
-
-  const blocked = sql(
-    `SELECT public.campaign_claim('${company}','ZALO_PERSONAL') IS NULL;`,
-  );
-  assert.equal(blocked, "t");
-
-  sql(`
+   SET next_attempt_at=clock_timestamp()-interval '1 minute'
+ WHERE campaign_id=(SELECT id FROM camp)
+   AND id<>((SELECT job FROM first_claim)->>'id')::uuid;
+SELECT pg_temp.ok(
+  public.campaign_claim('${company}','ZALO_PERSONAL') IS NULL,
+  'second overdue recipient remains blocked inside five minute window'
+);
 UPDATE public.messaging_campaign_recipients
-SET dispatch_started_at=clock_timestamp()-interval '5 minutes 1 second'
-WHERE id='${firstClaim.id}';
-`);
-
-  const secondClaim = JSON.parse(
-    sql(`SELECT public.campaign_claim('${company}','ZALO_PERSONAL')::text;`),
-  ) as { id: string };
-  assert.ok(secondClaim.id);
-  assert.notEqual(secondClaim.id, firstClaim.id);
-  sql("ROLLBACK;");
-});
+   SET dispatch_started_at=clock_timestamp()-interval '5 minutes 1 second'
+ WHERE id=((SELECT job FROM first_claim)->>'id')::uuid;
+CREATE TEMP TABLE second_claim AS
+SELECT public.campaign_claim('${company}','ZALO_PERSONAL') AS job;
+SELECT pg_temp.ok((SELECT job IS NOT NULL FROM second_claim),'second recipient claim opens after five minutes');
+SELECT pg_temp.ok(
+  ((SELECT job FROM second_claim)->>'id')::uuid <> ((SELECT job FROM first_claim)->>'id')::uuid,
+  'second claim is a different recipient'
+);
+`));
