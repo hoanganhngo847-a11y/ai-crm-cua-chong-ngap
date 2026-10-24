@@ -1,0 +1,41 @@
+name: Personal Zalo campaign gate
+
+on:
+  pull_request:
+    paths:
+      - "features/campaigns/**"
+      - "features/omnichannel/zalo/**"
+      - "app/api/inbox/zalo-zcajs/dispatch/route.ts"
+      - "app/(dashboard)/campaigns/**"
+      - "supabase/migrations/**"
+      - "tests/campaigns/**"
+      - ".github/workflows/personal-zalo-campaign-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  personal-zalo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: npm ci
+      - name: Personal Zalo runtime tests
+        run: npx tsx --conditions=react-server --test tests/campaigns/personal-zalo.test.ts
+      - name: Start local Supabase
+        run: supabase start -x studio,logflare,vector
+      - name: Apply all migrations
+        run: supabase db reset
+      - name: Personal Zalo database pacing tests
+        run: npx tsx --conditions=react-server --test tests/campaigns/personal-zalo-db.test.ts
+      - run: git diff --check
