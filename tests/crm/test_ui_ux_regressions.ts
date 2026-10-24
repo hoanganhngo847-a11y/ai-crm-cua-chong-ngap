@@ -88,7 +88,13 @@ async function runUiUxRegressionTests() {
     customerListCode.includes('CUSTOMER_STAGE_LABELS'),
     'customer-list.tsx must use CUSTOMER_STAGE_LABELS for display labels'
   );
+  assert(
+    customerListCode.includes('targetStage === selectedCustomerForStage?.stage') ||
+      customerListCode.includes('targetStage === selectedCustomerForStage.stage'),
+    'customer-list.tsx must disable submit button when target stage equals current stage (no-op guard)'
+  );
   console.log('✓ PASS 1d: customer-list.tsx dynamically renders complete canonical stage options');
+  console.log('✓ PASS 1e: customer-list.tsx disables submit button on no-op stage transition');
 
   // ============================================================================
   // SECTION 2: CRM DASHBOARD METRICS & PIPELINE GROUP SEMANTICS
@@ -229,7 +235,12 @@ async function runUiUxRegressionTests() {
     appShellCode.includes('onNavigate={() => setIsMobileMenuOpen(false)}'),
     'AppShell must pass drawer close callback to mobile Sidebar instance'
   );
+  assert(
+    appShellCode.includes('usePathname'),
+    'AppShell must track pathname to auto-close drawer on route change'
+  );
   console.log('✓ PASS 4b: AppShell closes mobile Drawer upon any navigation event');
+  console.log('✓ PASS 4c: AppShell includes pathname-based drawer close effect');
 
   console.log('\n======================================================================');
   console.log('>>> ALL UI/UX REGRESSION & SEMANTIC TESTS PASSED SUCCESSFULLY! (100%) <<<');

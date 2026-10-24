@@ -157,7 +157,13 @@ export default function CustomerList({ userRole }: CustomerListProps) {
 
   const handleUpdateStageSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCustomerForStage || !targetStage) return;
+    if (
+      !selectedCustomerForStage ||
+      !targetStage ||
+      targetStage === selectedCustomerForStage.stage
+    ) {
+      return;
+    }
 
     setUpdatingStage(true);
     setStageNotification(null);
@@ -731,6 +737,18 @@ export default function CustomerList({ userRole }: CustomerListProps) {
         )}
 
         <form onSubmit={handleUpdateStageSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+              Giai đoạn hiện tại
+            </label>
+            <div className="text-xs font-mono px-2.5 py-1.5 rounded-md bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
+              {selectedCustomerForStage
+                ? CUSTOMER_STAGE_LABELS[selectedCustomerForStage.stage] ||
+                  selectedCustomerForStage.stage
+                : '—'}
+            </div>
+          </div>
+
           <Select
             label="Chọn giai đoạn mới"
             value={targetStage}
@@ -770,6 +788,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               variant="primary"
               size="sm"
               isLoading={updatingStage}
+              disabled={
+                updatingStage ||
+                !targetStage ||
+                targetStage === selectedCustomerForStage?.stage
+              }
             >
               Xác nhận chuyển giai đoạn
             </Button>

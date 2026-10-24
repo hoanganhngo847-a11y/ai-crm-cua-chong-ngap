@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
 import { Drawer } from '../ui/drawer';
@@ -27,6 +28,14 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const pathname = usePathname();
+  const [prevPathname, setPrevPathname] = useState(pathname);
+
+  // Auto-close mobile navigation drawer on route change during render
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setIsMobileMenuOpen(false);
+  }
 
   // Global Keyboard Shortcut: ⌘K or Ctrl+K
   useEffect(() => {
