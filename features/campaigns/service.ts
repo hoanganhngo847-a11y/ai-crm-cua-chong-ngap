@@ -2,6 +2,10 @@ import "server-only";
 import { z } from "zod";
 import { createAdminClient } from "../../lib/supabase/admin";
 import { bindingsForCompany } from "../omnichannel/facebook/binding";
+import {
+  ensureZcaJsRoutingConfig,
+  getZaloTransportMode,
+} from "../omnichannel/zalo/zcajs-client";
 import { recordingActor } from "../zalo-recordings/access";
 import { sanitizePhoneInText } from "../crm/utils/phone-sanitizer";
 import { campaignAdapters, channelEnabled } from "./adapters";
@@ -13,7 +17,6 @@ import {
   type CampaignData,
 } from "./contracts";
 
-// Browser DTOs never contain tokens, provider routing identities or raw private contacts.
 export function safeCampaignDto(value: unknown): unknown {
   if (typeof value === "string") return sanitizePhoneInText(value);
   if (Array.isArray(value)) return value.map(safeCampaignDto);
@@ -68,7 +71,10 @@ async function campaignReplyCount(
   if (sentAtByCustomer.size === 0) return 0;
 
   const earliestSentAt = Math.min(...sentAtByCustomer.values());
-  const interactionChannel = campaign.channel === "ZALO_OA" ? "ZALO" : "FACEBOOK";
+  const interactionChannel =
+    campaign.channel === "ZALO_OA" || campaign.channel === "ZALO_PERSONAL"
+      ? "ZALO"
+      : "FACEBOOK";
   const result = await createAdminClient()
     .from("interactions")
     .select("customer_id,created_at")
@@ -114,8 +120,6 @@ export async function campaignRead(
     .strict()
     .parse(input);
 
-  // Authoring remains available while live transports are disabled. Sender sync only
-  // stores trusted Page/OA registry metadata and never dispatches a message.
   let pages: { id: string; name: string; connected: boolean }[] = [];
   try {
     pages = bindingsForCompany(actor.companyId).map((b) => ({
@@ -126,6 +130,15 @@ export async function campaignRead(
   } catch {
     /* Missing/invalid bindings fail closed. */
   }
+
+  if (getZaloTransportMode() === "ZCAJS") {
+    try {
+      await ensureZcaJsRoutingConfig(createAdminClient(), actor.companyId);
+    } catch {
+      /* Personal Zalo sender remains unavailable until routing is healthy. */
+    }
+  }
+
   const db = createAdminClient();
   const sync = await db.rpc("campaign_sync_senders", {
     p_company: actor.companyId,
@@ -157,6 +170,7 @@ export async function campaignRead(
     readiness: {
       FACEBOOK: deliveryEnabled && channelEnabled("FACEBOOK"),
       ZALO_OA: deliveryEnabled && channelEnabled("ZALO_OA"),
+      ZALO_PERSONAL: channelEnabled("ZALO_PERSONAL"),
     },
   };
 }
@@ -176,25 +190,32 @@ export async function campaignCommand(command: string, input: unknown) {
       break;
     }
     case "confirm": {
-      if (!deliveryEnabled) throw new Error("TRANSPORT_DISABLED");
       parsed = confirmSchema.parse(input);
       const { data } = await campaignRead({
         id: (parsed as { id: string }).id,
       });
-      if (
-        !data?.enabled ||
-        !data.campaign ||
+      if (!data?.campaign) throw new Error("CAMPAIGN_UNAVAILABLE");
+      if (data.campaign.channel === "ZALO_PERSONAL") {
+        if (
+          !channelEnabled("ZALO_PERSONAL") ||
+          !campaignAdapters.ZALO_PERSONAL.verified
+        )
+          throw new Error("TRANSPORT_DISABLED");
+      } else if (
+        !deliveryEnabled ||
+        !data.enabled ||
         !channelEnabled(data.campaign.channel) ||
         !campaignAdapters[data.campaign.channel].verified
-      )
+      ) {
         throw new Error("TRANSPORT_DISABLED");
+      }
       break;
     }
     case "suppress":
       parsed = z
         .object({
           customer_id: z.string().uuid(),
-          channel: z.enum(["FACEBOOK", "ZALO_OA"]),
+          channel: z.enum(["FACEBOOK", "ZALO_OA", "ZALO_PERSONAL"]),
           status: z.enum(["DO_NOT_MESSAGE", "UNSUBSCRIBED", "BLOCKED"]),
         })
         .strict()
@@ -204,7 +225,7 @@ export async function campaignCommand(command: string, input: unknown) {
       parsed = z
         .object({
           customer_id: z.string().uuid(),
-          channel: z.enum(["FACEBOOK", "ZALO_OA"]),
+          channel: z.enum(["FACEBOOK", "ZALO_OA", "ZALO_PERSONAL"]),
           reason: z.string().trim().min(3).max(500).optional(),
         })
         .strict()
@@ -215,10 +236,15 @@ export async function campaignCommand(command: string, input: unknown) {
       break;
     case "pause":
     case "resume":
-    case "cancel":
-      if (!deliveryEnabled) throw new Error("TRANSPORT_DISABLED");
+    case "cancel": {
       parsed = z.object({ id: z.string().uuid() }).strict().parse(input);
+      const { data } = await campaignRead({ id: (parsed as { id: string }).id });
+      const personal = data.campaign?.channel === "ZALO_PERSONAL";
+      if (!personal && !deliveryEnabled) throw new Error("TRANSPORT_DISABLED");
+      if (personal && !channelEnabled("ZALO_PERSONAL") && command !== "cancel")
+        throw new Error("TRANSPORT_DISABLED");
       break;
+    }
     default:
       throw new Error("INVALID_COMMAND");
   }
@@ -232,7 +258,6 @@ export async function campaignCommand(command: string, input: unknown) {
   return result.data as { id: string };
 }
 
-// Trusted server-side provider identity verification helper. Never exposed to browser actions.
 export async function verifyProviderIdentity(input: {
   companyId: string;
   channel: "FACEBOOK" | "ZALO_OA";

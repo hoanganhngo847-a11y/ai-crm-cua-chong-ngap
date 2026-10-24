@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { ZaloOutboundDispatcher } from '../../../../../features/omnichannel/zalo/outbound-dispatcher';
+import { processCampaignBatch } from '../../../../../features/campaigns/worker';
 
 export const runtime = 'nodejs';
 
@@ -53,13 +54,27 @@ export async function POST(request: NextRequest) {
     : DEFAULT_BATCH_LIMIT;
 
   try {
+    const campaign =
+      process.env.ZALO_PERSONAL_CAMPAIGNS_ENABLED === 'true'
+        ? await processCampaignBatch({
+            companyId,
+            channel: 'ZALO_PERSONAL',
+            limit: 1,
+          })
+        : { status: 'DISABLED', processed: 0 };
+
     const dispatcher = new ZaloOutboundDispatcher();
     const result = await dispatcher.dispatchPendingZaloDeliveries(companyId, {
       limit,
       workerId: `zcajs_poll_${crypto.randomUUID()}`,
     });
 
-    return NextResponse.json({ success: true, ...result });
+    return NextResponse.json({
+      success: true,
+      ...result,
+      campaignStatus: campaign.status,
+      campaignProcessed: campaign.processed,
+    });
   } catch (error: unknown) {
     console.error(
       '[ZCAJS Dispatch] Failed to drain pending outbound deliveries:',
