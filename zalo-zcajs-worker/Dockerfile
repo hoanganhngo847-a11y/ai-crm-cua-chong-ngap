@@ -8,12 +8,14 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY patches/zcajs-old-direct-messages.patch /tmp/zcajs-old-direct-messages.patch
+COPY patches/patch-zcajs-recent-rest.mjs /tmp/patch-zcajs-recent-rest.mjs
 
 WORKDIR /src/zcajs
 RUN git clone "$ZCAJS_REPO" . \
   && git checkout "$ZCAJS_COMMIT" \
   && git apply --check /tmp/zcajs-old-direct-messages.patch \
   && git apply /tmp/zcajs-old-direct-messages.patch \
+  && node /tmp/patch-zcajs-recent-rest.mjs \
   && npm install --no-audit --no-fund \
   && npm run build \
   && mkdir -p /out \
