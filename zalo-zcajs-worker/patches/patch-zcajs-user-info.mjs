@@ -156,7 +156,10 @@ if (!zalo.includes('ZALO_PC_DISPLAY_NAME_RESOLUTION')) {
             const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2500));
             void Promise.race([resolveDisplayName(uid), timeout])
                 .then((name) => {
-                    if (name && message?.data) message.data.dName = name;
+                    if (name && message?.data) {
+                        message.data.dName = name;
+                        message.data.__zaloNameSource = "profile_resolved";
+                    }
                     originalListenerEmit(eventName, ...args);
                 })
                 .catch(() => originalListenerEmit(eventName, ...args));
