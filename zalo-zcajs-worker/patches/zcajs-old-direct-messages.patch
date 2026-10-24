@@ -1,7 +1,8 @@
 diff --git a/src/apis/listen.ts b/src/apis/listen.ts
 --- a/src/apis/listen.ts
 +++ b/src/apis/listen.ts
-@@ -38,6 +38,10 @@ export class Listener extends EventEmitter<ListenerEvents> {
+@@ -37,6 +37,10 @@
+     private cipherKey?: string;
  
      private selfListen;
 +
@@ -11,13 +12,12 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
  
      constructor(url: string) {
          super();
-@@ -77,15 +81,25 @@ export class Listener extends EventEmitter<ListenerEvents> {
-                 cookie: this.cookie,
+@@ -89,12 +93,21 @@
              },
          });
-+
-+        this.ws = ws;
  
++        this.ws = ws;
++
          ws.onopen = () => {
              this.onConnectedCallback();
              this.emit("connected");
@@ -34,7 +34,7 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
              this.onClosedCallback();
              this.emit("closed");
          };
-@@ -137,6 +151,25 @@ export class Listener extends EventEmitter<ListenerEvents> {
+@@ -151,6 +164,27 @@
                      }
                  }
  
@@ -62,8 +62,7 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
                  if (n == 1 && cmd == 601 && s == 0) {
                      const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
                      const { controls } = parsedData;
-@@ -190,6 +223,28 @@ export class Listener extends EventEmitter<ListenerEvents> {
-                 this.emit("error", error);
+@@ -210,6 +244,27 @@
              }
          };
      }
