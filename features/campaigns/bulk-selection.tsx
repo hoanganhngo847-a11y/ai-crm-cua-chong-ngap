@@ -11,14 +11,16 @@ const Selection = createContext<{
 }>({ enabled: false, selected: [], ids: [], toggle() {}, all() {} });
 export function BulkSelection({
   ids,
-  enabled,
   children,
 }: {
   ids: string[];
-  enabled: boolean;
+  enabled?: boolean;
   children: ReactNode;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
+  // Selecting recipients is an authoring action, not a delivery action.
+  // Keep it available even while live bulk transports are disabled.
+  const enabled = true;
   return (
     <Selection.Provider
       value={{
@@ -33,14 +35,14 @@ export function BulkSelection({
       }}
     >
       {children}
-      {enabled && selected.length > 0 && (
+      {selected.length > 0 && (
         <div
           className="sticky bottom-4 z-20 mx-auto flex w-fit items-center gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-primary)] p-4 shadow-lg"
           role="status"
         >
           <strong>{selected.length} khách hàng đã chọn</strong>
           <Link href={`/campaigns/new?customers=${selected.join(",")}`}>
-            <Button>Gửi tin nhắn</Button>
+            <Button>Tạo chiến dịch</Button>
           </Link>
           <Button variant="ghost" onClick={() => setSelected([])}>
             Bỏ chọn
