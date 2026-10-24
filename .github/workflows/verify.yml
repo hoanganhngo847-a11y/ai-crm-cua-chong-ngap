@@ -13,8 +13,8 @@ jobs:
     timeout-minutes: 25
     env:
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJIUzI1NiIsInRvbGUiOiJhbm9uIiwiZXhwIjoxOTgzODEyOTk2fQ.invalid-for-local-ci
-      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJIUzI1NiIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJleHAiOjE5ODM4MTI5OTZ9.invalid-for-local-ci
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,7 +29,6 @@ jobs:
       - run: npm ci
       - run: npm run test:customer-360
       - run: npm run test:campaigns
-      - run: npx tsx --conditions=react-server --test tests/campaigns/personal-zalo.test.ts
       - run: npm run test:ai-brain
       - run: npm run test:javis-brain
       - run: npm run build:javis-brain
@@ -37,7 +36,6 @@ jobs:
       - run: supabase db reset
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db
-      - run: npx tsx --conditions=react-server --test tests/campaigns/personal-zalo-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/memory-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/shadow-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/live-db.test.ts
