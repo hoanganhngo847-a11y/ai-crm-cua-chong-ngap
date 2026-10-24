@@ -103,11 +103,13 @@ const recentSyncBlock = `
             recentSyncRunning = true;
             try {
                 const now = Date.now();
+                const ownUid = String(appContext.uid || "");
                 pruneRecent(now);
                 const messages = await getRecentDirectMessages();
                 let emitted = 0;
                 for (const message of messages) {
-                    if (message.isSelf) continue;
+                    const senderUid = String(message?.data?.uidFrom || "");
+                    if (message.isSelf || (ownUid && senderUid === ownUid)) continue;
                     const id = messageId(message);
                     const ts = messageTimestampMs(message);
                     if (!id || !ts || now - ts > recentWindowMs || recentSeen.has(id)) continue;
