@@ -72,7 +72,12 @@ export async function linkPersonalZaloContactToCustomer(input: {
   });
   if (error || !data) {
     const code = String(error?.message || 'ZALO_CONTACT_LINK_FAILED');
-    if (code.includes('IDENTITY_CONFLICT') || code.includes('CONVERSATION_CONFLICT')) {
+    if (
+      code.includes('IDENTITY_CONFLICT') ||
+      code.includes('CONVERSATION_CONFLICT') ||
+      code.includes('IDENTITY_ROUTE_CONFLICT') ||
+      code.includes('CONVERSATION_ROUTE_CONFLICT')
+    ) {
       throw new Error('ZALO_CONTACT_ALREADY_LINKED_ELSEWHERE');
     }
     throw new Error('ZALO_CONTACT_LINK_FAILED');
