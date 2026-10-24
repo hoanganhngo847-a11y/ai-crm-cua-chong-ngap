@@ -43,5 +43,7 @@ jobs:
       - run: node --check zalo-zcajs-worker/src/index.mjs
       - run: node --check zalo-zcajs-worker/src/dispatch-loop.mjs
       - run: node --check zalo-zcajs-worker/src/message-normalizer.mjs
+      - run: node --check zalo-zcajs-worker/src/contact-directory.mjs
       - run: node --test zalo-zcajs-worker/test/message-normalizer.test.mjs
+      - run: node --test zalo-zcajs-worker/test/contact-directory.test.mjs
       - run: docker build -f zalo-zcajs-worker/Dockerfile zalo-zcajs-worker

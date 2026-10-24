@@ -60,6 +60,11 @@ const importLine = 'import { getRecentDirectMessagesFactory } from "./apis/getRe
 if (!zalo.includes(importAnchor)) throw new Error('ZCAJS patch anchor missing: getCookie import');
 if (!zalo.includes(importLine)) zalo = zalo.replace(importAnchor, `${importAnchor}\n${importLine}`);
 
+const propertyAnchor = '    public getCookie: ReturnType<typeof getCookieFactory>;';
+const propertyLine = '    public getRecentDirectMessages: ReturnType<typeof getRecentDirectMessagesFactory>;';
+if (!zalo.includes(propertyAnchor)) throw new Error('ZCAJS patch anchor missing: getCookie property');
+if (!zalo.includes(propertyLine)) zalo = zalo.replace(propertyAnchor, `${propertyAnchor}\n${propertyLine}`);
+
 const ctorAnchor = '        this.getCookie = getCookieFactory();';
 if (!zalo.includes(ctorAnchor)) throw new Error('ZCAJS patch anchor missing: getCookie constructor');
 
@@ -67,10 +72,10 @@ const recentSyncBlock = `
 
         // Zalo Web can keep a first-time/stranger direct message in the recent
         // conversation preload even when the websocket listener does not emit it.
-        // Recover those recent inbound DMs through the same listener event so the
-        // CRM ingress path, tenant checks and idempotency remain unchanged.
+        // Expose the same read-only API to the worker contact directory so non-friends
+        // with a recent 1:1 thread can also be linked without typing a UID.
         const conversationBase = zpwServiceMap.conversation?.[0] || "https://tt-convers-wpa.chat.zalo.me";
-        const getRecentDirectMessages = getRecentDirectMessagesFactory(
+        this.getRecentDirectMessages = getRecentDirectMessagesFactory(
             makeURL(\`${'${conversationBase}'}/api/preloadconvers/get-last-msgs\`, {
                 zpw_ver: Zalo.API_VERSION,
                 zpw_type: Zalo.API_TYPE,
@@ -105,7 +110,7 @@ const recentSyncBlock = `
                 const now = Date.now();
                 const ownUid = String(appContext.uid || "");
                 pruneRecent(now);
-                const messages = await getRecentDirectMessages();
+                const messages = await this.getRecentDirectMessages();
                 let emitted = 0;
                 for (const message of messages) {
                     const senderUid = String(message?.data?.uidFrom || "");

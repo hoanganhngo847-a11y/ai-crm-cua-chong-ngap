@@ -3,7 +3,12 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { runCampaignCommand, loadCampaignPreview } from "../../app/actions/campaigns";
+import {
+  runCampaignCommand,
+  loadCampaignPreview,
+  syncPersonalZaloContactsAction,
+  linkPersonalZaloContactAction,
+} from "../../app/actions/campaigns";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { Modal } from "../../components/ui/modal";
@@ -24,6 +29,17 @@ const variableLabels: Record<string, string> = {
   customer_code: "Mã khách hàng",
   assigned_sale_name: "Sale phụ trách",
   company_name: "Tên công ty",
+};
+
+type ContactCandidate = {
+  id: string;
+  display_name: string | null;
+  last_seen_at: string;
+};
+
+type LinkTarget = {
+  customerId: string;
+  customerName: string;
 };
 
 export function PersonalZaloCampaignWizard({
@@ -62,6 +78,12 @@ export function PersonalZaloCampaignWizard({
   const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplateContent, setNewTemplateContent] = useState("");
   const [templateMessage, setTemplateMessage] = useState("");
+  const [contactBusy, setContactBusy] = useState(false);
+  const [contactCandidates, setContactCandidates] = useState<ContactCandidate[]>([]);
+  const [contactMessage, setContactMessage] = useState("");
+  const [linkModal, setLinkModal] = useState(false);
+  const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState("");
   const requestId = useRef<string | null>(null);
   const inFlight = useRef(false);
 
@@ -154,6 +176,76 @@ export function PersonalZaloCampaignWizard({
     } finally {
       inFlight.current = false;
       setBusy(false);
+    }
+  }
+
+  async function refreshContacts(target?: LinkTarget) {
+    if (contactBusy) return;
+    if (target) {
+      setLinkTarget(target);
+      setSelectedCandidate("");
+      setLinkModal(true);
+    }
+    setContactBusy(true);
+    setContactMessage("Đang đồng bộ danh bạ Zalo cá nhân…");
+    try {
+      const result = await syncPersonalZaloContactsAction();
+      if (!result.ok) {
+        setContactMessage(result.message);
+        return;
+      }
+      setContactCandidates(result.candidates);
+      setContactMessage(
+        result.candidates.length > 0
+          ? `Đã đồng bộ ${result.seen} liên hệ; còn ${result.candidates.length} liên hệ chưa gắn với Customer 360.`
+          : `Đã đồng bộ ${result.seen} liên hệ. Không còn liên hệ nào chờ gắn.`,
+      );
+
+      if (campaign) {
+        const validated = await runCampaignCommand("validate", { id: campaign.id });
+        if (validated.ok) {
+          const loaded = await loadCampaignPreview(campaign.id);
+          if (loaded.ok && loaded.data) setPreview(loaded.data);
+        }
+      }
+    } finally {
+      setContactBusy(false);
+    }
+  }
+
+  async function linkSelectedContact() {
+    if (!campaign || !linkTarget || !selectedCandidate || contactBusy) return;
+    setContactBusy(true);
+    setContactMessage("Đang liên kết tài khoản Zalo với khách hàng…");
+    try {
+      const result = await linkPersonalZaloContactAction({
+        candidateId: selectedCandidate,
+        customerId: linkTarget.customerId,
+      });
+      if (!result.ok) {
+        setContactMessage(result.message);
+        return;
+      }
+
+      const validated = await runCampaignCommand("validate", { id: campaign.id });
+      if (!validated.ok) {
+        setContactMessage("Đã liên kết Zalo nhưng chưa kiểm tra lại được chiến dịch. Hãy tải lại trang.");
+        return;
+      }
+      const loaded = await loadCampaignPreview(campaign.id);
+      if (!loaded.ok || !loaded.data) {
+        setContactMessage("Đã liên kết Zalo nhưng chưa tải lại được bản kiểm tra.");
+        return;
+      }
+
+      setPreview(loaded.data);
+      setContactCandidates((old) => old.filter((item) => item.id !== selectedCandidate));
+      setContactMessage(`Đã liên kết Zalo cho ${linkTarget.customerName} và kiểm tra lại chiến dịch.`);
+      setSelectedCandidate("");
+      setLinkTarget(null);
+      setLinkModal(false);
+    } finally {
+      setContactBusy(false);
     }
   }
 
@@ -301,22 +393,48 @@ export function PersonalZaloCampaignWizard({
 
         {step === 3 && preview && campaign && (
           <>
-            <div>
-              <h2 className="font-semibold">Kiểm tra trước khi gửi</h2>
-              <p className="text-sm">
-                Đã chọn {campaign.selected_count} · Có thể gửi {campaign.eligible_count} · Bị loại {campaign.selected_count - campaign.eligible_count}
-              </p>
-            </div>
-            {preview.recipients.map((recipient) => (
-              <div key={recipient.id} className="rounded border border-[var(--border-subtle)] p-3">
-                <strong>{recipient.recipient_snapshot.name}</strong>
-                <p className="text-xs">
-                  {reasonLabels[recipient.eligibility_status] || recipient.eligibility_status}
-                  {recipient.eligibility_reason ? ` · ${reasonLabels[recipient.eligibility_reason] || recipient.eligibility_reason}` : ""}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Kiểm tra trước khi gửi</h2>
+                <p className="text-sm">
+                  Đã chọn {campaign.selected_count} · Có thể gửi {campaign.eligible_count} · Bị loại {campaign.selected_count - campaign.eligible_count}
                 </p>
-                {recipient.personalized_payload && <p className="mt-2 whitespace-pre-wrap text-sm">{recipient.personalized_payload.text}</p>}
               </div>
-            ))}
+              <Button variant="outline" disabled={contactBusy} onClick={() => void refreshContacts()}>
+                {contactBusy ? "Đang đồng bộ…" : "Đồng bộ danh bạ Zalo"}
+              </Button>
+            </div>
+            {contactMessage && <p role="status" className="rounded-md bg-[var(--surface-secondary)] p-3 text-sm">{contactMessage}</p>}
+            {preview.recipients.map((recipient) => {
+              const missingIdentity = recipient.eligibility_status === "MISSING_IDENTITY" || recipient.eligibility_reason === "MISSING_IDENTITY";
+              return (
+                <div key={recipient.id} className="rounded border border-[var(--border-subtle)] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <strong>{recipient.recipient_snapshot.name}</strong>
+                      <p className="text-xs">
+                        {reasonLabels[recipient.eligibility_status] || recipient.eligibility_status}
+                        {recipient.eligibility_reason ? ` · ${reasonLabels[recipient.eligibility_reason] || recipient.eligibility_reason}` : ""}
+                      </p>
+                    </div>
+                    {missingIdentity && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={contactBusy}
+                        onClick={() => void refreshContacts({
+                          customerId: recipient.customer_id,
+                          customerName: recipient.recipient_snapshot.name,
+                        })}
+                      >
+                        Liên kết Zalo
+                      </Button>
+                    )}
+                  </div>
+                  {recipient.personalized_payload && <p className="mt-2 whitespace-pre-wrap text-sm">{recipient.personalized_payload.text}</p>}
+                </div>
+              );
+            })}
           </>
         )}
 
@@ -348,10 +466,10 @@ export function PersonalZaloCampaignWizard({
       </Card>
 
       <div className="flex flex-wrap gap-3">
-        {step > 1 && <Button variant="outline" disabled={busy || templateBusy} onClick={() => setStep(step - 1)}>Quay lại</Button>}
+        {step > 1 && <Button variant="outline" disabled={busy || templateBusy || contactBusy} onClick={() => setStep(step - 1)}>Quay lại</Button>}
         {step === 1 && <Button disabled={!ids.length} onClick={() => setStep(2)}>Tiếp tục: chọn mẫu tin nhắn</Button>}
         {step === 2 && <Button disabled={busy || templateBusy || !name.trim() || !template || !sender} onClick={prepare}>{busy ? "Đang kiểm tra…" : "Lưu bản nháp và kiểm tra"}</Button>}
-        {step === 3 && <Button onClick={() => setStep(4)}>Tiếp tục: gửi tin nhắn</Button>}
+        {step === 3 && <Button disabled={!campaign || campaign.eligible_count === 0 || contactBusy} onClick={() => setStep(4)}>Tiếp tục: gửi tin nhắn</Button>}
       </div>
 
       <Modal
@@ -369,6 +487,61 @@ export function PersonalZaloCampaignWizard({
           <p>{campaign?.eligible_count || 0} khách đủ điều kiện.</p>
           <p>Mỗi tin nhắn cách tin trước <strong>5 phút</strong>; không gửi đồng thời.</p>
           <p>Lượt cuối dự kiến bắt đầu sau khoảng {estimatedMinutes} phút kể từ lượt đầu.</p>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={linkModal}
+        onClose={() => {
+          if (!contactBusy) {
+            setLinkModal(false);
+            setLinkTarget(null);
+            setSelectedCandidate("");
+          }
+        }}
+        title="Liên kết tài khoản Zalo"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              disabled={contactBusy}
+              onClick={() => {
+                setLinkModal(false);
+                setLinkTarget(null);
+                setSelectedCandidate("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button disabled={contactBusy || !selectedCandidate || !linkTarget} onClick={() => void linkSelectedContact()}>
+              Xác nhận liên kết
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4 text-sm">
+          <p>
+            Chọn đúng tài khoản Zalo của <strong>{linkTarget?.customerName || "khách hàng"}</strong>.
+            Hệ thống không tự ghép theo tên để tránh gửi nhầm người.
+          </p>
+          {contactBusy && <p>Đang đồng bộ danh bạ Zalo cá nhân…</p>}
+          {!contactBusy && contactCandidates.length === 0 && (
+            <p>Chưa tìm thấy liên hệ Zalo nào chưa được gắn với Customer 360.</p>
+          )}
+          {contactCandidates.length > 0 && (
+            <label className="block space-y-1">
+              <span className="font-medium">Liên hệ Zalo chưa liên kết</span>
+              <select className={field} value={selectedCandidate} onChange={(e) => setSelectedCandidate(e.target.value)}>
+                <option value="">Chọn đúng người trên Zalo</option>
+                {contactCandidates.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.display_name || "Liên hệ Zalo chưa có tên"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {contactMessage && <p role="status">{contactMessage}</p>}
         </div>
       </Modal>
     </div>

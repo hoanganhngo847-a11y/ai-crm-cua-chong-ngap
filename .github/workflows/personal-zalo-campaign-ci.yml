@@ -5,7 +5,8 @@ on:
     paths:
       - "features/campaigns/**"
       - "features/omnichannel/zalo/**"
-      - "app/api/inbox/zalo-zcajs/dispatch/route.ts"
+      - "app/actions/campaigns.ts"
+      - "app/api/inbox/zalo-zcajs/**"
       - "app/(dashboard)/campaigns/**"
       - "supabase/migrations/**"
       - "tests/campaigns/**"
@@ -38,4 +39,6 @@ jobs:
         run: supabase db reset
       - name: Personal Zalo database pacing tests
         run: npx tsx --conditions=react-server --test tests/campaigns/personal-zalo-db.test.ts
+      - name: Zalo contact linking database tests
+        run: npx tsx --conditions=react-server --test tests/campaigns/zalo-contact-linking-db.test.ts
       - run: git diff --check
