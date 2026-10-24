@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const channelSchema = z.enum(["FACEBOOK", "ZALO_OA"]);
+export const channelSchema = z.enum(["FACEBOOK", "ZALO_OA", "ZALO_PERSONAL"]);
 export const variables = [
   "customer_name",
   "customer_code",
@@ -14,7 +14,12 @@ export const templateSchema = z
     channel: channelSchema,
     sender_account_id: z.string().uuid().nullable(),
     provider_template_id: z.string().trim().min(1).max(150).nullable(),
-    template_type: z.enum(["MESSENGER_RESPONSE", "OA_SERVICE", "ZBS_TEMPLATE"]),
+    template_type: z.enum([
+      "MESSENGER_RESPONSE",
+      "OA_SERVICE",
+      "ZBS_TEMPLATE",
+      "ZALO_PERSONAL_TEXT",
+    ]),
     content: z.string().trim().min(1).max(2000),
     parameter_mapping: z
       .record(z.string().regex(/^[A-Za-z0-9_]{1,80}$/), z.enum(variables))
@@ -56,7 +61,6 @@ export function renderTemplate(
 ): string {
   for (const key of templateVariables(content))
     if (!values[key]?.trim()) throw new Error("MISSING_VARIABLE");
-  // Single pass: substituted customer data is never evaluated as a template.
   return content.replace(
     /\{\{([a-z_]+)\}\}/g,
     (_, key: string) => values[key]!,
@@ -154,7 +158,7 @@ export const reasonLabels: Record<string, string> = {
   MISSING_IDENTITY: "Không có định danh kênh",
   IDENTITY_UNVERIFIED: "Định danh chưa được xác minh bởi provider",
   IDENTITY_CONFLICT: "Định danh mâu thuẫn giữa các khách hàng",
-  SENDER_MISMATCH: "Định danh thuộc Page/OA khác",
+  SENDER_MISMATCH: "Định danh thuộc tài khoản gửi khác",
   BLOCKED_POLICY: "Không đủ điều kiện policy",
   UNSUBSCRIBED: "Đã unsubscribe / chặn liên hệ",
   DUPLICATE: "Trùng người nhận",
@@ -219,10 +223,22 @@ export function resolveCampaignIdentity({
     return { status: "MATCH", identity: match };
   }
 
-  // ZALO_OA: canonical Zalo UID identity + resolved official OA scope
   const channelIds = customerIdentities.filter((i) => i.channel === "ZALO");
   if (channelIds.length === 0)
     return { status: "MISSING_IDENTITY", identity: null };
+
+  if (channel === "ZALO_PERSONAL") {
+    const match = channelIds.find(
+      (i) =>
+        /^[0-9]+$/.test(i.external_id) &&
+        (i.metadata?.source === "ZCAJS" || i.metadata?.provider === "zcajs"),
+    );
+    if (!match)
+      return { status: "IDENTITY_UNVERIFIED", identity: null };
+    if (!senderExternalId.startsWith("zcajs:"))
+      return { status: "SENDER_MISMATCH", identity: null };
+    return { status: "MATCH", identity: match };
+  }
 
   const match = channelIds.find(
     (i) =>
