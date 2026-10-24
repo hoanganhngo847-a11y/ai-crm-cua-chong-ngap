@@ -78,7 +78,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const mainClassName = isFocusMode
     ? 'flex-1 min-h-0 p-0 w-full overflow-hidden'
     : isInbox
-      ? 'flex-1 min-h-0 p-2 sm:p-3 lg:p-4 w-full overflow-hidden'
+      ? 'flex-1 min-h-0 p-0 w-full overflow-hidden'
       : 'flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto';
 
   return (
@@ -92,7 +92,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     >
       <ToastProvider>
         <div
-          className={`${isFocusMode ? 'h-screen overflow-hidden' : 'min-h-screen'} flex bg-[var(--app-canvas)] text-[var(--text-primary)]`}
+          className={`${isFocusMode || isInbox ? 'h-screen overflow-hidden' : 'min-h-screen'} flex bg-[var(--app-canvas)] text-[var(--text-primary)]`}
         >
           {/* Desktop Left Navigation Sidebar */}
           {!isFocusMode && (

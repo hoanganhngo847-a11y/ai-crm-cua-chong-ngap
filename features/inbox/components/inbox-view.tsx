@@ -1434,8 +1434,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               </div>
 
               {/* Message Input Box (Fixed at bottom) */}
-              <div className="shrink-0 p-3 border-t border-[var(--border-subtle)] bg-[var(--surface-primary)]">
-                <form onSubmit={handleSendMessage} className="space-y-2">
+              <div className="shrink-0 px-3 py-1.5 border-t border-[var(--border-subtle)] bg-[var(--surface-primary)]">
+                <form onSubmit={handleSendMessage} className="space-y-1.5">
                   {/* AI Draft Suggestion Box */}
                   {aiError && (
                     <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex justify-between items-center">
@@ -1516,11 +1516,6 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     onSendMedia={handleSendMedia}
                     onRequestAi={handleRequestAiSuggestion}
                   />
-
-                  <div className="flex items-center justify-between text-[11px] text-[var(--text-tertiary)] px-1">
-                    <span>Quy tắc 5 phút: Nếu Sale trả lời, AI tự động nhường quyền xử lý.</span>
-                    <span className="text-[var(--text-secondary)]">Khung chat hỗ trợ dán ảnh trực tiếp từ clipboard trên Zalo.</span>
-                  </div>
                 </form>
               </div>
             </>

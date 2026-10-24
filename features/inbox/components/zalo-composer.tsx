@@ -57,7 +57,7 @@ function ToolbarButton({
       aria-label={title}
       disabled={disabled}
       onClick={onClick}
-      className={`w-9 h-9 rounded-lg flex items-center justify-center transition border ${
+      className={`w-6 h-6 sm:w-7 sm:h-7 rounded-md flex items-center justify-center transition border ${
         active
           ? 'bg-blue-50 border-blue-200 text-blue-600'
           : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
@@ -123,6 +123,16 @@ export default function ZaloComposer({
   const busy = disabled || mediaSending;
   const canUseZaloMedia = channel === 'zalo';
   const hasContent = Boolean(draft.trim()) || attachments.length > 0;
+
+  // Auto-expand textarea on typing multiple lines and shrink to 1 compact row when empty
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const scrollHeight = el.scrollHeight;
+    const targetHeight = Math.min(Math.max(scrollHeight, 28), 120);
+    el.style.height = `${targetHeight}px`;
+  }, [draft]);
 
   const closePanels = () => setPanel(null);
 
@@ -320,35 +330,35 @@ export default function ZaloComposer({
       />
 
       {/* Toolbar styled after the familiar Zalo desktop composer. */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--surface-secondary)] overflow-x-auto rounded-t-xl">
+      <div className="flex items-center gap-0.5 px-2 py-0.5 border-b border-[var(--border-subtle)] bg-[var(--surface-secondary)]/50 overflow-x-auto rounded-t-lg">
         <ToolbarButton title="Nhãn dán / biểu cảm" active={panel === 'sticker'} onClick={() => setPanel(panel === 'sticker' ? null : 'sticker')} disabled={busy}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" strokeWidth="1.8"/><path d="M8 10h.01M16 10h.01M8.5 14.5c1 .9 2.2 1.4 3.5 1.4s2.5-.5 3.5-1.4" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" strokeWidth="1.8"/><path d="M8 10h.01M16 10h.01M8.5 14.5c1 .9 2.2 1.4 3.5 1.4s2.5-.5 3.5-1.4" strokeWidth="1.8" strokeLinecap="round"/></svg>
         </ToolbarButton>
         <ToolbarButton title="Gửi ảnh" onClick={() => imageInputRef.current?.click()} disabled={busy || !canUseZaloMedia}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2" strokeWidth="1.8"/><circle cx="9" cy="9" r="1.6" strokeWidth="1.8"/><path d="m5 18 4.7-4.8 3.1 3.1 2.1-2.1L19 18" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2" strokeWidth="1.8"/><circle cx="9" cy="9" r="1.6" strokeWidth="1.8"/><path d="m5 18 4.7-4.8 3.1 3.1 2.1-2.1L19 18" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </ToolbarButton>
         <ToolbarButton title="Đính kèm tệp" onClick={() => fileInputRef.current?.click()} disabled={busy || !canUseZaloMedia}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="m8.5 12.7 6.2-6.2a3.3 3.3 0 0 1 4.7 4.7l-8 8a5 5 0 0 1-7.1-7.1l8.2-8.2" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="m8.5 12.7 6.2-6.2a3.3 3.3 0 0 1 4.7 4.7l-8 8a5 5 0 0 1-7.1-7.1l8.2-8.2" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </ToolbarButton>
         <ToolbarButton title="Chèn thông tin liên hệ" onClick={insertContact} disabled={busy}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" strokeWidth="1.8"/><circle cx="9" cy="11" r="2" strokeWidth="1.8"/><path d="M6 16c.8-1.6 1.8-2.4 3-2.4s2.2.8 3 2.4M15 10h3M15 14h3" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" strokeWidth="1.8"/><circle cx="9" cy="11" r="2" strokeWidth="1.8"/><path d="M6 16c.8-1.6 1.8-2.4 3-2.4s2.2.8 3 2.4M15 10h3M15 14h3" strokeWidth="1.8" strokeLinecap="round"/></svg>
         </ToolbarButton>
         <div className="relative">
           <ToolbarButton title="Công cụ Zalo" active={panel === 'more'} onClick={() => setPanel(panel === 'more' ? null : 'more')} disabled={busy}>
-            <div className="flex items-center gap-0.5"><span className="w-6 h-6 border-2 border-dashed border-current rounded-md flex items-center justify-center text-xs font-bold">Z</span><span className="text-[9px]">▼</span></div>
+            <div className="flex items-center gap-0.5"><span className="w-4 h-4 border border-dashed border-current rounded flex items-center justify-center text-[9px] font-bold">Z</span><span className="text-[7px]">▼</span></div>
           </ToolbarButton>
         </div>
         <ToolbarButton title="Định dạng nhanh" active={panel === 'format'} onClick={() => setPanel(panel === 'format' ? null : 'format')} disabled={busy}>
-          <span className="flex items-end font-semibold text-lg leading-none">A<span className="text-xs ml-0.5">✎</span></span>
+          <span className="flex items-end font-semibold text-sm leading-none">A<span className="text-[9px] ml-0.5">✎</span></span>
         </ToolbarButton>
         <ToolbarButton title="Trả lời nhanh / Gợi ý AI" active={panel === 'quick'} onClick={() => setPanel(panel === 'quick' ? null : 'quick')} disabled={busy}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 5.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-4.5 3v-3H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" strokeWidth="1.8"/><path d="m13 7-3 4h2l-1 4 4-5h-2l0-3Z" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 5.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-4.5 3v-3H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" strokeWidth="1.8"/><path d="m13 7-3 4h2l-1 4 4-5h-2l0-3Z" strokeWidth="1.6" strokeLinejoin="round"/></svg>
         </ToolbarButton>
         <ToolbarButton title="Mẫu tin nhắn" active={panel === 'quick'} onClick={() => setPanel('quick')} disabled={busy}>
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2" strokeWidth="1.8"/><path d="M7 9h10M7 12h8M7 15h5" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2" strokeWidth="1.8"/><path d="M7 9h10M7 12h8M7 15h5" strokeWidth="1.8" strokeLinecap="round"/></svg>
         </ToolbarButton>
         <ToolbarButton title="Thêm" active={panel === 'more'} onClick={() => setPanel(panel === 'more' ? null : 'more')} disabled={busy}>
-          <span className="text-xl leading-none tracking-widest -mt-1">•••</span>
+          <span className="text-sm leading-none tracking-widest -mt-1">•••</span>
         </ToolbarButton>
       </div>
 
@@ -435,10 +445,10 @@ export default function ZaloComposer({
         </div>
       )}
 
-      <div className="flex items-end gap-2 px-3 py-2.5">
+      <div className="flex items-end gap-1 px-2 py-1">
         <textarea
           ref={textareaRef}
-          rows={2}
+          rows={1}
           value={draft}
           disabled={busy}
           onChange={(event) => onDraftChange(event.target.value)}
@@ -451,11 +461,11 @@ export default function ZaloComposer({
             }
           }}
           placeholder={canUseZaloMedia ? 'Nhập tin nhắn tư vấn…' : 'Nhập nội dung tư vấn phản hồi…'}
-          className="flex-1 min-h-[52px] max-h-36 bg-transparent border-0 p-1 text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none resize-none disabled:opacity-60"
+          className="flex-1 min-h-[28px] max-h-32 bg-transparent border-0 p-1 text-xs sm:text-[13px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none resize-none disabled:opacity-60 leading-tight"
         />
 
         <ToolbarButton title="Biểu tượng cảm xúc" active={panel === 'emoji'} onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')} disabled={busy}>
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" strokeWidth="1.8"/><path d="M9 10h.01M15 10h.01M8.5 14c1 1.4 2.1 2 3.5 2s2.5-.6 3.5-2" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" strokeWidth="1.8"/><path d="M9 10h.01M15 10h.01M8.5 14c1 1.4 2.1 2 3.5 2s2.5-.6 3.5-2" strokeWidth="1.8" strokeLinecap="round"/></svg>
         </ToolbarButton>
 
         {hasContent ? (
@@ -464,22 +474,17 @@ export default function ZaloComposer({
             onClick={() => void submit()}
             disabled={busy}
             title="Gửi"
-            className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center transition shadow-subtle disabled:opacity-40"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center transition shadow-subtle shrink-0 disabled:opacity-40"
           >
             {busy ? (
-              <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              <span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
             ) : (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="m4 4 16 8-16 8 3-8-3-8Z" strokeWidth="1.8" strokeLinejoin="round"/><path d="M7 12h13" strokeWidth="1.8"/></svg>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="m4 4 16 8-16 8 3-8-3-8Z" strokeWidth="1.8" strokeLinejoin="round"/><path d="M7 12h13" strokeWidth="1.8"/></svg>
             )}
           </button>
         ) : (
-          <button type="button" onClick={() => void sendThumb()} disabled={busy} title="Gửi 👍" className="w-10 h-10 rounded-full text-2xl flex items-center justify-center hover:bg-[var(--surface-hover)] disabled:opacity-40">👍</button>
+          <button type="button" onClick={() => void sendThumb()} disabled={busy} title="Gửi 👍" className="w-7 h-7 sm:w-8 sm:h-8 rounded-full text-base flex items-center justify-center hover:bg-[var(--surface-hover)] shrink-0 disabled:opacity-40">👍</button>
         )}
-      </div>
-
-      <div className="flex items-center justify-between px-3 pb-2 text-[10px] text-[var(--text-tertiary)]">
-        <span>{canUseZaloMedia ? 'Có thể kéo/chọn ảnh hoặc dán ảnh bằng Cmd/Ctrl + V' : 'Ảnh/tệp đang ưu tiên cho kênh Zalo'}</span>
-        <span>Shift + Enter để xuống dòng</span>
       </div>
     </div>
   );

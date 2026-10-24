@@ -1,7 +1,7 @@
 .inbox-maximize-shell {
   position: relative;
-  height: calc(100vh - 5.25rem);
-  min-height: 560px;
+  height: 100%;
+  min-height: 0;
 }
 
 .inbox-maximize-shell[data-focus-mode='true'] {
@@ -79,7 +79,7 @@
 
 /* Compact the message composer without touching its send/media/AI behavior. */
 .inbox-maximize-shell .platform-inbox-shell textarea {
-  min-height: 36px !important;
+  min-height: 28px !important;
   max-height: 120px !important;
 }
 
