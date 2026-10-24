@@ -173,3 +173,77 @@ export function vietnamSchedule(local: string): string {
   if (!Number.isFinite(parsed.getTime())) throw new Error("INVALID_SCHEDULE");
   return parsed.toISOString();
 }
+
+export function resolveCampaignIdentity({
+  channel,
+  senderExternalId,
+  customerIdentities,
+  resolvedOaId,
+}: {
+  channel: Channel;
+  senderExternalId: string;
+  customerIdentities: Array<{
+    id: string;
+    channel: string;
+    external_id: string;
+    verified: boolean;
+    metadata?: Record<string, unknown> | null;
+  }>;
+  resolvedOaId?: string | null;
+}):
+  | { status: "MATCH"; identity: (typeof customerIdentities)[number] }
+  | {
+      status:
+        | "MISSING_IDENTITY"
+        | "SENDER_MISMATCH"
+        | "IDENTITY_UNVERIFIED";
+      identity: null;
+    } {
+  if (channel === "FACEBOOK") {
+    const channelIds = customerIdentities.filter(
+      (i) => i.channel === "FACEBOOK",
+    );
+    if (channelIds.length === 0)
+      return { status: "MISSING_IDENTITY", identity: null };
+
+    const match = channelIds.find(
+      (i) =>
+        (i.external_id ===
+          `${senderExternalId}:${i.external_id.split(":")[1]}` ||
+          i.external_id.startsWith(`${senderExternalId}:`)) &&
+        /^[0-9]+:[0-9]+$/.test(i.external_id),
+    );
+    if (!match) return { status: "SENDER_MISMATCH", identity: null };
+    if (!match.verified)
+      return { status: "IDENTITY_UNVERIFIED", identity: null };
+    return { status: "MATCH", identity: match };
+  }
+
+  // ZALO_OA: canonical Zalo UID identity + resolved official OA scope
+  const channelIds = customerIdentities.filter((i) => i.channel === "ZALO");
+  if (channelIds.length === 0)
+    return { status: "MISSING_IDENTITY", identity: null };
+
+  const match = channelIds.find(
+    (i) =>
+      /^[0-9]+$/.test(i.external_id) &&
+      i.metadata?.source !== "ZCAJS" &&
+      i.metadata?.provider !== "zcajs",
+  );
+  if (!match) return { status: "IDENTITY_UNVERIFIED", identity: null };
+
+  const effectiveOa =
+    resolvedOaId ||
+    (match.metadata?.source === "ZALO_OA" &&
+    typeof match.metadata?.oa_id === "string"
+      ? match.metadata.oa_id
+      : null);
+
+  if (!effectiveOa || effectiveOa !== senderExternalId) {
+    return { status: "SENDER_MISMATCH", identity: null };
+  }
+  if (!match.verified)
+    return { status: "IDENTITY_UNVERIFIED", identity: null };
+
+  return { status: "MATCH", identity: match };
+}

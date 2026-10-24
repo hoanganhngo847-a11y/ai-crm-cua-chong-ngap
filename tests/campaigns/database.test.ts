@@ -97,7 +97,14 @@ const sender = "bc000000-0000-4000-8000-000000000031",
 const template = "bc000000-0000-4000-8000-000000000041",
   zaloTemplate = "bc000000-0000-4000-8000-000000000042";
 const identity = "bc000000-0000-4000-8000-000000000051",
-  conversation = "bc000000-0000-4000-8000-000000000061";
+  conversation = "bc000000-0000-4000-8000-000000000061",
+  interaction = "bc000000-0000-4000-8000-000000000071",
+  zaloId = "bc000000-0000-4000-8000-000000000072",
+  zaloConv = "bc000000-0000-4000-8000-000000000073",
+  zaloEvent = "bc000000-0000-4000-8000-000000000074",
+  zaloEventB = "bc000000-0000-4000-8000-000000000075",
+  zaloEvent8888 = "bc000000-0000-4000-8000-000000000076",
+  oa444 = "bc000000-0000-4000-8000-000000000077";
 const setup = `BEGIN;
 CREATE FUNCTION pg_temp.ok(ok boolean,label text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF ok IS DISTINCT FROM true THEN RAISE EXCEPTION 'ASSERT: %',label; END IF; END $$;
 CREATE FUNCTION pg_temp.denied(statement text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN
@@ -114,7 +121,7 @@ INSERT INTO public.message_templates(id,company_id,name,channel,template_type,co
 INSERT INTO public.message_templates(id,company_id,name,channel,template_type,provider_template_id,content,status,created_by) VALUES('${zaloTemplate}','${A}','Synthetic ZBS','ZALO_OA','ZBS_TEMPLATE','provider-approved-synthetic','Hello {{customer_name}}','PROVIDER_APPROVED','${boss}');
 INSERT INTO public.identities(id,company_id,customer_id,channel,external_id,verified) VALUES('${identity}','${A}','${cust}','FACEBOOK','111:12345',true);
 INSERT INTO public.conversations(id,company_id,customer_id,channel,external_conversation_id) VALUES('${conversation}','${A}','${cust}','FACEBOOK','111:12345');
-INSERT INTO public.interactions(company_id,customer_id,conversation_id,channel,type,direction,actor_type,sanitized_content,sanitization_status) VALUES('${A}','${cust}','${conversation}','FACEBOOK','MESSAGE','INBOUND','CUSTOMER','Hello','SUCCEEDED');
+INSERT INTO public.interactions(id,company_id,customer_id,conversation_id,channel,type,direction,actor_type,sanitized_content,sanitization_status) VALUES('${interaction}','${A}','${cust}','${conversation}','FACEBOOK','MESSAGE','INBOUND','CUSTOMER','Hello','SUCCEEDED');
 CREATE FUNCTION pg_temp.make_campaign(actor uuid DEFAULT '${boss}',chan text DEFAULT 'FACEBOOK',sid uuid DEFAULT '${sender}',tid uuid DEFAULT '${template}',recipients jsonb DEFAULT '["${cust}","${missing}"]') RETURNS uuid LANGUAGE sql AS $$
  SELECT (public.campaign_command('${A}',actor,'create',jsonb_build_object('request_id',gen_random_uuid(),'name','Synthetic campaign','channel',chan,'sender_account_id',sid,'template_id',tid,'customer_ids',recipients))->>'id')::uuid $$;
 CREATE FUNCTION pg_temp.ready_confirm(cid uuid) RETURNS void LANGUAGE plpgsql AS $$ BEGIN
@@ -238,8 +245,8 @@ test("DB Zalo OA official-only, exact provider template, consent and connection 
 CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign(chan=>'ZALO_OA',sid=>'${oa}',tid=>'${zaloTemplate}') id;
 SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
 SELECT pg_temp.ok((SELECT eligibility_status='MISSING_IDENTITY' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'missing Zalo identity');
-INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified) VALUES('${A}','${cust}','ZALO','333:6789',true);
-INSERT INTO public.conversations(company_id,customer_id,channel,external_conversation_id) VALUES('${A}','${cust}','ZALO','333:6789');
+INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified,metadata) VALUES('${A}','${cust}','ZALO','6789',true,jsonb_build_object('source','ZALO_OA','oa_id','333'));
+INSERT INTO public.conversations(company_id,customer_id,channel,external_conversation_id) VALUES('${A}','${cust}','ZALO','6789');
 SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
 SELECT pg_temp.ok((SELECT eligibility_reason='SENDER_UNAVAILABLE' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'OA disconnected');
 INSERT INTO public.zalo_oa_configs(company_id,oa_id,app_id,status) VALUES('${A}','333','synthetic-app','ACTIVE');
@@ -357,27 +364,102 @@ SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_ca
 
 test("Facebook and Zalo provider identity verification, cross-tenant denial and ZCAJS rejection", () =>
   run(`
+-- ==========================================
+-- 1. FACEBOOK PROVIDER IDENTITY VERIFICATION
+-- ==========================================
 UPDATE public.identities SET verified=false WHERE id='${identity}';
-CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign(recipients=>'["${cust}"]') id;
-SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
-SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'unverified identity blocked with IDENTITY_UNVERIFIED');
+CREATE TEMP TABLE camp_fb AS SELECT pg_temp.make_campaign(recipients=>'["${cust}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_fb)));
+SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'unverified FB identity blocked with IDENTITY_UNVERIFIED');
 
-SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${B}','FACEBOOK','111','12345','{"verified":true}')$q$);
-SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','999','12345','{"verified":true}')$q$);
+-- Mandatory test (Section 17): caller arbitrary boolean MUST FAIL
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','12345','{"verified":true}')$q$);
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','12345','{}')$q$);
 
-SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','12345','{"verified":true}');
-SELECT pg_temp.ok((SELECT verified FROM public.identities WHERE id='${identity}'),'identity promoted to verified');
+-- Cross-tenant denial: company B cannot verify company A identity
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${B}','FACEBOOK','111','12345',jsonb_build_object('interaction_id','${interaction}'))$q$);
+
+-- Wrong Page denial: Page 999 does not match 111
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','999','12345',jsonb_build_object('interaction_id','${interaction}'))$q$);
+
+-- Wrong PSID denial: PSID 99999 does not match interaction
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','99999',jsonb_build_object('interaction_id','${interaction}'))$q$);
+
+-- Valid authoritative stored inbound interaction verification
+SELECT public.campaign_verify_identity('${A}','FACEBOOK','111','12345',jsonb_build_object('interaction_id','${interaction}'));
+SELECT pg_temp.ok((SELECT verified FROM public.identities WHERE id='${identity}'),'FB identity promoted to verified');
 SELECT pg_temp.ok(EXISTS(SELECT 1 FROM public.messaging_campaign_audit WHERE company_id='${A}' AND event='identity_verified'),'identity_verified audit logged');
 
-SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp)));
-SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'verified identity eligible');
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_fb)));
+SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_campaign_recipients WHERE customer_id='${cust}'),'verified FB identity eligible');
 
+-- ==========================================
+-- 2. ZALO OA PROVIDER IDENTITY VERIFICATION & ELIGIBILITY
+-- ==========================================
+-- Setup official active OA 333 and second active OA 444 for sender mismatch testing
+INSERT INTO public.zalo_oa_configs(company_id,oa_id,app_id,status) VALUES
+ ('${A}','333','synthetic-app','ACTIVE'),
+ ('${A}','444','synthetic-app-2','ACTIVE'),
+ ('${B}','555','synthetic-app-b','ACTIVE');
+UPDATE public.messaging_sender_accounts SET connected=true,verified=true WHERE id='${oa}';
+INSERT INTO public.messaging_sender_accounts(id,company_id,channel,external_id,name,connected,verified)
+VALUES('${oa444}','${A}','ZALO_OA','444','Synthetic OA 444',true,true);
+
+-- Missing UID test: customer without Zalo identity yields MISSING_IDENTITY
+CREATE TEMP TABLE camp_oa_missing AS SELECT pg_temp.make_campaign(chan=>'ZALO_OA',sid=>'${oa}',tid=>'${zaloTemplate}',recipients=>'["${missing}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_oa_missing)));
+SELECT pg_temp.ok((SELECT eligibility_status='MISSING_IDENTITY' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa_missing) AND customer_id='${missing}'),'customer without Zalo has MISSING_IDENTITY');
+
+-- Canonical Zalo identity (external_id = '9999' ONLY, no oa_id:uid!)
 INSERT INTO public.identities(id,company_id,customer_id,channel,external_id,verified,metadata)
-VALUES('bc000000-0000-4000-8000-000000000098','${A}','${cust}','ZALO','333:9999',false,jsonb_build_object('source','ZCAJS','provider','zcajs'));
-SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999','{"verified":true}')$q$);
+VALUES('${zaloId}','${A}','${cust}','ZALO','9999',false,jsonb_build_object('source','ZALO_OA','oa_id','333'));
+INSERT INTO public.conversations(id,company_id,customer_id,channel,external_conversation_id) VALUES('${zaloConv}','${A}','${cust}','ZALO','9999');
+
+-- Ingress event fixtures
+INSERT INTO public.zalo_ingress_events(id,company_id,oa_id,external_ref,event_name,sender_id,recipient_id,status) VALUES
+ ('${zaloEvent}','${A}','333','evt-9999','user_send_text','9999','333','PROCESSED'),
+ ('${zaloEventB}','${B}','555','evt-b','user_send_text','9999','555','PROCESSED'),
+ ('${zaloEvent8888}','${A}','333','evt-8888','user_send_text','8888','333','PROCESSED');
+
+-- ZBS Consent evidence
+INSERT INTO public.messaging_channel_evidence(company_id,sender_account_id,customer_id,identity_id,template_type,provider_template_id,consent_at,provider_verified_at,eligible_until)
+VALUES('${A}','${oa}','${cust}','${zaloId}','ZBS_TEMPLATE','provider-approved-synthetic',clock_timestamp(),clock_timestamp(),clock_timestamp()+interval '1 hour');
+
+-- Unverified UID test
 CREATE TEMP TABLE camp_oa AS SELECT pg_temp.make_campaign(chan=>'ZALO_OA',sid=>'${oa}',tid=>'${zaloTemplate}',recipients=>'["${cust}"]') id;
 SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_oa)));
-SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' OR eligibility_reason='SENDER_UNAVAILABLE' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa) AND customer_id='${cust}'),'ZCAJS identity never eligible for OA campaign');
+SELECT pg_temp.ok((SELECT eligibility_reason='IDENTITY_UNVERIFIED' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa) AND customer_id='${cust}'),'unverified Zalo UID blocked with IDENTITY_UNVERIFIED');
+
+-- Mandatory test (Section 17): arbitrary boolean fails on Zalo too
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999','{"verified":true}')$q$);
+
+-- Cross-tenant denial: company B event cannot verify company A identity
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999',jsonb_build_object('ingress_event_id','${zaloEventB}'))$q$);
+
+-- Wrong identity denial: event for UID 8888 cannot verify UID 9999
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999',jsonb_build_object('ingress_event_id','${zaloEvent8888}'))$q$);
+
+-- Wrong OA denial: event for OA 333 cannot verify OA 444
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','444','9999',jsonb_build_object('ingress_event_id','${zaloEvent}'))$q$);
+
+-- Personal ZCAJS rejection test
+INSERT INTO public.identities(id,company_id,customer_id,channel,external_id,verified,metadata)
+VALUES('bc000000-0000-4000-8000-000000000098','${A}','${cust}','ZALO','7777',false,jsonb_build_object('source','ZCAJS','provider','zcajs'));
+SELECT pg_temp.denied($q$SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','7777',jsonb_build_object('ingress_event_id','${zaloEvent}'))$q$);
+
+-- Official OA verification succeeds with authoritative ingress event reference
+SELECT public.campaign_verify_identity('${A}','ZALO_OA','333','9999',jsonb_build_object('ingress_event_id','${zaloEvent}'));
+SELECT pg_temp.ok((SELECT verified FROM public.identities WHERE id='${zaloId}'),'Zalo identity promoted to verified');
+SELECT pg_temp.ok((SELECT metadata->>'oa_id'='333' FROM public.identities WHERE id='${zaloId}'),'Zalo identity bound to official OA 333');
+
+-- Canonical identity + sender match: OA 333 matches customer OA -> ELIGIBLE
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_oa)));
+SELECT pg_temp.ok((SELECT eligibility_status='ELIGIBLE' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa) AND customer_id='${cust}'),'verified Zalo identity eligible when OA matches');
+
+-- Sender mismatch test: campaign with OA 444, but customer OA is 333 -> SENDER_MISMATCH
+CREATE TEMP TABLE camp_oa_mismatch AS SELECT pg_temp.make_campaign(chan=>'ZALO_OA',sid=>'${oa444}',tid=>'${zaloTemplate}',recipients=>'["${cust}"]') id;
+SELECT public.campaign_command('${A}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp_oa_mismatch)));
+SELECT pg_temp.ok((SELECT eligibility_reason='SENDER_MISMATCH' FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp_oa_mismatch) AND customer_id='${cust}'),'OA 444 vs customer OA 333 yields SENDER_MISMATCH');
 `));
 test('provider IDs, retry budget and company rate limits fail closed',()=>run(`
 CREATE TEMP TABLE camp AS SELECT pg_temp.make_campaign() id;

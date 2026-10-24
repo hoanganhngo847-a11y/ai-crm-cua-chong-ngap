@@ -159,44 +159,69 @@ CREATE FUNCTION public.campaign_eligibility(p_campaign uuid,p_customer uuid) RET
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
 DECLARE c public.messaging_campaigns; s public.messaging_sender_accounts; t public.message_templates; i public.identities;
  conv public.conversations; values jsonb; parameters jsonb; payload text;
- v_chan text; v_cust_identities int; v_conflict_count int;
+ v_chan text; v_cust_identities int; v_conflict_count int; v_oa text;
 BEGIN
  SELECT * INTO STRICT c FROM public.messaging_campaigns WHERE id=p_campaign;
  SELECT * INTO STRICT s FROM public.messaging_sender_accounts WHERE company_id=c.company_id AND id=c.sender_account_id;
  IF EXISTS(SELECT 1 FROM public.messaging_suppressions WHERE company_id=c.company_id AND customer_id=p_customer AND channel=c.channel AND revoked_at IS NULL)
  OR EXISTS(SELECT 1 FROM public.care_schedules WHERE company_id=c.company_id AND customer_id=p_customer AND channel=CASE c.channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END AND NOT enabled)
  THEN RETURN '{"status":"UNSUBSCRIBED","reason":"UNSUBSCRIBED"}'; END IF;
+
  v_chan := CASE c.channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END;
  SELECT count(*) INTO v_cust_identities FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer AND channel=v_chan;
  IF v_cust_identities = 0 THEN RETURN '{"status":"MISSING_IDENTITY","reason":"MISSING_IDENTITY"}'; END IF;
- SELECT * INTO i FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer
- AND channel=v_chan AND split_part(external_id,':',1)=s.external_id AND external_id ~ '^[0-9]+:[0-9]+$' ORDER BY verified DESC, id LIMIT 1;
- IF i.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_MISMATCH"}'; END IF;
- SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=c.company_id AND channel=v_chan AND external_id=i.external_id;
- IF v_conflict_count > 1 THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_CONFLICT"}'; END IF;
- IF NOT i.verified THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
- IF c.channel='ZALO_OA' AND ((i.metadata->>'source'='ZCAJS') OR (i.metadata->>'provider'='zcajs')) THEN
- RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
+
+ IF NOT s.connected OR NOT s.verified OR (c.channel='ZALO_OA' AND NOT EXISTS(
+ SELECT 1 FROM public.zalo_oa_configs WHERE company_id=c.company_id AND oa_id=s.external_id AND app_id<>'ZCAJS' AND status='ACTIVE'))
+ THEN RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_UNAVAILABLE"}'; END IF;
+
+ IF c.channel = 'FACEBOOK' THEN
+  SELECT * INTO i FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer
+  AND channel='FACEBOOK' AND split_part(external_id,':',1)=s.external_id AND external_id ~ '^[0-9]+:[0-9]+$' ORDER BY verified DESC, id LIMIT 1;
+  IF i.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_MISMATCH"}'; END IF;
+  SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=c.company_id AND channel='FACEBOOK' AND external_id=i.external_id;
+  IF v_conflict_count > 1 THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_CONFLICT"}'; END IF;
+  IF NOT i.verified THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
+  SELECT * INTO conv FROM public.conversations WHERE company_id=c.company_id AND customer_id=p_customer
+  AND channel='FACEBOOK' AND external_conversation_id=i.external_id;
+  IF conv.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"MISSING_IDENTITY"}'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.interactions WHERE company_id=c.company_id AND customer_id=p_customer
+  AND conversation_id=conv.id AND channel='FACEBOOK' AND type='MESSAGE' AND direction='INBOUND' AND actor_type='CUSTOMER'
+  AND created_at>clock_timestamp()-interval '24 hours' AND created_at<=clock_timestamp())
+  THEN RETURN '{"status":"BLOCKED_POLICY","reason":"OUTSIDE_WINDOW"}'; END IF;
+
+ ELSIF c.channel = 'ZALO_OA' THEN
+  SELECT * INTO i FROM public.identities WHERE company_id=c.company_id AND customer_id=p_customer
+  AND channel='ZALO' AND external_id ~ '^[0-9]+$' ORDER BY verified DESC, id LIMIT 1;
+  IF i.id IS NULL THEN RETURN '{"status":"MISSING_IDENTITY","reason":"MISSING_IDENTITY"}'; END IF;
+  SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=c.company_id AND channel='ZALO' AND external_id=i.external_id;
+  IF v_conflict_count > 1 THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_CONFLICT"}'; END IF;
+  IF (i.metadata->>'source'='ZCAJS') OR (i.metadata->>'provider'='zcajs') THEN
+   RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
+  v_oa := private.zalo_resolve_customer_oa(c.company_id, p_customer);
+  IF v_oa IS NULL AND i.metadata->>'source' = 'ZALO_OA' AND i.metadata->>'oa_id' IS NOT NULL THEN
+   IF EXISTS (SELECT 1 FROM public.zalo_oa_configs WHERE company_id=c.company_id AND oa_id=i.metadata->>'oa_id' AND status='ACTIVE' AND app_id<>'ZCAJS') THEN
+    v_oa := i.metadata->>'oa_id';
+   END IF;
+  END IF;
+  IF v_oa IS NULL OR v_oa <> s.external_id THEN
+   RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_MISMATCH"}'; END IF;
+  IF NOT i.verified THEN RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_UNVERIFIED"}'; END IF;
+  SELECT * INTO conv FROM public.conversations WHERE company_id=c.company_id AND customer_id=p_customer
+  AND channel='ZALO' AND external_conversation_id=i.external_id;
+  IF conv.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"MISSING_IDENTITY"}'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.messaging_channel_evidence e
+  WHERE e.company_id=c.company_id AND e.customer_id=p_customer AND e.sender_account_id=s.id AND e.identity_id=i.id
+  AND e.template_type=c.template_snapshot->>'template_type' AND e.provider_template_id=coalesce(c.template_snapshot->>'provider_template_id','')
+  AND e.consent_at<=clock_timestamp() AND e.provider_verified_at<=clock_timestamp() AND e.eligible_until>clock_timestamp())
+  THEN RETURN '{"status":"BLOCKED_POLICY","reason":"NO_CONSENT"}'; END IF;
+ END IF;
+
  SELECT * INTO t FROM public.message_templates WHERE company_id=c.company_id AND id=c.template_id;
  IF (t.sender_account_id IS NOT NULL AND t.sender_account_id<>c.sender_account_id) OR t.channel IS DISTINCT FROM c.channel OR t.template_type IS DISTINCT FROM c.template_snapshot->>'template_type' OR t.status NOT IN ('ACTIVE','PROVIDER_APPROVED') OR (c.template_snapshot->>'template_type'='ZBS_TEMPLATE' AND
  (t.status<>'PROVIDER_APPROVED' OR t.parameter_mapping IS DISTINCT FROM c.template_snapshot->'parameter_mapping' OR t.provider_template_id IS DISTINCT FROM c.template_snapshot->>'provider_template_id'))
  THEN RETURN '{"status":"BLOCKED_POLICY","reason":"TEMPLATE_DISABLED"}'; END IF;
- IF NOT s.connected OR NOT s.verified OR (c.channel='ZALO_OA' AND NOT EXISTS(
- SELECT 1 FROM public.zalo_oa_configs WHERE company_id=c.company_id AND oa_id=s.external_id AND app_id<>'ZCAJS' AND status='ACTIVE'))
- THEN RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_UNAVAILABLE"}'; END IF;
- SELECT * INTO conv FROM public.conversations WHERE company_id=c.company_id AND customer_id=p_customer
- AND channel=i.channel AND external_conversation_id=i.external_id;
- IF conv.id IS NULL THEN RETURN '{"status":"BLOCKED_POLICY","reason":"MISSING_IDENTITY"}'; END IF;
- -- Only inbound customer messages from the exact sender-scoped existing conversation count.
- IF c.channel='FACEBOOK' AND NOT EXISTS(SELECT 1 FROM public.interactions WHERE company_id=c.company_id AND customer_id=p_customer
- AND conversation_id=conv.id AND channel='FACEBOOK' AND type='MESSAGE' AND direction='INBOUND' AND actor_type='CUSTOMER'
- AND created_at>clock_timestamp()-interval '24 hours' AND created_at<=clock_timestamp())
- THEN RETURN '{"status":"BLOCKED_POLICY","reason":"OUTSIDE_WINDOW"}'; END IF;
- IF c.channel='ZALO_OA' AND NOT EXISTS(SELECT 1 FROM public.messaging_channel_evidence e
- WHERE e.company_id=c.company_id AND e.customer_id=p_customer AND e.sender_account_id=s.id AND e.identity_id=i.id
- AND e.template_type=c.template_snapshot->>'template_type' AND e.provider_template_id=coalesce(c.template_snapshot->>'provider_template_id','')
- AND e.consent_at<=clock_timestamp() AND e.provider_verified_at<=clock_timestamp() AND e.eligible_until>clock_timestamp())
- THEN RETURN '{"status":"BLOCKED_POLICY","reason":"NO_CONSENT"}'; END IF;
+
  SELECT jsonb_build_object('customer_name',cu.name,'customer_code',cu.customer_code,'company_name',co.name,'assigned_sale_name',u.full_name)
  INTO values FROM public.customers cu JOIN public.companies co ON co.id=cu.company_id
  LEFT JOIN public.customer_dossier_profiles d ON d.company_id=cu.company_id AND d.customer_id=cu.id
@@ -381,29 +406,208 @@ END $$;
 -- Trusted server-side identity verification based on authoritative provider evidence. Never callable from browser.
 CREATE FUNCTION public.campaign_verify_identity(p_company uuid,p_channel text,p_sender_id text,p_recipient_id text,p_evidence jsonb DEFAULT '{}') RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
-DECLARE v_channel text; v_ext text; v_identity public.identities; v_conflict_count int; v_sender public.messaging_sender_accounts; BEGIN
+DECLARE
+ v_channel text;
+ v_ext text;
+ v_identity public.identities;
+ v_conflict_count int;
+ v_sender public.messaging_sender_accounts;
+ v_evidence_type text;
+ v_evidence_id text;
+ v_evidence_valid boolean := false;
+BEGIN
  IF p_channel NOT IN ('FACEBOOK','ZALO_OA') THEN RAISE EXCEPTION 'INVALID_CHANNEL'; END IF;
  IF p_sender_id !~ '^[0-9]{1,100}$' OR p_recipient_id !~ '^[0-9]{1,100}$' THEN RAISE EXCEPTION 'INVALID_IDENTIFIER'; END IF;
- v_channel:=CASE p_channel WHEN 'ZALO_OA' THEN 'ZALO' ELSE 'FACEBOOK' END;
- v_ext:=p_sender_id||':'||p_recipient_id;
- SELECT * INTO v_sender FROM public.messaging_sender_accounts WHERE company_id=p_company AND channel=p_channel AND external_id=p_sender_id;
- IF v_sender.id IS NULL OR NOT v_sender.connected THEN RAISE EXCEPTION 'SENDER_NOT_FOUND_OR_DISCONNECTED'; END IF;
- IF p_channel='ZALO_OA' AND NOT EXISTS(SELECT 1 FROM public.zalo_oa_configs WHERE company_id=p_company AND oa_id=p_sender_id AND status='ACTIVE' AND app_id<>'ZCAJS') THEN
- RAISE EXCEPTION 'OA_NOT_ACTIVE_OR_ZCAJS'; END IF;
- IF EXISTS(SELECT 1 FROM public.identities WHERE channel=v_channel AND external_id=v_ext AND company_id<>p_company) THEN
- RAISE EXCEPTION 'IDENTITY_CROSS_TENANT_CONFLICT'; END IF;
- SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities WHERE company_id=p_company AND channel=v_channel AND external_id=v_ext;
- IF v_conflict_count>1 THEN RAISE EXCEPTION 'IDENTITY_CONFLICT'; END IF;
- SELECT * INTO v_identity FROM public.identities WHERE company_id=p_company AND channel=v_channel AND external_id=v_ext LIMIT 1;
- IF v_identity.id IS NULL THEN RAISE EXCEPTION 'IDENTITY_NOT_FOUND'; END IF;
- IF p_channel='ZALO_OA' AND ((v_identity.metadata->>'source'='ZCAJS') OR (v_identity.metadata->>'provider'='zcajs')) THEN
- RAISE EXCEPTION 'ZCAJS_CANNOT_BE_VERIFIED_AS_OA'; END IF;
- IF coalesce(p_evidence->>'verified','false')<>'true' AND NOT EXISTS(
- SELECT 1 FROM public.interactions WHERE company_id=p_company AND customer_id=v_identity.customer_id AND channel=v_channel AND direction='INBOUND' AND actor_type='CUSTOMER') THEN
- RAISE EXCEPTION 'AUTHORITATIVE_EVIDENCE_REQUIRED'; END IF;
- UPDATE public.identities SET verified=true WHERE id=v_identity.id AND company_id=p_company;
- INSERT INTO public.messaging_campaign_audit(company_id,event,metadata) VALUES(p_company,'identity_verified',jsonb_build_object('identity_id',v_identity.id,'customer_id',v_identity.customer_id,'channel',p_channel,'external_id',v_ext));
- RETURN jsonb_build_object('ok',true,'identity_id',v_identity.id,'customer_id',v_identity.customer_id);
+
+ v_evidence_type := coalesce(
+   p_evidence->>'evidence_type',
+   CASE
+     WHEN p_evidence->>'interaction_id' IS NOT NULL THEN 'INTERACTION'
+     WHEN p_evidence->>'ingress_event_id' IS NOT NULL THEN 'ZALO_INGRESS_EVENT'
+     WHEN p_evidence->>'intake_event_key' IS NOT NULL THEN 'FACEBOOK_INTAKE_EVENT'
+     ELSE NULL
+   END
+ );
+ v_evidence_id := coalesce(
+   p_evidence->>'evidence_id',
+   p_evidence->>'interaction_id',
+   p_evidence->>'ingress_event_id',
+   p_evidence->>'intake_event_key'
+ );
+
+ IF v_evidence_id IS NULL OR length(btrim(v_evidence_id)) = 0 THEN
+   RAISE EXCEPTION 'AUTHORITATIVE_EVIDENCE_REQUIRED';
+ END IF;
+
+ IF p_channel = 'FACEBOOK' THEN
+   v_channel := 'FACEBOOK';
+   v_ext := p_sender_id || ':' || p_recipient_id;
+
+   SELECT * INTO v_sender FROM public.messaging_sender_accounts
+   WHERE company_id = p_company AND channel = 'FACEBOOK' AND external_id = p_sender_id;
+   IF v_sender.id IS NULL OR NOT v_sender.connected THEN
+     RAISE EXCEPTION 'SENDER_NOT_FOUND_OR_DISCONNECTED';
+   END IF;
+
+   IF EXISTS(SELECT 1 FROM public.identities WHERE channel = 'FACEBOOK' AND external_id = v_ext AND company_id <> p_company) THEN
+     RAISE EXCEPTION 'IDENTITY_CROSS_TENANT_CONFLICT';
+   END IF;
+
+   SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities
+   WHERE company_id = p_company AND channel = 'FACEBOOK' AND external_id = v_ext;
+   IF v_conflict_count > 1 THEN
+     RAISE EXCEPTION 'IDENTITY_CONFLICT';
+   END IF;
+
+   SELECT * INTO v_identity FROM public.identities
+   WHERE company_id = p_company AND channel = 'FACEBOOK' AND external_id = v_ext
+   ORDER BY verified DESC, id LIMIT 1;
+   IF v_identity.id IS NULL THEN
+     RAISE EXCEPTION 'IDENTITY_NOT_FOUND';
+   END IF;
+
+   IF v_evidence_type = 'INTERACTION' THEN
+     IF v_evidence_id !~ '^[0-9a-fA-F-]{36}$' THEN RAISE EXCEPTION 'INVALID_EVIDENCE_ID'; END IF;
+     SELECT EXISTS(
+       SELECT 1 FROM public.interactions i
+       JOIN public.conversations conv ON conv.id = i.conversation_id
+       WHERE i.id = v_evidence_id::uuid
+         AND i.company_id = p_company
+         AND i.customer_id = v_identity.customer_id
+         AND i.channel = 'FACEBOOK'
+         AND i.direction = 'INBOUND'
+         AND i.actor_type = 'CUSTOMER'
+         AND conv.company_id = p_company
+         AND conv.channel = 'FACEBOOK'
+         AND conv.external_conversation_id = v_ext
+     ) INTO v_evidence_valid;
+   ELSIF v_evidence_type = 'FACEBOOK_INTAKE_EVENT' THEN
+     SELECT EXISTS(
+       SELECT 1 FROM private.han_intake_events e
+       WHERE e.company_id = p_company
+         AND e.channel = 'FACEBOOK'
+         AND e.event_key = v_evidence_id
+         AND e.external_identity = v_ext
+         AND e.status = 'PROCESSED'
+     ) INTO v_evidence_valid;
+   ELSE
+     RAISE EXCEPTION 'UNSUPPORTED_EVIDENCE_TYPE';
+   END IF;
+
+   IF NOT v_evidence_valid THEN
+     RAISE EXCEPTION 'AUTHORITATIVE_EVIDENCE_NOT_FOUND';
+   END IF;
+
+   UPDATE public.identities SET verified = true WHERE id = v_identity.id AND company_id = p_company;
+
+   INSERT INTO public.messaging_campaign_audit(company_id, event, metadata)
+   VALUES(p_company, 'identity_verified', jsonb_build_object(
+     'identity_id', v_identity.id,
+     'customer_id', v_identity.customer_id,
+     'channel', 'FACEBOOK',
+     'external_id', v_ext,
+     'evidence_type', v_evidence_type,
+     'evidence_id', v_evidence_id
+   ));
+
+   RETURN jsonb_build_object('ok', true, 'identity_id', v_identity.id, 'customer_id', v_identity.customer_id);
+
+ ELSIF p_channel = 'ZALO_OA' THEN
+   v_channel := 'ZALO';
+   v_ext := p_recipient_id;
+
+   SELECT * INTO v_sender FROM public.messaging_sender_accounts
+   WHERE company_id = p_company AND channel = 'ZALO_OA' AND external_id = p_sender_id;
+   IF v_sender.id IS NULL OR NOT v_sender.connected THEN
+     RAISE EXCEPTION 'SENDER_NOT_FOUND_OR_DISCONNECTED';
+   END IF;
+
+   IF NOT EXISTS(
+     SELECT 1 FROM public.zalo_oa_configs
+     WHERE company_id = p_company AND oa_id = p_sender_id AND status = 'ACTIVE' AND app_id <> 'ZCAJS'
+   ) THEN
+     RAISE EXCEPTION 'OA_NOT_ACTIVE_OR_ZCAJS';
+   END IF;
+
+   IF EXISTS(SELECT 1 FROM public.identities WHERE channel = 'ZALO' AND external_id = v_ext AND company_id <> p_company) THEN
+     RAISE EXCEPTION 'IDENTITY_CROSS_TENANT_CONFLICT';
+   END IF;
+
+   SELECT count(DISTINCT customer_id) INTO v_conflict_count FROM public.identities
+   WHERE company_id = p_company AND channel = 'ZALO' AND external_id = v_ext;
+   IF v_conflict_count > 1 THEN
+     RAISE EXCEPTION 'IDENTITY_CONFLICT';
+   END IF;
+
+   SELECT * INTO v_identity FROM public.identities
+   WHERE company_id = p_company AND channel = 'ZALO' AND external_id = v_ext
+   ORDER BY verified DESC, id LIMIT 1;
+   IF v_identity.id IS NULL THEN
+     RAISE EXCEPTION 'IDENTITY_NOT_FOUND';
+   END IF;
+
+   IF (v_identity.metadata->>'source' = 'ZCAJS') OR (v_identity.metadata->>'provider' = 'zcajs') THEN
+     RAISE EXCEPTION 'ZCAJS_CANNOT_BE_VERIFIED_AS_OA';
+   END IF;
+
+   IF v_evidence_type = 'ZALO_INGRESS_EVENT' THEN
+     IF v_evidence_id !~ '^[0-9a-fA-F-]{36}$' THEN RAISE EXCEPTION 'INVALID_EVIDENCE_ID'; END IF;
+     SELECT EXISTS(
+       SELECT 1 FROM public.zalo_ingress_events e
+       JOIN public.zalo_oa_configs c ON c.company_id = p_company AND c.oa_id = e.oa_id AND c.status = 'ACTIVE' AND c.app_id <> 'ZCAJS'
+       WHERE e.id = v_evidence_id::uuid
+         AND e.company_id = p_company
+         AND e.oa_id = p_sender_id
+         AND e.sender_id = p_recipient_id
+         AND e.status = 'PROCESSED'
+     ) INTO v_evidence_valid;
+   ELSIF v_evidence_type = 'INTERACTION' THEN
+     IF v_evidence_id !~ '^[0-9a-fA-F-]{36}$' THEN RAISE EXCEPTION 'INVALID_EVIDENCE_ID'; END IF;
+     SELECT EXISTS(
+       SELECT 1 FROM public.interactions i
+       JOIN private.interaction_raw_contents r ON r.interaction_id = i.id
+       JOIN public.conversations conv ON conv.id = i.conversation_id
+       JOIN public.zalo_oa_configs c ON c.company_id = p_company AND c.oa_id = p_sender_id AND c.status = 'ACTIVE' AND c.app_id <> 'ZCAJS'
+       WHERE i.id = v_evidence_id::uuid
+         AND i.company_id = p_company
+         AND i.customer_id = v_identity.customer_id
+         AND i.channel = 'ZALO'
+         AND i.direction = 'INBOUND'
+         AND i.actor_type = 'CUSTOMER'
+         AND conv.company_id = p_company
+         AND conv.channel = 'ZALO'
+         AND conv.external_conversation_id = v_ext
+         AND r.source_metadata->>'oa_id' = p_sender_id
+         AND (r.source_metadata->>'sender_id' = p_recipient_id OR r.source_metadata->>'origin' = 'ZALO_USER')
+         AND coalesce(r.source_metadata->>'source', '') <> 'ZCAJS'
+         AND coalesce(r.source_metadata->>'provider', '') <> 'zcajs'
+     ) INTO v_evidence_valid;
+   ELSE
+     RAISE EXCEPTION 'UNSUPPORTED_EVIDENCE_TYPE';
+   END IF;
+
+   IF NOT v_evidence_valid THEN
+     RAISE EXCEPTION 'AUTHORITATIVE_EVIDENCE_NOT_FOUND';
+   END IF;
+
+   UPDATE public.identities
+   SET verified = true,
+       metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('source', 'ZALO_OA', 'oa_id', p_sender_id)
+   WHERE id = v_identity.id AND company_id = p_company;
+
+   INSERT INTO public.messaging_campaign_audit(company_id, event, metadata)
+   VALUES(p_company, 'identity_verified', jsonb_build_object(
+     'identity_id', v_identity.id,
+     'customer_id', v_identity.customer_id,
+     'channel', 'ZALO_OA',
+     'external_id', v_ext,
+     'oa_id', p_sender_id,
+     'evidence_type', v_evidence_type,
+     'evidence_id', v_evidence_id
+   ));
+
+   RETURN jsonb_build_object('ok', true, 'identity_id', v_identity.id, 'customer_id', v_identity.customer_id);
+ END IF;
 END $$;
 
 CREATE FUNCTION public.campaign_read(p_company uuid,p_actor uuid,p_input jsonb DEFAULT '{}') RETURNS jsonb

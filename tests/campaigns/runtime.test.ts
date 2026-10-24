@@ -8,6 +8,7 @@ import {
   templateVariables,
   vietnamSchedule,
   reasonLabels,
+  resolveCampaignIdentity,
 } from "../../features/campaigns/contracts";
 import {
   campaignAdapters,
@@ -90,6 +91,74 @@ test("reasonLabels include enhanced identity and policy distinction", () => {
   assert.ok(reasonLabels.IDENTITY_UNVERIFIED);
   assert.ok(reasonLabels.IDENTITY_CONFLICT);
   assert.ok(reasonLabels.SENDER_MISMATCH);
+});
+test("resolveCampaignIdentity implements distinct strategies for Facebook and Zalo", () => {
+  // Facebook: Page-scoped PSID
+  const fbIdentities = [
+    { id: "1", channel: "FACEBOOK", external_id: "111:12345", verified: true },
+  ];
+  assert.equal(
+    resolveCampaignIdentity({
+      channel: "FACEBOOK",
+      senderExternalId: "111",
+      customerIdentities: fbIdentities,
+    }).status,
+    "MATCH",
+  );
+  assert.equal(
+    resolveCampaignIdentity({
+      channel: "FACEBOOK",
+      senderExternalId: "999",
+      customerIdentities: fbIdentities,
+    }).status,
+    "SENDER_MISMATCH",
+  );
+
+  // Zalo: canonical UID with resolved OA scope
+  const zaloIdentities = [
+    {
+      id: "2",
+      channel: "ZALO",
+      external_id: "9999",
+      verified: true,
+      metadata: { source: "ZALO_OA", oa_id: "333" },
+    },
+  ];
+  assert.equal(
+    resolveCampaignIdentity({
+      channel: "ZALO_OA",
+      senderExternalId: "333",
+      customerIdentities: zaloIdentities,
+    }).status,
+    "MATCH",
+  );
+  assert.equal(
+    resolveCampaignIdentity({
+      channel: "ZALO_OA",
+      senderExternalId: "444",
+      customerIdentities: zaloIdentities,
+    }).status,
+    "SENDER_MISMATCH",
+  );
+
+  // ZCAJS rejection
+  const zcajsIdentities = [
+    {
+      id: "3",
+      channel: "ZALO",
+      external_id: "9999",
+      verified: false,
+      metadata: { source: "ZCAJS", provider: "zcajs" },
+    },
+  ];
+  assert.equal(
+    resolveCampaignIdentity({
+      channel: "ZALO_OA",
+      senderExternalId: "333",
+      customerIdentities: zcajsIdentities,
+    }).status,
+    "IDENTITY_UNVERIFIED",
+  );
 });
 test("browser DTO masks phones including malicious customer names and frozen preview content", () => {
   const dto = safeCampaignDto({
