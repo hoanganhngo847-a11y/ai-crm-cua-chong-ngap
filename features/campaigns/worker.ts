@@ -4,6 +4,7 @@ import { createAdminClient } from "../../lib/supabase/admin";
 import { z } from "zod";
 import {
   campaignAdapters,
+  channelEnabled,
   type CampaignAdapter,
   type DeliveryJob,
   type DeliveryResult,
@@ -25,15 +26,10 @@ export async function processCampaignBatch(
     })
     .strict()
     .parse(input);
-  if (
-    process.env.BULK_MESSAGING_ENABLED !== "true" ||
-    process.env[
-      parsed.channel === "FACEBOOK"
-        ? "FACEBOOK_CAMPAIGNS_ENABLED"
-        : "ZALO_OA_CAMPAIGNS_ENABLED"
-    ] !== "true"
-  )
+
+  if (!channelEnabled(parsed.channel))
     return { status: "DISABLED", processed: 0 };
+
   const adapter = dependencies.adapter ?? campaignAdapters[parsed.channel];
   if (!adapter.verified) return { status: "TRANSPORT_DISABLED", processed: 0 };
   const db = dependencies.db ?? createAdminClient();
@@ -55,8 +51,6 @@ export async function processCampaignBatch(
     if (begin.error) throw new Error("CAMPAIGN_REVALIDATION_FAILED");
     if (!begin.data) continue;
     let result: DeliveryResult;
-    // Ambiguous timeouts/throws must never become retryable. A certified adapter must bound
-    // network duration below the lease and report TRANSIENT only for proven non-acceptance.
     try {
       result = await adapter.send(begin.data as DeliveryJob);
     } catch {
