@@ -2,7 +2,7 @@ import React from 'react';
 import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
-import InboxView from '../../../features/inbox/components/inbox-view';
+import PlatformInboxShell from '../../../features/inbox/components/platform-inbox-shell';
 
 export const metadata = {
   title: 'Hộp thư tích hợp | AI CRM Cửa Chống Ngập',
@@ -58,7 +58,7 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
     typeof resolvedParams?.customer_id === 'string' ? resolvedParams.customer_id : null;
 
   return (
-    <InboxView
+    <PlatformInboxShell
       userRole={actor.role}
       userFullName={actor.fullName}
       initialCustomerId={initialCustomerId}
