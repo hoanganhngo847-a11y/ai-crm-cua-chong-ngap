@@ -1,0 +1,152 @@
+.inbox-maximize-shell {
+  position: relative;
+  height: calc(100vh - 5.25rem);
+  min-height: 560px;
+}
+
+.inbox-maximize-shell[data-focus-mode='true'] {
+  height: 100vh;
+  min-height: 0;
+}
+
+.inbox-maximize-shell .platform-inbox-shell,
+.inbox-maximize-shell .platform-inbox-shell > div:first-child {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.inbox-maximize-shell .platform-inbox-shell > div:first-child > div:nth-child(2) {
+  position: relative;
+  min-height: 0 !important;
+  height: calc(100% - 48px) !important;
+}
+
+.inbox-maximize-shell[data-focus-mode='true'] .platform-inbox-shell > div:first-child > div:first-child {
+  display: none !important;
+}
+
+.inbox-maximize-shell[data-focus-mode='true'] .platform-inbox-shell > div:first-child > div:nth-child(2) {
+  height: 100% !important;
+}
+
+.inbox-maximize-action {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--native-accent, #2563eb);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.inbox-maximize-action:hover {
+  background: var(--native-accent-soft, #eff6ff);
+}
+
+.inbox-maximize-action:active {
+  transform: scale(0.95);
+}
+
+.inbox-maximize-divider {
+  width: 1px;
+  height: 22px;
+  margin: 0 2px;
+  background: #e5e7eb;
+}
+
+/* The native shell already has a right-panel toggle. The maximize shell owns that
+   state so the panel can behave as a drawer instead of consuming a grid column. */
+.inbox-maximize-shell .platform-native-header-host button[title$='thông tin hội thoại'] {
+  display: none !important;
+}
+
+.inbox-maximize-backdrop {
+  position: absolute;
+  inset: 48px 0 0;
+  z-index: 55;
+  border: 0;
+  background: rgba(15, 23, 42, 0.18);
+  cursor: default;
+}
+
+.inbox-maximize-shell[data-focus-mode='true'] .inbox-maximize-backdrop {
+  inset: 0;
+}
+
+/* Compact the message composer without touching its send/media/AI behavior. */
+.inbox-maximize-shell .platform-inbox-shell textarea {
+  min-height: 36px !important;
+  max-height: 120px !important;
+}
+
+@media (min-width: 1024px) {
+  .inbox-maximize-shell .platform-inbox-shell > div:first-child > div:nth-child(2) {
+    display: grid !important;
+    grid-template-columns: 300px minmax(0, 1fr) !important;
+  }
+
+  .inbox-maximize-shell .platform-inbox-shell > div:first-child > div:nth-child(2) > div:first-child,
+  .inbox-maximize-shell .platform-inbox-shell > div:first-child > div:nth-child(2) > div:nth-child(2) {
+    grid-column: auto !important;
+    min-width: 0 !important;
+    width: auto !important;
+  }
+
+  .inbox-maximize-shell[data-list-open='false'] .platform-inbox-shell > div:first-child > div:nth-child(2) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .inbox-maximize-shell[data-list-open='false'] .platform-inbox-shell > div:first-child > div:nth-child(2) > div:first-child {
+    display: none !important;
+  }
+
+  /* Customer information is an overlay drawer instead of a permanent third column. */
+  .inbox-maximize-shell .platform-inbox-shell > div:first-child > div:nth-child(2) > div:nth-child(3) {
+    position: absolute !important;
+    z-index: 70;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(360px, 90vw) !important;
+    max-width: 360px;
+    grid-column: auto !important;
+    background: #ffffff !important;
+    box-shadow: -16px 0 40px rgba(15, 23, 42, 0.16);
+    overflow-y: auto;
+  }
+
+  .inbox-maximize-shell[data-details-open='false'] .platform-inbox-shell > div:first-child > div:nth-child(2) > div:nth-child(3) {
+    display: none !important;
+  }
+
+  .inbox-maximize-shell[data-details-open='true'] .platform-inbox-shell > div:first-child > div:nth-child(2) > div:nth-child(3) {
+    display: block !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .inbox-maximize-shell {
+    height: calc(100vh - 4.5rem);
+    min-height: 0;
+  }
+
+  .inbox-maximize-shell[data-focus-mode='true'] {
+    height: 100vh;
+  }
+
+  .inbox-maximize-divider {
+    display: none;
+  }
+
+  .inbox-maximize-shell[data-list-open='false'] .platform-inbox-shell > div:first-child > div:nth-child(2) > div:first-child {
+    display: none !important;
+  }
+
+  .inbox-maximize-shell[data-details-open='false'] .platform-inbox-shell > div:first-child > div:nth-child(2) > div:nth-child(3) {
+    display: none !important;
+  }
+}
