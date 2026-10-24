@@ -170,7 +170,7 @@ SELECT pg_temp.ok(
 );
 `));
 
-test("manual link rejects an exact UID already owned by another customer", () =>
+test("manual link rejects an exact ZCAJS UID already owned by another customer", () =>
   run(`
 INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified,metadata)
 VALUES('${company}','${otherCustomer}','ZALO','900000002',false,'{"provider":"zcajs"}');
@@ -182,7 +182,7 @@ SELECT pg_temp.ok(
   (SELECT status='LINKED' AND linked_customer_id='${otherCustomer}'::uuid
      FROM public.zalo_personal_contact_candidates
     WHERE company_id='${company}' AND external_id='900000002'),
-  'exact existing identity is auto-recognized'
+  'exact existing ZCAJS identity is auto-recognized'
 );
 DO $$
 DECLARE cid uuid;
@@ -194,6 +194,40 @@ BEGIN
     RAISE EXCEPTION 'expected identity conflict';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%IDENTITY_CONFLICT%' THEN RAISE; END IF;
+  END;
+END $$;
+`));
+
+test("numeric OA identity is never reclassified as a personal Zalo route", () =>
+  run(`
+INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified,metadata)
+VALUES('${company}','${otherCustomer}','ZALO','900000003',true,'{"source":"ZALO_OA","oa_id":"oa-test"}');
+SELECT public.sync_zalo_personal_contacts(
+  '${company}',
+  '[{"externalUserId":"900000003","displayName":"Same numeric id"}]'::jsonb
+);
+SELECT pg_temp.ok(
+  (SELECT status='UNLINKED' AND linked_customer_id IS NULL
+     FROM public.zalo_personal_contact_candidates
+    WHERE company_id='${company}' AND external_id='900000003'),
+  'official identity is not automatic evidence for personal Zalo'
+);
+SELECT pg_temp.ok(
+  (SELECT metadata->>'source'='ZALO_OA' AND metadata->>'provider' IS NULL
+     FROM public.identities
+    WHERE company_id='${company}' AND external_id='900000003'),
+  'official identity metadata is preserved'
+);
+DO $$
+DECLARE cid uuid;
+BEGIN
+  SELECT id INTO cid FROM public.zalo_personal_contact_candidates
+   WHERE company_id='${company}' AND external_id='900000003';
+  BEGIN
+    PERFORM public.link_zalo_personal_contact('${company}','${boss}',cid,'${customer}');
+    RAISE EXCEPTION 'expected route conflict';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDENTITY_ROUTE_CONFLICT%' THEN RAISE; END IF;
   END;
 END $$;
 `));
