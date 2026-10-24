@@ -35,6 +35,9 @@ RUN npm install --omit=dev --no-audit --no-fund /tmp/zca-js.tgz \
   && rm -f /tmp/zca-js.tgz
 
 COPY src ./src
+COPY patches/patch-worker-contact-endpoint.mjs /tmp/patch-worker-contact-endpoint.mjs
+RUN node /tmp/patch-worker-contact-endpoint.mjs \
+  && rm -f /tmp/patch-worker-contact-endpoint.mjs
 
 EXPOSE 10000
 CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/index.mjs"]
