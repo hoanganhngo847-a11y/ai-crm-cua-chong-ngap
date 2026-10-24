@@ -57,9 +57,17 @@ BEGIN
     seen_count := seen_count + 1;
     linked := NULL;
 
+    -- Only a previously established ZCAJS identity is authoritative for automatic linking.
+    -- A numeric Zalo OA identity is not evidence that the personal-account UID is the same route.
     SELECT i.customer_id INTO linked
       FROM public.identities i
-     WHERE i.company_id=p_company AND i.channel='ZALO' AND i.external_id=ext
+     WHERE i.company_id=p_company
+       AND i.channel='ZALO'
+       AND i.external_id=ext
+       AND (
+         upper(coalesce(i.metadata->>'source',''))='ZCAJS'
+         OR lower(coalesce(i.metadata->>'provider',''))='zcajs'
+       )
      LIMIT 1;
 
     IF linked IS NULL THEN
@@ -72,18 +80,30 @@ BEGIN
        LIMIT 1;
 
       IF linked IS NOT NULL THEN
-        INSERT INTO public.identities(
-          company_id,customer_id,channel,external_id,verified,metadata,created_at,updated_at
-        ) VALUES (
-          p_company,linked,'ZALO',ext,false,
-          jsonb_build_object('source','ZCAJS','provider','zcajs','link_source','existing_conversation'),
-          clock_timestamp(),clock_timestamp()
-        )
-        ON CONFLICT(company_id,channel,external_id) DO UPDATE
-          SET updated_at=clock_timestamp(),
-              metadata=coalesce(public.identities.metadata,'{}'::jsonb) ||
-                jsonb_build_object('source','ZCAJS','provider','zcajs');
-        auto_linked := auto_linked + 1;
+        -- Do not overwrite an official/ambiguous identity that happens to share a numeric id.
+        IF EXISTS (
+          SELECT 1 FROM public.identities i
+           WHERE i.company_id=p_company AND i.channel='ZALO' AND i.external_id=ext
+             AND NOT (
+               upper(coalesce(i.metadata->>'source',''))='ZCAJS'
+               OR lower(coalesce(i.metadata->>'provider',''))='zcajs'
+             )
+        ) THEN
+          linked := NULL;
+        ELSE
+          INSERT INTO public.identities(
+            company_id,customer_id,channel,external_id,verified,metadata,created_at,updated_at
+          ) VALUES (
+            p_company,linked,'ZALO',ext,false,
+            jsonb_build_object('source','ZCAJS','provider','zcajs','link_source','existing_conversation'),
+            clock_timestamp(),clock_timestamp()
+          )
+          ON CONFLICT(company_id,channel,external_id) DO UPDATE
+            SET updated_at=clock_timestamp(),
+                metadata=coalesce(public.identities.metadata,'{}'::jsonb) ||
+                  jsonb_build_object('source','ZCAJS','provider','zcajs');
+          auto_linked := auto_linked + 1;
+        END IF;
       END IF;
     END IF;
 
@@ -94,7 +114,7 @@ BEGIN
       CASE WHEN linked IS NULL THEN 'UNLINKED' ELSE 'LINKED' END,
       linked,clock_timestamp(),
       CASE WHEN linked IS NULL THEN NULL ELSE clock_timestamp() END,
-      jsonb_build_object('source','ZCAJS','directory','friends')
+      jsonb_build_object('source','ZCAJS','directory','personal_directory')
     )
     ON CONFLICT(company_id,external_id) DO UPDATE SET
       display_name=coalesce(EXCLUDED.display_name,public.zalo_personal_contact_candidates.display_name),
@@ -146,8 +166,16 @@ BEGIN
     FROM public.identities
    WHERE company_id=p_company AND channel='ZALO' AND external_id=candidate.external_id
    LIMIT 1 FOR UPDATE;
-  IF existing_identity.id IS NOT NULL AND existing_identity.customer_id <> p_customer THEN
-    RAISE EXCEPTION 'IDENTITY_CONFLICT';
+  IF existing_identity.id IS NOT NULL THEN
+    IF NOT (
+      upper(coalesce(existing_identity.metadata->>'source',''))='ZCAJS'
+      OR lower(coalesce(existing_identity.metadata->>'provider',''))='zcajs'
+    ) THEN
+      RAISE EXCEPTION 'IDENTITY_ROUTE_CONFLICT';
+    END IF;
+    IF existing_identity.customer_id <> p_customer THEN
+      RAISE EXCEPTION 'IDENTITY_CONFLICT';
+    END IF;
   END IF;
 
   SELECT * INTO existing_conversation
@@ -231,8 +259,8 @@ GRANT EXECUTE ON FUNCTION public.sync_zalo_personal_contacts(uuid,jsonb) TO serv
 GRANT EXECUTE ON FUNCTION public.link_zalo_personal_contact(uuid,uuid,uuid,uuid) TO service_role;
 
 COMMENT ON TABLE public.zalo_personal_contact_candidates IS
-  'Server-only ZCAJS directory candidates. Never auto-linked by display name.';
+  'Server-only ZCAJS directory candidates. Never auto-linked by display name or OA identity.';
 COMMENT ON FUNCTION public.link_zalo_personal_contact(uuid,uuid,uuid,uuid) IS
-  'Boss-confirmed UID-to-customer link. Rejects identity/conversation conflicts and never matches by name.';
+  'Boss-confirmed personal-Zalo UID link. Rejects official/ambiguous identity routes and never matches by name.';
 
 COMMIT;
