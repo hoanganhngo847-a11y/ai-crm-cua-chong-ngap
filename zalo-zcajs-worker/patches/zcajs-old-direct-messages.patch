@@ -34,7 +34,7 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
              this.onClosedCallback();
              this.emit("closed");
          };
-@@ -151,6 +164,27 @@
+@@ -151,6 +164,32 @@
                      }
                  }
  
@@ -47,13 +47,18 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
 +                            continue;
 +                        }
 +
++                        const numericTs = Number(msg?.ts);
++                        if (!Number.isFinite(numericTs) || numericTs <= 0) continue;
++                        const messageMs = numericTs < 1_000_000_000_000 ? numericTs * 1000 : numericTs;
++                        if (Date.now() - messageMs > 24 * 60 * 60 * 1000) continue;
++
 +                        const messageObject = new Message(msg);
 +                        if (messageObject.isSelf && !this.selfListen) continue;
 +
-+                        // Re-emit historical/direct-request messages through the same event
-+                        // used by live traffic. The CRM's durable external_ref constraint
-+                        // handles duplicates, while previously unseen sender UIDs become
-+                        // normal inbound events and can create LEAD_NEW conversations.
++                        // Re-emit only recent historical/direct-request messages through
++                        // the same event used by live traffic. The CRM's durable external_ref
++                        // constraint handles duplicates, while previously unseen sender UIDs
++                        // become normal inbound events and create LEAD_NEW conversations.
 +                        this.onMessageCallback(messageObject);
 +                        this.emit("message", messageObject);
 +                    }
@@ -62,7 +67,7 @@ diff --git a/src/apis/listen.ts b/src/apis/listen.ts
                  if (n == 1 && cmd == 601 && s == 0) {
                      const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
                      const { controls } = parsedData;
-@@ -210,6 +244,27 @@
+@@ -210,6 +249,27 @@
              }
          };
      }
