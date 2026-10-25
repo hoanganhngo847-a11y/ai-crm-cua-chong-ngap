@@ -108,21 +108,29 @@ const recentSyncBlock = `
             recentSyncRunning = true;
             try {
                 const now = Date.now();
-                const ownUid = String(appContext.uid || "");
                 pruneRecent(now);
                 const messages = await this.getRecentDirectMessages();
-                let emitted = 0;
+                let emittedInbound = 0;
+                let emittedOutbound = 0;
                 for (const message of messages) {
-                    const senderUid = String(message?.data?.uidFrom || "");
-                    if (message.isSelf || (ownUid && senderUid === ownUid)) continue;
                     const id = messageId(message);
                     const ts = messageTimestampMs(message);
                     if (!id || !ts || now - ts > recentWindowMs || recentSeen.has(id)) continue;
+
+                    // Recover both customer messages and messages sent manually from this
+                    // Zalo account. The worker's normalizer preserves isSelf/direction, and
+                    // the CRM endpoint deduplicates CRM-originated sends by provider message ID.
                     recentSeen.set(id, now);
                     this.listener.emit("message", message);
-                    emitted += 1;
+                    if (message.isSelf) emittedOutbound += 1;
+                    else emittedInbound += 1;
                 }
-                if (emitted > 0) logger.info("Recovered recent inbound Zalo DMs via REST", emitted);
+                if (emittedInbound > 0 || emittedOutbound > 0) {
+                    logger.info("Recovered recent Zalo DMs via REST", {
+                        inbound: emittedInbound,
+                        outbound: emittedOutbound,
+                    });
+                }
             } catch (error) {
                 logger.warn(
                     "Recent inbound Zalo DM recovery failed",
