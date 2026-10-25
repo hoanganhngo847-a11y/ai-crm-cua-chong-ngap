@@ -4,8 +4,17 @@ on:
   pull_request:
     paths:
       - 'features/inbox/components/platform-inbox-shell.tsx'
+      - 'features/inbox/components/zalo-pc-call-interceptor.tsx'
+      - 'features/inbox/services/zalo-pc-handoff.ts'
       - 'features/inbox/utils/zalo-handoff.ts'
+      - 'features/omnichannel/zalo/zcajs-phone.ts'
+      - 'app/(dashboard)/inbox/page.tsx'
       - 'app/api/inbox/zalo-call-target/route.ts'
+      - 'app/api/inbox/zalo-pc-launch/route.ts'
+      - 'zalo-zcajs-worker/src/phone-resolver.mjs'
+      - 'zalo-zcajs-worker/patches/patch-worker-phone-resolver.mjs'
+      - 'zalo-zcajs-worker/Dockerfile'
+      - 'zalo-zcajs-worker/test/phone-resolver.test.mjs'
       - 'tests/inbox/zalo-exact-handoff.test.ts'
       - '.github/workflows/inbox-zalo-handoff-ci.yml'
 
@@ -19,8 +28,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Exact Zalo handoff invariants
+      - name: Exact Zalo PC handoff invariants
         run: npx tsx --conditions=react-server --test tests/inbox/zalo-exact-handoff.test.ts
+      - name: Exact ZCAJS phone resolver invariants
+        run: node --test zalo-zcajs-worker/test/phone-resolver.test.mjs
+      - name: Worker patch syntax
+        run: node --check zalo-zcajs-worker/patches/patch-worker-phone-resolver.mjs && node --check zalo-zcajs-worker/src/phone-resolver.mjs
+      - name: No Zalo Web fallback in handoff helper
+        run: '! grep -R "chat.zalo.me" features/inbox/utils/zalo-handoff.ts features/inbox/components/zalo-pc-call-interceptor.tsx app/api/inbox/zalo-call-target app/api/inbox/zalo-pc-launch'
       - name: Typecheck
         run: npm run typecheck
       - name: Diff check
