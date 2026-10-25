@@ -11,7 +11,11 @@ if (!source.includes(importLine)) {
 }
 
 const handlerAnchor = 'function requestHandler(req, res) {';
-const handlerBlock = `async function handleResolvePhone(req, res) {
+const handlerBlock = `const phoneResolverCache = new Map();
+const PHONE_RESOLVER_POSITIVE_TTL_MS = 60_000;
+const PHONE_RESOLVER_NEGATIVE_TTL_MS = 10_000;
+
+async function handleResolvePhone(req, res) {
   if (!isAuthorized(req)) {
     return json(res, 401, { success: false, error: 'UNAUTHORIZED' });
   }
@@ -38,9 +42,21 @@ const handlerBlock = `async function handleResolvePhone(req, res) {
     return json(res, 503, { success: false, error: 'ZCAJS_NOT_LOGGED_IN' });
   }
 
+  const cached = phoneResolverCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.phone
+      ? json(res, 200, { success: true, phone: cached.phone })
+      : json(res, 404, { success: false, error: 'PHONE_NOT_AVAILABLE' });
+  }
+  if (cached) phoneResolverCache.delete(userId);
+
   try {
     const userInfo = await api.getUserInfo(userId);
     const phone = resolveExactZaloPhone(userInfo, userId);
+    phoneResolverCache.set(userId, {
+      phone,
+      expiresAt: Date.now() + (phone ? PHONE_RESOLVER_POSITIVE_TTL_MS : PHONE_RESOLVER_NEGATIVE_TTL_MS),
+    });
     if (!phone) {
       return json(res, 404, { success: false, error: 'PHONE_NOT_AVAILABLE' });
     }
