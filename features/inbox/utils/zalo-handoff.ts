@@ -1,8 +1,8 @@
 export interface ZaloHandoffTarget {
   targeted: boolean;
   deepLink: string | null;
-  webUrl: string | null;
-  targetKind: 'phone' | 'uid' | 'none';
+  webUrl: null;
+  targetKind: 'phone' | 'none';
 }
 
 export function normalizeZaloPhone(value: string | null | undefined): string | null {
@@ -29,34 +29,18 @@ export function buildZaloHandoffTarget(input: {
   uid?: string | null;
 }): ZaloHandoffTarget {
   const phone = normalizeZaloPhone(input.phone);
-  const uid = normalizeZaloUid(input.uid);
 
-  // Zalo PC's desktop URI is only reliably documented in the ecosystem by phone.
-  // When the CRM has a full phone, use it to open the native app, but keep the
-  // UID-based Zalo Web conversation as the exact fallback whenever possible.
   if (phone) {
     return {
       targeted: true,
       deepLink: `zalo://conversation?phone=${encodeURIComponent(phone)}`,
-      webUrl: uid
-        ? `https://chat.zalo.me/?c=${encodeURIComponent(uid)}`
-        : `https://chat.zalo.me/?phone=${encodeURIComponent(phone)}&openConv=true`,
+      webUrl: null,
       targetKind: 'phone',
     };
   }
 
-  // Personal Zalo identities synced by ZCAJS always have the authoritative UID.
-  // Zalo Web accepts the conversation id via ?c=, allowing exact navigation even
-  // when the customer never shared a phone number with the CRM.
-  if (uid) {
-    return {
-      targeted: true,
-      deepLink: null,
-      webUrl: `https://chat.zalo.me/?c=${encodeURIComponent(uid)}`,
-      targetKind: 'uid',
-    };
-  }
-
-  // Fail closed: never open generic Zalo and make the sale search by name.
+  // UID alone is not enough for a reliable Zalo PC deep-link. The server-side
+  // handoff resolver must first resolve the exact UID to a phone via ZCAJS.
+  // Never fall back to Zalo Web, generic Zalo, or name-based search.
   return { targeted: false, deepLink: null, webUrl: null, targetKind: 'none' };
 }

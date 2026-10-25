@@ -38,9 +38,11 @@ RUN npm install --omit=dev --no-audit --no-fund /tmp/zca-js.tgz \
 
 COPY src ./src
 COPY patches/patch-worker-contact-endpoint.mjs /tmp/patch-worker-contact-endpoint.mjs
+COPY patches/patch-worker-phone-resolver.mjs /tmp/patch-worker-phone-resolver.mjs
 RUN node /tmp/patch-worker-contact-endpoint.mjs \
+  && node /tmp/patch-worker-phone-resolver.mjs \
   && node --check src/index.mjs \
-  && rm -f /tmp/patch-worker-contact-endpoint.mjs
+  && rm -f /tmp/patch-worker-contact-endpoint.mjs /tmp/patch-worker-phone-resolver.mjs
 
 EXPOSE 10000
 CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/index.mjs"]
