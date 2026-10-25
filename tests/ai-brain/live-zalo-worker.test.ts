@@ -25,6 +25,7 @@ const CLAIM_ID = '55555555-5555-4555-8555-555555555555';
 const SANITIZED_TEXT = 'Chào shop, em cần tư vấn lắp cửa chống ngập.';
 
 interface MockDbConfig {
+  eligibility?: boolean[];
   claimData?: unknown[];
   claimError?: Error | null;
   finishData?: boolean;
@@ -46,6 +47,7 @@ interface CapturedRpc {
 
 function createMockSupabase(config: MockDbConfig = {}) {
   const rpcCalls: CapturedRpc[] = [];
+  let eligibilityCount = 0;
   let settingQueryCount = 0;
   let convQueryCount = 0;
 
@@ -131,6 +133,7 @@ function createMockSupabase(config: MockDbConfig = {}) {
     },
     async rpc(name: string, params: Record<string, unknown>) {
       rpcCalls.push({ name, params });
+      if (name === 'ai_brain_live_zalo_is_eligible') return { data: config.eligibility?.[eligibilityCount++] ?? true, error: null };
       if (name === 'claim_ai_brain_live_deliveries') {
         if (config.claimError) return { data: null, error: config.claimError };
         return { data: config.claimData ?? [defaultClaim], error: null };
@@ -537,10 +540,12 @@ test('RACE: Human assignment during inference halts send via pre-send recheck', 
       channel: 'ZALO',
       status: 'OPEN',
       assigned_to: null,
+      ai_mode: 'ACTIVE',
     },
     // Human assigned while model is calculating!
     preSendConversationData: {
       status: 'OPEN',
+      ai_mode: 'ACTIVE',
       assigned_to: '88888888-8888-4888-8888-888888888888',
     },
   });
@@ -624,3 +629,28 @@ test('STATIC SECURITY AUDIT: Zero Zalo credentials in javis-brain and javis-runt
     }
   }
 });
+
+for (const eligibility of [[false], [true, false]]) {
+  test(`SLA/Sale DB gate ${eligibility.join('->')} suppresses transport`, async () => {
+    const supabase = createMockSupabase({ eligibility });
+    const provider = createMockProvider({ decision: 'RESPOND', draft: 'Synthetic proposal', confidence: 0.95 });
+    const inbox = createMockInboxService();
+    const result = await processDueAiBrainLiveZaloDeliveries(1, { supabase, provider, inboxService: inbox });
+    assert.equal(result.skipped, 1);
+    assert.equal(inbox.sendCalls.length, 0);
+    assert.equal(supabase.rpcCalls.find(c => c.name === 'finish_ai_brain_live_delivery')?.params.p_error_code, 'SLA_OR_HUMAN_REPLY_GUARD');
+  });
+}
+for (const mode of ['OFF', 'DRAFT_ONLY', null]) {
+  test(`ai_mode ${mode} never sends`, async () => {
+    const supabase = createMockSupabase({ conversationData: {
+      id: CONVERSATION_ID, company_id: COMPANY_ID, customer_id: CUSTOMER_ID,
+      channel: 'ZALO', status: 'OPEN', assigned_to: null, ai_mode: mode,
+    } });
+    const inbox = createMockInboxService();
+    const result = await processDueAiBrainLiveZaloDeliveries(1, { supabase,
+      provider: createMockProvider({ decision: 'RESPOND', draft: 'Synthetic', confidence: 0.95 }), inboxService: inbox });
+    assert.equal(result.skipped, 1);
+    assert.equal(inbox.sendCalls.length, 0);
+  });
+}

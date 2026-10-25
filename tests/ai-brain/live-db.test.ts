@@ -373,6 +373,7 @@ test('H: claim_ai_brain_live_deliveries locks row with token and increments atte
     actor_type: 'CUSTOMER',
     sanitization_status: 'SUCCEEDED',
     sanitized_content: 'Cần claim test',
+    created_at: new Date(Date.now() - 360000).toISOString(),
   });
 
   const token1 = randomUUID();
@@ -439,6 +440,7 @@ test('I: finish_ai_brain_live_delivery fences wrong token', async () => {
     actor_type: 'CUSTOMER',
     sanitization_status: 'SUCCEEDED',
     sanitized_content: 'Test fence',
+    created_at: new Date(Date.now() - 360000).toISOString(),
   });
 
   const token1 = randomUUID();

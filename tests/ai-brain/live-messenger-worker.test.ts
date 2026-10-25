@@ -134,6 +134,7 @@ function createMockMessengerWorkerSupabase(config: MockWorkerDbConfig = {}) {
     },
     async rpc(name: string, params: Record<string, unknown>) {
       rpcCalls.push({ name, params });
+      if (name === 'ai_brain_live_zalo_is_eligible') return { data: true, error: null };
       if (name === 'claim_ai_brain_live_deliveries') {
         currentLockToken = params.p_lock_token as string;
         return { data: [defaultClaim], error: null };

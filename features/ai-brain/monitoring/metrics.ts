@@ -1,4 +1,5 @@
 import 'server-only';
+import { PROVIDER_FAILURE_CODES } from '../provider-failure';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
@@ -209,7 +210,8 @@ export async function getAiPipelineMetrics(
       if (
         row.error_code === 'BRAIN_UNAVAILABLE' ||
         row.error_code === 'BRAIN_TIMEOUT' ||
-        row.error_code === 'BRAIN_PROVIDER_ERROR'
+        row.error_code === 'BRAIN_PROVIDER_ERROR' ||
+        PROVIDER_FAILURE_CODES.some(code => code === row.error_code)
       ) {
         providerFailures++;
       }

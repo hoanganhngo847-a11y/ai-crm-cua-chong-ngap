@@ -223,7 +223,7 @@ test('E2E: createBrainService + JavisBrainProvider + real HTTP server: backend f
     });
 
     assert.equal(result.decision, 'ERROR');
-    assert.equal(result.errorCode, 'BRAIN_PROVIDER_ERROR');
+    assert.equal(result.errorCode, 'BRAIN_HTTP_ERROR');
     assert.equal(result.handoverRequired, true);
     assert.equal(result.delivery, undefined);
     assert.equal(result.draft, undefined);
@@ -262,4 +262,30 @@ test('Static Security Audit: zero messaging/database/outbound imports in service
       );
     }
   }
+});
+
+test('E2E: Runtime HTTP-200 model 404 survives Brain HTTP boundary as safe CRM classification', async () => {
+  const { JavisRuntimeBackend } = await import('../../services/javis-brain/model');
+  const logs: unknown[] = [];
+  const privateCanary = 'private-payload-never-in-audit';
+  const backend = new JavisRuntimeBackend({ baseUrl: 'https://runtime.synthetic.test',
+    internalToken: 'jvs_synthetic_runtime_e2e_credential',
+    customFetch: async () => new Response(JSON.stringify({ ok: false,
+      text: `⚠ Gemini 404: ${privateCanary}` })),
+  });
+  const server = createJavisBrainServer({ authToken: TEST_TOKEN, modelBackend: backend, onAuditLog: log => logs.push(log) });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const provider = new JavisBrainProvider({ baseUrl: LOGICAL_HTTPS_BASE, authToken: TEST_TOKEN,
+      fetchImpl: (input, init) => fetch(`http://127.0.0.1:${port}${new URL(String(input)).pathname}`, init) });
+    const result = await createBrainService({ resolveContext: createResolver(), provider }).handleBrainTurn({
+      customerId: CUSTOMER_ID, conversationId: CONVERSATION_ID, channel: 'ZALO', modality: 'TEXT', input: { text: 'Synthetic test' },
+    });
+    assert.equal(result.errorCode, 'MODEL_CONFIG_INVALID');
+    assert.equal(result.decision, 'ERROR');
+    assert.ok(!JSON.stringify({ result, logs }).includes(privateCanary));
+    assert.ok(JSON.stringify(logs).includes('"httpStatus":404'));
+    assert.ok(JSON.stringify(logs).includes('"retryable":false'));
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });

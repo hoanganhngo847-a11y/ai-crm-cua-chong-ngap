@@ -1,3 +1,4 @@
+import type { ProviderFailureCode } from './provider-failure';
 import 'server-only';
 
 import type { BrainTurnGrounding } from './grounding/contracts';
@@ -59,12 +60,16 @@ export const ALLOWED_BRAIN_DELIVERIES: readonly BrainDelivery[] = [
 ] as const;
 
 export type BrainErrorCode =
+  | ProviderFailureCode
   | 'BRAIN_UNAVAILABLE'
   | 'BRAIN_TIMEOUT'
   | 'BRAIN_POLICY_DENIED'
   | 'BRAIN_INVALID_CONTEXT'
   | 'BRAIN_PROVIDER_ERROR';
 export const ALLOWED_BRAIN_ERROR_CODES: readonly BrainErrorCode[] = [
+  'BRAIN_CONFIG_MISSING', 'BRAIN_AUTH_FAILED', 'BRAIN_HTTP_ERROR', 'BRAIN_REQUEST_INVALID', 'RUNTIME_REQUEST_INVALID',
+  'RUNTIME_AUTH_FAILED', 'RUNTIME_HTTP_ERROR', 'MODEL_PROVIDER_ERROR',
+  'MODEL_RATE_LIMIT', 'MODEL_TIMEOUT', 'MODEL_CONFIG_INVALID',
   'BRAIN_UNAVAILABLE',
   'BRAIN_TIMEOUT',
   'BRAIN_POLICY_DENIED',

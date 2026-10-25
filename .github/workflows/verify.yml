@@ -34,6 +34,7 @@ jobs:
       - run: npm run build:javis-brain
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
+      - run: npx tsx --conditions=react-server --test tests/ai-brain/zalo-sla-retry-db.test.ts
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db
       - run: npx tsx --conditions=react-server --test tests/ai-brain/memory-db.test.ts

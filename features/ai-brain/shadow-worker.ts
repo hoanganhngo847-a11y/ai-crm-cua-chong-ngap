@@ -176,7 +176,12 @@ async function finish(
     p_provider: result?.provider ?? null,
     p_model: result?.model ?? null,
     p_latency_ms: result ? Math.round(result.latencyMs) : null,
-    p_error_code: result?.errorCode ?? null,
+    // Shadow persistence retains its original canonical-code CHECK constraint.
+    // Detailed adapter diagnostics are emitted by BrainService server logs.
+    p_error_code: result?.errorCode && ![
+      'BRAIN_UNAVAILABLE', 'BRAIN_TIMEOUT', 'BRAIN_POLICY_DENIED',
+      'BRAIN_INVALID_CONTEXT', 'BRAIN_PROVIDER_ERROR',
+    ].includes(result.errorCode) ? 'BRAIN_PROVIDER_ERROR' : result?.errorCode ?? null,
     p_turn_id: result?.turnId ?? null,
     p_trace_id: result?.traceId ?? null,
     p_tools_used: result?.toolsUsed ?? [],
