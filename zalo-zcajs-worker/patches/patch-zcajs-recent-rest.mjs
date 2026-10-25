@@ -133,7 +133,7 @@ const recentSyncBlock = `
                 }
             } catch (error) {
                 logger.warn(
-                    "Recent inbound Zalo DM recovery failed",
+                    "Recent Zalo DM recovery failed",
                     error instanceof Error ? error.message : "unknown",
                 );
             } finally {
@@ -152,7 +152,7 @@ const recentSyncBlock = `
             recentSyncTimer = undefined;
         });`;
 
-if (!zalo.includes('Recovered recent inbound Zalo DMs via REST')) {
+if (!zalo.includes('Recovered recent Zalo DMs via REST')) {
     zalo = zalo.replace(ctorAnchor, `${ctorAnchor}${recentSyncBlock}`);
 }
 
