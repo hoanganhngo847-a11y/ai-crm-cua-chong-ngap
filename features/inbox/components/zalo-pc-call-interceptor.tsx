@@ -21,7 +21,11 @@ function isZaloPcControl(target: Element): boolean {
   return (
     label.includes('gọi qua zalo pc') ||
     label.includes('mở zalo pc để gọi video') ||
-    label.includes('mở cuộc trò chuyện trên zalo pc')
+    label.includes('mở cuộc trò chuyện trên zalo pc') ||
+    label.includes('mở đúng chat zalo để gọi') ||
+    label.includes('mở đúng chat zalo để gọi video') ||
+    label.includes('mở đúng cuộc trò chuyện zalo của khách để gọi') ||
+    label.includes('mở đúng cuộc trò chuyện trên zalo')
   );
 }
 
