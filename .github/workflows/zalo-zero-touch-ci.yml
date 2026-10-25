@@ -1,0 +1,31 @@
+name: Zalo zero-touch sync gate
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261025051000_zalo_personal_zero_touch_customer_sync.sql'
+      - 'tests/campaigns/zalo-contact-linking-db.test.ts'
+      - 'tests/campaigns/zalo-zero-touch-runtime.test.ts'
+      - '.github/workflows/zalo-zero-touch-ci.yml'
+
+jobs:
+  zero-touch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: supabase/setup-cli@v1
+      - run: npm ci
+      - name: Runtime invariants
+        run: npx tsx tests/campaigns/zalo-zero-touch-runtime.test.ts
+      - name: Start local Supabase
+        run: npx supabase start -x studio,logflare,vector,realtime
+      - name: Apply all migrations
+        run: npx supabase db reset
+      - name: Zero-touch database invariants
+        run: npx tsx tests/campaigns/zalo-contact-linking-db.test.ts
+      - name: Diff check
+        run: git diff --check
