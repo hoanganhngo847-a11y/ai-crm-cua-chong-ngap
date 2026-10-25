@@ -4,10 +4,16 @@ import { verifyActorForCompany } from '../../lib/server-auth/authorize';
 import { createAdminClient } from '../../lib/supabase/admin';
 import { RecordingError, UUID } from './metadata';
 
-export async function recordingActor(bossOnly = false) {
+export async function recordingActor(
+  bossOnly = false,
+  options: { requireAal2?: boolean } = {}
+) {
   const context = await getActorContext();
-  if (!context?.companyId) throw new RecordingError('UNAUTHORIZED',401);
-  return verifyActorForCompany(context.companyId,{allowedRoles:bossOnly?['BOSS_ADMIN']:['BOSS_ADMIN','SALE']});
+  if (!context?.companyId) throw new RecordingError('UNAUTHORIZED', 401);
+  return verifyActorForCompany(context.companyId, {
+    allowedRoles: bossOnly ? ['BOSS_ADMIN'] : ['BOSS_ADMIN', 'SALE'],
+    requireAal2: options.requireAal2 ?? false,
+  });
 }
 export async function authorizedRecording(id: string) {
   if (!UUID.test(id)) throw new RecordingError('NOT_FOUND',404);

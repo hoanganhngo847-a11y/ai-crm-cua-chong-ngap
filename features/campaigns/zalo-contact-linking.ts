@@ -31,7 +31,7 @@ export async function syncPersonalZaloContactCandidates(): Promise<{
   seen: number;
   autoLinked: number;
 }> {
-  const actor = await recordingActor(true);
+  const actor = await recordingActor(true, { requireAal2: false });
   if (getZaloTransportMode() !== 'ZCAJS') throw new Error('ZCAJS_TRANSPORT_DISABLED');
 
   const contacts = await fetchZcaJsContacts(actor.companyId);
@@ -50,7 +50,7 @@ export async function syncPersonalZaloContactCandidates(): Promise<{
 }
 
 export async function listPersonalZaloContactCandidates(): Promise<PersonalZaloContactCandidate[]> {
-  const actor = await recordingActor(true);
+  const actor = await recordingActor(true, { requireAal2: false });
   return listUnlinked(actor.companyId);
 }
 
@@ -58,7 +58,7 @@ export async function linkPersonalZaloContactToCustomer(input: {
   candidateId: string;
   customerId: string;
 }): Promise<{ identityId: string; conversationId: string }> {
-  const actor = await recordingActor(true);
+  const actor = await recordingActor(true, { requireAal2: false });
   const candidateId = input.candidateId.trim();
   const customerId = input.customerId.trim();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

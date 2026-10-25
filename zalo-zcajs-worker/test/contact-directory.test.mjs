@@ -94,6 +94,58 @@ test('falls back to recent direct chats if friend directory read fails', async (
   ]);
 });
 
+test('resolves missing display names via getUserInfo when available', async () => {
+  const api = {
+    async getAllFriends() {
+      return [{ uid: '830000001', zaloName: '' }];
+    },
+    async getRecentDirectMessages() {
+      return [
+        {
+          type: 0,
+          threadId: '830000002',
+          isSelf: true,
+          data: {
+            msgId: 'msg-recent-3',
+            idTo: '830000002',
+            content: 'outbound',
+            ts: Date.now(),
+          },
+        },
+      ];
+    },
+    async getUserInfo(userIds) {
+      assert.deepEqual(userIds.sort(), ['830000001', '830000002']);
+      return {
+        changed_profiles: {
+          '830000001_0': { displayName: 'Resolved Friend 1' },
+          '830000002_0': { zaloName: 'Resolved Direct 2' },
+        },
+      };
+    },
+  };
+
+  assert.deepEqual(await listPersonalZaloContacts(api), [
+    { externalUserId: '830000001', displayName: 'Resolved Friend 1' },
+    { externalUserId: '830000002', displayName: 'Resolved Direct 2' },
+  ]);
+});
+
+test('handles getUserInfo failure gracefully without losing contacts', async () => {
+  const api = {
+    async getAllFriends() {
+      return [{ uid: '840000001', zaloName: '' }];
+    },
+    async getUserInfo() {
+      throw new Error('network timeout');
+    },
+  };
+
+  assert.deepEqual(await listPersonalZaloContacts(api), [
+    { externalUserId: '840000001' },
+  ]);
+});
+
 test('fails closed when the pinned ZCAJS API has no supported directory capability', async () => {
   await assert.rejects(
     () => listPersonalZaloContacts({}),
