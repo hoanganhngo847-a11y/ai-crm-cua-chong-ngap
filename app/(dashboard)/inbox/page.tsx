@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import InboxMaximizeShell from '../../../features/inbox/components/inbox-maximize-shell';
+import ZaloPcCallInterceptor from '../../../features/inbox/components/zalo-pc-call-interceptor';
 
 export const metadata = {
   title: 'Hộp thư tích hợp | AI CRM Cửa Chống Ngập',
@@ -58,10 +59,13 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
     typeof resolvedParams?.customer_id === 'string' ? resolvedParams.customer_id : null;
 
   return (
-    <InboxMaximizeShell
-      userRole={actor.role}
-      userFullName={actor.fullName}
-      initialCustomerId={initialCustomerId}
-    />
+    <>
+      <InboxMaximizeShell
+        userRole={actor.role}
+        userFullName={actor.fullName}
+        initialCustomerId={initialCustomerId}
+      />
+      <ZaloPcCallInterceptor />
+    </>
   );
 }
