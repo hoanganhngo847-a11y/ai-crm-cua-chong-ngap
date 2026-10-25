@@ -21,7 +21,9 @@
 --      cron_internal.ai_brain_live_zalo_dispatch_history and provides sanitized view
 --      cron_internal.ai_brain_live_zalo_dispatch_status (request_id, status_code,
 --      timed_out, has_error, created) without leaking raw headers, content, or errors.
---   4. CADENCE: Runs every minute (* * * * *) via job 'ai_brain_live_zalo_worker'.
+--   4. CADENCE: Runs every 5 seconds via job 'ai_brain_live_zalo_worker'. The
+--      customer reply SLA remains one minute; the tighter polling cadence only
+--      reduces scheduler pickup latency after that one-minute eligibility window.
 -- ==============================================================================
 
 BEGIN;
@@ -187,7 +189,7 @@ BEGIN
   END IF;
 END $$;
 
--- 7. Schedule recurring 1-minute cron job in pg_cron
+-- 7. Schedule recurring 5-second cron job in pg_cron
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'ai_brain_live_zalo_worker') THEN
@@ -196,7 +198,7 @@ BEGIN
 
   PERFORM cron.schedule(
     'ai_brain_live_zalo_worker',
-    '* * * * *',
+    '5 seconds',
     'SELECT cron_internal.invoke_ai_brain_live_zalo_cron();'
   );
 END $$;
