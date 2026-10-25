@@ -13,6 +13,8 @@ DECLARE
   ext text;
   display text;
   linked uuid;
+  identity_customer uuid;
+  conversation_customer uuid;
   candidate public.zalo_personal_contact_candidates;
   seen_count int := 0;
   auto_linked int := 0;
@@ -52,55 +54,20 @@ BEGIN
      WHERE company_id=p_company AND external_id=ext
      FOR UPDATE;
 
-    linked := NULL;
-    IF candidate.linked_customer_id IS NOT NULL AND EXISTS (
-      SELECT 1 FROM public.customers
-       WHERE company_id=p_company AND id=candidate.linked_customer_id
-    ) THEN
-      linked := candidate.linked_customer_id;
-    END IF;
-
-    -- Exact ZCAJS identity is authoritative. Display name is never a join key.
-    IF linked IS NULL THEN
-      SELECT i.customer_id INTO linked
-        FROM public.identities i
-       WHERE i.company_id=p_company
-         AND i.channel='ZALO'
-         AND i.external_id=ext
-         AND (
+    -- A numeric OA/ambiguous route is never converted to personal Zalo automatically,
+    -- even if an older candidate or conversation points at a customer.
+    IF EXISTS (
+      SELECT 1 FROM public.identities i
+       WHERE i.company_id=p_company AND i.channel='ZALO' AND i.external_id=ext
+         AND NOT (
            upper(coalesce(i.metadata->>'source',''))='ZCAJS'
            OR lower(coalesce(i.metadata->>'provider',''))='zcajs'
          )
-       LIMIT 1;
-    END IF;
-
-    -- Exact ZCAJS conversation is also authoritative.
-    IF linked IS NULL THEN
-      SELECT c.customer_id INTO linked
-        FROM public.conversations c
-       WHERE c.company_id=p_company
-         AND c.channel='ZALO'
+    ) OR EXISTS (
+      SELECT 1 FROM public.conversations c
+       WHERE c.company_id=p_company AND c.channel='ZALO'
          AND c.external_conversation_id=ext
-         AND lower(coalesce(c.metadata->>'provider',''))='zcajs'
-       LIMIT 1;
-    END IF;
-
-    -- A numeric OA/ambiguous route is never converted to personal Zalo automatically.
-    IF linked IS NULL AND (
-      EXISTS (
-        SELECT 1 FROM public.identities i
-         WHERE i.company_id=p_company AND i.channel='ZALO' AND i.external_id=ext
-           AND NOT (
-             upper(coalesce(i.metadata->>'source',''))='ZCAJS'
-             OR lower(coalesce(i.metadata->>'provider',''))='zcajs'
-           )
-      )
-      OR EXISTS (
-        SELECT 1 FROM public.conversations c
-         WHERE c.company_id=p_company AND c.channel='ZALO'
-           AND c.external_conversation_id=ext
-           AND lower(coalesce(c.metadata->>'provider','')) <> 'zcajs'
-      )
+         AND lower(coalesce(c.metadata->>'provider','')) <> 'zcajs'
     ) THEN
       route_conflicts := route_conflicts + 1;
       UPDATE public.zalo_personal_contact_candidates
@@ -111,6 +78,67 @@ BEGIN
              )
        WHERE id=candidate.id;
       CONTINUE;
+    END IF;
+
+    identity_customer := NULL;
+    conversation_customer := NULL;
+
+    -- Exact ZCAJS identity is authoritative. Display name is never a join key.
+    SELECT i.customer_id INTO identity_customer
+      FROM public.identities i
+     WHERE i.company_id=p_company
+       AND i.channel='ZALO'
+       AND i.external_id=ext
+       AND (
+         upper(coalesce(i.metadata->>'source',''))='ZCAJS'
+         OR lower(coalesce(i.metadata->>'provider',''))='zcajs'
+       )
+     LIMIT 1;
+
+    -- A real ZCAJS conversation is also authoritative when it exists.
+    SELECT c.customer_id INTO conversation_customer
+      FROM public.conversations c
+     WHERE c.company_id=p_company
+       AND c.channel='ZALO'
+       AND c.external_conversation_id=ext
+       AND lower(coalesce(c.metadata->>'provider',''))='zcajs'
+     LIMIT 1;
+
+    -- Multiple exact UID routes must agree on the customer. Never guess through a conflict.
+    IF identity_customer IS NOT NULL
+       AND conversation_customer IS NOT NULL
+       AND identity_customer <> conversation_customer THEN
+      route_conflicts := route_conflicts + 1;
+      UPDATE public.zalo_personal_contact_candidates
+         SET status='UNLINKED', linked_customer_id=NULL, linked_at=NULL,
+             metadata=coalesce(metadata,'{}'::jsonb) || jsonb_build_object(
+               'route_conflict',true,
+               'zero_touch_blocked',true
+             )
+       WHERE id=candidate.id;
+      CONTINUE;
+    END IF;
+
+    linked := NULL;
+    IF candidate.linked_customer_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.customers
+       WHERE company_id=p_company AND id=candidate.linked_customer_id
+    ) THEN
+      linked := candidate.linked_customer_id;
+      IF (identity_customer IS NOT NULL AND identity_customer <> linked)
+         OR (conversation_customer IS NOT NULL AND conversation_customer <> linked) THEN
+        route_conflicts := route_conflicts + 1;
+        UPDATE public.zalo_personal_contact_candidates
+           SET status='UNLINKED', linked_customer_id=NULL, linked_at=NULL,
+               metadata=coalesce(metadata,'{}'::jsonb) || jsonb_build_object(
+                 'route_conflict',true,
+                 'zero_touch_blocked',true
+               )
+         WHERE id=candidate.id;
+        CONTINUE;
+      END IF;
+    ELSE
+      linked := coalesce(identity_customer,conversation_customer);
     END IF;
 
     -- Zero-touch path: a UID with no established route gets its own canonical Customer 360.
@@ -136,6 +164,7 @@ BEGIN
         'source','ZCAJS',
         'provider','zcajs',
         'link_source',CASE WHEN candidate.linked_customer_id IS NULL THEN 'directory_zero_touch' ELSE 'existing_link' END,
+        'directory_seen',true,
         'zero_touch',true
       ),
       display,clock_timestamp(),clock_timestamp()
@@ -149,27 +178,6 @@ BEGIN
         upper(coalesce(public.identities.metadata->>'source',''))='ZCAJS'
         OR lower(coalesce(public.identities.metadata->>'provider',''))='zcajs'
       );
-
-    -- Campaign eligibility currently requires an observed canonical conversation route.
-    -- Directory-only routes are CLOSED so they do not masquerade as unread/open chats.
-    INSERT INTO public.conversations(
-      company_id,customer_id,channel,external_conversation_id,
-      last_message_at,unread_count,status,metadata,created_at,updated_at
-    ) VALUES (
-      p_company,linked,'ZALO',ext,
-      candidate.last_seen_at,0,'CLOSED',jsonb_build_object(
-        'provider','zcajs',
-        'source','ZCAJS',
-        'directory_materialized',true,
-        'zero_touch',true,
-        'zalo_display_name',display
-      ),clock_timestamp(),clock_timestamp()
-    )
-    ON CONFLICT(company_id,channel,external_conversation_id) DO UPDATE SET
-      metadata=coalesce(public.conversations.metadata,'{}'::jsonb) || EXCLUDED.metadata,
-      updated_at=clock_timestamp()
-    WHERE public.conversations.customer_id=EXCLUDED.customer_id
-      AND lower(coalesce(public.conversations.metadata->>'provider',''))='zcajs';
 
     UPDATE public.zalo_personal_contact_candidates
        SET status='LINKED',
@@ -189,13 +197,186 @@ BEGIN
   );
 END $$;
 
+-- Personal-Zalo campaigns can dispatch directly from the canonical ZCAJS identity.
+-- conversation_id remains populated when a real conversation exists, but directory-only
+-- contacts do not get synthetic Inbox conversations just to become campaign-eligible.
+CREATE OR REPLACE FUNCTION public.campaign_eligibility(
+  p_campaign uuid,
+  p_customer uuid
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=''
+AS $$
+DECLARE
+  c public.messaging_campaigns;
+  s public.messaging_sender_accounts;
+  t public.message_templates;
+  i public.identities;
+  conv public.conversations;
+  values jsonb;
+  parameters jsonb;
+  payload text;
+  v_conflict_count int;
+BEGIN
+  SELECT * INTO STRICT c
+    FROM public.messaging_campaigns
+   WHERE id=p_campaign;
+
+  IF c.channel <> 'ZALO_PERSONAL' THEN
+    RETURN public.campaign_eligibility_before_personal(p_campaign,p_customer);
+  END IF;
+
+  SELECT * INTO STRICT s
+    FROM public.messaging_sender_accounts
+   WHERE company_id=c.company_id
+     AND id=c.sender_account_id;
+
+  IF EXISTS(
+    SELECT 1
+      FROM public.messaging_suppressions
+     WHERE company_id=c.company_id
+       AND customer_id=p_customer
+       AND channel IN ('ZALO_PERSONAL','ZALO_OA')
+       AND revoked_at IS NULL
+  ) OR EXISTS(
+    SELECT 1
+      FROM public.care_schedules
+     WHERE company_id=c.company_id
+       AND customer_id=p_customer
+       AND channel='ZALO'
+       AND NOT enabled
+  ) THEN
+    RETURN '{"status":"UNSUBSCRIBED","reason":"UNSUBSCRIBED"}';
+  END IF;
+
+  IF NOT s.connected
+     OR NOT s.verified
+     OR s.channel <> 'ZALO_PERSONAL'
+     OR NOT EXISTS(
+       SELECT 1
+         FROM public.zalo_oa_configs
+        WHERE company_id=c.company_id
+          AND oa_id=s.external_id
+          AND app_id='ZCAJS'
+          AND status='ACTIVE'
+     )
+  THEN
+    RETURN '{"status":"BLOCKED_POLICY","reason":"SENDER_UNAVAILABLE"}';
+  END IF;
+
+  SELECT * INTO i
+    FROM public.identities
+   WHERE company_id=c.company_id
+     AND customer_id=p_customer
+     AND channel='ZALO'
+     AND external_id ~ '^[0-9]+$'
+     AND (
+       upper(coalesce(metadata->>'source',''))='ZCAJS'
+       OR lower(coalesce(metadata->>'provider',''))='zcajs'
+     )
+   ORDER BY updated_at DESC NULLS LAST,id
+   LIMIT 1;
+
+  IF i.id IS NULL THEN
+    RETURN '{"status":"MISSING_IDENTITY","reason":"MISSING_IDENTITY"}';
+  END IF;
+
+  SELECT count(DISTINCT customer_id) INTO v_conflict_count
+    FROM public.identities
+   WHERE company_id=c.company_id
+     AND channel='ZALO'
+     AND external_id=i.external_id;
+
+  IF v_conflict_count > 1 THEN
+    RETURN '{"status":"BLOCKED_POLICY","reason":"IDENTITY_CONFLICT"}';
+  END IF;
+
+  SELECT * INTO conv
+    FROM public.conversations
+   WHERE company_id=c.company_id
+     AND customer_id=p_customer
+     AND channel='ZALO'
+     AND external_conversation_id=i.external_id
+     AND lower(coalesce(metadata->>'provider',''))='zcajs'
+   ORDER BY updated_at DESC NULLS LAST,id
+   LIMIT 1;
+
+  SELECT * INTO t
+    FROM public.message_templates
+   WHERE company_id=c.company_id
+     AND id=c.template_id;
+
+  IF t.id IS NULL
+     OR t.channel<>'ZALO_PERSONAL'
+     OR t.template_type<>'ZALO_PERSONAL_TEXT'
+     OR t.status<>'ACTIVE'
+     OR (t.sender_account_id IS NOT NULL AND t.sender_account_id<>c.sender_account_id)
+  THEN
+    RETURN '{"status":"BLOCKED_POLICY","reason":"TEMPLATE_DISABLED"}';
+  END IF;
+
+  SELECT jsonb_build_object(
+    'customer_name',cu.name,
+    'customer_code',cu.customer_code,
+    'company_name',co.name,
+    'assigned_sale_name',u.full_name
+  ) INTO values
+  FROM public.customers cu
+  JOIN public.companies co ON co.id=cu.company_id
+  LEFT JOIN public.customer_dossier_profiles d
+    ON d.company_id=cu.company_id AND d.customer_id=cu.id
+  LEFT JOIN public.user_profiles u ON u.id=d.assigned_sale_id
+  WHERE cu.company_id=c.company_id
+    AND cu.id=p_customer;
+
+  SELECT jsonb_object_agg(
+    key,
+    CASE WHEN jsonb_typeof(value)='string'
+      THEN to_jsonb(regexp_replace(value#>>'{}','[+]?[0-9][0-9 .()-]{7,}[0-9]','[phone]','g'))
+      ELSE value END
+  ) INTO values
+  FROM jsonb_each(values);
+
+  BEGIN
+    payload:=regexp_replace(
+      public.campaign_render(c.template_snapshot->>'content',values),
+      '[+]?[0-9][0-9 .()-]{7,}[0-9]','[phone]','g'
+    );
+  EXCEPTION WHEN OTHERS THEN
+    RETURN '{"status":"BLOCKED_POLICY","reason":"MISSING_VARIABLE"}';
+  END;
+
+  IF EXISTS(
+    SELECT 1
+      FROM jsonb_each_text(coalesce(c.template_snapshot->'parameter_mapping','{}'))
+     WHERE nullif(btrim(values->>value),'') IS NULL
+  ) THEN
+    RETURN '{"status":"BLOCKED_POLICY","reason":"MISSING_VARIABLE"}';
+  END IF;
+
+  SELECT coalesce(jsonb_object_agg(key,values->>value),'{}') INTO parameters
+    FROM jsonb_each_text(coalesce(c.template_snapshot->'parameter_mapping','{}'));
+
+  RETURN jsonb_build_object(
+    'status','ELIGIBLE',
+    'identity_id',i.id,
+    'conversation_id',conv.id,
+    'payload',jsonb_build_object('text',payload,'parameters',parameters)
+  );
+END $$;
+
 REVOKE ALL ON FUNCTION public.sync_zalo_personal_contacts(uuid,jsonb)
+  FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.campaign_eligibility(uuid,uuid)
   FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.sync_zalo_personal_contacts(uuid,jsonb)
   TO service_role;
 
 COMMENT ON FUNCTION public.sync_zalo_personal_contacts(uuid,jsonb) IS
-  'Zero-touch ZCAJS directory sync: exact UID routes are reused; otherwise a canonical Zalo Customer 360 + identity + closed conversation route is created. Never matches by display name and never converts OA routes.';
+  'Zero-touch ZCAJS directory sync: exact UID routes are reused; otherwise a canonical Zalo Customer 360 + identity is created. Never matches by display name, never creates synthetic Inbox conversations, and never converts OA routes.';
+COMMENT ON FUNCTION public.campaign_eligibility(uuid,uuid) IS
+  'ZALO_PERSONAL eligibility uses the canonical ZCAJS identity directly; a real conversation is optional.';
 
 -- Backfill the already-synced directory candidates so production does not require a manual resync.
 DO $$
