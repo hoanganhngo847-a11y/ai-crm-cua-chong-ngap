@@ -1,0 +1,27 @@
+name: Inbox Zalo exact handoff gate
+
+on:
+  pull_request:
+    paths:
+      - 'features/inbox/components/platform-inbox-shell.tsx'
+      - 'features/inbox/utils/zalo-handoff.ts'
+      - 'app/api/inbox/zalo-call-target/route.ts'
+      - 'tests/inbox/zalo-exact-handoff.test.ts'
+      - '.github/workflows/inbox-zalo-handoff-ci.yml'
+
+jobs:
+  exact-handoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Exact Zalo handoff invariants
+        run: npx tsx --conditions=react-server --test tests/inbox/zalo-exact-handoff.test.ts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Diff check
+        run: git diff --check
