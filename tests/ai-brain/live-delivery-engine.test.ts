@@ -190,6 +190,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
     },
     async rpc(name: string, params: Record<string, unknown>) {
       rpcCalls.push({ name, params });
+      if (name === 'ai_brain_live_zalo_is_eligible') return { data: true, error: null };
       if (name === 'claim_ai_brain_live_deliveries') {
         return { data: defaultClaims, error: null };
       }

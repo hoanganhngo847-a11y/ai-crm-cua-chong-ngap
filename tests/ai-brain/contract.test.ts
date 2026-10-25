@@ -197,7 +197,10 @@ test('raw provider errors are neither inspected, logged nor returned', async () 
   try {
     const r = await make(provider(async () => { throw raw; })).handleBrainTurn(input({ input: { text: canary } }));
     assert.equal(r.errorCode, 'BRAIN_PROVIDER_ERROR');
-    assert.ok(!JSON.stringify(r).includes(canary)); assert.deepEqual(logged, []);
+    assert.ok(!JSON.stringify(r).includes(canary));
+    assert.equal(logged.length, 1);
+    assert.ok(!JSON.stringify(logged).includes(canary));
+    assert.equal(JSON.parse((logged[0] as string[])[0]).code, 'BRAIN_PROVIDER_ERROR');
   } finally { console.error = old; }
 });
 

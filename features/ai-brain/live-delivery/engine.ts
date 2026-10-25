@@ -8,6 +8,7 @@ import type {
   BrainProvider,
   BrainServerContext,
 } from '../contracts';
+import { ProviderFailure } from '../provider-failure';
 import { JavisBrainProvider } from '../javis-provider';
 import { createBrainService } from '../service';
 import { classifyHandoverReason, createHandoverCase } from '../handover';
@@ -41,11 +42,13 @@ export interface LiveDeliveryEngineOptions {
 function productionProvider(): BrainProvider | undefined {
   const baseUrl = process.env.JAVIS_BRAIN_BASE_URL?.trim();
   const authToken = process.env.JAVIS_BRAIN_INTERNAL_TOKEN?.trim();
-  if (!baseUrl || !authToken) return undefined;
+  if (!baseUrl || !authToken) return { descriptor: { id: 'javis-brain-service', model: 'javis-router-v1' },
+    async runTurn() { throw new ProviderFailure('BRAIN_CONFIG_MISSING', 'JAVIS_BRAIN'); } };
   try {
     return new JavisBrainProvider({ baseUrl, authToken });
   } catch {
-    return undefined;
+    return { descriptor: { id: 'javis-brain-service', model: 'javis-router-v1' },
+      async runTurn() { throw new ProviderFailure('BRAIN_CONFIG_MISSING', 'JAVIS_BRAIN'); } };
   }
 }
 
@@ -88,7 +91,7 @@ async function loadEligibleInput(
     conversation.status === 'CLOSED' ||
     conversation.status === 'PENDING_SALE' ||
     conversation.assigned_to !== null ||
-    conversation.ai_mode === 'PAUSED'
+    conversation.ai_mode !== 'ACTIVE'
   ) {
     return null;
   }
@@ -228,8 +231,20 @@ async function processClaim(
   transports: Map<LiveDeliveryChannel, LiveDeliveryTransport>,
   dataSource?: BrainContextDataSource,
 ): Promise<'sent' | 'skipped' | 'failed'> {
+  const eligibleAtDb = async () => {
+    if (claim.channel !== 'ZALO') return true;
+    const { data, error } = await client.rpc('ai_brain_live_zalo_is_eligible', {
+      p_id: claim.id, p_lock_token: lockToken,
+    });
+    if (error) throw new Error('LIVE_ELIGIBILITY_CHECK_FAILED');
+    return data === true;
+  };
   let eligible: EligibleLiveInput | null;
   try {
+    if (!await eligibleAtDb()) {
+      await finish(client, claim, lockToken, 'SKIPPED', { errorCode: 'SLA_OR_HUMAN_REPLY_GUARD' });
+      return 'skipped';
+    }
     eligible = await loadEligibleInput(client, claim, dataSource);
   } catch (err: unknown) {
     await finish(client, claim, lockToken, 'FAILED', {
@@ -277,6 +292,9 @@ async function processClaim(
   const brainLatencyMs = typeof result.latencyMs === 'number' && Number.isFinite(result.latencyMs)
     ? Math.round(result.latencyMs)
     : null;
+
+  console.info(JSON.stringify({ event: 'LIVE_BRAIN_RESULT', deliveryId: claim.id, turnId: result.turnId,
+    traceId: result.traceId, decision: result.decision, errorCode: result.errorCode, latencyMs: brainLatencyMs }));
 
   // Provider error or timeout
   if (result.decision === 'ERROR') {
@@ -394,7 +412,7 @@ async function processClaim(
     currentConv.status === 'CLOSED' ||
     currentConv.status === 'PENDING_SALE' ||
     currentConv.assigned_to !== null ||
-    currentConv.ai_mode === 'PAUSED'
+    currentConv.ai_mode !== 'ACTIVE'
   ) {
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: 'RESPOND',
@@ -443,6 +461,14 @@ async function processClaim(
     }
   }
 
+  // Recheck after generation: a Sale reply during the model call wins.
+  if (!await eligibleAtDb()) {
+    await finish(client, claim, lockToken, 'SKIPPED', { errorCode: 'SLA_OR_HUMAN_REPLY_GUARD', turnId: result.turnId });
+    return 'skipped';
+  }
+
+  console.info(JSON.stringify({ event: 'BRAIN_PROPOSAL_READY', deliveryId: claim.id,
+    turnId: result.turnId, traceId: result.traceId, latencyMs: brainLatencyMs }));
   // SENDER TRANSPORT CALL (CRM is the delivery authority)
   const transport = transports.get(claim.channel);
   if (!transport) {

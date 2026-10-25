@@ -1,4 +1,5 @@
 import 'server-only';
+import type { ProviderDiagnostic } from '../../features/ai-brain/provider-failure';
 import type { DossierContext, DossierSnapshot } from '../../features/customer-360/contracts';
 import type {
   BrainChannel,
@@ -47,6 +48,7 @@ export interface ModelBackend {
 }
 
 export interface SafeAuditLog {
+  readonly upstream?: Readonly<ProviderDiagnostic>;
   readonly turnId: string | null;
   readonly traceId: string | null;
   readonly latencyMs: number;

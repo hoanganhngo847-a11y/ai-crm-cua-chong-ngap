@@ -142,7 +142,7 @@ test('non-2xx response body is never surfaced by the adapter', async () => {
   const p = provider(async () => response({ error: canary, token: canary }, 500));
   await assert.rejects(
     () => p.runTurn(turnRequest, { signal: new AbortController().signal }),
-    (error: unknown) => error instanceof Error && error.message === 'JAVIS_BRAIN_ADAPTER_ERROR' && !error.message.includes(canary),
+    (error: unknown) => error instanceof Error && error.message === 'BRAIN_HTTP_ERROR' && !error.message.includes(canary),
   );
 });
 
@@ -174,7 +174,7 @@ test('BrainService maps remote HTTP failure to canonical provider error without 
     modality: 'TEXT',
     input: { text: 'hello' },
   });
-  assert.equal(result.errorCode, 'BRAIN_PROVIDER_ERROR');
+  assert.equal(result.errorCode, 'BRAIN_HTTP_ERROR');
   assert.equal(result.decision, 'ERROR');
   assert.equal(result.handoverRequired, true);
   assert.ok(!JSON.stringify(result).includes(canary));
@@ -223,4 +223,25 @@ test('remote service cannot replace trusted CRM scope through its proposal', asy
   });
   assert.equal(result.errorCode, 'BRAIN_PROVIDER_ERROR');
   assert.equal(result.audit.companyId, companyId);
+});
+
+for (const [status, code] of [[401, 'BRAIN_AUTH_FAILED'], [403, 'BRAIN_AUTH_FAILED'], [400, 'BRAIN_REQUEST_INVALID'], [504, 'BRAIN_TIMEOUT']] as const) {
+  test(`CRM provider classifies HTTP ${status} without reading error body`, async () => {
+    const p = provider(async () => new Response(canary, { status }));
+    await assert.rejects(() => p.runTurn(turnRequest, { signal: new AbortController().signal }), { message: code });
+  });
+}
+test('CRM accepts only allowlisted structured upstream diagnostics', async () => {
+  const p = provider(async () => new Response(canary, { status: 500, headers: {
+    'X-AI-Brain-Error': 'MODEL_CONFIG_INVALID', 'X-AI-Brain-Phase': 'MODEL_PROVIDER', 'X-AI-Brain-Upstream-Status': '404',
+  } }));
+  const result = await createBrainService({ resolveContext: resolver, provider: p }).handleBrainTurn({
+    customerId, conversationId, channel: 'MESSENGER', modality: 'TEXT', input: { text: 'Synthetic' },
+  });
+  assert.equal(result.errorCode, 'MODEL_CONFIG_INVALID');
+  assert.ok(!JSON.stringify(result).includes(canary));
+  const bad = provider(async () => new Response('', { status: 500, headers: {
+    'X-AI-Brain-Error': 'UNKNOWN_SECRET_CODE', 'X-AI-Brain-Phase': 'MODEL_PROVIDER',
+  } }));
+  await assert.rejects(() => bad.runTurn(turnRequest, { signal: new AbortController().signal }), { message: 'BRAIN_HTTP_ERROR' });
 });

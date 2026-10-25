@@ -1,4 +1,5 @@
 import 'server-only';
+import { diagnosticFromHeaders, httpProviderFailure } from './provider-failure';
 
 import type { BrainProposal, BrainProvider, BrainProviderDescriptor, BrainTurnRequest } from './contracts';
 import { validateProviderProposal } from './validation';
@@ -102,7 +103,8 @@ function parseHealthEnvelope(raw: unknown): JavisBrainHealth {
 async function readJsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) {
     // Do not inspect response.text(): upstream bodies may contain stack traces or credentials.
-    throw new JavisAdapterError();
+    await response.body?.cancel().catch(() => undefined);
+    throw diagnosticFromHeaders(response.headers) ?? httpProviderFailure('JAVIS_BRAIN', response.status);
   }
   try {
     return await response.json();

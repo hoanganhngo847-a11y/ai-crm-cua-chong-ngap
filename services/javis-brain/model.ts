@@ -1,4 +1,5 @@
 import 'server-only';
+import { httpProviderFailure, ProviderFailure } from '../../features/ai-brain/provider-failure';
 import { randomUUID } from 'node:crypto';
 import { DOSSIER_INSTRUCTION, validateDossierSnapshot, type DossierContext, type DossierSnapshot } from '../../features/customer-360/contracts';
 import { validateProviderProposal } from '../../features/ai-brain/validation';
@@ -488,7 +489,7 @@ export class JavisRuntimeBackend implements ModelBackend {
     const prompt = options.dossier ? `${DOSSIER_INSTRUCTION}\n\n${JSON.stringify(options.dossier)}` : `${JAVIS_BRAIN_SYSTEM_INSTRUCTION}\n\n${inquiryBlock}\n\nReturn strictly valid JSON only with {"decision": "RESPOND" | "HANDOVER" | "NO_REPLY", "confidence": number, "draft": string}:`;
     const formBody = new URLSearchParams({
       message: prompt,
-      session: options.dossier ? `crm_dossier_readonly_${randomUUID()}` : 'crm_shadow_readonly',
+      session: `crm_${options.dossier ? 'dossier' : 'turn'}_readonly_${randomUUID()}`,
     }).toString();
 
     let response: Response;
@@ -516,7 +517,7 @@ export class JavisRuntimeBackend implements ModelBackend {
           await response.body.cancel();
         } catch {}
       }
-      throw new Error('UPSTREAM_HTTP_ERROR');
+      throw httpProviderFailure('JAVIS_RUNTIME', response.status);
     }
 
     const clHeader = response.headers.get('content-length');
@@ -585,6 +586,17 @@ export class JavisRuntimeBackend implements ModelBackend {
     }
 
     const wrapperObj = javisWrapper as Record<string, unknown>;
+    if (wrapperObj.ok === false) {
+      // Javis /chat wraps model failures in HTTP 200. Inspect only known numeric
+      // status markers, never persist or log its free-form text.
+      const text = typeof wrapperObj.text === 'string' ? wrapperObj.text : '';
+      const marker = /(?:Gemini|OpenAI|Anthropic)\s+(400|401|403|404|408|429|5\d\d)\s*:/.exec(text);
+      const status = marker ? Number(marker[1]) : undefined;
+      throw new ProviderFailure(status === 429 ? 'MODEL_RATE_LIMIT'
+        : status === 408 ? 'MODEL_TIMEOUT'
+        : status && [400, 401, 403, 404].includes(status) ? 'MODEL_CONFIG_INVALID'
+        : 'MODEL_PROVIDER_ERROR', 'MODEL_PROVIDER', status);
+    }
     if (wrapperObj.ok !== true || typeof wrapperObj.text !== 'string' || !wrapperObj.text.trim()) {
       throw new Error('UPSTREAM_HTTP_ERROR');
     }

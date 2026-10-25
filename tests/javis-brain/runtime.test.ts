@@ -102,7 +102,7 @@ test('JavisRuntimeBackend: sends form-encoded request to /chat with Bearer token
   const sentMessage = params.get('message');
   assert.ok(sentMessage?.includes(inputText));
   assert.ok(sentMessage?.includes('CRITICAL SECURITY AND BEHAVIORAL CONSTRAINTS'));
-  assert.equal(params.get('session'), 'crm_shadow_readonly');
+  assert.match(params.get('session')!, /^crm_turn_readonly_[0-9a-f-]{36}$/);
 
   // Verify NO sensitive tokens or IDs in message
   assert.ok(!sentMessage?.includes(TEST_AUTH_TOKEN));
@@ -424,7 +424,7 @@ test('JavisRuntimeBackend: handles upstream HTTP error safely without leaking ra
 
   await assert.rejects(
     () => backend.generate('test', { signal: new AbortController().signal }),
-    { message: 'UPSTREAM_HTTP_ERROR' }
+    { message: 'RUNTIME_HTTP_ERROR' }
   );
 });
 
@@ -451,4 +451,33 @@ test('loadConfigFromEnv: throws when neither runtime nor Gemini is configured', 
   assert.throws(() => loadConfigFromEnv(env), {
     message: 'MISSING_BACKEND_CONFIGURATION',
   });
+});
+
+for (const [status, code] of [[401, 'RUNTIME_AUTH_FAILED'], [403, 'RUNTIME_AUTH_FAILED'], [500, 'RUNTIME_HTTP_ERROR']] as const) {
+  test(`runtime HTTP ${status} retains safe classification`, async () => {
+    const { fetchImpl } = mockJavisFetch('secret customer payload must not escape', status);
+    const backend = new JavisRuntimeBackend({ baseUrl: TEST_BASE_URL, internalToken: TEST_INTERNAL_TOKEN, customFetch: fetchImpl });
+    await assert.rejects(() => backend.generate('synthetic', { signal: new AbortController().signal }), { message: code });
+  });
+}
+for (const [text, code] of [
+  ['⚠ Gemini 404: {"error":{"message":"secret customer"}}', 'MODEL_CONFIG_INVALID'],
+  ['⚠ Gemini 429: rate limited', 'MODEL_RATE_LIMIT'],
+  ['⚠ OpenAI 408: timed out', 'MODEL_TIMEOUT'],
+  ['unknown error with private data', 'MODEL_PROVIDER_ERROR'],
+] as const) {
+  test(`runtime HTTP 200 ok:false is ${code}, never a proposal`, async () => {
+    const { fetchImpl } = mockJavisFetch({ ok: false, text });
+    const backend = new JavisRuntimeBackend({ baseUrl: TEST_BASE_URL, internalToken: TEST_INTERNAL_TOKEN, customFetch: fetchImpl });
+    await assert.rejects(() => backend.generate('synthetic', { signal: new AbortController().signal }), { message: code });
+  });
+}
+
+test('separate CRM turns never share a runtime session', async () => {
+  const { fetchImpl, capturedRequests } = mockJavisFetch({ ok: true, text: '{"decision":"NO_REPLY","confidence":1}' });
+  const backend = new JavisRuntimeBackend({ baseUrl: TEST_BASE_URL, internalToken: TEST_INTERNAL_TOKEN, customFetch: fetchImpl });
+  await backend.generate('synthetic A', { signal: new AbortController().signal });
+  await backend.generate('synthetic B', { signal: new AbortController().signal });
+  const sessions = capturedRequests.map(r => new URLSearchParams(String(r.init?.body)).get('session'));
+  assert.notEqual(sessions[0], sessions[1]);
 });

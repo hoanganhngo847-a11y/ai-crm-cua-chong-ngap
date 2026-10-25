@@ -1,4 +1,5 @@
 import 'server-only';
+import { providerDiagnostic } from '../../features/ai-brain/provider-failure';
 import { dossierContextSchema, validateDossierSnapshot, type DossierSnapshot, type DossierContext } from '../../features/customer-360/contracts';
 import http from 'node:http';
 import { validateProviderProposal } from '../../features/ai-brain/validation';
@@ -93,11 +94,13 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
       let traceId: string | null = null;
       let decision: 'RESPOND' | 'HANDOVER' | 'NO_REPLY' | 'ERROR' | null = null;
       let logged = false;
+      let upstream: ReturnType<typeof providerDiagnostic>;
 
       const finalizeLog = (status: number) => {
         if (logged) return;
         logged = true;
         emitAudit({
+          ...(upstream ? { upstream } : {}),
           turnId,
           traceId,
           latencyMs: Math.max(0, performance.now() - startTime),
@@ -450,6 +453,12 @@ export function createJavisBrainServer(options: JavisBrainServerOptions): http.S
           sendJson(res, 200, turnResponse);
           finalizeLog(200);
         } catch (err: unknown) {
+          upstream = providerDiagnostic(err);
+          if (upstream && !res.headersSent && !clientDisconnected) {
+            res.setHeader('X-AI-Brain-Error', upstream.code);
+            res.setHeader('X-AI-Brain-Phase', upstream.phase);
+            if (upstream.httpStatus) res.setHeader('X-AI-Brain-Upstream-Status', upstream.httpStatus);
+          }
           decision = 'ERROR';
           if (clientDisconnected) {
             // True client disconnect: prompt settlement, do not write to closed socket

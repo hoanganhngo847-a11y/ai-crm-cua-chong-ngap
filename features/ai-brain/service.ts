@@ -1,4 +1,5 @@
 import 'server-only';
+import { providerDiagnostic } from './provider-failure';
 import { randomUUID } from 'node:crypto';
 import type {
   BrainContextSelector, BrainDelivery, BrainErrorCode, BrainServerContext, BrainService,
@@ -91,11 +92,17 @@ export function createBrainService(options: BrainServiceOptions): BrainService {
         input: { text: input.input.text }, latencyProfile: input.latency ?? 'STANDARD',
         ...(context.grounding ? { grounding: context.grounding } : {}),
       });
-      // Throws from provider code are always provider failures, including forged internal
-      // error classes. Only this service's deadline can select the timeout code.
+      // Arbitrary throws and forged internal errors stay generic. Only diagnostics
+      // minted by our adapters may retain a classified upstream cause.
       let proposalRaw: unknown;
       try { proposalRaw = await bounded(() => provider.runTurn(request, { signal: controller.signal })); }
-      catch { throw new BrainBoundaryError(controller.signal.aborted ? 'BRAIN_TIMEOUT' : 'BRAIN_PROVIDER_ERROR'); }
+      catch (error) {
+        const diagnostic = providerDiagnostic(error);
+        console.error(JSON.stringify({ event: diagnostic?.retryable === false ? 'PROVIDER_CONFIGURATION_ALERT' : 'BRAIN_TURN_FAILED', turnId, traceId: context.traceId,
+          provider: providerId, latencyMs: Math.round(performance.now() - started),
+          ...(diagnostic ?? { code: controller.signal.aborted ? 'BRAIN_TIMEOUT' : 'BRAIN_PROVIDER_ERROR', phase: 'JAVIS_BRAIN' }) }));
+        throw new BrainBoundaryError(controller.signal.aborted ? 'BRAIN_TIMEOUT' : diagnostic?.code ?? 'BRAIN_PROVIDER_ERROR');
+      }
       const proposal = validateProviderProposal(proposalRaw);
       const deliveryMode: BrainDelivery =
         context?.deliveryMode === 'LIVE_SEND' &&
