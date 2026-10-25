@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/20261025051000_zalo_personal_zero_touch_customer_sync.sql'
+      - 'supabase/migrations/20261025062000_zalo_personal_legacy_identity_upgrade.sql'
       - 'tests/campaigns/zalo-contact-linking-db.test.ts'
+      - 'tests/campaigns/zalo-legacy-upgrade-db.test.ts'
       - 'tests/campaigns/zalo-zero-touch-runtime.test.ts'
       - '.github/workflows/zalo-zero-touch-ci.yml'
 
@@ -27,5 +29,7 @@ jobs:
         run: npx supabase db reset
       - name: Zero-touch database invariants
         run: npx tsx tests/campaigns/zalo-contact-linking-db.test.ts
+      - name: Legacy Zalo identity upgrade invariants
+        run: npx tsx tests/campaigns/zalo-legacy-upgrade-db.test.ts
       - name: Diff check
         run: git diff --check
