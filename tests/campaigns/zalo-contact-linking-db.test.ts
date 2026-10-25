@@ -108,72 +108,66 @@ function run(body: string) {
   assert.match(output, /ROLLBACK/);
 }
 
-test("contact sync never auto-links by display name; boss confirmation creates canonical route", () =>
+test("directory sync creates a canonical UID customer without matching same-name customers", () =>
   run(`
 SELECT public.sync_zalo_personal_contacts(
   '${company}',
   '[{"externalUserId":"${externalId}","displayName":"Trung Ten"}]'::jsonb
 );
-SELECT pg_temp.ok(
-  (SELECT count(*)=1
-     FROM public.zalo_personal_contact_candidates
-    WHERE company_id='${company}' AND external_id='${externalId}'
-      AND status='UNLINKED' AND linked_customer_id IS NULL),
-  'same display name does not auto-link candidate'
-);
-SELECT pg_temp.ok(
-  (SELECT count(*)=0 FROM public.identities
-    WHERE company_id='${company}' AND channel='ZALO' AND external_id='${externalId}'),
-  'same display name does not create identity'
-);
-CREATE TEMP TABLE candidate AS
-SELECT id FROM public.zalo_personal_contact_candidates
+CREATE TEMP TABLE canonical AS
+SELECT linked_customer_id AS id
+  FROM public.zalo_personal_contact_candidates
  WHERE company_id='${company}' AND external_id='${externalId}';
-SELECT public.link_zalo_personal_contact(
-  '${company}','${boss}',(SELECT id FROM candidate),'${customer}'
+SELECT pg_temp.ok(
+  (SELECT id IS NOT NULL AND id NOT IN ('${customer}'::uuid,'${otherCustomer}'::uuid) FROM canonical),
+  'same display name creates a separate UID-canonical customer'
+);
+SELECT pg_temp.ok(
+  (SELECT status='LINKED' FROM public.zalo_personal_contact_candidates
+    WHERE company_id='${company}' AND external_id='${externalId}'),
+  'candidate is zero-touch linked'
 );
 SELECT pg_temp.ok(
   (SELECT count(*)=1 FROM public.identities
-    WHERE company_id='${company}' AND customer_id='${customer}'
+    WHERE company_id='${company}' AND customer_id=(SELECT id FROM canonical)
       AND channel='ZALO' AND external_id='${externalId}'
-      AND metadata->>'provider'='zcajs'),
-  'confirmed link creates ZCAJS identity'
+      AND metadata->>'provider'='zcajs' AND metadata->>'zero_touch'='true'),
+  'zero-touch identity is canonical'
 );
 SELECT pg_temp.ok(
   (SELECT count(*)=1 FROM public.conversations
-    WHERE company_id='${company}' AND customer_id='${customer}'
+    WHERE company_id='${company}' AND customer_id=(SELECT id FROM canonical)
       AND channel='ZALO' AND external_conversation_id='${externalId}'
-      AND metadata->>'provider'='zcajs'),
-  'confirmed link creates canonical ZCAJS conversation route'
+      AND status='CLOSED' AND metadata->>'provider'='zcajs'
+      AND metadata->>'directory_materialized'='true'),
+  'closed directory conversation route is created for campaign eligibility'
 );
 SELECT pg_temp.ok(
-  (SELECT status='LINKED' AND linked_customer_id='${customer}'::uuid
-     FROM public.zalo_personal_contact_candidates
-    WHERE id=(SELECT id FROM candidate)),
-  'candidate is marked linked to confirmed customer'
+  (SELECT count(*)=3 FROM public.customers
+    WHERE company_id='${company}' AND name='Trung Ten'),
+  'no existing customer was reused by name'
 );
 SELECT public.sync_zalo_personal_contacts(
   '${company}',
   '[{"externalUserId":"${externalId}","displayName":"Trung Ten"}]'::jsonb
 );
 SELECT pg_temp.ok(
-  (SELECT linked_customer_id='${customer}'::uuid AND status='LINKED'
-     FROM public.zalo_personal_contact_candidates
-    WHERE id=(SELECT id FROM candidate)),
-  'future directory sync preserves confirmed link'
+  (SELECT count(*)=3 FROM public.customers
+    WHERE company_id='${company}' AND name='Trung Ten'),
+  'repeat sync is idempotent and does not create a duplicate canonical customer'
 );
 SELECT pg_temp.ok(
-  NOT has_function_privilege('anon','public.link_zalo_personal_contact(uuid,uuid,uuid,uuid)','EXECUTE')
-  AND NOT has_function_privilege('authenticated','public.link_zalo_personal_contact(uuid,uuid,uuid,uuid)','EXECUTE')
-  AND has_function_privilege('service_role','public.link_zalo_personal_contact(uuid,uuid,uuid,uuid)','EXECUTE'),
-  'link RPC remains server-only'
+  NOT has_function_privilege('anon','public.sync_zalo_personal_contacts(uuid,jsonb)','EXECUTE')
+  AND NOT has_function_privilege('authenticated','public.sync_zalo_personal_contacts(uuid,jsonb)','EXECUTE')
+  AND has_function_privilege('service_role','public.sync_zalo_personal_contacts(uuid,jsonb)','EXECUTE'),
+  'sync RPC remains server-only'
 );
 `));
 
-test("manual link rejects an exact ZCAJS UID already owned by another customer", () =>
+test("exact ZCAJS UID already owned by a customer is reused without creating another customer", () =>
   run(`
 INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified,metadata)
-VALUES('${company}','${otherCustomer}','ZALO','900000002',false,'{"provider":"zcajs"}');
+VALUES('${company}','${otherCustomer}','ZALO','900000002',false,'{"provider":"zcajs","source":"ZCAJS"}');
 SELECT public.sync_zalo_personal_contacts(
   '${company}',
   '[{"externalUserId":"900000002","displayName":"Other"}]'::jsonb
@@ -182,23 +176,21 @@ SELECT pg_temp.ok(
   (SELECT status='LINKED' AND linked_customer_id='${otherCustomer}'::uuid
      FROM public.zalo_personal_contact_candidates
     WHERE company_id='${company}' AND external_id='900000002'),
-  'exact existing ZCAJS identity is auto-recognized'
+  'exact existing ZCAJS identity is reused'
 );
-DO $$
-DECLARE cid uuid;
-BEGIN
-  SELECT id INTO cid FROM public.zalo_personal_contact_candidates
-   WHERE company_id='${company}' AND external_id='900000002';
-  BEGIN
-    PERFORM public.link_zalo_personal_contact('${company}','${boss}',cid,'${customer}');
-    RAISE EXCEPTION 'expected identity conflict';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%IDENTITY_CONFLICT%' THEN RAISE; END IF;
-  END;
-END $$;
+SELECT pg_temp.ok(
+  (SELECT count(*)=2 FROM public.customers WHERE company_id='${company}'),
+  'no duplicate customer is created for an exact ZCAJS identity'
+);
+SELECT pg_temp.ok(
+  (SELECT count(*)=1 FROM public.conversations
+    WHERE company_id='${company}' AND customer_id='${otherCustomer}'
+      AND external_conversation_id='900000002' AND metadata->>'provider'='zcajs'),
+  'missing canonical conversation is materialized for the exact identity'
+);
 `));
 
-test("numeric OA identity is never reclassified as a personal Zalo route", () =>
+test("numeric OA identity remains fail-closed and is never reclassified", () =>
   run(`
 INSERT INTO public.identities(company_id,customer_id,channel,external_id,verified,metadata)
 VALUES('${company}','${otherCustomer}','ZALO','900000003',true,'{"source":"ZALO_OA","oa_id":"oa-test"}');
@@ -210,7 +202,7 @@ SELECT pg_temp.ok(
   (SELECT status='UNLINKED' AND linked_customer_id IS NULL
      FROM public.zalo_personal_contact_candidates
     WHERE company_id='${company}' AND external_id='900000003'),
-  'official identity is not automatic evidence for personal Zalo'
+  'official identity blocks zero-touch personal materialization'
 );
 SELECT pg_temp.ok(
   (SELECT metadata->>'source'='ZALO_OA' AND metadata->>'provider' IS NULL
@@ -218,16 +210,14 @@ SELECT pg_temp.ok(
     WHERE company_id='${company}' AND external_id='900000003'),
   'official identity metadata is preserved'
 );
-DO $$
-DECLARE cid uuid;
-BEGIN
-  SELECT id INTO cid FROM public.zalo_personal_contact_candidates
-   WHERE company_id='${company}' AND external_id='900000003';
-  BEGIN
-    PERFORM public.link_zalo_personal_contact('${company}','${boss}',cid,'${customer}');
-    RAISE EXCEPTION 'expected route conflict';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%IDENTITY_ROUTE_CONFLICT%' THEN RAISE; END IF;
-  END;
-END $$;
+SELECT pg_temp.ok(
+  (SELECT metadata->>'zero_touch_blocked'='true'
+     FROM public.zalo_personal_contact_candidates
+    WHERE company_id='${company}' AND external_id='900000003'),
+  'route conflict is recorded without sending or guessing'
+);
+SELECT pg_temp.ok(
+  (SELECT count(*)=2 FROM public.customers WHERE company_id='${company}'),
+  'route conflict never creates an ambiguous customer'
+);
 `));
