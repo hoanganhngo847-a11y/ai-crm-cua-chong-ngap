@@ -13,12 +13,12 @@ test("zero-touch sync never uses display name as an identity key", () => {
   assert.doesNotMatch(migration, /lower\([^\n]*name[^\n]*\)\s*=\s*lower/i);
 });
 
-test("zero-touch sync materializes customer identity and closed conversation route", () => {
+test("zero-touch sync materializes Customer 360 plus identity without a synthetic Inbox conversation", () => {
   assert.match(migration, /INSERT INTO public\.customers/);
   assert.match(migration, /INSERT INTO public\.identities/);
-  assert.match(migration, /INSERT INTO public\.conversations/);
-  assert.match(migration, /'CLOSED'/);
-  assert.match(migration, /'directory_materialized',true/);
+  assert.doesNotMatch(migration, /INSERT INTO public\.conversations/);
+  assert.match(migration, /a real conversation is optional/i);
+  assert.match(migration, /conversation_id',conv\.id/);
 });
 
 test("official Zalo routes remain fail-closed", () => {
