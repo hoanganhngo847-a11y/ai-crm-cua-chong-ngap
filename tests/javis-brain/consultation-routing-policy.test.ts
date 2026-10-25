@@ -8,3 +8,10 @@ test('Javis Brain policy does not treat generic consultation as an explicit huma
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /CUSTOMER_REQUESTED_HUMAN/);
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /only when the customer explicitly asks/i);
 });
+
+test('Javis Brain continues replying to short contextual customer follow-ups', () => {
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Every new inbound customer message is a new turn/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /there is no one-reply-per-conversation limit/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Do not choose "NO_REPLY" only because a message is short/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /clear final closure/i);
+});
