@@ -81,7 +81,10 @@ const company = "ce000000-0000-4000-8000-000000000001";
 const boss = "ce000000-0000-4000-8000-000000000002";
 const customer = "ce000000-0000-4000-8000-000000000011";
 const otherCustomer = "ce000000-0000-4000-8000-000000000012";
+const sender = "ce000000-0000-4000-8000-000000000021";
+const template = "ce000000-0000-4000-8000-000000000031";
 const externalId = "900000001";
+const logicalSender = `zcajs:${company}`;
 
 const setup = `BEGIN;
 CREATE FUNCTION pg_temp.ok(ok boolean,label text) RETURNS void LANGUAGE plpgsql AS $$
@@ -135,12 +138,10 @@ SELECT pg_temp.ok(
   'zero-touch identity is canonical'
 );
 SELECT pg_temp.ok(
-  (SELECT count(*)=1 FROM public.conversations
+  (SELECT count(*)=0 FROM public.conversations
     WHERE company_id='${company}' AND customer_id=(SELECT id FROM canonical)
-      AND channel='ZALO' AND external_conversation_id='${externalId}'
-      AND status='CLOSED' AND metadata->>'provider'='zcajs'
-      AND metadata->>'directory_materialized'='true'),
-  'closed directory conversation route is created for campaign eligibility'
+      AND channel='ZALO' AND external_conversation_id='${externalId}'),
+  'directory sync does not create a synthetic Inbox conversation'
 );
 SELECT pg_temp.ok(
   (SELECT count(*)=3 FROM public.customers
@@ -183,10 +184,59 @@ SELECT pg_temp.ok(
   'no duplicate customer is created for an exact ZCAJS identity'
 );
 SELECT pg_temp.ok(
-  (SELECT count(*)=1 FROM public.conversations
-    WHERE company_id='${company}' AND customer_id='${otherCustomer}'
-      AND external_conversation_id='900000002' AND metadata->>'provider'='zcajs'),
-  'missing canonical conversation is materialized for the exact identity'
+  (SELECT count(*)=0 FROM public.conversations
+    WHERE company_id='${company}' AND external_conversation_id='900000002'),
+  'identity-only contact stays out of Inbox until a real conversation arrives'
+);
+`));
+
+test("directory-only canonical customer is campaign-eligible directly from its ZCAJS identity", () =>
+  run(`
+INSERT INTO public.messaging_campaign_settings(company_id,enabled,sale_execute)
+VALUES('${company}',true,false);
+INSERT INTO public.zalo_oa_configs(company_id,oa_id,app_id,status)
+VALUES('${company}','${logicalSender}','ZCAJS','ACTIVE');
+INSERT INTO public.messaging_sender_accounts(
+  id,company_id,channel,external_id,name,connected,verified
+) VALUES(
+  '${sender}','${company}','ZALO_PERSONAL','${logicalSender}','Zalo cá nhân',true,true
+);
+INSERT INTO public.message_templates(
+  id,company_id,name,channel,template_type,content,status,created_by
+) VALUES(
+  '${template}','${company}','Zero touch personal','ZALO_PERSONAL','ZALO_PERSONAL_TEXT',
+  'Chao {{customer_name}}','ACTIVE','${boss}'
+);
+SELECT public.sync_zalo_personal_contacts(
+  '${company}',
+  '[{"externalUserId":"900000004","displayName":"Zero Touch"}]'::jsonb
+);
+CREATE TEMP TABLE canonical AS
+SELECT linked_customer_id AS id
+  FROM public.zalo_personal_contact_candidates
+ WHERE company_id='${company}' AND external_id='900000004';
+CREATE TEMP TABLE camp AS
+SELECT (public.campaign_command(
+  '${company}','${boss}','create',jsonb_build_object(
+    'request_id',gen_random_uuid(),
+    'name','Zero touch send',
+    'channel','ZALO_PERSONAL',
+    'sender_account_id','${sender}',
+    'template_id','${template}',
+    'customer_ids',jsonb_build_array((SELECT id FROM canonical))
+  )
+)->>'id')::uuid AS id;
+SELECT public.campaign_command(
+  '${company}','${boss}','validate',jsonb_build_object('id',(SELECT id FROM camp))
+);
+SELECT pg_temp.ok(
+  (SELECT eligible_count=1 FROM public.messaging_campaigns WHERE id=(SELECT id FROM camp)),
+  'directory-only canonical customer is eligible'
+);
+SELECT pg_temp.ok(
+  (SELECT eligibility_status='ELIGIBLE' AND channel_identity_id IS NOT NULL AND conversation_id IS NULL
+     FROM public.messaging_campaign_recipients WHERE campaign_id=(SELECT id FROM camp)),
+  'campaign recipient uses identity UID directly without a conversation'
 );
 `));
 
