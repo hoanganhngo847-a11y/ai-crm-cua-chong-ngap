@@ -36,8 +36,16 @@ async function isLocalWorkerReady() {
 async function syncContacts() {
   if (!COMPANY_ID || !CRM_BASE_URL || !WORKER_SECRET) return;
   if (Date.now() < nextContactSyncAt) return;
+
+  const ready = await isLocalWorkerReady();
+  if (!ready) {
+    // Retry shortly if local worker is not ready yet instead of waiting a full cycle
+    nextContactSyncAt = Date.now() + 5000;
+    return;
+  }
+
+  // Schedule next routine sync
   nextContactSyncAt = Date.now() + CONTACT_SYNC_INTERVAL_MS;
-  if (!(await isLocalWorkerReady())) return;
 
   try {
     const directoryResponse = await fetch(
@@ -64,7 +72,10 @@ async function syncContacts() {
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
-      console.warn(`[ZCAJS] contact sync failed: CRM HTTP ${response.status}`);
+      const errBody = await response.json().catch(() => null);
+      console.warn(
+        `[ZCAJS] contact sync failed: CRM HTTP ${response.status} error=${errBody?.error || 'UNKNOWN'}`
+      );
       return;
     }
     const result = await response.json().catch(() => null);

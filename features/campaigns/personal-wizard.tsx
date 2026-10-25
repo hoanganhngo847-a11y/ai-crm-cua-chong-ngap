@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   runCampaignCommand,
   loadCampaignPreview,
+  listPersonalZaloContactsAction,
   syncPersonalZaloContactsAction,
   linkPersonalZaloContactAction,
 } from "../../app/actions/campaigns";
@@ -179,13 +180,29 @@ export function PersonalZaloCampaignWizard({
     }
   }
 
-  async function refreshContacts(target?: LinkTarget) {
-    if (contactBusy) return;
-    if (target) {
-      setLinkTarget(target);
-      setSelectedCandidate("");
-      setLinkModal(true);
+  async function openContactLinker(target: LinkTarget) {
+    setLinkTarget(target);
+    setSelectedCandidate("");
+    setContactMessage("");
+    setLinkModal(true);
+
+    if (contactCandidates.length === 0) {
+      setContactBusy(true);
+      try {
+        const res = await listPersonalZaloContactsAction();
+        if (res.ok && res.candidates.length > 0) {
+          setContactCandidates(res.candidates);
+        } else {
+          await triggerSyncContacts();
+        }
+      } finally {
+        setContactBusy(false);
+      }
     }
+  }
+
+  async function triggerSyncContacts() {
+    if (contactBusy) return;
     setContactBusy(true);
     setContactMessage("Đang đồng bộ danh bạ Zalo cá nhân…");
     try {
@@ -400,7 +417,7 @@ export function PersonalZaloCampaignWizard({
                   Đã chọn {campaign.selected_count} · Có thể gửi {campaign.eligible_count} · Bị loại {campaign.selected_count - campaign.eligible_count}
                 </p>
               </div>
-              <Button variant="outline" disabled={contactBusy} onClick={() => void refreshContacts()}>
+              <Button variant="outline" disabled={contactBusy} onClick={() => void triggerSyncContacts()}>
                 {contactBusy ? "Đang đồng bộ…" : "Đồng bộ danh bạ Zalo"}
               </Button>
             </div>
@@ -422,7 +439,7 @@ export function PersonalZaloCampaignWizard({
                         size="xs"
                         variant="outline"
                         disabled={contactBusy}
-                        onClick={() => void refreshContacts({
+                        onClick={() => void openContactLinker({
                           customerId: recipient.customer_id,
                           customerName: recipient.recipient_snapshot.name,
                         })}
@@ -524,20 +541,41 @@ export function PersonalZaloCampaignWizard({
             Chọn đúng tài khoản Zalo của <strong>{linkTarget?.customerName || "khách hàng"}</strong>.
             Hệ thống không tự ghép theo tên để tránh gửi nhầm người.
           </p>
-          {contactBusy && <p>Đang đồng bộ danh bạ Zalo cá nhân…</p>}
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-xs text-[var(--text-secondary)]">
+              {contactCandidates.length > 0
+                ? `${contactCandidates.length} liên hệ chưa gắn`
+                : "Chưa có liên hệ"}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={contactBusy}
+              onClick={() => void triggerSyncContacts()}
+            >
+              {contactBusy ? "Đang đồng bộ…" : "Đồng bộ danh bạ Zalo"}
+            </Button>
+          </div>
+
+          {contactBusy && <p className="text-sm text-[var(--text-secondary)]">Đang đồng bộ danh bạ Zalo cá nhân…</p>}
           {!contactBusy && contactCandidates.length === 0 && (
-            <p>Chưa tìm thấy liên hệ Zalo nào chưa được gắn với Customer 360.</p>
+            <p className="text-sm text-[var(--text-secondary)]">
+              Chưa tìm thấy liên hệ Zalo chưa liên kết. Hãy đồng bộ lại danh bạ.
+            </p>
           )}
           {contactCandidates.length > 0 && (
             <label className="block space-y-1">
               <span className="font-medium">Liên hệ Zalo chưa liên kết</span>
               <select className={field} value={selectedCandidate} onChange={(e) => setSelectedCandidate(e.target.value)}>
                 <option value="">Chọn đúng người trên Zalo</option>
-                {contactCandidates.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.display_name || "Liên hệ Zalo chưa có tên"}
-                  </option>
-                ))}
+                {[...contactCandidates]
+                  .sort((a, b) => (a.display_name || "").localeCompare(b.display_name || "", "vi"))
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.display_name || "Liên hệ Zalo chưa có tên"}
+                    </option>
+                  ))}
               </select>
             </label>
           )}

@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { campaignCommand } from "../../features/campaigns/service";
 import {
   linkPersonalZaloContactToCustomer,
+  listPersonalZaloContactCandidates,
   syncPersonalZaloContactCandidates,
   type PersonalZaloContactCandidate,
 } from "../../features/campaigns/zalo-contact-linking";
@@ -35,6 +36,24 @@ export async function loadCampaignPreview(id: string) {
   }
 }
 
+export async function listPersonalZaloContactsAction(): Promise<{
+  ok: boolean;
+  candidates: PersonalZaloContactCandidate[];
+  message?: string;
+}> {
+  try {
+    const candidates = await listPersonalZaloContactCandidates();
+    return { ok: true, candidates };
+  } catch (error) {
+    console.error("[listPersonalZaloContactsAction] error:", error);
+    return {
+      ok: false,
+      candidates: [],
+      message: "Không tải được danh sách liên hệ Zalo chưa liên kết.",
+    };
+  }
+}
+
 export async function syncPersonalZaloContactsAction(): Promise<{
   ok: boolean;
   candidates: PersonalZaloContactCandidate[];
@@ -52,7 +71,8 @@ export async function syncPersonalZaloContactsAction(): Promise<{
       autoLinked: result.autoLinked,
       message: `Đã đồng bộ ${result.seen} liên hệ Zalo.`,
     };
-  } catch {
+  } catch (error) {
+    console.error("[syncPersonalZaloContactsAction] error:", error);
     return {
       ok: false,
       candidates: [],
@@ -73,6 +93,7 @@ export async function linkPersonalZaloContactAction(input: {
     revalidatePath("/customers/dossier");
     return { ok: true, message: "Đã liên kết đúng tài khoản Zalo với khách hàng." };
   } catch (error) {
+    console.error("[linkPersonalZaloContactAction] error:", error);
     const code = error instanceof Error ? error.message : "";
     return {
       ok: false,
