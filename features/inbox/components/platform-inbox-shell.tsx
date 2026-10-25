@@ -15,6 +15,7 @@ import {
   Video,
 } from 'lucide-react';
 import InboxView from './inbox-view';
+import { buildZaloHandoffTarget, normalizeZaloPhone } from '../utils/zalo-handoff';
 import './platform-inbox-shell.css';
 
 interface PlatformInboxShellProps {
@@ -28,21 +29,15 @@ type NativeChannel = 'zalo' | 'facebook' | 'none';
 type HandoffNotice = {
   mode: 'audio' | 'video';
   targeted: boolean;
-  fallbackUrl: string;
+  fallbackUrl: string | null;
+  targetKind: 'phone' | 'uid' | 'none';
 } | null;
 
-function normalizeVisiblePhone(value: string | null | undefined): string | null {
-  if (!value || value.includes('*')) return null;
-  let digits = value.replace(/[^0-9+]/g, '');
-  if (!digits) return null;
+const CUSTOMER_CALL_HREF_REGEX = /^\/calls\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-  if (/^\+84[1-9][0-9]{7,12}$/.test(digits)) {
-    digits = `0${digits.slice(3)}`;
-  } else if (/^84[1-9][0-9]{7,12}$/.test(digits)) {
-    digits = `0${digits.slice(2)}`;
-  }
-
-  return /^0[1-9][0-9]{7,12}$/.test(digits) ? digits : null;
+function customerIdFromCallHref(href: string | null): string | null {
+  if (!href) return null;
+  return href.match(CUSTOMER_CALL_HREF_REGEX)?.[1] || null;
 }
 
 function IconButton({
@@ -88,6 +83,7 @@ export default function PlatformInboxShell({
   const [fileCount, setFileCount] = useState(0);
   const [linkCount, setLinkCount] = useState(0);
   const [handoffNotice, setHandoffNotice] = useState<HandoffNotice>(null);
+  const [zaloTargetLoading, setZaloTargetLoading] = useState(false);
 
   const getWorkspaceParts = useCallback(() => {
     const root = shellRef.current?.firstElementChild as HTMLElement | null;
@@ -115,7 +111,7 @@ export default function PlatformInboxShell({
     const row = phoneLabel?.parentElement;
     if (!row) return null;
     const value = row.lastElementChild?.textContent?.trim() || '';
-    return normalizeVisiblePhone(value);
+    return normalizeZaloPhone(value);
   }, []);
 
   const refreshDomBinding = useCallback(() => {
@@ -136,7 +132,7 @@ export default function PlatformInboxShell({
       callLink.dataset.nativeCallLink = 'true';
       callLink.title =
         nextChannel === 'zalo'
-          ? 'Mở cuộc trò chuyện trên Zalo PC để gọi khách'
+          ? 'Mở đúng cuộc trò chuyện Zalo của khách để gọi'
           : 'Gọi khách';
     }
 
@@ -229,37 +225,67 @@ export default function PlatformInboxShell({
   }, [searchTerm, channel, getWorkspaceParts]);
 
   const openZaloHandoff = useCallback(
-    (mode: 'audio' | 'video') => {
+    async (mode: 'audio' | 'video') => {
       const phone = extractVisiblePhone();
-      const targeted = Boolean(phone);
-      const fallbackUrl = phone
-        ? `https://chat.zalo.me/?phone=${encodeURIComponent(phone!)}&openConv=true`
-        : 'https://chat.zalo.me/';
-      const deepLink = phone
-        ? `zalo://conversation?phone=${encodeURIComponent(phone!)}`
-        : 'zalo://';
+      const customerId = customerIdFromCallHref(callHref);
+      let uid: string | null = null;
 
-      setHandoffNotice({ mode, targeted, fallbackUrl });
+      setZaloTargetLoading(true);
+      try {
+        if (customerId) {
+          const response = await fetch(
+            `/api/inbox/zalo-call-target?customer_id=${encodeURIComponent(customerId)}`,
+            { cache: 'no-store' }
+          );
+          const payload = await response.json().catch(() => null) as
+            | { success?: boolean; data?: { uid?: unknown } }
+            | null;
+          if (response.ok && payload?.success && typeof payload.data?.uid === 'string') {
+            uid = payload.data.uid;
+          }
+        }
 
-      // Best effort only. Zalo does not publish a stable desktop URI for directly
-      // starting a personal voice/video call. When a full phone is already visible
-      // to the current actor we ask Zalo PC to open that conversation; otherwise we
-      // open Zalo without leaking masked/private phone data.
-      window.location.href = deepLink;
+        const target = buildZaloHandoffTarget({ phone, uid });
+        setHandoffNotice({
+          mode,
+          targeted: target.targeted,
+          fallbackUrl: target.webUrl,
+          targetKind: target.targetKind,
+        });
+
+        if (!target.targeted) return;
+
+        if (target.deepLink) {
+          // Full phone is available to the current actor: ask the installed Zalo PC
+          // client to open that exact conversation. The UID-based Web link remains
+          // available in the toast as a deterministic fallback.
+          window.location.href = target.deepLink;
+          return;
+        }
+
+        if (target.webUrl) {
+          // UID-only contacts (the normal ZCAJS directory case) cannot be targeted
+          // through Zalo's public desktop phone URI. Open the exact Zalo Web thread
+          // by UID instead of dumping the sale into generic Zalo search.
+          window.open(target.webUrl, '_blank', 'noopener,noreferrer');
+        }
+      } finally {
+        setZaloTargetLoading(false);
+      }
     },
-    [extractVisiblePhone]
+    [callHref, extractVisiblePhone]
   );
 
   const handleAudioCall = useCallback(() => {
     if (channel === 'zalo') {
-      openZaloHandoff('audio');
+      void openZaloHandoff('audio');
       return;
     }
     if (callHref) window.location.href = callHref;
   }, [callHref, channel, openZaloHandoff]);
 
   const handleVideoCall = useCallback(() => {
-    if (channel === 'zalo') openZaloHandoff('video');
+    if (channel === 'zalo') void openZaloHandoff('video');
   }, [channel, openZaloHandoff]);
 
   return (
@@ -280,20 +306,24 @@ export default function PlatformInboxShell({
           <>
             <div className="platform-native-divider" />
             <IconButton
-              title={channel === 'zalo' ? 'Gọi qua Zalo PC' : 'Gọi khách'}
+              title={channel === 'zalo' ? 'Mở đúng chat Zalo để gọi' : 'Gọi khách'}
               onClick={handleAudioCall}
-              disabled={channel === 'none' || (channel === 'facebook' && !callHref)}
+              disabled={
+                zaloTargetLoading ||
+                channel === 'none' ||
+                (channel === 'facebook' && !callHref)
+              }
             >
               <Phone size={17} />
             </IconButton>
             <IconButton
               title={
                 channel === 'zalo'
-                  ? 'Mở Zalo PC để gọi video'
+                  ? 'Mở đúng chat Zalo để gọi video'
                   : 'Messenger video call chưa được tích hợp vào CRM'
               }
               onClick={handleVideoCall}
-              disabled={channel !== 'zalo'}
+              disabled={zaloTargetLoading || channel !== 'zalo'}
             >
               <Video size={18} />
             </IconButton>
@@ -367,16 +397,17 @@ export default function PlatformInboxShell({
               <button
                 type="button"
                 className="platform-open-provider-button"
-                onClick={() => openZaloHandoff('audio')}
+                onClick={() => void openZaloHandoff('audio')}
+                disabled={zaloTargetLoading}
               >
                 <ExternalLink size={15} />
-                <span>Mở cuộc trò chuyện trên Zalo PC</span>
+                <span>Mở đúng cuộc trò chuyện trên Zalo</span>
               </button>
             )}
 
             <p className="platform-context-note">
               {channel === 'zalo'
-                ? 'Ghim, phân loại, tắt thông báo và các thao tác chỉ có trên Zalo được thực hiện trong Zalo PC để tránh giả lập trạng thái không đồng bộ.'
+                ? 'CRM dùng đúng định danh Zalo của khách để mở hội thoại; không tìm theo tên. Nếu có số đầy đủ sẽ ưu tiên Zalo PC, nếu chỉ có UID sẽ mở thẳng đúng hội thoại Zalo Web.'
                 : 'Các thao tác CRM, AI và trạng thái giao nhận vẫn dùng dữ liệu thật của hệ thống; các nút chưa được Meta hỗ trợ sẽ không được giả lập.'}
             </p>
           </div>,
@@ -389,16 +420,26 @@ export default function PlatformInboxShell({
             {handoffNotice.mode === 'video' ? <Video size={18} /> : <Phone size={18} />}
           </div>
           <div className="platform-handoff-copy">
-            <strong>Đang mở Zalo PC</strong>
+            <strong>
+              {handoffNotice.targetKind === 'phone'
+                ? 'Đang mở đúng chat trên Zalo PC'
+                : handoffNotice.targetKind === 'uid'
+                  ? 'Đã mở đúng chat Zalo của khách'
+                  : 'Chưa có định danh Zalo cá nhân'}
+            </strong>
             <span>
-              {handoffNotice.targeted
-                ? 'CRM đã yêu cầu Zalo mở cuộc trò chuyện của khách. Sau khi Zalo hiện lên, bấm biểu tượng gọi ở góc trên.'
-                : 'CRM không được phép lộ số điện thoại đầy đủ cho tài khoản này, nên chỉ mở Zalo. Tìm khách rồi bấm biểu tượng gọi.'}
+              {handoffNotice.targetKind === 'phone'
+                ? 'CRM đã định tuyến đúng khách. Sau khi Zalo PC hiện lên, bấm biểu tượng gọi ở góc trên.'
+                : handoffNotice.targetKind === 'uid'
+                  ? 'Khách này chưa có số điện thoại trong CRM, nên hệ thống mở đúng hội thoại Zalo Web bằng UID. Bạn có thể gọi ngay trong hội thoại đó.'
+                  : 'CRM không tìm thấy UID Zalo cá nhân chính xác của khách này nên không mở Zalo chung và không đoán theo tên.'}
             </span>
           </div>
-          <a href={handoffNotice.fallbackUrl} target="_blank" rel="noreferrer">
-            Mở Zalo Web
-          </a>
+          {handoffNotice.fallbackUrl && (
+            <a href={handoffNotice.fallbackUrl} target="_blank" rel="noreferrer">
+              Mở đúng chat Zalo
+            </a>
+          )}
           <button type="button" onClick={() => setHandoffNotice(null)} aria-label="Đóng thông báo">
             ×
           </button>
