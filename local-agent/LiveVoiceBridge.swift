@@ -175,6 +175,9 @@ final class LiveVoiceBridge {
     private var sessionId: String?
     private var stopped = false
     private var started = false
+    private var socketReady = false
+    private var pendingInput: [Data] = []
+    private let maxPendingInputChunks = 150
     private var failure: String?
 
     init(requestId: String? = nil, localCallId: String, remoteDisplayName: String? = nil,
@@ -201,7 +204,18 @@ final class LiveVoiceBridge {
     func sendInputPCM16(_ data: Data) {
         guard !data.isEmpty else { return }
         sendQueue.async { [weak self] in
-            guard let self, !self.stopped, let socket = self.socket else { return }
+            guard let self, !self.stopped else { return }
+            guard self.socketReady, let socket = self.socket else {
+                if self.pendingInput.count < self.maxPendingInputChunks {
+                    self.pendingInput.append(data)
+                }
+                return
+            }
+            self.sendInputFrame(data, on: socket)
+        }
+    }
+
+    private func sendInputFrame(_ data: Data, on socket: URLSessionWebSocketTask) {
             let event: [String: Any] = [
                 "realtimeInput": [
                     "audio": [
@@ -215,7 +229,6 @@ final class LiveVoiceBridge {
             socket.send(.string(text)) { error in
                 if let error { self.fail("WebSocket audio send failed: \(error.localizedDescription)") }
             }
-        }
     }
 
     func stop() {
@@ -280,6 +293,7 @@ final class LiveVoiceBridge {
         }
         let task = URLSession.shared.webSocketTask(with: URLRequest(url: url))
         socket = task
+        socketReady = false
         task.resume()
         started = true
         let setupPayload: [String: Any] = [
@@ -290,11 +304,24 @@ final class LiveVoiceBridge {
         if let data = try? JSONSerialization.data(withJSONObject: setup),
            let text = String(data: data, encoding: .utf8) {
             task.send(.string(text)) { [weak self] error in
-                if let error { self?.fail("Gemini Live setup failed: \(error.localizedDescription)") }
+                guard let self else { return }
+                self.sendQueue.async {
+                    guard !self.stopped else { return }
+                    if let error {
+                        self.fail("Gemini Live setup failed: \(error.localizedDescription)")
+                        return
+                    }
+                    self.socketReady = true
+                    let queued = self.pendingInput
+                    self.pendingInput.removeAll(keepingCapacity: true)
+                    for data in queued {
+                        self.sendInputFrame(data, on: task)
+                    }
+                    print("[LiveVoice] Gemini Live bridge connected; audio output is isolated to configured virtual device.")
+                }
             }
         }
         receiveNext()
-        print("[LiveVoice] Gemini Live bridge connected; audio output is isolated to configured virtual device.")
     }
 
     private func receiveNext() {
