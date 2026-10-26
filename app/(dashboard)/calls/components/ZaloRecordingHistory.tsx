@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Loader2,
 } from 'lucide-react';
 
 type Call = Awaited<ReturnType<typeof listZaloCalls>>['items'][number];
@@ -45,6 +46,7 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
   const [remember, setRemember] = useState(false);
   const [newName, setNewName] = useState(call.remote_display_name || '');
   const [creating, setCreating] = useState(false);
+  const [showRelink, setShowRelink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [audio, setAudio] = useState('');
@@ -73,17 +75,48 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
   useEffect(() => {
     if (call.customer_id) return;
     let active = true;
+    // Automatically link unlinked calls immediately without manual user intervention
     searchZaloCustomers(call.id)
-      .then((items) => {
-        if (active) setCandidates(items);
+      .then(async (items) => {
+        if (!active) return;
+        if (items.length > 0) {
+          await linkZaloCustomer(call.id, items[0].id, true);
+        } else {
+          const autoName =
+            call.remote_display_name && call.remote_display_name !== 'Chưa xác định tên'
+              ? call.remote_display_name
+              : `Khách Zalo ${new Date(call.started_at).toLocaleString('vi-VN', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`;
+          await linkZaloCustomer(call.id, null, true, autoName);
+        }
+        if (active) onLinked();
       })
-      .catch(() => {
-        if (active) setError('Không tải được gợi ý.');
+      .catch(async () => {
+        if (!active) return;
+        const autoName =
+          call.remote_display_name && call.remote_display_name !== 'Chưa xác định tên'
+            ? call.remote_display_name
+            : `Khách Zalo ${new Date(call.started_at).toLocaleString('vi-VN', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}`;
+        try {
+          await linkZaloCustomer(call.id, null, true, autoName);
+          if (active) onLinked();
+        } catch {
+          // ignore
+        }
       });
     return () => {
       active = false;
     };
-  }, [call.id, call.customer_id]);
+  }, [call.id, call.customer_id, call.remote_display_name, call.started_at, onLinked]);
 
   async function perform(operation: () => Promise<void>) {
     setBusy(true);
@@ -124,9 +157,18 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
     setError('');
     try {
       await retryZaloTranscription(call.id);
-      setTranscriptStatus('PENDING');
-      setTranscript(null);
-      setExpanded(false);
+      const data = await getZaloTranscription(call.id);
+      setTranscript(data);
+      if (data?.status) setTranscriptStatus(data.status);
+      if (data?.status === 'COMPLETED') {
+        setExpanded(true);
+        // Also refresh summary if ready
+        const sumData = await getZaloCallSummary(call.id).catch(() => null);
+        if (sumData) {
+          setSummary(sumData);
+          if (sumData.status) setSummaryStatus(sumData.status);
+        }
+      }
     } catch {
       setError('Không thể yêu cầu thử lại bóc băng. Vui lòng thử lại sau.');
     } finally {
@@ -161,9 +203,12 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
     setError('');
     try {
       await retryZaloCallSummaryAction(call.id);
-      setSummaryStatus('PENDING');
-      setSummary(null);
-      setExpandedSummary(false);
+      const data = await getZaloCallSummary(call.id);
+      setSummary(data);
+      if (data?.status) setSummaryStatus(data.status);
+      if (data?.status === 'COMPLETED') {
+        setExpandedSummary(true);
+      }
     } catch {
       setError('Không thể yêu cầu thử lại tóm tắt AI. Vui lòng thử lại sau.');
     } finally {
@@ -253,25 +298,47 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
 
       {/* Customer Linking Section */}
       {call.customer_id ? (
-        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] flex-wrap">
           <span>Khách hàng gắn kết:</span>
           <Link
             href={`/customers/${call.customer_id}/dossier`}
             className="font-medium text-[var(--accent)] hover:underline"
           >
-            {customer?.name || 'Xem hồ sơ 360'}
+            {customer?.name || call.remote_display_name || 'Xem hồ sơ 360'}
           </Link>
           {customer?.customer_code && (
             <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
               ({customer.customer_code})
             </span>
           )}
+          <button
+            type="button"
+            onClick={() => setShowRelink((v) => !v)}
+            className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--accent)] underline ml-auto cursor-pointer"
+          >
+            {showRelink ? 'Đóng' : 'Đổi liên kết'}
+          </button>
         </div>
       ) : (
+        <div className="flex items-center justify-between gap-2 text-xs text-[var(--text-secondary)] p-2 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent)]" />
+            <span>Đang tự động liên kết hồ sơ khách hàng...</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowRelink((v) => !v)}
+            className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--accent)] underline cursor-pointer"
+          >
+            {showRelink ? 'Đóng' : 'Liên kết thủ công'}
+          </button>
+        </div>
+      )}
+
+      {showRelink && (
         <div className="p-3 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-2.5 text-xs">
-          <div className="flex items-center gap-1.5 text-amber-700 font-medium">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Cuộc gọi Zalo mới • Khách hàng chưa liên kết</span>
+          <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-medium">
+            <span>Tìm kiếm &amp; chọn khách hàng liên kết</span>
           </div>
 
           <form
@@ -356,6 +423,7 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
               onClick={() =>
                 perform(async () => {
                   await linkZaloCustomer(call.id, selected, remember);
+                  setShowRelink(false);
                   onLinked();
                 })
               }
@@ -384,6 +452,7 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
                 e.preventDefault();
                 perform(async () => {
                   await linkZaloCustomer(call.id, null, remember, newName);
+                  setShowRelink(false);
                   onLinked();
                 });
               }}
@@ -424,6 +493,8 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
                   ? 'success'
                   : summaryStatus === 'FAILED'
                   ? 'danger'
+                  : summaryStatus === 'NOT_STARTED'
+                  ? 'neutral'
                   : 'warning'
               }
               size="xs"
@@ -432,6 +503,8 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
                 ? 'Đã tóm tắt'
                 : summaryStatus === 'FAILED'
                 ? 'Thất bại'
+                : summaryStatus === 'NOT_STARTED'
+                ? 'Chưa tóm tắt'
                 : 'Đang xử lý'}
             </Badge>
           </div>
