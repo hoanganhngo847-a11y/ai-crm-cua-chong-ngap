@@ -137,6 +137,12 @@ export async function POST(request: Request) {
         const message = inboundError?.message || '';
         if (message.includes('ZALO_DEVICE_UNAUTHORIZED')) throw new RecordingError('DEVICE_UNAUTHORIZED', 401);
         if (message.includes('ZALO_LIVE_SESSION_CONFLICT')) throw new RecordingError('LIVE_SESSION_CONFLICT', 409);
+        if (message.includes('ZALO_LIVE_SESSION_EXPIRED') || message.includes('ZALO_LIVE_SESSION_TERMINAL')) {
+          throw new RecordingError('LIVE_SESSION_EXPIRED', 409);
+        }
+        if (message.includes('zalo_begin_inbound_live_voice_session') || message.includes('does not exist')) {
+          throw new RecordingError('LIVE_VOICE_SCHEMA_UNAVAILABLE', 503);
+        }
         throw new RecordingError('LIVE_SESSION_UNAVAILABLE', 503);
       }
       const inboundId = typeof inboundSession.session_id === 'string' && UUID.test(inboundSession.session_id)
@@ -144,6 +150,9 @@ export async function POST(request: Request) {
       const companyId = typeof inboundSession.company_id === 'string' && UUID.test(inboundSession.company_id)
         ? inboundSession.company_id : null;
       if (!inboundId || !companyId) throw new RecordingError('LIVE_SESSION_UNAVAILABLE', 503);
+      // Keep the inbound session fenced if context loading or token minting
+      // fails after the idempotent begin RPC has already created it.
+      sessionId = inboundId;
 
       const [{ data: company, error: companyError }, { data: knowledge, error: knowledgeError }] = await Promise.all([
         admin.from('companies').select('name').eq('id', companyId).maybeSingle(),

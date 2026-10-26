@@ -5,6 +5,7 @@ import { test } from 'node:test';
 const routePath = new URL('../../app/api/voice/zalo-personal/live/session/route.ts', import.meta.url);
 const migrationPath = new URL('../../supabase/migrations/20261026083543_zalo_personal_live_voice_bridge.sql', import.meta.url);
 const inboundMigrationPath = new URL('../../supabase/migrations/20261026092307_zalo_personal_inbound_live_voice.sql', import.meta.url);
+const inboundHardeningMigrationPath = new URL('../../supabase/migrations/20261026111500_zalo_personal_inbound_live_voice_hardening.sql', import.meta.url);
 
 test('Zalo personal live voice is fail-closed when the server flag is off', async () => {
   const previous = process.env.ZALO_PERSONAL_LIVE_VOICE_ENABLED;
@@ -65,4 +66,20 @@ test('inbound live voice accepts unknown callers but remains device-scoped and f
   assert.match(sql, /WHERE id = p_device AND active AND device_key_hash = p_key_hash/);
   assert.match(sql, /INSERT INTO public\.zalo_personal_live_voice_sessions[\s\S]*'INBOUND'/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.zalo_begin_inbound_live_voice_session[^;]* TO service_role/);
+});
+
+test('inbound live session does not reuse expired or terminal provider sessions', async () => {
+  const sql = await readFile(inboundHardeningMigrationPath, 'utf8');
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.zalo_begin_inbound_live_voice_session/);
+  assert.match(sql, /ZALO_LIVE_SESSION_EXPIRED/);
+  assert.match(sql, /ZALO_LIVE_SESSION_TERMINAL/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.zalo_begin_inbound_live_voice_session/);
+});
+
+test('inbound live session remains fenced when post-begin work fails', async () => {
+  const source = await readFile(routePath, 'utf8');
+  assert.match(source, /const inboundId =/);
+  assert.match(source, /sessionId = inboundId/);
+  assert.match(source, /LIVE_VOICE_SCHEMA_UNAVAILABLE/);
+  assert.match(source, /message\.includes\('does not exist'\)/);
 });

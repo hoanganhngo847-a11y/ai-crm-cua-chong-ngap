@@ -234,7 +234,10 @@ final class LiveVoiceBridge {
         let url = serverURL.appendingPathComponent("api/voice/zalo-personal/live/session")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        // Render may cold-start and the CRM route then mints a Gemini token.
+        // Keep this bounded, but do not fail a ringing call during a normal
+        // cold start before the server has had a chance to answer.
+        request.timeoutInterval = 35
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(deviceId, forHTTPHeaderField: "x-zalo-device-id")
         request.setValue("Bearer \(deviceSecret)", forHTTPHeaderField: "Authorization")
