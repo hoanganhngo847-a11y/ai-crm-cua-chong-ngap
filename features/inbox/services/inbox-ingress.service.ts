@@ -420,6 +420,14 @@ export async function ingestNormalizedEvent(
         content: rawContent,
         timestamp: event.timestamp || new Date().toISOString(),
         externalMessageId: event.message_id,
+        metadata: {
+          channel,
+          external_message_id: event.message_id,
+          sender_id: event.external_user_id,
+          ...(event.sender_name ? { sender_name: event.sender_name } : {}),
+          ...(event.sender_phone ? { sender_phone: event.sender_phone } : {}),
+          ...(event.metadata || {}),
+        },
       }, passedClient);
     } catch (insertErr: unknown) {
       // Xử lý xung đột ghi đồng thời (Concurrent Race Condition) vi phạm UNIQUE index uq_interactions_company_channel_ext_ref
