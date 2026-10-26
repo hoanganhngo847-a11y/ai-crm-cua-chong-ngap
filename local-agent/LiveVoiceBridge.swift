@@ -162,6 +162,36 @@ final class LiveVoiceAudioPlayer {
 }
 
 final class LiveVoiceBridge {
+    private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate {
+        private let onOpen: (URLSessionWebSocketTask, String?) -> Void
+        private let onClose: (URLSessionWebSocketTask, URLSessionWebSocketTask.CloseCode, Data?) -> Void
+        private let onComplete: (URLSessionTask, Error?) -> Void
+
+        init(onOpen: @escaping (URLSessionWebSocketTask, String?) -> Void,
+             onClose: @escaping (URLSessionWebSocketTask, URLSessionWebSocketTask.CloseCode, Data?) -> Void,
+             onComplete: @escaping (URLSessionTask, Error?) -> Void) {
+            self.onOpen = onOpen
+            self.onClose = onClose
+            self.onComplete = onComplete
+        }
+
+        func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                        didOpenWithProtocol protocol: String?) {
+            onOpen(webSocketTask, `protocol`)
+        }
+
+        func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+                        reason: Data?) {
+            onClose(webSocketTask, closeCode, reason)
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        didCompleteWithError error: Error?) {
+            onComplete(task, error)
+        }
+    }
+
     private let requestId: String?
     private let localCallId: String
     private let remoteDisplayName: String?
@@ -172,6 +202,8 @@ final class LiveVoiceBridge {
     private let networkQueue = DispatchQueue(label: "zalo.live-voice.network")
     private let sendQueue = DispatchQueue(label: "zalo.live-voice.send")
     private var socket: URLSessionWebSocketTask?
+    private var webSocketSession: URLSession?
+    private var webSocketDelegate: WebSocketDelegate?
     private var sessionId: String?
     private var stopped = false
     private var started = false
@@ -179,6 +211,7 @@ final class LiveVoiceBridge {
     private var pendingInput: [Data] = []
     private let maxPendingInputChunks = 150
     private var failure: String?
+    private var audioFramesSentCount = 0
 
     init(requestId: String? = nil, localCallId: String, remoteDisplayName: String? = nil,
          config: UploadConfiguration, outputUID: String) throws {
@@ -216,19 +249,30 @@ final class LiveVoiceBridge {
     }
 
     private func sendInputFrame(_ data: Data, on socket: URLSessionWebSocketTask) {
-            let event: [String: Any] = [
-                "realtimeInput": [
-                    "audio": [
-                        "data": data.base64EncodedString(),
-                        "mimeType": "audio/pcm;rate=16000"
-                    ]
+        let event: [String: Any] = [
+            "realtimeInput": [
+                "audio": [
+                    "data": data.base64EncodedString(),
+                    "mimeType": "audio/pcm;rate=16000"
                 ]
             ]
-            guard let json = try? JSONSerialization.data(withJSONObject: event),
-                  let text = String(data: json, encoding: .utf8) else { return }
-            socket.send(.string(text)) { error in
-                if let error { self.fail("WebSocket audio send failed: \(error.localizedDescription)") }
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: event),
+              let text = String(data: json, encoding: .utf8) else { return }
+        socket.send(.string(text)) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                let ns = error as NSError
+                self.fail("WebSocket audio send failed: domain=\(ns.domain), code=\(ns.code), description=\(error.localizedDescription)")
+            } else {
+                self.audioFramesSentCount += 1
+                if self.audioFramesSentCount == 1 {
+                    print("[LiveVoice] Gemini Live audio input sent (\(data.count) bytes).")
+                } else if self.audioFramesSentCount % 50 == 0 {
+                    print("[LiveVoice] Streaming audio input to Gemini Live (\(self.audioFramesSentCount) chunks sent)...")
+                }
             }
+        }
     }
 
     func stop() {
@@ -237,6 +281,9 @@ final class LiveVoiceBridge {
             self.stopped = true
             self.socket?.cancel(with: .normalClosure, reason: nil)
             self.socket = nil
+            self.webSocketSession?.invalidateAndCancel()
+            self.webSocketSession = nil
+            self.webSocketDelegate = nil
             self.output.stop()
             self.finishSession(status: "ENDED", failureCode: nil)
         }
@@ -279,47 +326,95 @@ final class LiveVoiceBridge {
                     return
                 }
                 self.sessionId = sessionId
-                self.connectGeminiLive(accessToken: accessToken, model: json["model"] as? String)
+                let apiVersion = json["api_version"] as? String
+                self.connectGeminiLive(accessToken: accessToken,
+                                       model: json["model"] as? String,
+                                       apiVersion: apiVersion)
             }
         }.resume()
     }
 
-    private func connectGeminiLive(accessToken: String, model: String?) {
+    private func connectGeminiLive(accessToken: String, model: String?, apiVersion: String? = nil) {
         let model = model ?? ProcessInfo.processInfo.environment["GEMINI_LIVE_MODEL"] ?? "gemini-2.5-flash-native-audio-preview-12-2025"
+        let resolvedApiVersion = apiVersion ?? ProcessInfo.processInfo.environment["GEMINI_LIVE_API_VERSION"] ?? "v1alpha"
         guard let encodedToken = accessToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=\(encodedToken)") else {
+              let url = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.\(resolvedApiVersion).GenerativeService.BidiGenerateContentConstrained?access_token=\(encodedToken)") else {
             fail("Invalid Gemini Live URL.")
             return
         }
-        let task = URLSession.shared.webSocketTask(with: URLRequest(url: url))
+        let delegate = WebSocketDelegate(
+            onOpen: { [weak self] task, proto in
+                guard let self else { return }
+                self.networkQueue.async {
+                    guard !self.stopped, self.socket === task else { return }
+                    print("[LiveVoice] Gemini Live WebSocket opened.")
+                    self.sendGeminiSetup(on: task, model: model)
+                }
+            },
+            onClose: { [weak self] task, closeCode, reason in
+                self?.networkQueue.async {
+                    guard let self, !self.stopped else { return }
+                    let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) }
+                        ?? task.closeReason.flatMap { String(data: $0, encoding: .utf8) }
+                        ?? "none"
+                    let detail = "closeCode=\(closeCode.rawValue), closeReason=\(reasonStr), taskState=\(task.state.rawValue)"
+                    print("[LiveVoice] WebSocket didCloseWith: \(detail)")
+                    self.fail("Gemini Live socket closed (\(closeCode.rawValue)): \(reasonStr)")
+                }
+            },
+            onComplete: { [weak self] task, error in
+                self?.networkQueue.async {
+                    guard let self, !self.stopped else { return }
+                    if let error {
+                        let ns = error as NSError
+                        let wsTask = task as? URLSessionWebSocketTask
+                        let closeCode = wsTask?.closeCode.rawValue ?? -1
+                        let closeReasonStr = wsTask?.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
+                        let detail = "domain=\(ns.domain), code=\(ns.code), description=\(error.localizedDescription), closeCode=\(closeCode), closeReason=\(closeReasonStr), taskState=\(task.state.rawValue), userInfo=\(ns.userInfo)"
+                        print("[LiveVoice] WebSocket didCompleteWithError: \(detail)")
+                        if !self.socketReady {
+                            self.fail("Gemini Live socket completed before setupComplete: \(error.localizedDescription) [\(detail)]")
+                        } else {
+                            self.fail("Gemini Live socket completed: \(error.localizedDescription) [\(detail)]")
+                        }
+                    }
+                }
+            })
+        webSocketDelegate = delegate
+        webSocketSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let task = webSocketSession!.webSocketTask(with: URLRequest(url: url))
         socket = task
         socketReady = false
         task.resume()
         started = true
+    }
+
+    private func sendGeminiSetup(on task: URLSessionWebSocketTask, model: String) {
+        guard !stopped, socket === task else { return }
+        let normalizedModel = model.hasPrefix("models/") ? model : "models/\(model)"
         let setupPayload: [String: Any] = [
-            "model": "models/\(model)",
-            "responseModalities": ["AUDIO"]
+            "model": normalizedModel,
+            "generationConfig": [
+                "responseModalities": ["AUDIO"]
+            ]
         ]
         let setup: [String: Any] = ["setup": setupPayload]
-        if let data = try? JSONSerialization.data(withJSONObject: setup),
-           let text = String(data: data, encoding: .utf8) {
-            task.send(.string(text)) { [weak self] error in
-                guard let self else { return }
-                self.sendQueue.async {
-                    guard !self.stopped else { return }
-                    if let error {
-                        self.fail("Gemini Live setup failed: \(error.localizedDescription)")
-                        return
-                    }
-                    self.socketReady = true
-                    let queued = self.pendingInput
-                    self.pendingInput.removeAll(keepingCapacity: true)
-                    for data in queued {
-                        self.sendInputFrame(data, on: task)
-                    }
-                    self.receiveNext()
-                    print("[LiveVoice] Gemini Live bridge connected; audio output is isolated to configured virtual device.")
+        guard let data = try? JSONSerialization.data(withJSONObject: setup),
+              let text = String(data: data, encoding: .utf8) else {
+            fail("Failed to serialize Gemini Live setup payload.")
+            return
+        }
+        task.send(.string(text)) { [weak self] error in
+            guard let self else { return }
+            self.networkQueue.async {
+                guard !self.stopped, self.socket === task else { return }
+                if let error {
+                    let ns = error as NSError
+                    self.fail("Gemini Live setup send failed: domain=\(ns.domain), code=\(ns.code), userInfo=\(ns.userInfo), description=\(error.localizedDescription)")
+                    return
                 }
+                print("[LiveVoice] Gemini Live setup sent; waiting for setupComplete before audio.")
+                self.receiveNext()
             }
         }
     }
@@ -331,12 +426,28 @@ final class LiveVoiceBridge {
             self.networkQueue.async {
                 guard !self.stopped else { return }
                 switch result {
-                case .failure(let error): self.fail("WebSocket receive failed: \(error.localizedDescription)")
+                case .failure(let error):
+                    self.handleReceiveFailure(error)
                 case .success(let message):
                     self.handle(message)
                     self.receiveNext()
                 }
             }
+        }
+    }
+
+    private func handleReceiveFailure(_ error: Error) {
+        guard !stopped else { return }
+        let ns = error as NSError
+        let closeCode = socket?.closeCode.rawValue ?? -1
+        let closeReasonStr = socket?.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
+        let taskState = socket?.state.rawValue ?? -1
+        let detail = "domain=\(ns.domain), code=\(ns.code), description=\(error.localizedDescription), closeCode=\(closeCode), closeReason=\(closeReasonStr), taskState=\(taskState), userInfo=\(ns.userInfo)"
+        print("[LiveVoice] WebSocket receive failed diagnostic: \(detail)")
+        if closeCode > 0 && closeCode != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
+            fail("Gemini Live socket closed (\(closeCode)): \(closeReasonStr) [\(detail)]")
+        } else {
+            fail("WebSocket receive failed: \(error.localizedDescription) [\(detail)]")
         }
     }
 
@@ -347,34 +458,99 @@ final class LiveVoiceBridge {
         case .string(let value): data = value.data(using: .utf8)
         @unknown default: data = nil
         }
-        guard let data,
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let type = json["type"] as? String else { return }
-        if type == "error" {
-            fail("Gemini Live returned an error.")
+        guard let data else { return }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            if let raw = String(data: data, encoding: .utf8) {
+                print("[LiveVoice] Gemini Live non-JSON text frame received: \(raw.prefix(200))")
+            }
             return
         }
-        guard type == "serverContent", let content = json["serverContent"] as? [String: Any],
-              let turn = content["modelTurn"] as? [String: Any],
-              let parts = turn["parts"] as? [[String: Any]] else { return }
-        for part in parts {
-            guard let inlineData = part["inlineData"] as? [String: Any],
-                  let encoded = inlineData["data"] as? String,
-                  let audio = Data(base64Encoded: encoded) else { continue }
-            output.append(audio)
+        if let error = json["error"] as? [String: Any] {
+            let detail = (try? JSONSerialization.data(withJSONObject: error))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "unknown error"
+            print("[LiveVoice] Gemini Live returned error JSON: \(detail)")
+            fail("Gemini Live returned an error: \(detail.prefix(240))")
+            return
+        }
+        if json["setupComplete"] != nil {
+            print("[LiveVoice] Gemini Live setupComplete received; audio bridge is ready and output is isolated to configured virtual device.")
+            sendQueue.async { [weak self] in
+                guard let self, !self.stopped else { return }
+                self.socketReady = true
+                if let socket = self.socket {
+                    self.sendInitialGreeting(on: socket)
+                }
+                let queued = self.pendingInput
+                self.pendingInput.removeAll(keepingCapacity: true)
+                for chunk in queued {
+                    guard let socket = self.socket else { break }
+                    self.sendInputFrame(chunk, on: socket)
+                }
+            }
+            return
+        }
+        if let content = json["serverContent"] as? [String: Any] {
+            print("[LiveVoice] Gemini Live serverContent received.")
+            if let turn = content["modelTurn"] as? [String: Any],
+               let parts = turn["parts"] as? [[String: Any]] {
+                for part in parts {
+                    if let text = part["text"] as? String, !text.isEmpty {
+                        print("[LiveVoice] AI: \(text)")
+                    }
+                    if let inlineData = part["inlineData"] as? [String: Any],
+                       let encoded = inlineData["data"] as? String,
+                       let audio = Data(base64Encoded: encoded) {
+                        print("[LiveVoice] Gemini Live audio output received (\(audio.count) bytes).")
+                        output.append(audio)
+                    }
+                }
+            }
+            if let turnComplete = content["turnComplete"] as? Bool, turnComplete {
+                print("[LiveVoice] Gemini Live turnComplete received.")
+            }
+            return
         }
     }
 
-    private func fail(_ message: String) {
+    private func sendInitialGreeting(on socket: URLSessionWebSocketTask) {
+        let turn: [String: Any] = [
+            "role": "user",
+            "parts": [
+                ["text": "Cuộc gọi vừa được kết nối. Hãy chào khách hàng bằng một câu tiếng Việt ngắn gọn, ấm áp (1 câu) theo vai trò trợ lý doanh nghiệp."]
+            ]
+        ]
+        let clientContent: [String: Any] = [
+            "turns": [turn],
+            "turnComplete": true
+        ]
+        let greetingMsg: [String: Any] = [
+            "clientContent": clientContent
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: greetingMsg),
+              let text = String(data: json, encoding: .utf8) else { return }
+        socket.send(.string(text)) { error in
+            if let error {
+                let ns = error as NSError
+                print("[LiveVoice] Initial greeting trigger failed: domain=\(ns.domain), code=\(ns.code), description=\(error.localizedDescription)")
+            } else {
+                print("[LiveVoice] Gemini Live initial greeting trigger sent.")
+            }
+        }
+    }
+
+    private func fail(_ message: String, failureCode: String = "LIVE_VOICE_BRIDGE_ERROR") {
         networkQueue.async { [weak self] in
             guard let self, !self.stopped else { return }
             self.failure = message
             self.stopped = true
             self.socket?.cancel(with: .goingAway, reason: nil)
             self.socket = nil
+            self.webSocketSession?.invalidateAndCancel()
+            self.webSocketSession = nil
+            self.webSocketDelegate = nil
             self.output.stop()
             print("[LiveVoice] Disabled for this call: \(message)")
-            self.finishSession(status: "FAILED", failureCode: "LIVE_VOICE_BRIDGE_ERROR")
+            self.finishSession(status: "FAILED", failureCode: failureCode)
         }
     }
 
