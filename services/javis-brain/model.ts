@@ -2,9 +2,11 @@ import 'server-only';
 import { httpProviderFailure, ProviderFailure } from '../../features/ai-brain/provider-failure';
 import { randomUUID } from 'node:crypto';
 import { DOSSIER_INSTRUCTION, validateDossierSnapshot, type DossierContext, type DossierSnapshot } from '../../features/customer-360/contracts';
-import { validateProviderProposal } from '../../features/ai-brain/validation';
+import { INTERNAL_LEAK_PATTERNS, validateProviderProposal } from '../../features/ai-brain/validation';
 import type { BrainLatencyProfile, BrainProposal, BrainTurnGrounding, ModelBackend } from './types';
 import { MAX_MODEL_RESPONSE_BYTES, MAX_UPSTREAM_RESPONSE_BYTES } from './validation';
+
+export { INTERNAL_LEAK_PATTERNS };
 
 export const DEFAULT_JAVIS_BRAIN_MODEL = 'gemini-2.5-flash';
 export const DEFAULT_JAVIS_ROUTER_MODEL = 'javis-router';
@@ -363,6 +365,20 @@ export class GeminiModelBackend implements ModelBackend {
       }
     }
 
+    // Check draft for internal terms / metadata leakage
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as Record<string, unknown>).draft === 'string'
+    ) {
+      const draftStr = (parsed as Record<string, unknown>).draft as string;
+      for (const pattern of INTERNAL_LEAK_PATTERNS) {
+        if (pattern.test(draftStr)) {
+          throw new Error('MODEL_SECURITY_LEAK_INTERNAL_METADATA');
+        }
+      }
+    }
+
     return options.dossier ? validateDossierSnapshot(parsed, options.dossier) : validateProviderProposal(parsed);
   }
 }
@@ -377,6 +393,9 @@ export interface JavisRuntimeBackendOptions {
 
 export function parseJavisProposalText(rawText: string): unknown {
   const trimmed = rawText.trim();
+  if (!trimmed) {
+    throw new Error('MODEL_MALFORMED_PROPOSAL');
+  }
 
   const normalizeProposalObj = (val: unknown): unknown => {
     if (val && typeof val === 'object' && !Array.isArray(val)) {
@@ -387,51 +406,21 @@ export function parseJavisProposalText(rawText: string): unknown {
       }
       return rec;
     }
-    return val;
+    throw new Error('MODEL_MALFORMED_PROPOSAL');
   };
 
   // 1. Markdown code block extraction
-  const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
+  const codeBlockMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed) ||
+                         /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
   const jsonCandidate = codeBlockMatch ? codeBlockMatch[1].trim() : trimmed;
 
-  // 2. Direct JSON or embedded JSON object
+  // 2. Direct JSON only. Do not extract an object from surrounding prose:
+  // explanations, CLI output and internal metadata must fail closed.
   try {
     return normalizeProposalObj(JSON.parse(jsonCandidate));
   } catch {
-    const jsonMatch = /(\{[\s\S]*"(?:decision|action)"[\s\S]*\})/.exec(trimmed);
-    if (jsonMatch) {
-      try {
-        return normalizeProposalObj(JSON.parse(jsonMatch[1]));
-      } catch {}
-    }
+    throw new Error('MODEL_MALFORMED_PROPOSAL');
   }
-
-  // 3. Key-value structured text lines
-  const decMatch = /(?:Quyết định|Decision)[:\s*]+(RESPOND|HANDOVER|NO_REPLY)/i.exec(trimmed);
-  if (decMatch) {
-    const decision = decMatch[1].toUpperCase();
-    const confMatch = /(?:Độ tin cậy|Confidence)[:\s*]+([0-9.]+)/i.exec(trimmed);
-    const confidence = confMatch
-      ? Math.min(1.0, Math.max(0.0, parseFloat(confMatch[1])))
-      : 0.85;
-    const proposal: Record<string, unknown> = { decision, confidence };
-
-    if (decision === 'HANDOVER') {
-      const reasonMatch = /(?:Lý do(?: chuyển giao)?|Handover\s*Reason)[:\s*]+([A-Za-z0-9_]+)/i.exec(trimmed);
-      proposal.handoverReason = reasonMatch ? reasonMatch[1].toUpperCase() : 'HUMAN_SUPPORT_REQUIRED';
-    } else if (decision === 'RESPOND') {
-      const draftMatch = /(?:Bản nháp|Draft|Nội dung trả lời)[:\s*]+([^\n]+)/i.exec(trimmed);
-      proposal.draft = draftMatch ? draftMatch[1].trim() : trimmed;
-    }
-    return proposal;
-  }
-
-  // 4. Default natural language fallback: classify as RESPOND draft
-  return {
-    decision: 'RESPOND',
-    draft: trimmed,
-    confidence: 0.8,
-  };
 }
 
 export class JavisRuntimeBackend implements ModelBackend {
@@ -631,6 +620,20 @@ export class JavisRuntimeBackend implements ModelBackend {
     for (const phrase of CANARY_SYSTEM_PHRASES) {
       if (rawText.includes(phrase) || checkNormalizedLeak(parsedProposal, phrase)) {
         throw new Error('MODEL_SECURITY_LEAK_SYSTEM_INSTRUCTION');
+      }
+    }
+
+    // Check draft for internal terms / metadata leakage
+    if (
+      parsedProposal &&
+      typeof parsedProposal === 'object' &&
+      typeof (parsedProposal as Record<string, unknown>).draft === 'string'
+    ) {
+      const draftStr = (parsedProposal as Record<string, unknown>).draft as string;
+      for (const pattern of INTERNAL_LEAK_PATTERNS) {
+        if (pattern.test(draftStr)) {
+          throw new Error('MODEL_SECURITY_LEAK_INTERNAL_METADATA');
+        }
       }
     }
 

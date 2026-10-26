@@ -103,6 +103,32 @@ export function validateProviderDescriptor(raw: unknown): BrainProviderDescripto
   // Descriptor is registered server configuration. Unknown fields are never copied or read.
   return Object.freeze({ id: label(p.id), model: label(p.model) });
 }
+export const INTERNAL_LEAK_PATTERNS: readonly RegExp[] = [
+  // Decision labels / keywords
+  /(?:quyết\s*định|decision)\s*[:\-]/i,
+  /\b(?:RESPOND|HANDOVER|NO_REPLY)\b/,
+  // Confidence labels
+  /(?:độ\s*(?:tin\s*cậy|tự\s*tin)|confidence)\s*[:\-]/i,
+  // Internal draft labels
+  /(?:dự\s*thảo\s*(?:phản\s*hồi|câu\s*trả\s*lời)|bản\s*nháp|nội\s*dung\s*trả\s*lời)\s*[:\-]/i,
+  // Handover reason labels or tokens
+  /(?:lý\s*do(?:\s*chuyển\s*giao)?|handover\s*reason)\s*[:\-]/i,
+  /\bhandoverReason\b/,
+  // CLI / JSON / internal runtime metadata / explanation
+  /(?:kênh\s*hiện\s*tại\s*là\s*CLI|định\s*dạng\s*JSON\s*thuần|giới\s*hạn\s*đầu\s*ra)/i,
+  /```/,
+  /\{[\s\S]*"(?:decision|action|draft|confidence|handoverReason)"[\s\S]*\}/,
+  // Chain-of-thought tags
+  /<\/?thought>/i,
+  /\bchain-of-thought\b/i,
+] as const;
+
+export function assertNoInternalLeak(draftText: string, code: BrainErrorCode = 'BRAIN_PROVIDER_ERROR'): void {
+  for (const pattern of INTERNAL_LEAK_PATTERNS) {
+    if (pattern.test(draftText)) deny(code);
+  }
+}
+
 export function validateProviderProposal(raw: unknown): BrainProposal {
   const code = 'BRAIN_PROVIDER_ERROR';
   const p = record(raw, code);
@@ -113,8 +139,10 @@ export function validateProviderProposal(raw: unknown): BrainProposal {
     if (p[key] !== undefined && (!Array.isArray(p[key]) || p[key].length !== 0)) deny(code);
   }
   let draft: string | undefined;
-  if (decision === 'RESPOND') draft = text(p.draft, code);
-  else if (p.draft !== undefined) deny(code);
+  if (decision === 'RESPOND') {
+    draft = text(p.draft, code);
+    assertNoInternalLeak(draft, code);
+  } else if (p.draft !== undefined) deny(code);
   let handoverReason: string | undefined;
   if (decision === 'HANDOVER') {
     if (p.handoverReason !== undefined &&
