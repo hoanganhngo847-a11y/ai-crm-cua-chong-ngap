@@ -75,10 +75,23 @@ export function getFfmpegPath(): string {
     // ffmpeg-static not installed or failed to resolve
   }
 
-  // 3. Dev-only fallback
-  if (process.platform === 'darwin') {
-    const homebrewPath = '/opt/homebrew/bin/ffmpeg';
-    if (existsSync(homebrewPath)) return homebrewPath;
+  // 3. Fallback to system paths (macOS & Linux / Render)
+  const fallbackPaths = [
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/bin/ffmpeg',
+    '/opt/homebrew/bin/ffmpeg',
+  ];
+  for (const fallback of fallbackPaths) {
+    if (existsSync(fallback)) return fallback;
+  }
+
+  // 4. Fallback to which
+  try {
+    const whichPath = execFileSync('which', ['ffmpeg'], { encoding: 'utf-8', timeout: 2000 }).trim();
+    if (whichPath && existsSync(whichPath)) return whichPath;
+  } catch {
+    // which failed or not found
   }
 
   throw new Error('FFMPEG_UNAVAILABLE');
@@ -171,18 +184,34 @@ export async function splitStereoChannels(
 
     const ffmpegTimeout = Math.min(options?.timeoutMs ?? 60_000, 60_000);
 
-    execFileSync(ffmpegPath, [
-      '-v', 'error',
-      '-y',
-      '-i', inputPath,
-      '-filter_complex',
-      '[0:a]channelsplit=channel_layout=stereo[left][right];[left]aformat=channel_layouts=mono[l];[right]aformat=channel_layouts=mono[r]',
-      '-map', '[l]', '-c:a', 'aac', leftPath,
-      '-map', '[r]', '-c:a', 'aac', rightPath,
-    ], {
-      timeout: ffmpegTimeout,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    try {
+      execFileSync(ffmpegPath, [
+        '-v', 'error',
+        '-y',
+        '-i', inputPath,
+        '-filter_complex',
+        '[0:a]channelsplit=channel_layout=stereo[left][right];[left]aformat=channel_layouts=mono[l];[right]aformat=channel_layouts=mono[r]',
+        '-map', '[l]', '-c:a', 'aac', leftPath,
+        '-map', '[r]', '-c:a', 'aac', rightPath,
+      ], {
+        timeout: ffmpegTimeout,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch {
+      // Fallback: If stereo split fails (e.g. irregular layout or single-channel container),
+      // extract mono audio for both channels so transcription continues cleanly.
+      execFileSync(ffmpegPath, [
+        '-v', 'error',
+        '-y',
+        '-i', inputPath,
+        '-ac', '1',
+        '-c:a', 'aac', leftPath,
+      ], {
+        timeout: ffmpegTimeout,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      writeFileSync(rightPath, readFileSync(leftPath));
+    }
 
     const customerAudio = !customerSilent ? readFileSync(leftPath) : null;
     const staffAudio = !staffSilent ? readFileSync(rightPath) : null;

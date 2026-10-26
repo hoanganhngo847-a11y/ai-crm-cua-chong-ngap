@@ -1,7 +1,7 @@
 import { createAdminClient } from '../../../../../../lib/supabase/admin';
 import { authorizedRecording } from '../../../../../../features/zalo-recordings/access';
 import { RecordingError, UUID } from '../../../../../../features/zalo-recordings/metadata';
-import { retryZaloTranscriptionJob } from '../../../../../../features/zalo-transcription/service';
+import { processTargetedZaloTranscriptionJob, retryZaloTranscriptionJob } from '../../../../../../features/zalo-transcription/service';
 
 export const runtime = 'nodejs';
 
@@ -17,6 +17,14 @@ export async function POST(request: Request) {
     const admin = createAdminClient();
 
     const result = await retryZaloTranscriptionJob(actor.companyId, actor.userId, call.id, admin);
+    if (result?.transcription_id) {
+      await processTargetedZaloTranscriptionJob(result.transcription_id, {
+        companyId: actor.companyId,
+        client: admin,
+      }).catch((err) => {
+        console.error('[transcriptions/retry] Targeted job error:', err);
+      });
+    }
 
     return Response.json(
       { ok: true, data: result },

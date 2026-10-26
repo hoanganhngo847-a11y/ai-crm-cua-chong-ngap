@@ -39,6 +39,10 @@ export function validateProviderType(provider: string): TranscriptionProviderTyp
 export function resolveProviderType(): TranscriptionProviderType {
   const envProvider = process.env.TRANSCRIPTION_PROVIDER;
   if (envProvider === undefined) {
+    // If OPENAI_API_KEY is not configured but GEMINI is available, resolve to GEMINI
+    if (!process.env.OPENAI_API_KEY && (process.env.GEMINI_API_KEY || process.env.GEMINI_POOL_ENABLED === 'true')) {
+      return 'GEMINI';
+    }
     return 'OPENAI';
   }
   return validateProviderType(envProvider);

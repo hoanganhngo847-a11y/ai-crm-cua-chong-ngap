@@ -18,6 +18,18 @@
       "path": "/api/cron/zalo-care",
       "schedule": "*/15 * * * *",
       "method": "GET"
+    },
+    {
+      "name": "zalo-transcription",
+      "path": "/api/cron/zalo-transcription",
+      "schedule": "* * * * *",
+      "method": "GET"
+    },
+    {
+      "name": "zalo-summary",
+      "path": "/api/cron/zalo-summary",
+      "schedule": "* * * * *",
+      "method": "GET"
     }
   ]
 }
