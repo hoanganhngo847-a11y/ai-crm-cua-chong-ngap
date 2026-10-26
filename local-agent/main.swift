@@ -12,6 +12,10 @@ struct Config {
         ?? NSString(string: "~/.zalo_recordings_temp").expandingTildeInPath
     static let legacyOutputUID = "org.antigravity.multioutput"
     static let fallbackOutputUID = "BuiltInSpeakerDevice"
+    static let liveVoiceEnabled = ProcessInfo.processInfo.environment["ZALO_PERSONAL_LIVE_VOICE_ENABLED"] == "1"
+    static let inboundAutoAnswerEnabled = ProcessInfo.processInfo.environment["ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER"] == "1"
+    static let liveVoiceOutputUID = ProcessInfo.processInfo.environment["ZALO_VOICE_OUTPUT_UID"] ?? ""
+    static let liveVoiceModel = ProcessInfo.processInfo.environment["GEMINI_LIVE_MODEL"] ?? "gemini-2.5-flash-native-audio-preview-12-2025"
 }
 
 // Routing is read-only during calls. The only write is migration away from the
@@ -176,6 +180,7 @@ final class CallRecorder {
     let capture: NativeCallCapture
     private var endedAt: Date?
     var boundOutboundContext: PendingOutboundContext?
+    var liveVoiceBridge: LiveVoiceBridge?
 
     init(callID: String) throws {
         self.callID = callID
@@ -186,6 +191,8 @@ final class CallRecorder {
 
     func stop(completion: @escaping (String?) -> Void) {
         endedAt = Date()
+        capture.onRemotePCM16 = nil
+        liveVoiceBridge?.stop()
         capture.stop(completion: completion)
     }
 
@@ -270,6 +277,7 @@ final class ZaloAgent {
     private var lastError: String?
     private var lastRoutingError: String?
     private var loopbackServer: LoopbackServer?
+    private var inboundAnswerAttempts = 0
 
     func start() throws {
         // Prevent two new agents from recording the same call.
@@ -340,8 +348,26 @@ final class ZaloAgent {
             } else if direction == .unknown {
                 direction = probe.direction
             }
+            // An incoming Zalo window can expose no direction label until after
+            // it is answered. Try only when it is not positively identified as
+            // outbound; the AX walker itself still requires an unambiguous
+            // answer/accept button before clicking anything.
+            if state == .idle && Config.inboundAutoAnswerEnabled && direction != .outbound {
+                if ZaloAutomation.shared.acceptIncomingVoiceCall() {
+                    direction = .inbound
+                    print("[Inbound] Accepted incoming Zalo call from '\(contact ?? "unknown")'.")
+                    inboundAnswerAttempts = 0
+                } else {
+                    inboundAnswerAttempts += 1
+                    if inboundAnswerAttempts == 5 {
+                        print("[Inbound] Could not find an unambiguous Zalo answer button; call was not auto-accepted.")
+                    }
+                }
+            }
             checkAndBindOutbound()
-            if state == .idle { begin() }
+            if state == .idle && !(Config.inboundAutoAnswerEnabled && direction != .outbound && inboundAnswerAttempts >= 5) {
+                begin()
+            }
         } else if state != .idle {
             inactiveCount += 1
             if inactiveCount >= 3 { finish() }
@@ -362,10 +388,30 @@ final class ZaloAgent {
                 rec.boundOutboundContext = bound
                 print("[Outbound] Early bound call \(rec.callID) with CRM request \(bound.requestId) for '\(bound.customerName)'")
                 OutboundCallManager.shared.notifyCallDetectedAsync(requestId: bound.requestId)
+                startLiveVoice(for: rec, context: bound)
             }
         } else if rec.boundOutboundContext != nil {
             print("[Outbound] Invalidation detected for call \(rec.callID). Clearing bound context.")
             rec.boundOutboundContext = nil
+        }
+    }
+
+    private func startLiveVoice(for recorder: CallRecorder, context: PendingOutboundContext) {
+        guard Config.liveVoiceEnabled else { return }
+        guard recorder.liveVoiceBridge == nil else { return }
+        guard let config = UploadConfiguration.load() else {
+            print("[LiveVoice] Disabled: local agent is not enrolled.")
+            return
+        }
+        do {
+            let bridge = try LiveVoiceBridge(requestId: context.requestId, localCallId: recorder.callID,
+                                             config: config, outputUID: Config.liveVoiceOutputUID)
+            recorder.liveVoiceBridge = bridge
+            recorder.capture.onRemotePCM16 = { [weak bridge] data in bridge?.sendInputPCM16(data) }
+            bridge.start()
+            print("[LiveVoice] Starting CRM-scoped Zalo voice bridge for customer '\(context.customerName)'.")
+        } catch {
+            print("[LiveVoice] Disabled for this call: \(error.localizedDescription)")
         }
     }
 
@@ -387,7 +433,11 @@ final class ZaloAgent {
                     guard let self = self, let recorder = recorder, self.recorder === recorder,
                           self.state == .starting else { return }
                     switch result {
-                    case .success: self.state = .recording
+                    case .success:
+                        self.state = .recording
+                        if self.direction == .inbound && Config.liveVoiceEnabled {
+                            self.startInboundLiveVoice(for: recorder, remoteDisplayName: self.contact)
+                        }
                     case .failure(let error):
                         self.lastError = error.localizedDescription
                         self.state = .failed
@@ -400,6 +450,25 @@ final class ZaloAgent {
             state = .failed
             lastError = error.localizedDescription
             print("[Capture failed] \(error.localizedDescription)")
+        }
+    }
+
+    private func startInboundLiveVoice(for recorder: CallRecorder, remoteDisplayName: String?) {
+        guard recorder.liveVoiceBridge == nil else { return }
+        guard let config = UploadConfiguration.load() else {
+            print("[LiveVoice] Inbound disabled: local agent is not enrolled.")
+            return
+        }
+        do {
+            let bridge = try LiveVoiceBridge(localCallId: recorder.callID,
+                                             remoteDisplayName: remoteDisplayName,
+                                             config: config, outputUID: Config.liveVoiceOutputUID)
+            recorder.liveVoiceBridge = bridge
+            recorder.capture.onRemotePCM16 = { [weak bridge] data in bridge?.sendInputPCM16(data) }
+            bridge.start()
+            print("[LiveVoice] Starting company-context inbound voice bridge.")
+        } catch {
+            print("[LiveVoice] Inbound disabled for this call: \(error.localizedDescription)")
         }
     }
 
@@ -439,6 +508,7 @@ final class ZaloAgent {
         direction = .unknown
         inactiveCount = 0
         lastError = nil
+        inboundAnswerAttempts = 0
         state = .idle
         if stopping { exit(0) }
     }
@@ -584,6 +654,10 @@ do {
         let probe = ZaloDetector.shared.probe()
         print("Call window visible: \(probe.isActive)")
         print("Devices: \(audio.devices().compactMap { audio.uid(for: $0) }.joined(separator: ", "))")
+    } else if CommandLine.arguments.contains("--audio-devices") {
+        for device in AudioManager.shared.devices() {
+            print(AudioManager.shared.uid(for: device) ?? "unknown")
+        }
     } else if CommandLine.arguments.contains("--check-capture") {
         // Explicit user-operated, bounded permission/smoke test; makes no call.
         let before = AudioManager.shared.defaultUID()

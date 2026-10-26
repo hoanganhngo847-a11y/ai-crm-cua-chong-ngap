@@ -127,6 +127,7 @@ compile_agent() {
        [ "$DIR/ZaloAutomation.swift" -nt "$DIR/zalo-recorder" ] || \
        [ "$DIR/LoopbackServer.swift" -nt "$DIR/zalo-recorder" ] || \
        [ "$DIR/OutboundCallManager.swift" -nt "$DIR/zalo-recorder" ] || \
+       [ "$DIR/LiveVoiceBridge.swift" -nt "$DIR/zalo-recorder" ] || \
        [ "$DIR/entitlements.plist" -nt "$DIR/zalo-recorder" ] || \
        [ "$DIR/Info.plist" -nt "$DIR/zalo-recorder" ]; then
         echo "Compiling Native Zalo Recorder v1.2.0..."
@@ -135,7 +136,7 @@ compile_agent() {
         swiftc -O -target arm64-apple-macos13.0 -module-cache-path "$DIR/.build/modules" \
             "$DIR/AudioCapture.swift" "$DIR/RecordingSupport.swift" "$DIR/UploadSupport.swift" \
             "$DIR/PermissionManager.swift" "$DIR/HeartbeatManager.swift" "$DIR/ZaloAutomation.swift" \
-            "$DIR/LoopbackServer.swift" "$DIR/OutboundCallManager.swift" "$DIR/main.swift" \
+            "$DIR/LoopbackServer.swift" "$DIR/OutboundCallManager.swift" "$DIR/LiveVoiceBridge.swift" "$DIR/main.swift" \
             -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$DIR/Info.plist" \
             -o "$BUILD_PATH/zalo-recorder"
         codesign --force --sign - --identifier com.local.zalo-recorder --entitlements "$DIR/entitlements.plist" "$BUILD_PATH/zalo-recorder"
@@ -271,6 +272,17 @@ install_agent() {
     <string>${LOG_DIR}</string>
     <key>RunAtLoad</key>
     <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ZALO_PERSONAL_LIVE_VOICE_ENABLED</key>
+        <string>${ZALO_PERSONAL_LIVE_VOICE_ENABLED:-0}</string>
+        <key>ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER</key>
+        <string>${ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER:-0}</string>
+        <key>ZALO_VOICE_OUTPUT_UID</key>
+        <string>${ZALO_VOICE_OUTPUT_UID:-}</string>
+        <key>GEMINI_LIVE_MODEL</key>
+        <string>${GEMINI_LIVE_MODEL:-gemini-2.5-flash-native-audio-preview-12-2025}</string>
+    </dict>
     <key>KeepAlive</key>
     <true/>
     <key>ProcessType</key>

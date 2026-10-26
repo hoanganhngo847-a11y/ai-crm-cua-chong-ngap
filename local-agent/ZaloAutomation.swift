@@ -295,4 +295,77 @@ public final class ZaloAutomation {
         click(at: buttonPos)
         return true
     }
+
+    /// Accept only a button whose accessible label unambiguously means
+    /// "answer/accept call". We never fall back to a blind coordinate because
+    /// an incoming personal Zalo call can be from an unknown caller.
+    public func acceptIncomingVoiceCall() -> Bool {
+        let apps = NSWorkspace.shared.runningApplications.filter { app in
+            app.bundleIdentifier == Self.bundleID ||
+            app.bundleIdentifier == "com.vng.zalo.zalocall" ||
+            app.localizedName == "ZaloCall"
+        }
+        let acceptedLabels = [
+            "nhận cuộc gọi", "trả lời", "answer", "accept", "accept call", "join call"
+        ]
+        let rejectedLabels = ["từ chối", "decline", "reject", "end call", "cancel"]
+
+        for app in apps {
+            app.activate(options: .activateIgnoringOtherApps)
+            let appAx = AXUIElementCreateApplication(app.processIdentifier)
+            var windowsRef: CFTypeRef?
+            var windows: [AXUIElement] = []
+            if AXUIElementCopyAttributeValue(appAx, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+               let values = windowsRef as? [AXUIElement] {
+                windows = values
+            }
+            if let main = getMainWindow(appAx: appAx) {
+                windows.insert(main, at: 0)
+            }
+
+            for window in windows {
+                if let point = incomingAcceptPoint(root: window, acceptedLabels: acceptedLabels, rejectedLabels: rejectedLabels) {
+                    click(at: point)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func incomingAcceptPoint(root: AXUIElement, acceptedLabels: [String], rejectedLabels: [String]) -> CGPoint? {
+        var result: CGPoint?
+        func walk(_ element: AXUIElement, depth: Int) {
+            if result != nil || depth > 20 { return }
+            var roleRef: CFTypeRef?, titleRef: CFTypeRef?, descriptionRef: CFTypeRef?, valueRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+            AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
+            AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &descriptionRef)
+            AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
+            let role = (roleRef as? String) ?? ""
+            let labels = [titleRef as? String, descriptionRef as? String, valueRef as? String]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            let isRejected = labels.contains { label in rejectedLabels.contains(where: { label == $0 || label.contains($0) }) }
+            let isAccepted = role == "AXButton" && !isRejected && labels.contains { label in
+                acceptedLabels.contains(where: { label == $0 || label.contains($0) })
+            }
+            if isAccepted {
+                var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef)
+                AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+                var point = CGPoint.zero, size = CGSize.zero
+                if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &point) }
+                if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
+                if size.width > 0 && size.height > 0 { result = CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2) }
+                return
+            }
+            var childrenRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+               let children = childrenRef as? [AXUIElement] {
+                for child in children { walk(child, depth: depth + 1) }
+            }
+        }
+        walk(root, depth: 0)
+        return result
+    }
 }

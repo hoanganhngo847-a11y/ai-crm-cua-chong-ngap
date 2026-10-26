@@ -10,7 +10,7 @@ swiftc -O -target arm64-apple-macos13.0 -module-cache-path "$DIR/.build/modules"
     "$DIR/AudioCapture.swift" "$DIR/RecordingSupport.swift" "$DIR/UploadSupport.swift" \
     "$DIR/PermissionManager.swift" \
     "$DIR/HeartbeatManager.swift" "$DIR/ZaloAutomation.swift" "$DIR/LoopbackServer.swift" \
-    "$DIR/OutboundCallManager.swift" \
+    "$DIR/OutboundCallManager.swift" "$DIR/LiveVoiceBridge.swift" \
     "$DIR/tests/main.swift" \
     -o "$BUILD_PATH/regressions"
 

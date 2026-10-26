@@ -138,9 +138,14 @@ final class NativeCallCapture: NSObject, SCStreamOutput, SCStreamDelegate,
     private var stream: SCStream?
     private var stopped = false
     private var failure: String?
+    private var realtimeSourceFormat: AVAudioFormat?
+    private var realtimeConverter: AVAudioConverter?
+    private let realtimeTargetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+        sampleRate: 16000, channels: 1, interleaved: true)!
     let remote: PCMTrackWriter
     let local: PCMTrackWriter
     var onFailure: ((String) -> Void)?
+    var onRemotePCM16: ((Data) -> Void)?
 
     init(directory: URL) {
         let origin = CMClockGetTime(CMClockGetHostTimeClock())
@@ -258,8 +263,10 @@ final class NativeCallCapture: NSObject, SCStreamOutput, SCStreamDelegate,
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
         guard !stopped, type == .audio else { return }
-        do { try remote.append(sampleBuffer, clock: stream.synchronizationClock) }
-        catch { recordFailure(error) }
+        do {
+            try remote.append(sampleBuffer, clock: stream.synchronizationClock)
+            if let pcm = try realtimePCM16(sampleBuffer) { onRemotePCM16?(pcm) }
+        } catch { recordFailure(error) }
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
@@ -277,5 +284,50 @@ final class NativeCallCapture: NSObject, SCStreamOutput, SCStreamDelegate,
         guard failure == nil else { return }
         failure = error.localizedDescription
         onFailure?(error.localizedDescription)
+    }
+
+    /// ScreenCaptureKit currently delivers 48 kHz app audio while Gemini Live's
+    /// WebSocket PCM contract is 16 kHz mono little-endian. Keep this adapter
+    /// local to the capture queue so the recorder and live bridge share one
+    /// source without changing Zalo's devices or the system default output.
+    private func realtimePCM16(_ sample: CMSampleBuffer) throws -> Data? {
+        guard CMSampleBufferDataIsReady(sample),
+              let description = CMSampleBufferGetFormatDescription(sample) else { return nil }
+        let sourceFormat = AVAudioFormat(cmAudioFormatDescription: description)
+        let frames = CMSampleBufferGetNumSamples(sample)
+        guard frames > 0 else { return nil }
+        if realtimeSourceFormat == nil || realtimeSourceFormat != sourceFormat {
+            realtimeSourceFormat = sourceFormat
+            realtimeConverter = AVAudioConverter(from: sourceFormat, to: realtimeTargetFormat)
+        }
+        guard let converter = realtimeConverter,
+              let source = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frames)) else {
+            throw RecorderFailure(message: "Cannot create realtime audio converter.")
+        }
+        source.frameLength = AVAudioFrameCount(frames)
+        let copyStatus = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sample, at: 0, frameCount: Int32(frames), into: source.mutableAudioBufferList)
+        guard copyStatus == noErr else { throw RecorderFailure(message: "Cannot copy realtime PCM audio: \(copyStatus)") }
+
+        let outputCapacity = AVAudioFrameCount(ceil(Double(frames) * 16000 / sourceFormat.sampleRate)) + 8
+        guard let output = AVAudioPCMBuffer(pcmFormat: realtimeTargetFormat, frameCapacity: outputCapacity) else {
+            throw RecorderFailure(message: "Cannot allocate realtime audio output.")
+        }
+        var supplied = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if supplied {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return source
+        }
+        guard status != .error, conversionError == nil, output.frameLength > 0,
+              let pointer = output.int16ChannelData?[0] else {
+            throw conversionError ?? RecorderFailure(message: "Realtime PCM conversion failed.")
+        }
+        return Data(bytes: pointer, count: Int(output.frameLength) * MemoryLayout<Int16>.size)
     }
 }
