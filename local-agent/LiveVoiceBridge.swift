@@ -317,11 +317,11 @@ final class LiveVoiceBridge {
                     for data in queued {
                         self.sendInputFrame(data, on: task)
                     }
+                    self.receiveNext()
                     print("[LiveVoice] Gemini Live bridge connected; audio output is isolated to configured virtual device.")
                 }
             }
         }
-        receiveNext()
     }
 
     private func receiveNext() {
