@@ -37,12 +37,13 @@ async function createGeminiLiveToken(instructions: string) {
   if (!apiKey) throw new RecordingError('LIVE_VOICE_PROVIDER_UNAVAILABLE', 503);
   const model = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025';
   const now = Date.now();
+  const expireTime = new Date(now + 30 * 60_000).toISOString();
   const client = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1alpha' } });
   const token = await client.authTokens.create({
     config: {
       uses: 1,
       newSessionExpireTime: new Date(now + 60_000).toISOString(),
-      expireTime: new Date(now + 30 * 60_000).toISOString(),
+      expireTime,
       liveConnectConstraints: {
         model: `models/${model}`,
         config: {
@@ -63,10 +64,13 @@ async function createGeminiLiveToken(instructions: string) {
       lockAdditionalFields: [],
     },
   });
-  if (!token.name || !token.expireTime) {
+  // Gemini returns `name` for the issued token; `expireTime` is input-only
+  // metadata in the AuthToken response, so use the bounded value requested
+  // above for the client-side expiry contract.
+  if (!token.name) {
     throw new RecordingError('LIVE_VOICE_PROVIDER_UNAVAILABLE', 503);
   }
-  return { token: token.name, expiresAt: Date.parse(token.expireTime), model };
+  return { token: token.name, expiresAt: Date.parse(expireTime), model };
 }
 
 function liveResponse(sessionId: string, live: { token: string; expiresAt: number; model: string }) {

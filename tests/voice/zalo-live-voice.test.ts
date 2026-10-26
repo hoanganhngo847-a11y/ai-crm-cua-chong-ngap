@@ -39,6 +39,9 @@ test('live session route uses Gemini Live ephemeral tokens and the documented au
   const source = await readFile(routePath, 'utf8');
   assert.match(source, /GoogleGenAI/);
   assert.match(source, /authTokens\.create/);
+  assert.match(source, /const expireTime = new Date\(now \+ 30 \* 60_000\)\.toISOString\(\)/);
+  assert.match(source, /expiresAt: Date\.parse\(expireTime\)/);
+  assert.doesNotMatch(source, /token\.expireTime/);
   assert.match(source, /access_token/);
   assert.match(source, /input_sample_rate: 16000/);
   assert.match(source, /output_sample_rate: 24000/);
