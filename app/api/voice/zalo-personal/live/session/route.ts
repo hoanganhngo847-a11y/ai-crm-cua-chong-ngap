@@ -80,6 +80,7 @@ function liveResponse(sessionId: string, live: { token: string; expiresAt: numbe
     provider: 'GEMINI_LIVE',
     access_token: live.token,
     model: live.model,
+    api_version: 'v1alpha',
     expires_at: live.expiresAt,
     audio: { input_sample_rate: 16000, output_sample_rate: 24000, format: 'pcm16le_mono' },
   }, { headers: { 'Cache-Control': 'no-store' } });
