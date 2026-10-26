@@ -16,6 +16,7 @@ struct Config {
     static let inboundAutoAnswerEnabled = ProcessInfo.processInfo.environment["ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER"] == "1"
     static let liveVoiceOutputUID = ProcessInfo.processInfo.environment["ZALO_VOICE_OUTPUT_UID"] ?? ""
     static let liveVoiceModel = ProcessInfo.processInfo.environment["GEMINI_LIVE_MODEL"] ?? "gemini-2.5-flash-native-audio-preview-12-2025"
+    static let liveVoiceApiVersion = ProcessInfo.processInfo.environment["GEMINI_LIVE_API_VERSION"] ?? "v1alpha"
 }
 
 // Routing is read-only during calls. The only write is migration away from the
@@ -83,7 +84,12 @@ class ZaloDetector {
 
     func getZaloCallPID() -> pid_t? {
         for app in NSWorkspace.shared.runningApplications {
-            if app.bundleIdentifier == "com.vng.zalo.zalocall" || app.localizedName == "ZaloCall" {
+            if app.localizedName == "ZaloCall" {
+                return app.processIdentifier
+            }
+        }
+        for app in NSWorkspace.shared.runningApplications {
+            if app.bundleIdentifier == "com.vng.zalo.zalocall" && app.localizedName != "ZaloCap" {
                 return app.processIdentifier
             }
         }
@@ -376,8 +382,14 @@ final class ZaloAgent {
                 begin()
             }
         } else if state != .idle {
-            inactiveCount += 1
-            if inactiveCount >= 3 { finish() }
+            // Grace period: allow at least 6 seconds for the ZaloCall window to establish and stabilize
+            let callAge = recorder.map { Date().timeIntervalSince($0.startedAt) } ?? 0
+            if callAge < 6.0 {
+                inactiveCount = 0
+            } else {
+                inactiveCount += 1
+                if inactiveCount >= 15 { finish() }
+            }
         }
         let status = "[\(state.rawValue)] Contact: \(contact ?? "unknown") | Output: \(AudioManager.shared.defaultUID() ?? "unknown")"
         if status != lastStatus { print(status); lastStatus = status }

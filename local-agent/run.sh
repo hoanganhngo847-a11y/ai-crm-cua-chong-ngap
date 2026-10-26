@@ -257,6 +257,15 @@ install_agent() {
     pkill -x zalo-recorder 2>/dev/null || true
     sleep 0.5
 
+    local cur_enabled cur_auto cur_uid cur_model cur_version
+    if [ -f "$PLIST_PATH" ]; then
+        cur_enabled="$(defaults read "$PLIST_PATH" EnvironmentVariables 2>/dev/null | awk -F'"' '/ZALO_PERSONAL_LIVE_VOICE_ENABLED/ {print $4}')"
+        cur_auto="$(defaults read "$PLIST_PATH" EnvironmentVariables 2>/dev/null | awk -F'"' '/ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER/ {print $4}')"
+        cur_uid="$(defaults read "$PLIST_PATH" EnvironmentVariables 2>/dev/null | awk -F'"' '/ZALO_VOICE_OUTPUT_UID/ {print $4}')"
+        cur_model="$(defaults read "$PLIST_PATH" EnvironmentVariables 2>/dev/null | awk -F'"' '/GEMINI_LIVE_MODEL/ {print $4}')"
+        cur_version="$(defaults read "$PLIST_PATH" EnvironmentVariables 2>/dev/null | awk -F'"' '/GEMINI_LIVE_API_VERSION/ {print $4}')"
+    fi
+
     cat <<EOF > "$PLIST_PATH"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -275,13 +284,15 @@ install_agent() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>ZALO_PERSONAL_LIVE_VOICE_ENABLED</key>
-        <string>${ZALO_PERSONAL_LIVE_VOICE_ENABLED:-0}</string>
+        <string>${ZALO_PERSONAL_LIVE_VOICE_ENABLED:-${cur_enabled:-1}}</string>
         <key>ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER</key>
-        <string>${ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER:-0}</string>
+        <string>${ZALO_PERSONAL_LIVE_VOICE_AUTO_ANSWER:-${cur_auto:-1}}</string>
         <key>ZALO_VOICE_OUTPUT_UID</key>
-        <string>${ZALO_VOICE_OUTPUT_UID:-}</string>
+        <string>${ZALO_VOICE_OUTPUT_UID:-${cur_uid:-BlackHole2ch_UID}}</string>
         <key>GEMINI_LIVE_MODEL</key>
-        <string>${GEMINI_LIVE_MODEL:-gemini-2.5-flash-native-audio-preview-12-2025}</string>
+        <string>${GEMINI_LIVE_MODEL:-${cur_model:-gemini-2.5-flash-native-audio-preview-12-2025}}</string>
+        <key>GEMINI_LIVE_API_VERSION</key>
+        <string>${GEMINI_LIVE_API_VERSION:-${cur_version:-v1alpha}}</string>
     </dict>
     <key>KeepAlive</key>
     <true/>

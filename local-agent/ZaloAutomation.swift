@@ -316,8 +316,7 @@ public final class ZaloAutomation {
                     return true
                 }
             }
-            if app.bundleIdentifier == "com.vng.zalo.zalocall" || app.localizedName == "ZaloCall",
-               let point = incomingZaloCallFallbackPoint(appAx: appAx) {
+            if let point = incomingZaloCallFallbackPoint(appAx: appAx) {
                 print("[Inbound] Using scoped ZaloCall incoming-call geometry fallback.")
                 click(at: point)
                 return true
@@ -332,15 +331,18 @@ public final class ZaloAutomation {
         for app in zaloApplications() {
             let appAx = AXUIElementCreateApplication(app.processIdentifier)
             if incomingAcceptTarget(appAx: appAx) != nil { return true }
+            if incomingZaloCallFallbackPoint(appAx: appAx) != nil { return true }
         }
         return false
     }
 
     private func zaloApplications() -> [NSRunningApplication] {
         NSWorkspace.shared.runningApplications.filter { app in
-            app.bundleIdentifier == Self.bundleID ||
-            app.bundleIdentifier == "com.vng.zalo.zalocall" ||
-            app.localizedName == "ZaloCall"
+            guard app.localizedName != "ZaloCap" else { return false }
+            return app.bundleIdentifier == Self.bundleID ||
+                app.bundleIdentifier == "com.vng.zalo.zalocall" ||
+                app.localizedName == "Zalo" ||
+                app.localizedName == "ZaloCall"
         }
     }
 
@@ -458,19 +460,47 @@ public final class ZaloAutomation {
     /// ZaloCall currently renders the incoming dialog as a canvas: macOS
     /// exposes the window but not the two colored controls. The measured
     /// layout is the green accept control at about 62% width and 79% height.
-    /// Scope this fallback to the small ZaloCall dialog so it cannot click a
-    /// control in the main Zalo window or in another application.
+    /// Check all accessibility windows and onscreen CGWindowList entries so
+    /// stale/hidden call windows from previous calls do not block detection.
     private func incomingZaloCallFallbackPoint(appAx: AXUIElement) -> CGPoint? {
-        guard let window = getMainWindow(appAx: appAx) else { return nil }
-        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef)
-        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
-        var position = CGPoint.zero, size = CGSize.zero
-        if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &position) }
-        if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
-        guard size.width >= 300, size.width <= 500,
-              size.height >= 180, size.height <= 300 else { return nil }
-        return CGPoint(x: position.x + size.width * 0.62,
-                       y: position.y + size.height * 0.79)
+        var windows: [AXUIElement] = []
+        var winsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appAx, kAXWindowsAttribute as CFString, &winsRef) == .success,
+           let list = winsRef as? [AXUIElement] {
+            windows = list
+        }
+        if let main = getMainWindow(appAx: appAx) {
+            windows.append(main)
+        }
+        for window in windows {
+            var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef)
+            AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
+            var position = CGPoint.zero, size = CGSize.zero
+            if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &position) }
+            if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
+            if size.width >= 280 && size.width <= 520 && size.height >= 160 && size.height <= 360 {
+                return CGPoint(x: position.x + size.width * 0.62,
+                               y: position.y + size.height * 0.79)
+            }
+        }
+
+        // Secondary fallback: query WindowServer for onscreen ZaloCall dialog
+        let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionOnScreenOnly)
+        if let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
+            for win in list {
+                let owner = win[kCGWindowOwnerName as String] as? String ?? ""
+                let bounds = win[kCGWindowBounds as String] as? [String: Any] ?? [:]
+                let w = CGFloat(bounds["Width"] as? Int ?? 0)
+                let h = CGFloat(bounds["Height"] as? Int ?? 0)
+                let x = CGFloat(bounds["X"] as? Int ?? 0)
+                let y = CGFloat(bounds["Y"] as? Int ?? 0)
+                if (owner == "ZaloCall" || owner.contains("Zalo")) &&
+                   w >= 280 && w <= 520 && h >= 160 && h <= 360 {
+                    return CGPoint(x: x + w * 0.62, y: y + h * 0.79)
+                }
+            }
+        }
+        return nil
     }
 }
