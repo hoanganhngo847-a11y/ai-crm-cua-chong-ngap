@@ -91,6 +91,13 @@ class ZaloDetector {
     }
 
     func probe() -> ZaloProbeResult {
+        // Incoming personal calls are shown as an accessibility invite in the
+        // main Zalo app before the separate ZaloCall process/window exists.
+        // Detect that invite first so auto-answer can run while it is ringing.
+        if ZaloAutomation.shared.hasIncomingVoiceCallUI() {
+            return ZaloProbeResult(isActive: true, contactName: nil, direction: .inbound)
+        }
+
         guard let pid = getZaloCallPID() else {
             return ZaloProbeResult(isActive: false, contactName: nil, direction: .unknown)
         }

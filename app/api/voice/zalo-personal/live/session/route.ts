@@ -85,6 +85,7 @@ export async function POST(request: Request) {
   let sessionId: string | null = null;
   let device = '';
   let token = '';
+  let stage = 'request';
 
   try {
     device = request.headers.get('x-zalo-device-id') || '';
@@ -93,6 +94,7 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     if (body?.action === 'finish') {
+      stage = 'finish_session';
       const finishSessionId = body?.session_id;
       const status = body?.status;
       if (!UUID.test(finishSessionId) || !['ENDED', 'FAILED', 'EXPIRED'].includes(status)) {
@@ -119,6 +121,7 @@ export async function POST(request: Request) {
     const admin = createAdminClient();
 
     if (body?.action === 'start_inbound') {
+      stage = 'begin_inbound_session';
       const localCallId = body?.local_call_id;
       if (!UUID.test(localCallId)) throw new RecordingError('INVALID_REQUEST', 400);
       const displayName = typeof body?.remote_display_name === 'string'
@@ -148,6 +151,7 @@ export async function POST(request: Request) {
           .eq('company_id', companyId).eq('verification_status', 'VERIFIED').eq('lifecycle_status', 'ACTIVE')
           .order('updated_at', { ascending: false }).limit(8),
       ]);
+      stage = 'load_inbound_context';
       if (companyError || knowledgeError || !company) throw new RecordingError('LIVE_CONTEXT_UNAVAILABLE', 503);
       const grounding = {
         company: { id: companyId, name: typeof company.name === 'string' ? company.name.slice(0, 256) : null },
@@ -161,11 +165,13 @@ export async function POST(request: Request) {
         memories: [],
         businessFacts: {},
       };
+      stage = 'create_gemini_live_token';
       const live = await createGeminiLiveToken(buildInstructions({
         companyName: typeof company.name === 'string' ? company.name.slice(0, 256) : null,
         customerName: displayName,
         grounding,
       }));
+      stage = 'activate_inbound_session';
       const { error: activationError } = await admin.rpc('zalo_finish_live_voice_session', {
         p_device: device,
         p_key_hash: sha256(token),
@@ -183,6 +189,7 @@ export async function POST(request: Request) {
       throw new RecordingError('INVALID_REQUEST', 400);
     }
 
+    stage = 'begin_outbound_session';
     const { data: session, error: sessionError } = await admin.rpc('zalo_begin_live_voice_session', {
       p_device: device,
       p_key_hash: sha256(token),
@@ -205,6 +212,7 @@ export async function POST(request: Request) {
     const customerId = typeof session.customer_id === 'string' && UUID.test(session.customer_id) ? session.customer_id : null;
     if (!sessionId || !companyId || !customerId) throw new RecordingError('LIVE_SESSION_UNAVAILABLE', 503);
 
+    stage = 'load_outbound_context';
     const [{ data: company }, { data: customer }, { data: conversation }] = await Promise.all([
       admin.from('companies').select('name').eq('id', companyId).maybeSingle(),
       admin.from('customers').select('name').eq('company_id', companyId).eq('id', customerId).maybeSingle(),
@@ -214,6 +222,7 @@ export async function POST(request: Request) {
 
     const traceId = randomUUID();
     const dataSource = createSupabaseBrainContextDataSource();
+    stage = 'resolve_outbound_grounding';
     const grounding = await resolveGroundingContext({
       scope: {
         companyId,
@@ -229,12 +238,14 @@ export async function POST(request: Request) {
       throw new RecordingError('LIVE_CONTEXT_UNAVAILABLE', 503);
     }
 
+    stage = 'create_gemini_live_token';
     const live = await createGeminiLiveToken(buildInstructions({
       companyName: typeof company?.name === 'string' ? company.name.slice(0, 256) : null,
       customerName: typeof customer?.name === 'string' ? customer.name.slice(0, 256) : null,
       grounding,
     }));
 
+    stage = 'activate_outbound_session';
     const { error: activationError } = await admin.rpc('zalo_finish_live_voice_session', {
       p_device: device,
       p_key_hash: sha256(token),
@@ -247,6 +258,12 @@ export async function POST(request: Request) {
 
     return liveResponse(sessionId, live);
   } catch (error) {
+    const errorCode = error instanceof RecordingError ? error.code : 'UNEXPECTED_ERROR';
+    console.error('[zalo-live-voice] failed', {
+      stage,
+      error_code: errorCode,
+      error_status: error instanceof RecordingError ? error.status : 503,
+    });
     if (sessionId && device && token) {
       try {
         const admin = createAdminClient();

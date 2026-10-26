@@ -300,41 +300,83 @@ public final class ZaloAutomation {
     /// "answer/accept call". We never fall back to a blind coordinate because
     /// an incoming personal Zalo call can be from an unknown caller.
     public func acceptIncomingVoiceCall() -> Bool {
-        let apps = NSWorkspace.shared.runningApplications.filter { app in
-            app.bundleIdentifier == Self.bundleID ||
-            app.bundleIdentifier == "com.vng.zalo.zalocall" ||
-            app.localizedName == "ZaloCall"
-        }
-        let acceptedLabels = [
-            "nhận cuộc gọi", "trả lời", "answer", "accept", "accept call", "join call"
-        ]
-        let rejectedLabels = ["từ chối", "decline", "reject", "end call", "cancel"]
+        let apps = zaloApplications()
 
         for app in apps {
             app.activate(options: .activateIgnoringOtherApps)
             let appAx = AXUIElementCreateApplication(app.processIdentifier)
-            var windowsRef: CFTypeRef?
-            var windows: [AXUIElement] = []
-            if AXUIElementCopyAttributeValue(appAx, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-               let values = windowsRef as? [AXUIElement] {
-                windows = values
-            }
-            if let main = getMainWindow(appAx: appAx) {
-                windows.insert(main, at: 0)
-            }
-
-            for window in windows {
-                if let point = incomingAcceptPoint(root: window, acceptedLabels: acceptedLabels, rejectedLabels: rejectedLabels) {
+            if let target = incomingAcceptTarget(appAx: appAx) {
+                if target.pressable {
+                    if AXUIElementPerformAction(target.element, kAXPressAction as CFString) == .success {
+                        return true
+                    }
+                }
+                if let point = target.point {
                     click(at: point)
                     return true
                 }
+            }
+            if app.bundleIdentifier == "com.vng.zalo.zalocall" || app.localizedName == "ZaloCall",
+               let point = incomingZaloCallFallbackPoint(appAx: appAx) {
+                print("[Inbound] Using scoped ZaloCall incoming-call geometry fallback.")
+                click(at: point)
+                return true
             }
         }
         return false
     }
 
-    private func incomingAcceptPoint(root: AXUIElement, acceptedLabels: [String], rejectedLabels: [String]) -> CGPoint? {
-        var result: CGPoint?
+    /// Detect the ringing invite before ZaloCall creates its separate call
+    /// window. This is intentionally read-only and does not activate Zalo.
+    public func hasIncomingVoiceCallUI() -> Bool {
+        for app in zaloApplications() {
+            let appAx = AXUIElementCreateApplication(app.processIdentifier)
+            if incomingAcceptTarget(appAx: appAx) != nil { return true }
+        }
+        return false
+    }
+
+    private func zaloApplications() -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter { app in
+            app.bundleIdentifier == Self.bundleID ||
+            app.bundleIdentifier == "com.vng.zalo.zalocall" ||
+            app.localizedName == "ZaloCall"
+        }
+    }
+
+    private struct IncomingAcceptTarget {
+        let element: AXUIElement
+        let point: CGPoint?
+        let pressable: Bool
+    }
+
+    private func incomingAcceptTarget(appAx: AXUIElement) -> IncomingAcceptTarget? {
+        let acceptedLabels = [
+            "nhận cuộc gọi", "trả lời", "trả lời cuộc gọi", "nghe máy",
+            "answer", "answer call", "answer voice call", "answer video call",
+            "accept", "accept call", "accept voice call", "accept video call",
+            "join call"
+        ]
+        let rejectedLabels = ["từ chối", "decline", "reject", "end call", "cancel"]
+        var windows: [AXUIElement] = []
+        var windowsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appAx, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+           let values = windowsRef as? [AXUIElement] {
+            windows = values
+        }
+        if let main = getMainWindow(appAx: appAx) { windows.insert(main, at: 0) }
+        for window in windows {
+            if let target = incomingAcceptTarget(root: window, acceptedLabels: acceptedLabels, rejectedLabels: rejectedLabels) {
+                return target
+            }
+        }
+        return nil
+    }
+
+    private func incomingAcceptTarget(root: AXUIElement, acceptedLabels: [String], rejectedLabels: [String]) -> IncomingAcceptTarget? {
+        var result: IncomingAcceptTarget?
+        var checkboxTargets: [IncomingAcceptTarget] = []
+        var hasIncomingText = false
         func walk(_ element: AXUIElement, depth: Int) {
             if result != nil || depth > 20 { return }
             var roleRef: CFTypeRef?, titleRef: CFTypeRef?, descriptionRef: CFTypeRef?, valueRef: CFTypeRef?
@@ -344,10 +386,20 @@ public final class ZaloAutomation {
             AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
             let role = (roleRef as? String) ?? ""
             let labels = [titleRef as? String, descriptionRef as? String, valueRef as? String]
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            let isRejected = labels.contains { label in rejectedLabels.contains(where: { label == $0 || label.contains($0) }) }
-            let isAccepted = role == "AXButton" && !isRejected && labels.contains { label in
-                acceptedLabels.contains(where: { label == $0 || label.contains($0) })
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN")).lowercased() }
+            if labels.contains(where: { $0.contains("cuoc goi thoai den") || $0.contains("incoming call") || $0.contains("incoming voice call") }) {
+                hasIncomingText = true
+            }
+            let normalizedAccepted = acceptedLabels.map {
+                $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN")).lowercased()
+            }
+            let normalizedRejected = rejectedLabels.map {
+                $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN")).lowercased()
+            }
+            let isRejected = labels.contains { label in normalizedRejected.contains(where: { label == $0 || label.contains($0) }) }
+            let isAccepted = !isRejected && labels.contains { label in
+                normalizedAccepted.contains(where: { label == $0 || label.contains($0) })
             }
             if isAccepted {
                 var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
@@ -356,8 +408,19 @@ public final class ZaloAutomation {
                 var point = CGPoint.zero, size = CGSize.zero
                 if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &point) }
                 if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
-                if size.width > 0 && size.height > 0 { result = CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2) }
+                var actionsRef: CFArray?
+                let pressable = AXUIElementCopyActionNames(element, &actionsRef) == .success &&
+                    ((actionsRef as? [String]) ?? []).contains(kAXPressAction as String)
+                let center = size.width > 0 && size.height > 0
+                    ? CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2)
+                    : nil
+                if pressable || center != nil {
+                    result = IncomingAcceptTarget(element: element, point: center, pressable: pressable)
+                }
                 return
+            }
+            if role == "AXCheckBox", let target = targetFor(element: element) {
+                checkboxTargets.append(target)
             }
             var childrenRef: CFTypeRef?
             if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
@@ -366,6 +429,48 @@ public final class ZaloAutomation {
             }
         }
         walk(root, depth: 0)
+        // ZaloCall exposes the incoming voice dialog as two unlabeled AXCheckBox
+        // elements: decline on the left, accept on the right. Require the exact
+        // incoming text and exactly two controls before selecting the right one.
+        if result == nil, hasIncomingText, checkboxTargets.count == 2 {
+            return checkboxTargets[1]
+        }
         return result
+    }
+
+    private func targetFor(element: AXUIElement) -> IncomingAcceptTarget? {
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef)
+        AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+        var point = CGPoint.zero, size = CGSize.zero
+        if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &point) }
+        if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
+        var actionsRef: CFArray?
+        let pressable = AXUIElementCopyActionNames(element, &actionsRef) == .success &&
+            ((actionsRef as? [String]) ?? []).contains(kAXPressAction as String)
+        let center = size.width > 0 && size.height > 0
+            ? CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2)
+            : nil
+        guard pressable || center != nil else { return nil }
+        return IncomingAcceptTarget(element: element, point: center, pressable: pressable)
+    }
+
+    /// ZaloCall currently renders the incoming dialog as a canvas: macOS
+    /// exposes the window but not the two colored controls. The measured
+    /// layout is the green accept control at about 62% width and 79% height.
+    /// Scope this fallback to the small ZaloCall dialog so it cannot click a
+    /// control in the main Zalo window or in another application.
+    private func incomingZaloCallFallbackPoint(appAx: AXUIElement) -> CGPoint? {
+        guard let window = getMainWindow(appAx: appAx) else { return nil }
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef)
+        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
+        var position = CGPoint.zero, size = CGSize.zero
+        if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &position) }
+        if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
+        guard size.width >= 300, size.width <= 500,
+              size.height >= 180, size.height <= 300 else { return nil }
+        return CGPoint(x: position.x + size.width * 0.62,
+                       y: position.y + size.height * 0.79)
     }
 }

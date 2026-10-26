@@ -249,12 +249,17 @@ final class LiveVoiceBridge {
             guard let self else { return }
             self.networkQueue.async {
                 guard !self.stopped else { return }
-                guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200,
-                      let data, let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                guard error == nil, let http = response as? HTTPURLResponse, let data else {
+                    self.fail("CRM refused the live voice session (network error).")
+                    return
+                }
+                guard http.statusCode == 200,
+                      let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                       json["ok"] as? Bool == true,
                       let accessToken = json["access_token"] as? String,
                       let sessionId = json["session_id"] as? String else {
-                    self.fail("CRM refused the live voice session.")
+                    let body = String(data: data, encoding: .utf8)?.prefix(240) ?? "<non-text>"
+                    self.fail("CRM refused the live voice session (HTTP \(http.statusCode)): \(body)")
                     return
                 }
                 self.sessionId = sessionId
