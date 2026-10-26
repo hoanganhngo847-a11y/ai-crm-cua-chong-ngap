@@ -893,7 +893,7 @@ export async function retryZaloTranscriptionJob(
   actorId: string,
   callId: string,
   client?: SupabaseClient
-): Promise<{ ok: boolean; status: string }> {
+): Promise<{ ok: boolean; status: string; transcription_id?: string }> {
   const admin = client || createAdminClient();
   const { data, error } = await admin.rpc('zalo_retry_transcription', {
     p_company: companyId,

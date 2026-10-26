@@ -1,8 +1,15 @@
 import 'server-only';
+import type { GoogleGenAI } from '@google/genai';
 import type { AudioTranscriptionOptions, AudioTranscriptionResult, RawUtteranceSegment } from './types';
 import type { TranscriptionProvider } from './provider';
 import { groupWordsIntoSegments, type GeminiWordAnnotation, GEMINI_MAX_TIMESTAMP_MS } from './word-grouper';
 import { MAX_PROVIDER_AUDIO_BYTES } from './audio-splitter';
+
+type GenerateContentClient = Pick<GoogleGenAI, 'models'>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 /** Default Gemini transcription model as per official documentation. */
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-transcribe';
@@ -368,12 +375,13 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
           throw interactionErr;
         }
         const msg = String(errorObj?.message || '');
-        if (/permission denied|unauthorized|forbidden|quota|rate limit/i.test(msg) && !/model|not found|interaction|api key not valid/i.test(msg)) {
-          throw interactionErr;
-        }
+        const interactionsUnsupported =
+          status === 404 ||
+          (status === 400 && /interaction|unsupported|not found|model/i.test(msg));
+        if (!interactionsUnsupported) throw interactionErr;
 
-        // Standard Google AI Studio keys or standard models do not support GAOS interactions API.
-        // Fallback to client.models.generateContent for audio transcription.
+        // Standard Google AI Studio keys may not expose Interactions API. Keep a strict
+        // generateContent fallback, but never invent transcript text or timestamps.
         checkActiveDeadline();
         return await this.transcribeViaGenerateContent(
           client,
@@ -452,7 +460,7 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
    * Transcribe via standard Gemini generateContent when Interactions API is unavailable.
    */
   private async transcribeViaGenerateContent(
-    client: any,
+    client: GenerateContentClient,
     remoteFileUri: string,
     normalizedMimeType: string,
     audioBuffer: Buffer,
@@ -469,7 +477,7 @@ Không kèm theo bất kỳ văn bản giải thích hay markdown code block nà
 
     const modelToUse = process.env.GEMINI_TRANSCRIPTION_GEN_MODEL || process.env.GEMINI_SUMMARY_MODEL || 'gemini-2.5-flash';
 
-    const parts: any[] = [];
+    const parts: Array<Record<string, unknown>> = [];
     if (remoteFileUri) {
       parts.push({
         fileData: {
@@ -496,47 +504,61 @@ Không kèm theo bất kỳ văn bản giải thích hay markdown code block nà
       },
     });
 
-    const rawText = response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    if (!rawText.trim()) {
-      return { language: targetLanguage || 'vi', segments: [] };
-    }
+    const responseRecord: Record<string, unknown> = isRecord(response) ? response : {};
+    const candidates = Array.isArray(responseRecord.candidates) ? responseRecord.candidates : [];
+    const firstCandidate = isRecord(candidates[0]) ? candidates[0] : {};
+    const candidateContent = isRecord(firstCandidate.content) ? firstCandidate.content : {};
+    const candidateParts = Array.isArray(candidateContent.parts) ? candidateContent.parts : [];
+    const firstPart = isRecord(candidateParts[0]) ? candidateParts[0] : {};
+    const rawText = typeof responseRecord.text === 'string'
+      ? responseRecord.text
+      : typeof firstPart.text === 'string'
+        ? firstPart.text
+        : '';
+    if (!rawText.trim()) throw new Error('GEMINI_INVALID_RESPONSE');
 
-    let parsed: any;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     } catch {
-      return {
-        language: targetLanguage || 'vi',
-        segments: [
-          {
-            start_ms: 0,
-            end_ms: 3000,
-            text: rawText.trim(),
-            confidence: 0.95,
-            provider_segment_id: 'gen_0',
-          },
-        ],
-      };
+      throw new Error('GEMINI_INVALID_RESPONSE');
     }
 
-    const items = Array.isArray(parsed) ? parsed : (parsed?.segments || parsed?.utterances || []);
+    const parsedRecord = isRecord(parsed) ? parsed : {};
+    const items = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsedRecord.segments)
+        ? parsedRecord.segments
+        : parsedRecord.utterances;
+    if (!Array.isArray(items) || items.length === 0) throw new Error('GEMINI_INVALID_RESPONSE');
     const segments: RawUtteranceSegment[] = [];
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (!item || typeof item.text !== 'string' || !item.text.trim()) continue;
-      const start = typeof item.start_ms === 'number' && Number.isFinite(item.start_ms) ? Math.max(0, item.start_ms) : (i * 3000);
-      const end = typeof item.end_ms === 'number' && Number.isFinite(item.end_ms) && item.end_ms > start ? item.end_ms : (start + 2500);
+      const itemRecord = isRecord(item) ? item : {};
+      if (
+        typeof itemRecord.text !== 'string' ||
+        !itemRecord.text.trim() ||
+        typeof itemRecord.start_ms !== 'number' ||
+        !Number.isFinite(itemRecord.start_ms) ||
+        typeof itemRecord.end_ms !== 'number' ||
+        !Number.isFinite(itemRecord.end_ms) ||
+        itemRecord.start_ms < 0 ||
+        itemRecord.end_ms <= itemRecord.start_ms
+      ) {
+        throw new Error('GEMINI_TIMESTAMP_MISSING');
+      }
       segments.push({
-        start_ms: start,
-        end_ms: end,
-        text: item.text.trim(),
-        confidence: typeof item.confidence === 'number' ? item.confidence : 0.95,
+        start_ms: itemRecord.start_ms,
+        end_ms: itemRecord.end_ms,
+        text: itemRecord.text.trim(),
+        confidence: typeof itemRecord.confidence === 'number' ? itemRecord.confidence : null,
         provider_segment_id: `g_${i}`,
       });
     }
 
     return {
+      text: segments.map((segment) => segment.text).join(' '),
       language: targetLanguage || 'vi',
       segments,
     };
@@ -576,8 +598,9 @@ Không kèm theo bất kỳ văn bản giải thích hay markdown code block nà
       }>;
     };
 
-    if (interactionRecord.status !== 'completed') {
-      if (interactionRecord.status === 'failed') {
+    const status = typeof interactionRecord.status === 'string' ? interactionRecord.status.toLowerCase() : '';
+    if (status !== 'completed') {
+      if (status === 'failed') {
         throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
       }
       throw new Error('GEMINI_INVALID_RESPONSE');
@@ -607,8 +630,18 @@ Không kèm theo bất kỳ văn bản giải thích hay markdown code block nà
 
             itemAnnotations.push({
               text: typeof ann.text === 'string' ? ann.text : '',
-              start_offset: typeof ann.start_offset === 'string' ? ann.start_offset : '',
-              end_offset: typeof ann.end_offset === 'string' ? ann.end_offset : '',
+              start_offset:
+                typeof ann.start_offset === 'string'
+                  ? ann.start_offset
+                  : typeof (ann as { startOffset?: unknown }).startOffset === 'string'
+                    ? (ann as { startOffset: string }).startOffset
+                    : '',
+              end_offset:
+                typeof ann.end_offset === 'string'
+                  ? ann.end_offset
+                  : typeof (ann as { endOffset?: unknown }).endOffset === 'string'
+                    ? (ann as { endOffset: string }).endOffset
+                    : '',
             });
           }
         }

@@ -23,7 +23,6 @@ import {
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
-  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Loader2,
@@ -75,48 +74,18 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
   useEffect(() => {
     if (call.customer_id) return;
     let active = true;
-    // Automatically link unlinked calls immediately without manual user intervention
     searchZaloCustomers(call.id)
-      .then(async (items) => {
+      .then((items) => {
         if (!active) return;
-        if (items.length > 0) {
-          await linkZaloCustomer(call.id, items[0].id, true);
-        } else {
-          const autoName =
-            call.remote_display_name && call.remote_display_name !== 'Chưa xác định tên'
-              ? call.remote_display_name
-              : `Khách Zalo ${new Date(call.started_at).toLocaleString('vi-VN', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}`;
-          await linkZaloCustomer(call.id, null, true, autoName);
-        }
-        if (active) onLinked();
+        setCandidates(items);
       })
-      .catch(async () => {
-        if (!active) return;
-        const autoName =
-          call.remote_display_name && call.remote_display_name !== 'Chưa xác định tên'
-            ? call.remote_display_name
-            : `Khách Zalo ${new Date(call.started_at).toLocaleString('vi-VN', {
-                day: '2-digit',
-                month: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}`;
-        try {
-          await linkZaloCustomer(call.id, null, true, autoName);
-          if (active) onLinked();
-        } catch {
-          // ignore
-        }
+      .catch(() => {
+        if (active) setError('Không tải được gợi ý.');
       });
     return () => {
       active = false;
     };
-  }, [call.id, call.customer_id, call.remote_display_name, call.started_at, onLinked]);
+  }, [call.id, call.customer_id]);
 
   async function perform(operation: () => Promise<void>) {
     setBusy(true);
@@ -323,7 +292,7 @@ function CallCard({ call, onLinked }: { call: Call; onLinked: () => void }) {
         <div className="flex items-center justify-between gap-2 text-xs text-[var(--text-secondary)] p-2 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
           <div className="flex items-center gap-2">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent)]" />
-            <span>Đang tự động liên kết hồ sơ khách hàng...</span>
+            <span>Đang kiểm tra hồ sơ khách hàng...</span>
           </div>
           <button
             type="button"

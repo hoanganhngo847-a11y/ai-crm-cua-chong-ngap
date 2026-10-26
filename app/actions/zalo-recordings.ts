@@ -5,16 +5,13 @@ import { createAdminClient } from '../../lib/supabase/admin';
 import { recordingActor, authorizedRecording } from '../../features/zalo-recordings/access';
 import { RecordingError, sha256, UUID } from '../../features/zalo-recordings/metadata';
 import { RECORDING_BUCKET } from '../../features/zalo-recordings/upload';
-import { processDueZaloTranscriptionJobs, processTargetedZaloTranscriptionJob, retryZaloTranscriptionJob } from '../../features/zalo-transcription/service';
+import { processTargetedZaloTranscriptionJob, retryZaloTranscriptionJob } from '../../features/zalo-transcription/service';
 import { processTargetedZaloCallSummaryJob, retryZaloCallSummary as retrySummaryService } from '../../features/zalo-summary/service';
 
 export async function listZaloCalls(page = 1, customerId?: string) {
   const actor = await recordingActor();
   if (!Number.isInteger(page) || page < 1 || page > 10000 || (customerId && !UUID.test(customerId))) throw new RecordingError('INVALID_FILTER');
   const admin = createAdminClient();
-
-  // Safeguard: auto-link any unlinked calls for this company so user never has to link manually
-  await admin.rpc('zalo_auto_link_unlinked_calls', { p_company: actor.companyId }).catch(() => {});
 
   let query = admin.from('zalo_personal_calls')
     .select('id,customer_id,remote_display_name,direction,started_at,duration_seconds,recording_status,transcript_status,summary_status,matching_status,identity_ambiguous,customers(name,customer_code)', { count: 'exact' })
@@ -23,35 +20,7 @@ export async function listZaloCalls(page = 1, customerId?: string) {
   if (customerId) query = query.eq('customer_id', customerId);
   const { data, error, count } = await query;
   if (error) throw new RecordingError('Không thể tải cuộc gọi Zalo. Kiểm tra migration và kết nối.', 503);
-
-  const items = data || [];
-
-  // Fallback: If any returned call is still unlinked, link it on the fly
-  for (const item of items) {
-    if (!item.customer_id) {
-      try {
-        const { data: linked } = await admin.rpc('zalo_auto_link_call', {
-          p_company: actor.companyId,
-          p_actor: actor.userId,
-          p_call: item.id,
-        });
-        if (linked?.customer_id) {
-          item.customer_id = linked.customer_id;
-          const { data: cust } = await admin.from('customers').select('name,customer_code').eq('id', linked.customer_id).maybeSingle();
-          if (cust) item.customers = cust;
-        }
-      } catch {
-        // Non-blocking fallback
-      }
-    }
-  }
-
-  // Trigger background processing for any pending transcription jobs
-  if (items.some((i) => i.transcript_status === 'PENDING')) {
-    void processDueZaloTranscriptionJobs(5, { client: admin }).catch(() => {});
-  }
-
-  return { items, total: count || 0, page };
+  return { items: data || [], total: count || 0, page };
 }
 export async function getZaloTranscription(callId: string) {
   const { actor, call } = await authorizedRecording(callId);

@@ -39,7 +39,7 @@ async function main() {
     await assert.rejects(upload(meta,'b'.repeat(43)),/DEVICE_UNAUTHORIZED/);
     const a=await upload();assert.equal(a.duplicate,false);
     const row=()=>db.query<Record<string,unknown>>('SELECT * FROM zalo_personal_calls WHERE id=$1',[a.call_id]).then(r=>r.rows[0]);
-    assert.equal((await row()).customer_id,null);assert.equal((await row()).matching_status,'SUGGESTED');assert.equal((await row()).staff_user_id,sale);
+    assert.equal((await row()).customer_id,customer);assert.equal((await row()).matching_status,'EXACT');assert.equal((await row()).staff_user_id,sale);
     assert.equal((await row()).channel,'ZALO_PERSONAL');assert.equal((await row()).source,'LOCAL_AGENT');
     assert.equal((await row()).recording_sha256,sha256(audio));
     const duplicate=await upload();assert.equal(duplicate.duplicate,true);assert.equal(duplicate.call_id,a.call_id);assert.equal(writes,1);

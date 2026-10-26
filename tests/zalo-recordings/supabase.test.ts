@@ -52,7 +52,7 @@ async function main() {
     const a=await upload();assert.equal(a.duplicate,false);
     const get=async(id:string)=>{const {data,error}=await admin.from('zalo_personal_calls').select('*').eq('id',id).single();assert.ifError(error);return data!;};
     const first=await get(a.call_id);paths.push(first.recording_path);
-    assert.equal(first.customer_id,null);assert.equal(first.recording_status,'READY');assert.equal(first.staff_user_id,sale.id);
+    assert.equal(first.customer_id,customer!.id);assert.equal(first.recording_status,'READY');assert.equal(first.staff_user_id,sale.id);
     const bucket=admin.storage.from(RECORDING_BUCKET);
     const downloaded=await bucket.download(first.recording_path);assert.ifError(downloaded.error);
     assert.equal(sha256(Buffer.from(await downloaded.data!.arrayBuffer())),sha256(audio));
