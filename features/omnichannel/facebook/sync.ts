@@ -84,8 +84,10 @@ type SyncWindow = {
     lookbackMinutes: number;
     maxConversationsPerPage: number;
     maxMessagesPerConversation: number;
-    since: number;
+    sinceMs: number;
 };
+
+type IngestOutcome = 'ingested' | 'duplicate' | 'skipped';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
@@ -227,7 +229,7 @@ async function ingestMessage(
     message: GraphMessage,
     client: SupabaseClient,
     result: FacebookSyncPageResult,
-): Promise<'ingested' | 'skipped'> {
+): Promise<IngestOutcome> {
     const mid = typeof message.id === 'string' ? message.id.trim() : '';
     if (!mid || mid.length > 250) return 'skipped';
 
@@ -242,7 +244,7 @@ async function ingestMessage(
     const content = messageContent(message);
     const privacy = processFacebookInboundPhonePrivacy(content);
 
-    const { error } = await client.rpc('han_ingest', {
+    const { data, error } = await client.rpc('han_ingest', {
         p_company: config.company,
         p_channel: 'FACEBOOK',
         p_external: `${config.page}:${customerPsid}`,
@@ -270,13 +272,25 @@ async function ingestMessage(
         },
     });
 
-    if (!error) return 'ingested';
+    if (error) {
+        if (error.message.includes('IDEMPOTENCY_CONFLICT')) {
+            return 'duplicate';
+        }
 
-    if (error.message.includes('IDEMPOTENCY_CONFLICT')) {
+        result.errors.push(`han_ingest:${error.message.slice(0, 120)}`);
         return 'skipped';
     }
 
-    result.errors.push(`han_ingest:${error.message.slice(0, 120)}`);
+    const status = asRecord(data)?.status;
+
+    if (status === 'ACCEPTED') return 'ingested';
+    if (status === 'PROCESSED' || status === 'IDENTITY_REVIEW') {
+        return 'duplicate';
+    }
+
+    result.errors.push(
+        `han_ingest:unexpected_status=${String(status ?? 'missing').slice(0, 40)}`,
+    );
     return 'skipped';
 }
 
@@ -307,12 +321,12 @@ async function syncConversation(
     let after: string | null = null;
     let remaining = window.maxMessagesPerConversation;
     let graphPages = 0;
+    let reachedWindowBoundary = false;
 
-    while (remaining > 0 && graphPages < MAX_GRAPH_PAGES) {
+    while (remaining > 0 && graphPages < MAX_GRAPH_PAGES && !reachedWindowBoundary) {
         const url = graphUrl(version, conversationId, 'messages');
         url.searchParams.set('fields', 'id,message,from,created_time,attachments');
         url.searchParams.set('limit', String(Math.min(GRAPH_PAGE_LIMIT, remaining)));
-        url.searchParams.set('since', String(window.since));
         if (after) url.searchParams.set('after', after);
 
         const response = await requestGraph(url, token, fetcher);
@@ -323,7 +337,17 @@ async function syncConversation(
 
         const list = readList<GraphMessage>(response.payload);
 
+        // Graph ignores `since` for Page conversation messages and returns newest first,
+        // so the lookback window must be enforced client-side.
         for (const message of list.rows) {
+            const created = graphTime(message.created_time);
+            if (!created) continue;
+
+            if (Date.parse(created) < window.sinceMs) {
+                reachedWindowBoundary = true;
+                break;
+            }
+
             if (remaining <= 0) break;
             remaining -= 1;
             result.messages_seen += 1;
@@ -389,12 +413,12 @@ async function syncPage(
     let after: string | null = null;
     let remaining = window.maxConversationsPerPage;
     let graphPages = 0;
+    let reachedWindowBoundary = false;
 
-    while (remaining > 0 && graphPages < MAX_GRAPH_PAGES) {
+    while (remaining > 0 && graphPages < MAX_GRAPH_PAGES && !reachedWindowBoundary) {
         const url = graphUrl(version, config.page, 'conversations');
         url.searchParams.set('fields', 'id,participants,updated_time');
         url.searchParams.set('limit', String(Math.min(GRAPH_PAGE_LIMIT, remaining)));
-        url.searchParams.set('since', String(window.since));
         if (after) url.searchParams.set('after', after);
 
         const response = await requestGraph(url, token, fetcher);
@@ -405,7 +429,17 @@ async function syncPage(
 
         const list = readList<GraphConversation>(response.payload);
 
+        // Graph ignores `since` for Page conversations and returns them ordered by
+        // updated_time desc, so stop at the first conversation older than the window.
         for (const conversation of list.rows) {
+            const updated = graphTime(conversation.updated_time);
+            if (!updated) continue;
+
+            if (Date.parse(updated) < window.sinceMs) {
+                reachedWindowBoundary = true;
+                break;
+            }
+
             if (remaining <= 0) break;
             remaining -= 1;
             result.conversations += 1;
@@ -475,7 +509,7 @@ export async function syncFacebookPages(
         lookbackMinutes,
         maxConversationsPerPage,
         maxMessagesPerConversation,
-        since: Math.floor((now.getTime() - lookbackMinutes * 60_000) / 1000),
+        sinceMs: now.getTime() - lookbackMinutes * 60_000,
     };
 
     const pages: FacebookSyncPageResult[] = [];

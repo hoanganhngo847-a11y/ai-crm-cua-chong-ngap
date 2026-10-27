@@ -72,11 +72,21 @@ function conversationResponse(): Response {
                     ],
                 },
             },
+            {
+                id: 't_old',
+                updated_time: '2026-10-27T07:00:00+0000',
+                participants: {
+                    data: [
+                        { id: '999', name: 'Khách cũ' },
+                        { id: PAGE, name: 'Cửa chống ngập' },
+                    ],
+                },
+            },
         ],
     });
 }
 
-test('polls customer messages and skips Page echoes', async () => {
+test('polls customer messages, skips Page echoes, and stops at the lookback boundary', async () => {
     const { client, calls } = fakeClient();
     const promotions: Array<{ page: string; psid: string; name: string | null }> = [];
 
@@ -100,6 +110,12 @@ test('polls customer messages and skips Page echoes', async () => {
                             from: { id: CUSTOMER, name: 'Mai Hạnh' },
                             message: 'hi bạn',
                             created_time: '2026-10-27T08:40:16+0000',
+                        },
+                        {
+                            id: 'm_old',
+                            from: { id: CUSTOMER, name: 'Mai Hạnh' },
+                            message: 'tin cũ',
+                            created_time: '2026-10-27T07:59:59+0000',
                         },
                     ],
                 });
@@ -136,21 +152,21 @@ test('polls customer messages and skips Page echoes', async () => {
                 { page: PAGE, psid: CUSTOMER, name: 'Mai Hạnh' },
             ]);
 
-            const expectedSince = String(
-                Math.floor(
-                    (new Date('2026-10-27T09:00:00Z').getTime() - 3_600_000) /
-                        1000,
-                ),
+            // Graph v26 ignores `since`; the worker must filter client-side instead.
+            assert.equal(urls[0].searchParams.get('since'), null);
+            assert.equal(urls[1].searchParams.get('since'), null);
+            assert.equal(
+                urls.some((url) => url.pathname.includes('/t_old/messages')),
+                false,
             );
-            assert.equal(urls[0].searchParams.get('since'), expectedSince);
-            assert.equal(urls[1].searchParams.get('since'), expectedSince);
         },
     );
 });
 
-test('treats an idempotency conflict as an already-ingested message', async () => {
+test('treats a replayed message status as already ingested', async () => {
     const { client, calls } = fakeClient(() => ({
-        error: { message: 'IDEMPOTENCY_CONFLICT' },
+        data: { status: 'PROCESSED' },
+        error: null,
     }));
     let promoted = 0;
 
@@ -189,6 +205,47 @@ test('treats an idempotency conflict as an already-ingested message', async () =
             assert.equal(summary.pages[0].errors.length, 0);
             assert.equal(calls.length, 1);
             assert.equal(promoted, 1);
+        },
+    );
+});
+
+test('treats an idempotency conflict as an already-ingested message', async () => {
+    const { client, calls } = fakeClient(() => ({
+        error: { message: 'IDEMPOTENCY_CONFLICT' },
+    }));
+
+    await withFetch(
+        (url) => {
+            if (url.pathname.endsWith(`/${PAGE}/conversations`)) {
+                return conversationResponse();
+            }
+
+            return jsonResponse({
+                data: [
+                    {
+                        id: 'm_customer',
+                        from: { id: CUSTOMER, name: 'Mai Hạnh' },
+                        message: 'hi bạn',
+                        created_time: '2026-10-27T08:40:16+0000',
+                    },
+                ],
+            });
+        },
+        async () => {
+            const summary = await syncFacebookPages(
+                { lookbackMinutes: 60 },
+                {
+                    client,
+                    now: new Date('2026-10-27T09:00:00Z'),
+                    promoteDisplayName: async () => {},
+                },
+            );
+
+            assert.equal(summary.ok, true);
+            assert.equal(summary.pages[0].messages_ingested, 0);
+            assert.equal(summary.pages[0].messages_skipped, 1);
+            assert.equal(summary.pages[0].errors.length, 0);
+            assert.equal(calls.length, 1);
         },
     );
 });
