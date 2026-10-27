@@ -818,6 +818,7 @@ async function syncPage(
 
         while (remaining > 0 && graphPages < MAX_GRAPH_PAGES && !reachedWindowBoundary) {
             const url = graphUrl(version, config.page, 'conversations');
+            url.searchParams.set('platform', 'messenger');
             url.searchParams.set('folder', folder);
             url.searchParams.set('fields', 'id,participants,updated_time');
             url.searchParams.set('limit', String(Math.min(GRAPH_PAGE_LIMIT, remaining)));
