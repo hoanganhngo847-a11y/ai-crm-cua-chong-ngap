@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { pageBindings, type PageBinding } from './binding';
+import { sanitize } from './core';
 import { processFacebookInboundPhonePrivacy } from './phone-intake';
 import {
     normalizeFacebookDisplayName,
@@ -17,6 +18,8 @@ const DEFAULT_LOOKBACK_MINUTES = 5;
 const MAX_LOOKBACK_MINUTES = 7 * 24 * 60;
 const DEFAULT_MAX_CONVERSATIONS = 200;
 const DEFAULT_MAX_MESSAGES = 200;
+
+export const DEFAULT_FACEBOOK_FOLDERS = ['inbox', 'other', 'pending'];
 
 const ATTACHMENT_PLACEHOLDER = '[Khách gửi tệp đính kèm; nội dung cần kiểm tra]';
 const EMPTY_MESSAGE_PLACEHOLDER = '[Tin nhắn không có văn bản]';
@@ -52,8 +55,10 @@ type GraphList<T> = {
 export type FacebookSyncOptions = {
     lookbackMinutes?: number;
     pages?: string[];
+    folders?: string[];
     maxConversationsPerPage?: number;
     maxMessagesPerConversation?: number;
+    dryRun?: boolean;
 };
 
 export type FacebookSyncDependencies = {
@@ -63,13 +68,27 @@ export type FacebookSyncDependencies = {
     promoteDisplayName?: typeof promoteFacebookCustomerDisplayName;
 };
 
+export type FacebookSyncFolderResult = {
+    folder: string;
+    conversations: number;
+    messages_seen: number;
+    messages_ingested: number;
+    messages_skipped: number;
+    inbound_ingested: number;
+    outbound_ingested: number;
+    errors: string[];
+};
+
 export type FacebookSyncPageResult = {
     page: string;
     conversations: number;
     messages_seen: number;
     messages_ingested: number;
     messages_skipped: number;
+    inbound_ingested: number;
+    outbound_ingested: number;
     errors: string[];
+    folders?: FacebookSyncFolderResult[];
 };
 
 export type FacebookSyncResult = {
@@ -77,6 +96,7 @@ export type FacebookSyncResult = {
     started_at: string;
     finished_at: string;
     lookback_minutes: number;
+    dry_run?: boolean;
     pages: FacebookSyncPageResult[];
 };
 
@@ -222,24 +242,22 @@ function conversationCustomer(
     };
 }
 
-async function ingestMessage(
+async function ingestInboundMessage(
     config: PageBinding,
     conversationId: string,
     customerPsid: string,
     message: GraphMessage,
     client: SupabaseClient,
-    result: FacebookSyncPageResult,
+    dryRun: boolean,
+    errors: string[],
 ): Promise<IngestOutcome> {
     const mid = typeof message.id === 'string' ? message.id.trim() : '';
     if (!mid || mid.length > 250) return 'skipped';
 
-    const fromId =
-        typeof message.from?.id === 'string' ? message.from.id.trim() : '';
-    if (fromId === config.page) return 'skipped';
-    if (fromId !== customerPsid) return 'skipped';
-
     const occurred = graphTime(message.created_time);
     if (!occurred) return 'skipped';
+
+    if (dryRun) return 'ingested';
 
     const content = messageContent(message);
     const privacy = processFacebookInboundPhonePrivacy(content);
@@ -258,7 +276,7 @@ async function ingestMessage(
         p_payload: {
             id: mid,
             created_time: occurred,
-            from: { id: fromId },
+            from: { id: customerPsid },
             message: content,
             has_attachments:
                 Array.isArray(message.attachments) && message.attachments.length > 0,
@@ -277,7 +295,7 @@ async function ingestMessage(
             return 'duplicate';
         }
 
-        result.errors.push(`han_ingest:${error.message.slice(0, 120)}`);
+        errors.push(`han_ingest:${error.message.slice(0, 120)}`);
         return 'skipped';
     }
 
@@ -288,10 +306,286 @@ async function ingestMessage(
         return 'duplicate';
     }
 
-    result.errors.push(
+    errors.push(
         `han_ingest:unexpected_status=${String(status ?? 'missing').slice(0, 40)}`,
     );
     return 'skipped';
+}
+
+async function ingestOutboundFallback(
+    config: PageBinding,
+    customerPsid: string,
+    mid: string,
+    content: string,
+    safeContent: string | null,
+    safeStatus: string,
+    occurred: string,
+    payload: Record<string, unknown>,
+    client: SupabaseClient,
+    errors: string[],
+): Promise<IngestOutcome> {
+    const key = `${config.page}:${mid}`;
+    const externalId = `${config.page}:${customerPsid}`;
+
+    try {
+        // Idempotency check: interaction already recorded
+        const { data: existing } = await client
+            .from('interactions')
+            .select('id')
+            .eq('company_id', config.company)
+            .eq('channel', 'FACEBOOK')
+            .eq('external_ref', key)
+            .maybeSingle();
+
+        if (existing?.id) return 'duplicate';
+
+        // Reconciliation: check if outbox recorded this mid from CRM send
+        const { data: outbox } = await client
+            .from('han_outbox')
+            .select('interaction_id')
+            .eq('company_id', config.company)
+            .eq('provider_mid', mid)
+            .maybeSingle();
+
+        if (outbox?.interaction_id) {
+            await client
+                .from('interactions')
+                .update({ external_ref: key })
+                .eq('id', outbox.interaction_id)
+                .is('external_ref', null);
+            return 'duplicate';
+        }
+
+        // Resolve customer
+        let customerId: string | null = null;
+        const { data: identity } = await client
+            .from('identities')
+            .select('customer_id')
+            .eq('company_id', config.company)
+            .eq('channel', 'FACEBOOK')
+            .eq('external_id', externalId)
+            .maybeSingle();
+
+        customerId = identity?.customer_id ?? null;
+
+        if (!customerId) {
+            const { data: newCust, error: custErr } = await client
+                .from('customers')
+                .insert({
+                    company_id: config.company,
+                    name: 'Khách Messenger',
+                    source: 'FACEBOOK',
+                    stage: 'LEAD_NEW',
+                })
+                .select('id')
+                .single();
+
+            if (custErr || !newCust) {
+                errors.push(`outbound_fallback:cust_err=${custErr?.message || 'unknown'}`);
+                return 'skipped';
+            }
+            customerId = newCust.id;
+
+            await client.from('identities').insert({
+                company_id: config.company,
+                customer_id: customerId,
+                channel: 'FACEBOOK',
+                external_id: externalId,
+                verified: false,
+            });
+        }
+
+        // Resolve conversation
+        let conversationId: string | null = null;
+        const { data: conv } = await client
+            .from('conversations')
+            .select('id, last_message_at')
+            .eq('company_id', config.company)
+            .eq('channel', 'FACEBOOK')
+            .eq('external_conversation_id', externalId)
+            .maybeSingle();
+
+        if (conv) {
+            conversationId = conv.id;
+            const currentLast = conv.last_message_at ? new Date(conv.last_message_at).getTime() : 0;
+            if (new Date(occurred).getTime() > currentLast) {
+                await client
+                    .from('conversations')
+                    .update({ last_message_at: occurred })
+                    .eq('id', conversationId);
+            }
+        } else {
+            const { data: newConv, error: convErr } = await client
+                .from('conversations')
+                .insert({
+                    company_id: config.company,
+                    customer_id: customerId,
+                    channel: 'FACEBOOK',
+                    external_conversation_id: externalId,
+                    last_message_at: occurred,
+                    unread_count: 0,
+                })
+                .select('id')
+                .single();
+
+            if (convErr || !newConv) {
+                errors.push(`outbound_fallback:conv_err=${convErr?.message || 'unknown'}`);
+                return 'skipped';
+            }
+            conversationId = newConv.id;
+        }
+
+        // Insert OUTBOUND interaction
+        const { data: interaction, error: intErr } = await client
+            .from('interactions')
+            .insert({
+                company_id: config.company,
+                customer_id: customerId,
+                conversation_id: conversationId,
+                channel: 'FACEBOOK',
+                type: 'MESSAGE',
+                direction: 'OUTBOUND',
+                sanitized_content: safeContent,
+                sanitization_status: safeStatus,
+                sanitized_at: safeStatus === 'SUCCEEDED' ? new Date().toISOString() : null,
+                sanitizer_version: 'han-bounded-v2',
+                external_ref: key,
+                actor_type: 'SALE',
+                created_at: occurred,
+            })
+            .select('id')
+            .single();
+
+        if (intErr) {
+            if (intErr.message?.includes('duplicate key') || intErr.code === '23505') {
+                return 'duplicate';
+            }
+            errors.push(`outbound_fallback:int_err=${intErr.message}`);
+            return 'skipped';
+        }
+
+        if (interaction?.id) {
+            try {
+                await client.from('interaction_raw_contents').insert({
+                    interaction_id: interaction.id,
+                    company_id: config.company,
+                    raw_content: content,
+                    raw_payload: payload,
+                });
+            } catch {
+                // Non-critical raw zone insertion
+            }
+
+            try {
+                await client
+                    .from('response_sla_windows')
+                    .update({
+                        state: 'SALE_RESPONDED',
+                        sale_response_interaction_id: interaction.id,
+                        resolved_at: occurred,
+                        dispatch_state: 'PROVIDER_ACCEPTED',
+                    })
+                    .eq('conversation_id', conversationId)
+                    .eq('state', 'OPEN')
+                    .lte('started_at', occurred);
+            } catch {
+                // Non-critical SLA update
+            }
+        }
+
+        return 'ingested';
+    } catch (err) {
+        errors.push(`outbound_fallback:ex=${err instanceof Error ? err.message : 'unknown'}`);
+        return 'skipped';
+    }
+}
+
+async function ingestOutboundMessage(
+    config: PageBinding,
+    conversationId: string,
+    customerPsid: string,
+    message: GraphMessage,
+    client: SupabaseClient,
+    dryRun: boolean,
+    errors: string[],
+): Promise<IngestOutcome> {
+    const mid = typeof message.id === 'string' ? message.id.trim() : '';
+    if (!mid || mid.length > 250) return 'skipped';
+
+    const occurred = graphTime(message.created_time);
+    if (!occurred) return 'skipped';
+
+    if (dryRun) return 'ingested';
+
+    const content = messageContent(message);
+    const safe = sanitize(content);
+    const safeContent = safe.status === 'SUCCEEDED' ? safe.content : null;
+    const safeStatus = safe.status;
+
+    const payload = {
+        id: mid,
+        created_time: occurred,
+        from: { id: config.page },
+        to: { id: customerPsid },
+        message: content,
+        has_attachments:
+            Array.isArray(message.attachments) && message.attachments.length > 0,
+        conversation_id: conversationId,
+        sync_source: 'graph_poll_outbound',
+    };
+
+    // 1. Prefer atomic database operation via RPC han_ingest_outbound
+    const { data, error } = await client.rpc('han_ingest_outbound', {
+        p_company: config.company,
+        p_channel: 'FACEBOOK',
+        p_page: config.page,
+        p_customer_psid: customerPsid,
+        p_key: `${config.page}:${mid}`,
+        p_content: content,
+        p_safe: safeContent,
+        p_safe_status: safeStatus,
+        p_occurred: occurred,
+        p_payload: payload,
+    });
+
+    if (!error) {
+        const status = asRecord(data)?.status;
+        if (status === 'ACCEPTED') return 'ingested';
+        if (status === 'PROCESSED') return 'duplicate';
+        errors.push(
+            `han_ingest_outbound:unexpected_status=${String(status ?? 'missing').slice(0, 40)}`,
+        );
+        return 'skipped';
+    }
+
+    if (error.message.includes('IDEMPOTENCY_CONFLICT')) {
+        return 'duplicate';
+    }
+
+    // If RPC is missing (e.g. before migration runs on target environment), use graceful fallback
+    const isRpcMissing =
+        error.code === 'PGRST202' ||
+        error.message.includes('Could not find the function') ||
+        error.message.includes('function public.han_ingest_outbound') ||
+        error.message.includes('schema cache');
+
+    if (!isRpcMissing) {
+        errors.push(`han_ingest_outbound:${error.message.slice(0, 120)}`);
+        return 'skipped';
+    }
+
+    return ingestOutboundFallback(
+        config,
+        customerPsid,
+        mid,
+        content,
+        safeContent,
+        safeStatus,
+        occurred,
+        payload,
+        client,
+        errors,
+    );
 }
 
 async function syncConversation(
@@ -303,18 +597,19 @@ async function syncConversation(
     token: string,
     version: string,
     promoteDisplayName: typeof promoteFacebookCustomerDisplayName,
-    result: FacebookSyncPageResult,
+    dryRun: boolean,
+    folderResult: FacebookSyncFolderResult,
 ): Promise<void> {
     const conversationId =
         typeof conversation.id === 'string' ? conversation.id.trim() : '';
     if (!conversationId) {
-        result.errors.push('conversation_id_missing');
+        folderResult.errors.push('conversation_id_missing');
         return;
     }
 
     const customer = conversationCustomer(conversation, config.page);
     if (!customer) {
-        result.errors.push('conversation_participants_ambiguous');
+        folderResult.errors.push('conversation_participants_ambiguous');
         return;
     }
 
@@ -331,7 +626,7 @@ async function syncConversation(
 
         const response = await requestGraph(url, token, fetcher);
         if (!response.ok) {
-            result.errors.push(response.failure);
+            folderResult.errors.push(response.failure);
             break;
         }
 
@@ -350,21 +645,49 @@ async function syncConversation(
 
             if (remaining <= 0) break;
             remaining -= 1;
-            result.messages_seen += 1;
+            folderResult.messages_seen += 1;
 
-            const outcome = await ingestMessage(
-                config,
-                conversationId,
-                customer.psid,
-                message,
-                client,
-                result,
-            );
+            const fromId =
+                typeof message.from?.id === 'string' ? message.from.id.trim() : '';
 
-            if (outcome === 'ingested') {
-                result.messages_ingested += 1;
+            let outcome: IngestOutcome = 'skipped';
+
+            if (fromId === customer.psid) {
+                // Inbound customer message
+                outcome = await ingestInboundMessage(
+                    config,
+                    conversationId,
+                    customer.psid,
+                    message,
+                    client,
+                    dryRun,
+                    folderResult.errors,
+                );
+                if (outcome === 'ingested') {
+                    folderResult.messages_ingested += 1;
+                    folderResult.inbound_ingested += 1;
+                } else {
+                    folderResult.messages_skipped += 1;
+                }
+            } else if (fromId === config.page) {
+                // Outbound Page administrator message
+                outcome = await ingestOutboundMessage(
+                    config,
+                    conversationId,
+                    customer.psid,
+                    message,
+                    client,
+                    dryRun,
+                    folderResult.errors,
+                );
+                if (outcome === 'ingested') {
+                    folderResult.messages_ingested += 1;
+                    folderResult.outbound_ingested += 1;
+                } else {
+                    folderResult.messages_skipped += 1;
+                }
             } else {
-                result.messages_skipped += 1;
+                folderResult.messages_skipped += 1;
             }
         }
 
@@ -373,7 +696,7 @@ async function syncConversation(
         after = list.after;
     }
 
-    if (customer.name) {
+    if (customer.name && !dryRun) {
         await promoteDisplayName(config, customer.psid, customer.name);
     }
 }
@@ -381,28 +704,33 @@ async function syncConversation(
 async function syncPage(
     config: PageBinding,
     window: SyncWindow,
+    folders: string[],
+    dryRun: boolean,
     dependencies: FacebookSyncDependencies,
 ): Promise<FacebookSyncPageResult> {
-    const result: FacebookSyncPageResult = {
+    const pageResult: FacebookSyncPageResult = {
         page: config.page,
         conversations: 0,
         messages_seen: 0,
         messages_ingested: 0,
         messages_skipped: 0,
+        inbound_ingested: 0,
+        outbound_ingested: 0,
         errors: [],
+        folders: [],
     };
 
     const version = process.env.META_GRAPH_VERSION?.trim();
     const token = process.env[config.tokenEnv]?.trim();
 
     if (!version || !/^v\d+\.\d+$/.test(version)) {
-        result.errors.push('graph_version_missing');
-        return result;
+        pageResult.errors.push('graph_version_missing');
+        return pageResult;
     }
 
     if (!token) {
-        result.errors.push('page_token_missing');
-        return result;
+        pageResult.errors.push('page_token_missing');
+        return pageResult;
     }
 
     const client = dependencies.client ?? createAdminClient();
@@ -410,67 +738,108 @@ async function syncPage(
     const promoteDisplayName =
         dependencies.promoteDisplayName ?? promoteFacebookCustomerDisplayName;
 
-    let after: string | null = null;
-    let remaining = window.maxConversationsPerPage;
-    let graphPages = 0;
-    let reachedWindowBoundary = false;
+    const seenConversations = new Set<string>();
 
-    while (remaining > 0 && graphPages < MAX_GRAPH_PAGES && !reachedWindowBoundary) {
-        const url = graphUrl(version, config.page, 'conversations');
-        url.searchParams.set('fields', 'id,participants,updated_time');
-        url.searchParams.set('limit', String(Math.min(GRAPH_PAGE_LIMIT, remaining)));
-        if (after) url.searchParams.set('after', after);
+    for (const folder of folders) {
+        const folderResult: FacebookSyncFolderResult = {
+            folder,
+            conversations: 0,
+            messages_seen: 0,
+            messages_ingested: 0,
+            messages_skipped: 0,
+            inbound_ingested: 0,
+            outbound_ingested: 0,
+            errors: [],
+        };
 
-        const response = await requestGraph(url, token, fetcher);
-        if (!response.ok) {
-            result.errors.push(response.failure);
-            break;
-        }
+        let after: string | null = null;
+        let remaining = window.maxConversationsPerPage;
+        let graphPages = 0;
+        let reachedWindowBoundary = false;
 
-        const list = readList<GraphConversation>(response.payload);
+        while (remaining > 0 && graphPages < MAX_GRAPH_PAGES && !reachedWindowBoundary) {
+            const url = graphUrl(version, config.page, 'conversations');
+            url.searchParams.set('folder', folder);
+            url.searchParams.set('fields', 'id,participants,updated_time');
+            url.searchParams.set('limit', String(Math.min(GRAPH_PAGE_LIMIT, remaining)));
+            if (after) url.searchParams.set('after', after);
 
-        // Graph ignores `since` for Page conversations and returns them ordered by
-        // updated_time desc, so stop at the first conversation older than the window.
-        for (const conversation of list.rows) {
-            const updated = graphTime(conversation.updated_time);
-            if (!updated) continue;
-
-            if (Date.parse(updated) < window.sinceMs) {
-                reachedWindowBoundary = true;
+            const response = await requestGraph(url, token, fetcher);
+            if (!response.ok) {
+                folderResult.errors.push(`folder_failed:${folder}:${response.failure}`);
                 break;
             }
 
-            if (remaining <= 0) break;
-            remaining -= 1;
-            result.conversations += 1;
+            const list = readList<GraphConversation>(response.payload);
 
-            await syncConversation(
-                config,
-                conversation,
-                window,
-                client,
-                fetcher,
-                token,
-                version,
-                promoteDisplayName,
-                result,
-            );
+            // Graph ignores `since` for Page conversations and returns them ordered by
+            // updated_time desc, so stop at the first conversation older than the window.
+            for (const conversation of list.rows) {
+                const updated = graphTime(conversation.updated_time);
+                if (!updated) continue;
+
+                if (Date.parse(updated) < window.sinceMs) {
+                    reachedWindowBoundary = true;
+                    break;
+                }
+
+                const convId =
+                    typeof conversation.id === 'string' ? conversation.id.trim() : '';
+
+                if (convId && seenConversations.has(convId)) {
+                    // Prevent duplicate processing across folder queries
+                    continue;
+                }
+                if (convId) seenConversations.add(convId);
+
+                if (remaining <= 0) break;
+                remaining -= 1;
+                folderResult.conversations += 1;
+
+                await syncConversation(
+                    config,
+                    conversation,
+                    window,
+                    client,
+                    fetcher,
+                    token,
+                    version,
+                    promoteDisplayName,
+                    dryRun,
+                    folderResult,
+                );
+            }
+
+            graphPages += 1;
+            if (!list.hasNext || !list.after) break;
+            after = list.after;
         }
 
-        graphPages += 1;
-        if (!list.hasNext || !list.after) break;
-        after = list.after;
+        console.info(
+            `[facebook-sync] page=${config.page} folder=${folder} conversations=${folderResult.conversations} seen=${folderResult.messages_seen} ingested=${folderResult.messages_ingested} (in=${folderResult.inbound_ingested},out=${folderResult.outbound_ingested}) skipped=${folderResult.messages_skipped} errors=${folderResult.errors.length}`,
+        );
+
+        pageResult.folders?.push(folderResult);
+        pageResult.conversations += folderResult.conversations;
+        pageResult.messages_seen += folderResult.messages_seen;
+        pageResult.messages_ingested += folderResult.messages_ingested;
+        pageResult.messages_skipped += folderResult.messages_skipped;
+        pageResult.inbound_ingested += folderResult.inbound_ingested;
+        pageResult.outbound_ingested += folderResult.outbound_ingested;
+        if (folderResult.errors.length > 0) {
+            pageResult.errors.push(...folderResult.errors);
+        }
     }
 
-    return result;
+    return pageResult;
 }
 
 /**
  * Pull recent Page conversations directly from Meta Graph API.
  *
- * This is the transport-independent fallback for messages that the webhook cannot deliver
- * while the Meta app is in Development mode. Polling uses the same `${page}:${mid}` key as
- * the webhook, so a message that arrives through both paths is ingested only once.
+ * Folder-aware polling across inbox, other, and pending message request folders.
+ * Ingests inbound messages (customer -> Page) and outbound replies (Page admin -> customer).
+ * Replays, duplicates, and CRM-originated sends are reconciled idempotently without duplicate rows.
  */
 export async function syncFacebookPages(
     options: FacebookSyncOptions = {},
@@ -499,6 +868,10 @@ export async function syncFacebookPages(
     const selectedPages = new Set(
         (options.pages ?? []).map((page) => page.trim()).filter(Boolean),
     );
+    const folders = (options.folders ?? DEFAULT_FACEBOOK_FOLDERS)
+        .map((folder) => folder.trim().toLowerCase())
+        .filter(Boolean);
+    const dryRun = Boolean(options.dryRun);
 
     const configs = pageBindings().filter(
         (config) => selectedPages.size === 0 || selectedPages.has(config.page),
@@ -516,7 +889,7 @@ export async function syncFacebookPages(
 
     for (const config of configs) {
         pages.push(
-            await syncPage(config, window, {
+            await syncPage(config, window, folders, dryRun, {
                 ...dependencies,
                 client,
             }),
@@ -528,6 +901,7 @@ export async function syncFacebookPages(
         started_at: startedAt.toISOString(),
         finished_at: new Date().toISOString(),
         lookback_minutes: lookbackMinutes,
+        dry_run: dryRun,
         pages,
     };
 }

@@ -130,5 +130,83 @@ BEGIN
     PERFORM pg_temp.check_it(NOT public.han_rate_limit(a, repeat('a',64)), 'phone quota blocks sixth request');
     FOR i IN 1..200 LOOP PERFORM public.han_rate_limit(b, lpad(to_hex(i),64,'0')); END LOOP;
     PERFORM pg_temp.check_it(NOT public.han_rate_limit(b, repeat('f',64)), 'company global quota blocks request 201');
+
+    -- han_ingest_outbound tests
+    DECLARE
+        outbound_res jsonb;
+        outbound_dup jsonb;
+        outbound_interaction uuid;
+        conv_unread_before integer;
+        sla_id uuid;
+    BEGIN
+        SELECT unread_count INTO conv_unread_before FROM public.conversations WHERE id = conv;
+
+        -- Test 1: Ingest outbound message for existing conversation
+        outbound_res := public.han_ingest_outbound(
+            a, 'FACEBOOK', '123', '456', '123:out_mid_1',
+            'Xin chào từ Page', 'Xin chào từ Page', 'SUCCEEDED', now(), '{}'::jsonb
+        );
+        PERFORM pg_temp.check_it(outbound_res->>'status' = 'ACCEPTED', 'outbound ingest accepted');
+        outbound_interaction := (outbound_res->>'interaction_id')::uuid;
+
+        -- Test 2: Verify direction, actor_type, external_ref
+        PERFORM pg_temp.check_it(
+            EXISTS(
+                SELECT 1 FROM public.interactions
+                WHERE id = outbound_interaction
+                  AND direction = 'OUTBOUND'
+                  AND actor_type = 'SALE'
+                  AND external_ref = '123:out_mid_1'
+            ),
+            'outbound interaction properties correct'
+        );
+
+        -- Test 3: Unread count not incremented
+        PERFORM pg_temp.check_it(
+            (SELECT unread_count FROM public.conversations WHERE id = conv) = conv_unread_before,
+            'outbound message never increments unread_count'
+        );
+
+        -- Test 4: Idempotency (same key returns PROCESSED, no duplicate row)
+        outbound_dup := public.han_ingest_outbound(
+            a, 'FACEBOOK', '123', '456', '123:out_mid_1',
+            'Xin chào từ Page', 'Xin chào từ Page', 'SUCCEEDED', now(), '{}'::jsonb
+        );
+        PERFORM pg_temp.check_it(outbound_dup->>'status' = 'PROCESSED', 'outbound duplicate returns PROCESSED');
+        PERFORM pg_temp.check_it(outbound_dup->>'interaction_id' = outbound_interaction::text, 'outbound duplicate reuses interaction');
+
+        -- Test 5: Outbound message resolves open Response SLA window
+        PERFORM public.open_response_sla_window(a, conv, interaction);
+        SELECT id INTO sla_id FROM public.response_sla_windows WHERE conversation_id = conv AND state = 'OPEN';
+        PERFORM pg_temp.check_it(sla_id IS NOT NULL, 'open SLA window exists');
+
+        outbound_res := public.han_ingest_outbound(
+            a, 'FACEBOOK', '123', '456', '123:out_mid_2',
+            'Phản hồi giải quyết SLA', 'Phản hồi giải quyết SLA', 'SUCCEEDED', now(), '{}'::jsonb
+        );
+        PERFORM pg_temp.check_it(
+            EXISTS(
+                SELECT 1 FROM public.response_sla_windows
+                WHERE id = sla_id AND state = 'SALE_RESPONDED'
+            ),
+            'outbound reply resolves open SLA window'
+        );
+
+        -- Test 6: Outbound message for new customer/conversation creates them with unread_count = 0
+        outbound_res := public.han_ingest_outbound(
+            a, 'FACEBOOK', '123', '789012345', '123:out_mid_3',
+            'Chào bạn mới', 'Chào bạn mới', 'SUCCEEDED', now(), '{}'::jsonb
+        );
+        PERFORM pg_temp.check_it(outbound_res->>'status' = 'ACCEPTED', 'outbound new conversation accepted');
+        PERFORM pg_temp.check_it(
+            EXISTS(
+                SELECT 1 FROM public.conversations
+                WHERE company_id = a
+                  AND external_conversation_id = '123:789012345'
+                  AND unread_count = 0
+            ),
+            'outbound creates new conversation with zero unread'
+        );
+    END;
 END $$;
 ROLLBACK;
