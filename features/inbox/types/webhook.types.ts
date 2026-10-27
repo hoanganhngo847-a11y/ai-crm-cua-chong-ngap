@@ -72,6 +72,7 @@ export interface NormalizedIngressEvent {
   provider: 'FACEBOOK' | 'ZALO' | 'SYSTEM';
   company_id: string; // MANDATORY - Strict Tenant Isolation
   external_user_id: string;
+  external_conversation_id?: string;
   sender_name?: string;
   sender_phone?: string;
   message_id: string;

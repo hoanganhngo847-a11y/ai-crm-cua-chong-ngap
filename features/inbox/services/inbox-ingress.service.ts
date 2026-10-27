@@ -414,6 +414,7 @@ export async function ingestNormalizedEvent(
         channel,
         senderId: event.external_user_id,
         externalUserId: event.external_user_id,
+        externalConversationId: event.external_conversation_id,
         company_id: cleanCompanyId,
         senderName: event.sender_name,
         senderPhone: event.sender_phone,
