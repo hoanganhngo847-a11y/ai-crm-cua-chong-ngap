@@ -9,8 +9,11 @@ export default async function HomePage() {
     redirect('/login');
   }
 
-  if (actor.role === APPLICATION_ROLES.BOSS_ADMIN) {
-    redirect('/admin');
+  if (
+    actor.role === APPLICATION_ROLES.BOSS_ADMIN ||
+    actor.role === APPLICATION_ROLES.SALE
+  ) {
+    redirect('/inbox');
   }
 
   if (actor.role === APPLICATION_ROLES.TECHNICIAN) {
