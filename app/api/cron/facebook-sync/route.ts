@@ -21,7 +21,7 @@ function queryInteger(value: string | null, fallback: number): number {
  *
  * Auth: Authorization: Bearer $CRON_SECRET (fail-closed in production).
  * Optional query params:
- * - lookback_minutes=15 (1..10080)
+ * - lookback_minutes=5 (1..10080)
  * - pages=1343097708890171,1026991374010112
  * - max_conversations=200
  * - max_messages=200
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     try {
         const summary = await syncFacebookPages({
-            lookbackMinutes: queryInteger(query.get('lookback_minutes'), 15),
+            lookbackMinutes: queryInteger(query.get('lookback_minutes'), 5),
             pages: (query.get('pages') || '')
                 .split(',')
                 .map((page) => page.trim())
