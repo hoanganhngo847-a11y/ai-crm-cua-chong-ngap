@@ -53,18 +53,32 @@ function withFetch(
 
 function fakeClient(
     handler?: (name: string, args: Record<string, unknown>) => RpcResult,
-): { client: SupabaseClient; calls: RpcCall[] } {
+): { client: SupabaseClient; calls: RpcCall[]; ingestCalls: () => RpcCall[] } {
     const calls: RpcCall[] = [];
     const client = {
         rpc: async (name: string, args: Record<string, unknown>) => {
             calls.push({ name, args });
-            return handler
-                ? handler(name, args)
-                : { data: { status: 'ACCEPTED' }, error: null };
+            if (handler) {
+                return handler(name, args);
+            }
+            if (name === 'facebook_get_sync_checkpoint') {
+                return { data: null, error: null };
+            }
+            if (name === 'facebook_set_sync_checkpoint') {
+                return { data: null, error: null };
+            }
+            return { data: { status: 'ACCEPTED' }, error: null };
         },
     } as unknown as SupabaseClient;
 
-    return { client, calls };
+    return {
+        client,
+        calls,
+        ingestCalls: () =>
+            calls.filter(
+                (c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound',
+            ),
+    };
 }
 
 test('polls default folders (inbox, other, pending), ingesting both inbound and Page outbound messages', async () => {
@@ -138,7 +152,8 @@ test('polls default folders (inbox, other, pending), ingesting both inbound and 
             assert.equal(pageResult.messages_skipped, 0);
 
             // Calls: han_ingest_outbound for m_page_reply, han_ingest for m_customer_inbound
-            assert.equal(calls.length, 2);
+            const ingestCalls = calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound');
+            assert.equal(ingestCalls.length, 2);
 
             const outboundCall = calls.find((c) => c.name === 'han_ingest_outbound');
             assert.ok(outboundCall);
@@ -294,7 +309,7 @@ test('prevents duplicated processing when a conversation appears in multiple fol
             // Conversation was seen in inbox, so in other and pending it was skipped
             assert.equal(summary.pages[0].conversations, 1);
             assert.equal(summary.pages[0].messages_ingested, 1);
-            assert.equal(calls.length, 1);
+            assert.equal(calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound').length, 1);
 
             // Message fetch should only have happened once
             const messageUrls = urls.filter((u) => u.pathname.includes('/messages'));
@@ -379,7 +394,7 @@ test('handles folder pagination and stops client-side at the lookback boundary',
             assert.equal(summary.ok, true);
             assert.equal(summary.pages[0].conversations, 1);
             assert.equal(summary.pages[0].messages_ingested, 1);
-            assert.equal(calls.length, 1);
+            assert.equal(calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound').length, 1);
             assert.equal(calls[0].args.p_key, `${PAGE_A}:m_recent`);
 
             // Verified t_old_boundary messages were NEVER queried
@@ -446,7 +461,7 @@ test('treats an idempotency conflict as an already-ingested message for both inb
             assert.equal(summary.pages[0].messages_ingested, 0);
             assert.equal(summary.pages[0].messages_skipped, 2);
             assert.equal(summary.pages[0].errors.length, 0);
-            assert.equal(calls.length, 2);
+            assert.equal(calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound').length, 2);
         },
     );
 });
@@ -514,7 +529,7 @@ test('handles partial folder failures without aborting other folders', async () 
             assert.equal(pageResult.messages_ingested, 1);
             assert.equal(pageResult.errors.length, 1);
             assert.match(pageResult.errors[0], /folder_failed:other/);
-            assert.equal(calls.length, 1);
+            assert.equal(calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound').length, 1);
 
             // Folders array breakdown
             const otherFolder = pageResult.folders?.find((f) => f.folder === 'other');
@@ -726,6 +741,131 @@ test('returns a sanitized Graph failure without leaking the Page token', async (
                 JSON.stringify(summary),
                 /token-page-a|bad token/,
             );
+        },
+    );
+});
+
+test('recovers from polling downtime exceeding 5 minutes via checkpoint expansion', async () => {
+    // Checkpoint was 45 minutes ago -> dynamic lookback window expands to 47 minutes
+    const lastSynced = '2026-10-27T08:15:00.000Z';
+    const now = new Date('2026-10-27T09:00:00.000Z');
+
+    const { client, calls } = fakeClient((name, args) => {
+        if (name === 'facebook_get_sync_checkpoint') {
+            return { data: lastSynced, error: null };
+        }
+        if (name === 'facebook_set_sync_checkpoint') {
+            return { data: null, error: null };
+        }
+        return { data: { status: 'ACCEPTED' }, error: null };
+    });
+
+    await withFetch(
+        (url) => {
+            const folder = url.searchParams.get('folder');
+            if (folder === 'inbox') {
+                return jsonResponse({
+                    data: [
+                        {
+                            id: 't_downtime_gap',
+                            updated_time: '2026-10-27T08:30:00Z', // 30 mins ago (> 5m routine lookback)
+                            participants: {
+                                data: [
+                                    { id: PAGE_A, name: 'Cửa chống ngập' },
+                                    { id: CUSTOMER_A, name: 'Khách Đã Nhắn' },
+                                ],
+                            },
+                        },
+                    ],
+                });
+            }
+            if (url.pathname.includes('/t_downtime_gap/messages')) {
+                return jsonResponse({
+                    data: [
+                        {
+                            id: 'm_downtime_msg',
+                            message: 'Tin nhắn gửi trong thời gian server dừng',
+                            created_time: '2026-10-27T08:30:00Z',
+                            from: { id: CUSTOMER_A, name: 'Khách Đã Nhắn' },
+                        },
+                    ],
+                });
+            }
+            return jsonResponse({ data: [] });
+        },
+        async () => {
+            // Routine sync without explicit lookbackMinutes (defaulting to 5m)
+            const summary = await syncFacebookPages(
+                { pages: [PAGE_A], folders: ['inbox'] },
+                { client, now, promoteDisplayName: async () => {} },
+            );
+
+            assert.equal(summary.ok, true);
+            assert.equal(summary.pages[0].conversations, 1);
+            // Ingested despite being 30 minutes old because downtime window recovered it
+            assert.equal(summary.pages[0].messages_ingested, 1);
+
+            const setCheckpointCall = calls.find((c) => c.name === 'facebook_set_sync_checkpoint');
+            assert.ok(setCheckpointCall);
+            assert.equal(setCheckpointCall.args.p_page_id, PAGE_A);
+            assert.equal(setCheckpointCall.args.p_folder, 'inbox');
+        },
+    );
+});
+
+test('performs initial bounded 24h backfill when folder has no checkpoint', async () => {
+    const now = new Date('2026-10-27T09:00:00.000Z');
+
+    const { client } = fakeClient((name) => {
+        if (name === 'facebook_get_sync_checkpoint') {
+            return { data: null, error: null }; // No checkpoint yet
+        }
+        return { data: { status: 'ACCEPTED' }, error: null };
+    });
+
+    await withFetch(
+        (url) => {
+            const folder = url.searchParams.get('folder');
+            if (folder === 'other') {
+                return jsonResponse({
+                    data: [
+                        {
+                            id: 't_historical_other',
+                            updated_time: '2026-10-26T15:00:00Z', // 18 hours ago
+                            participants: {
+                                data: [
+                                    { id: PAGE_B, name: 'Du học CHD' },
+                                    { id: CUSTOMER_B, name: 'Yen Nguyen' },
+                                ],
+                            },
+                        },
+                    ],
+                });
+            }
+            if (url.pathname.includes('/t_historical_other/messages')) {
+                return jsonResponse({
+                    data: [
+                        {
+                            id: 'm_historical_msg',
+                            message: 'Tin nhắn cũ trong thư mục Other',
+                            created_time: '2026-10-26T15:00:00Z',
+                            from: { id: CUSTOMER_B, name: 'Yen Nguyen' },
+                        },
+                    ],
+                });
+            }
+            return jsonResponse({ data: [] });
+        },
+        async () => {
+            const summary = await syncFacebookPages(
+                { pages: [PAGE_B], folders: ['other'] },
+                { client, now, promoteDisplayName: async () => {} },
+            );
+
+            assert.equal(summary.ok, true);
+            assert.equal(summary.pages[0].conversations, 1);
+            // Ingested because uncheckpointed folder looked back 24 hours
+            assert.equal(summary.pages[0].messages_ingested, 1);
         },
     );
 });

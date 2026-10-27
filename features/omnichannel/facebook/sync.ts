@@ -16,6 +16,7 @@ const GRAPH_PAGE_LIMIT = 100;
 const MAX_GRAPH_PAGES = 10;
 const DEFAULT_LOOKBACK_MINUTES = 5;
 const MAX_LOOKBACK_MINUTES = 7 * 24 * 60;
+const INITIAL_FOLDER_BACKFILL_MINUTES = 24 * 60;
 const DEFAULT_MAX_CONVERSATIONS = 200;
 const DEFAULT_MAX_MESSAGES = 200;
 
@@ -105,6 +106,7 @@ type SyncWindow = {
     maxConversationsPerPage: number;
     maxMessagesPerConversation: number;
     sinceMs: number;
+    isExplicitLookback?: boolean;
 };
 
 type IngestOutcome = 'ingested' | 'duplicate' | 'skipped';
@@ -599,6 +601,7 @@ async function syncConversation(
     promoteDisplayName: typeof promoteFacebookCustomerDisplayName,
     dryRun: boolean,
     folderResult: FacebookSyncFolderResult,
+    folderSinceMs?: number,
 ): Promise<void> {
     const conversationId =
         typeof conversation.id === 'string' ? conversation.id.trim() : '';
@@ -612,6 +615,8 @@ async function syncConversation(
         folderResult.errors.push('conversation_participants_ambiguous');
         return;
     }
+
+    const effectiveSinceMs = folderSinceMs ?? window.sinceMs;
 
     let after: string | null = null;
     let remaining = window.maxMessagesPerConversation;
@@ -638,7 +643,7 @@ async function syncConversation(
             const created = graphTime(message.created_time);
             if (!created) continue;
 
-            if (Date.parse(created) < window.sinceMs) {
+            if (Date.parse(created) < effectiveSinceMs) {
                 reachedWindowBoundary = true;
                 break;
             }
@@ -701,11 +706,57 @@ async function syncConversation(
     }
 }
 
+async function resolveFolderWindow(
+    client: SupabaseClient,
+    config: PageBinding,
+    folder: string,
+    window: SyncWindow,
+    now: Date,
+): Promise<{ folderSinceMs: number; isBackfill: boolean }> {
+    if (window.isExplicitLookback) {
+        return { folderSinceMs: window.sinceMs, isBackfill: false };
+    }
+
+    try {
+        const { data, error } = await client.rpc('facebook_get_sync_checkpoint', {
+            p_company_id: config.company,
+            p_page_id: config.page,
+            p_folder: folder,
+        });
+
+        if (error || !data) {
+            // No checkpoint yet for this folder (e.g. initial backfill for 'other' or 'pending').
+            const backfillSinceMs = now.getTime() - INITIAL_FOLDER_BACKFILL_MINUTES * 60_000;
+            return { folderSinceMs: backfillSinceMs, isBackfill: true };
+        }
+
+        const lastSyncedMs = Date.parse(data as string);
+        if (!Number.isFinite(lastSyncedMs)) {
+            return { folderSinceMs: window.sinceMs, isBackfill: false };
+        }
+
+        const elapsedMinutes = Math.ceil((now.getTime() - lastSyncedMs) / (60 * 1000));
+        const effectiveMinutes = Math.min(
+            MAX_LOOKBACK_MINUTES,
+            Math.max(DEFAULT_LOOKBACK_MINUTES, elapsedMinutes + 2),
+        );
+        const dynamicSinceMs = now.getTime() - effectiveMinutes * 60_000;
+
+        return {
+            folderSinceMs: dynamicSinceMs,
+            isBackfill: elapsedMinutes > DEFAULT_LOOKBACK_MINUTES,
+        };
+    } catch {
+        return { folderSinceMs: window.sinceMs, isBackfill: false };
+    }
+}
+
 async function syncPage(
     config: PageBinding,
     window: SyncWindow,
     folders: string[],
     dryRun: boolean,
+    now: Date,
     dependencies: FacebookSyncDependencies,
 ): Promise<FacebookSyncPageResult> {
     const pageResult: FacebookSyncPageResult = {
@@ -752,6 +803,14 @@ async function syncPage(
             errors: [],
         };
 
+        const { folderSinceMs, isBackfill } = await resolveFolderWindow(
+            client,
+            config,
+            folder,
+            window,
+            now,
+        );
+
         let after: string | null = null;
         let remaining = window.maxConversationsPerPage;
         let graphPages = 0;
@@ -778,7 +837,7 @@ async function syncPage(
                 const updated = graphTime(conversation.updated_time);
                 if (!updated) continue;
 
-                if (Date.parse(updated) < window.sinceMs) {
+                if (Date.parse(updated) < folderSinceMs) {
                     reachedWindowBoundary = true;
                     break;
                 }
@@ -807,6 +866,7 @@ async function syncPage(
                     promoteDisplayName,
                     dryRun,
                     folderResult,
+                    folderSinceMs,
                 );
             }
 
@@ -815,8 +875,21 @@ async function syncPage(
             after = list.after;
         }
 
+        if (!dryRun && folderResult.errors.length === 0) {
+            try {
+                await client.rpc('facebook_set_sync_checkpoint', {
+                    p_company_id: config.company,
+                    p_page_id: config.page,
+                    p_folder: folder,
+                    p_last_synced_at: now.toISOString(),
+                });
+            } catch {
+                // Checkpoint persistence is best-effort defense-in-depth
+            }
+        }
+
         console.info(
-            `[facebook-sync] page=${config.page} folder=${folder} conversations=${folderResult.conversations} seen=${folderResult.messages_seen} ingested=${folderResult.messages_ingested} (in=${folderResult.inbound_ingested},out=${folderResult.outbound_ingested}) skipped=${folderResult.messages_skipped} errors=${folderResult.errors.length}`,
+            `[facebook-sync] page=${config.page} folder=${folder} conversations=${folderResult.conversations} seen=${folderResult.messages_seen} ingested=${folderResult.messages_ingested} (in=${folderResult.inbound_ingested},out=${folderResult.outbound_ingested}) skipped=${folderResult.messages_skipped} errors=${folderResult.errors.length}${isBackfill ? ' backfill=true' : ''}`,
         );
 
         pageResult.folders?.push(folderResult);
@@ -878,18 +951,20 @@ export async function syncFacebookPages(
     );
 
     const client = dependencies.client ?? createAdminClient();
+    const isExplicitLookback = typeof options.lookbackMinutes === 'number';
     const window: SyncWindow = {
         lookbackMinutes,
         maxConversationsPerPage,
         maxMessagesPerConversation,
         sinceMs: now.getTime() - lookbackMinutes * 60_000,
+        isExplicitLookback,
     };
 
     const pages: FacebookSyncPageResult[] = [];
 
     for (const config of configs) {
         pages.push(
-            await syncPage(config, window, folders, dryRun, {
+            await syncPage(config, window, folders, dryRun, now, {
                 ...dependencies,
                 client,
             }),
