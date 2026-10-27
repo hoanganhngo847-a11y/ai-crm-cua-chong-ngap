@@ -6,10 +6,26 @@ The CRM receives Botcake-managed Messenger messages at:
 POST /api/webhooks/botcake
 ```
 
-The preferred transport is the **Pancake page Webhook** (`event_type: "messaging"`).
-The older Botcake Flow **JSON API** block is still accepted for compatibility, but
-it cannot be used to sync real messages. See “Why the JSON API block cannot sync
-messages” below.
+When the Page is managed by Pancake, the preferred transport is the **Pancake
+page Webhook** (`event_type: "messaging"`). The older Botcake Flow **JSON API**
+block is still accepted for compatibility, but it cannot be used to sync real
+messages. See “Why the JSON API block cannot sync messages” below.
+
+## Current production transport (verified 2026-10-27)
+
+The Botcake-managed Page `1343097708890171` is **not present** in the Pancake
+dashboard, so the Pancake Webhook cannot be enabled for it. Production therefore
+uses the **direct Meta webhook**:
+
+- Page `1343097708890171` → company `de6a7bf3-b5bc-418d-92d6-f9b241472598`
+- Page subscribed to Meta app `1780871206505449` for `messages`
+- Page token stored in Render as `META_PAGE_BOTCAKE_TOKEN`
+- Callback: `https://ai-crm-cua-chong-ngap.onrender.com/api/webhooks/meta`
+
+The `/api/webhooks/botcake` endpoint and Pancake parser remain in the code for
+future use, but they are not the active transport for this Page. Do not enable
+both transports for the same Page; see the warning in “Direct Meta webhook
+fallback”.
 
 ## Why the JSON API block cannot sync messages
 
