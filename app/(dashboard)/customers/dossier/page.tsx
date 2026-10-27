@@ -23,6 +23,10 @@ import {
 } from '../../../../components/ui/data-table';
 import { EmptyState } from '../../../../components/ui/empty-state';
 import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from '../../../../features/crm/components/secure-phone-reveal';
+import {
   Search,
   X,
   ExternalLink,
@@ -326,6 +330,7 @@ export default async function CustomerDossierList({
       </Card>
 
       {/* Data Table */}
+      <PhoneRevealProvider>
       <BulkSelection key={data.items.map(c => c.id).join(',')} ids={data.items.map(c => c.id)} enabled={process.env.BULK_MESSAGING_ENABLED === 'true'}>
       <Card className="overflow-hidden">
         <Table>
@@ -335,7 +340,7 @@ export default async function CustomerDossierList({
               <TableHead className="min-w-[220px]">Khách hàng</TableHead>
               <TableHead className="min-w-[130px]">Giai đoạn</TableHead>
               <TableHead className="w-[80px]" alignRight>Điểm</TableHead>
-              <TableHead className="min-w-[130px]">Liên hệ</TableHead>
+              <TableHead className="min-w-[150px]">Liên hệ</TableHead>
               <TableHead className="min-w-[120px]">Sale phụ trách</TableHead>
               <TableHead className="min-w-[260px] max-w-sm">Tình trạng hiện tại (AI)</TableHead>
               <TableHead className="min-w-[120px]">Liên hệ gần nhất</TableHead>
@@ -437,10 +442,8 @@ export default async function CustomerDossierList({
 
                     {/* Contact Phone / Email */}
                     <TableCell>
-                      <div className="flex flex-col text-[11px]">
-                        <span className="font-mono text-[var(--text-primary)]">
-                          {c.phone || '—'}
-                        </span>
+                      <div className="flex flex-col text-[11px] gap-1">
+                        <SecurePhoneRow customerId={c.id} maskedPhone={c.phone} />
                         {c.email && (
                           <span className="text-[var(--text-tertiary)] truncate max-w-[130px]">
                             {c.email}
@@ -524,6 +527,7 @@ export default async function CustomerDossierList({
         />
       </Card>
       </BulkSelection>
+      </PhoneRevealProvider>
     </div>
   );
 }

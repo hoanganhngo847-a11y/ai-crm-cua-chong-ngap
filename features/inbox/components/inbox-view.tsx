@@ -16,6 +16,10 @@ import MessageContent from './message-content';
 import ZaloComposer from './zalo-composer';
 import { evaluateSkeletonCorrelation } from '../utils/skeleton-helper';
 import { CUSTOMER_STAGE_LABELS } from '@/features/crm/types/customer.types';
+import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from '@/features/crm/components/secure-phone-reveal';
 
 export { mergeDeliveryStatus };
 
@@ -1037,6 +1041,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
   const currentSendError = selectedConversationId ? sendErrorByConversation[selectedConversationId] : null;
 
   return (
+    <PhoneRevealProvider>
     <div className="h-[calc(100vh-8rem)] flex flex-col bg-[var(--surface-primary)] rounded-xl border border-[var(--border-subtle)] overflow-hidden shadow-card">
       {/* Top Header Bar */}
       <div className="px-5 py-3 bg-[var(--surface-primary)] border-b border-[var(--border-subtle)] flex items-center justify-between">
@@ -1640,11 +1645,16 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 </h4>
 
                 <div className="space-y-2 text-[var(--text-primary)]">
-                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                  <div className="flex justify-between items-center py-1 border-b border-[var(--border-subtle)]">
                     <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
-                    <span className="font-mono font-medium text-amber-700">
-                      {selectedConversation.customer_phone || 'Chưa có'}
-                    </span>
+                    {selectedConversation.customer_phone ? (
+                      <SecurePhoneRow
+                        customerId={selectedConversation.customer_id}
+                        maskedPhone={selectedConversation.customer_phone}
+                      />
+                    ) : (
+                      <span className="font-mono font-medium text-slate-400">Chưa có</span>
+                    )}
                   </div>
 
                   <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
@@ -1739,5 +1749,6 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         </div>
       </div>
     </div>
+    </PhoneRevealProvider>
   );
 }

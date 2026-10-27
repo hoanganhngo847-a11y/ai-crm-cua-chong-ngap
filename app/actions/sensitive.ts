@@ -14,6 +14,7 @@ import {
   internalGetSanitizedInteractionAction,
   internalGetAuthorizedSignedUrlAction,
   internalViewBossRawPhoneAction,
+  internalRevealCustomerPhoneAction,
   internalGetCallTranscriptAction,
 } from '../../lib/sensitive/action-handlers';
 
@@ -63,6 +64,17 @@ export async function viewBossRawPhoneAction(
 ): Promise<{ success: boolean; rawPhone?: string; error?: string; message?: string }> {
   const client = await createClient();
   return internalViewBossRawPhoneAction(params, client);
+}
+
+/**
+ * Server Action: Xem số điện thoại khách hàng (Audit-first, unmask 1 khách hàng vào 1 thời điểm)
+ * Tuân thủ bảo mật: Cho phép SALE và BOSS_ADMIN trong cùng tổ chức.
+ */
+export async function revealCustomerPhoneAction(
+  customerId: string
+): Promise<{ success: boolean; phone?: string; error?: string; message?: string }> {
+  const client = await createClient();
+  return internalRevealCustomerPhoneAction({ customerId }, client);
 }
 
 /**

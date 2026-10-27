@@ -34,6 +34,10 @@ import {
   TableCell,
   TablePagination,
 } from '../../../components/ui/data-table';
+import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from './secure-phone-reveal';
 
 interface CustomerListProps {
   userRole?: string | null;
@@ -491,12 +495,13 @@ export default function CustomerList({ userRole }: CustomerListProps) {
             />
           </div>
         ) : (
+          <PhoneRevealProvider>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[120px]">Mã KH</TableHead>
                 <TableHead className="min-w-[200px]">Họ và Tên</TableHead>
-                <TableHead className="min-w-[140px]">Số điện thoại</TableHead>
+                <TableHead className="min-w-[150px]">Số điện thoại</TableHead>
                 <TableHead className="min-w-[120px]">Nguồn</TableHead>
                 <TableHead className="min-w-[140px]">Giai đoạn</TableHead>
                 <TableHead className="min-w-[120px]">Ngày tạo</TableHead>
@@ -532,19 +537,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
 
                   {/* Phone */}
                   <TableCell>
-                    {c.phone ? (
-                      <span
-                        className={`inline-flex items-center gap-1 font-mono text-xs px-2 py-0.5 rounded border ${
-                          c.is_phone_masked
-                            ? 'bg-amber-50 border-amber-200 text-amber-700'
-                            : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                        }`}
-                      >
-                        {c.phone}
-                      </span>
-                    ) : (
-                      <span className="text-[var(--text-tertiary)] italic text-xs">Chưa có số</span>
-                    )}
+                    <SecurePhoneRow customerId={c.id} maskedPhone={c.phone} />
                   </TableCell>
 
                   {/* Source */}
@@ -604,6 +597,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               ))}
             </TableBody>
           </Table>
+          </PhoneRevealProvider>
         )}
 
         {/* Pagination */}

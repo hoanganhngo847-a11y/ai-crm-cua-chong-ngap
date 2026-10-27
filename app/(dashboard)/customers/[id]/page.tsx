@@ -21,6 +21,10 @@ import { Badge } from '../../../../components/ui/badge';
 import { Avatar } from '../../../../components/ui/avatar';
 import { EmptyState } from '../../../../components/ui/empty-state';
 import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from '../../../../features/crm/components/secure-phone-reveal';
+import {
   PhoneCall,
   MessageSquare,
   ArrowRight,
@@ -261,6 +265,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column (4 cols): Information, Specs & Identities */}
         <div className="lg:col-span-4 space-y-6">
+          <PhoneRevealProvider>
           <Card className="p-5 space-y-4">
             <div className="flex items-center gap-3">
               <Avatar name={customerData.name} size="md" />
@@ -278,9 +283,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               <div className="flex items-center justify-between">
                 <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
                 <div className="flex items-center gap-1.5">
-                  <span className="font-mono font-medium text-[var(--text-primary)]">
-                    {displayPhone || 'Chưa cập nhật'}
-                  </span>
+                  <SecurePhoneRow customerId={customerData.id} maskedPhone={displayPhone} />
                   {isBossAdmin ? (
                     <Badge variant="success" size="xs">
                       RAW
@@ -385,6 +388,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               )}
             </div>
           </Card>
+          </PhoneRevealProvider>
         </div>
 
         {/* Right Column (8 cols): Customer Timeline */}

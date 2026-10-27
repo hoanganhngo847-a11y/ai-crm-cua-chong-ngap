@@ -11,6 +11,10 @@ import { Badge } from '../../../../../components/ui/badge';
 import { Card, CardHeader, CardTitle, CardContent } from '../../../../../components/ui/card';
 import { Avatar } from '../../../../../components/ui/avatar';
 import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from '../../../../../features/crm/components/secure-phone-reveal';
+import {
   PhoneCall,
   ExternalLink,
   Sparkles,
@@ -313,6 +317,7 @@ export default async function CustomerDossier({
 
           {/* Right Rail: Contact & Identity Context */}
           <aside className="space-y-6">
+            <PhoneRevealProvider>
             <Card>
               <CardHeader>
                 <CardTitle>Liên hệ &amp; Danh tính đa kênh</CardTitle>
@@ -325,7 +330,10 @@ export default async function CustomerDossier({
                   <div>
                     <div className="text-[11px] text-[var(--text-tertiary)]">Số điện thoại</div>
                     <div className="font-mono text-sm font-medium text-[var(--text-primary)]">
-                      {dossier.contacts.phone || 'Chưa xác định'}
+                      <SecurePhoneRow
+                        customerId={dossier.customer.id}
+                        maskedPhone={dossier.contacts.phone}
+                      />
                     </div>
                   </div>
                 </div>
@@ -408,6 +416,7 @@ export default async function CustomerDossier({
                 )}
               </CardContent>
             </Card>
+            </PhoneRevealProvider>
           </aside>
         </div>
       )}

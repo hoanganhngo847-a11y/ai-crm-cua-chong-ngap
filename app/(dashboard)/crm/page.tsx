@@ -25,6 +25,10 @@ import { Button } from '../../../components/ui/button';
 import { StatusBadge } from '../../../components/ui/status-badge';
 import { Avatar } from '../../../components/ui/avatar';
 import { EmptyState } from '../../../components/ui/empty-state';
+import {
+  PhoneRevealProvider,
+  SecurePhoneRow,
+} from '../../../features/crm/components/secure-phone-reveal';
 
 export const metadata = {
   title: 'CRM Tổng quan | AI CRM Cửa Chống Ngập',
@@ -238,6 +242,7 @@ export default async function CrmDashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column (2 Cols): Urgent Work Queue & Attention Items */}
         <div className="lg:col-span-2 space-y-6">
+          <PhoneRevealProvider>
           <Card>
             <CardHeader className="flex items-center justify-between">
               <div>
@@ -296,7 +301,7 @@ export default async function CrmDashboardPage() {
                             {cust.phone && (
                               <>
                                 <span>•</span>
-                                <span className="font-mono">{cust.phone}</span>
+                                <SecurePhoneRow customerId={cust.id} maskedPhone={cust.phone} />
                               </>
                             )}
                           </div>
@@ -321,6 +326,7 @@ export default async function CrmDashboardPage() {
               )}
             </CardContent>
           </Card>
+          </PhoneRevealProvider>
 
           {/* Sales Pipeline Distribution Summary */}
           <Card>

@@ -131,6 +131,71 @@ export async function internalViewBossRawPhoneAction(
   }
 }
 
+export async function internalRevealCustomerPhoneAction(
+  params: { customerId: string },
+  client?: SupabaseClient
+): Promise<{ success: boolean; phone?: string; error?: string; message?: string }> {
+  try {
+    const isDemo =
+      process.env.DEMO_MODE === 'true' || process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+    if (isDemo && params.customerId.startsWith('cust-')) {
+      const mockMap: Record<string, string> = {
+        'cust-1': '0912345612',
+        'cust-2': '0934567890',
+        'cust-3': '0987654321',
+        'cust-4': '0977889900',
+      };
+      if (mockMap[params.customerId]) {
+        return { success: true, phone: mockMap[params.customerId] };
+      }
+    }
+
+    try {
+      const contact = await resolveCustomerPrivateContactForTrustedOperation(
+        params.customerId,
+        CONTACT_ACCESS_PURPOSES.CLICK_TO_CALL,
+        client
+      );
+
+      const phone = contact.rawPhone || contact.normalizedPhone;
+      if (!phone) {
+        return {
+          success: false,
+          error: 'NO_PHONE',
+          message: 'Khách hàng chưa có số điện thoại.',
+        };
+      }
+
+      return {
+        success: true,
+        phone,
+      };
+    } catch (contactErr: unknown) {
+      if (isDemo) {
+        return {
+          success: true,
+          phone: '0912345678',
+        };
+      }
+      throw contactErr;
+    }
+  } catch (err: unknown) {
+    if (isServerAuthError(err)) {
+      return {
+        success: false,
+        error: err.code,
+        message: err.message,
+      };
+    }
+    return {
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'Không có quyền truy cập số điện thoại bảo mật.',
+    };
+  }
+}
+
 export async function internalGetCallTranscriptAction(
   params: { callId: string },
   client?: SupabaseClient
