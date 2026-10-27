@@ -28,14 +28,21 @@ export type CustomerSource = (typeof CUSTOMER_SOURCES)[keyof typeof CUSTOMER_SOU
  * Database check constraint on public.customers.stage
  */
 export const CUSTOMER_STAGES = {
+  // 12 Canonical Stages for Study Abroad Consulting (Tư vấn du học)
   LEAD_NEW: 'LEAD_NEW',
-  KHACH_MOI: 'LEAD_NEW', // Business alias for LEAD_NEW
-  DA_CO_GIA: 'PRICE_OFFERED', // Business alias for PRICE_OFFERED (Cần Sale chốt)
-  DANG_THUONG_LUONG: 'NEGOTIATING', // Business alias for NEGOTIATING (Cần Sale chốt)
   CONTACT_CYCLE_1: 'CONTACT_CYCLE_1',
   CONTACT_CYCLE_2: 'CONTACT_CYCLE_2',
   CONTACT_CYCLE_3: 'CONTACT_CYCLE_3',
   UNREACHABLE: 'UNREACHABLE',
+  ZALO_FRIENDED: 'ZALO_FRIENDED',
+  IN_CARE: 'IN_CARE',
+  POTENTIAL_CLOSING: 'POTENTIAL_CLOSING',
+  NOT_POTENTIAL: 'NOT_POTENTIAL',
+  NO_DEMAND: 'NO_DEMAND',
+  CONTRACT_SIGNED: 'CONTRACT_SIGNED',
+  CARE_NURTURING: 'CARE_NURTURING',
+
+  // Legacy Door stages kept for DB backward compatibility
   SURVEY_REQUESTED: 'SURVEY_REQUESTED',
   SURVEY_SCHEDULED: 'SURVEY_SCHEDULED',
   SURVEY_COMPLETED: 'SURVEY_COMPLETED',
@@ -45,14 +52,29 @@ export const CUSTOMER_STAGES = {
   NEGOTIATING: 'NEGOTIATING',
   ORDER_CREATED: 'ORDER_CREATED',
   DEPOSIT_CONFIRMED: 'DEPOSIT_CONFIRMED',
-  CONTRACT_SIGNED: 'CONTRACT_SIGNED',
   IN_PRODUCTION: 'IN_PRODUCTION',
   READY_FOR_INSTALL: 'READY_FOR_INSTALL',
   INSTALLING: 'INSTALLING',
   HANDOVER_COMPLETED: 'HANDOVER_COMPLETED',
   WARRANTY_ACTIVE: 'WARRANTY_ACTIVE',
   LOST: 'LOST',
-  CARE_NURTURING: 'CARE_NURTURING',
+
+  // Business aliases
+  KHACH_MOI: 'LEAD_NEW',
+  LIEN_HE_LAN_1: 'CONTACT_CYCLE_1',
+  LIEN_HE_LAN_2: 'CONTACT_CYCLE_2',
+  LIEN_HE_LAN_3: 'CONTACT_CYCLE_3',
+  KHONG_NGHE_MAY: 'UNREACHABLE',
+  DA_KET_BAN_ZALO: 'ZALO_FRIENDED',
+  DANG_CHAM_SOC: 'IN_CARE',
+  CO_TIEM_NANG: 'POTENTIAL_CLOSING',
+  CHUA_TIEM_NANG: 'NOT_POTENTIAL',
+  KHONG_NHU_CAU: 'NO_DEMAND',
+  DA_KY_HOP_DONG: 'CONTRACT_SIGNED',
+  DA_KI_HOP_DONG: 'CONTRACT_SIGNED',
+  CHAM_SOC_SAU_BAN: 'CARE_NURTURING',
+  DA_CO_GIA: 'PRICE_OFFERED',
+  DANG_THUONG_LUONG: 'NEGOTIATING',
 } as const;
 
 export type CustomerStage =
@@ -74,6 +96,17 @@ export function toCanonicalStage(stage: unknown): CustomerStage {
 
   // Hỗ trợ business alias sang canonical stage
   if (upper === 'KHACH_MOI') return CUSTOMER_STAGES.LEAD_NEW;
+  if (upper === 'LIEN_HE_LAN_1') return CUSTOMER_STAGES.CONTACT_CYCLE_1;
+  if (upper === 'LIEN_HE_LAN_2') return CUSTOMER_STAGES.CONTACT_CYCLE_2;
+  if (upper === 'LIEN_HE_LAN_3') return CUSTOMER_STAGES.CONTACT_CYCLE_3;
+  if (upper === 'KHONG_NGHE_MAY') return CUSTOMER_STAGES.UNREACHABLE;
+  if (upper === 'DA_KET_BAN_ZALO') return CUSTOMER_STAGES.ZALO_FRIENDED;
+  if (upper === 'DANG_CHAM_SOC') return CUSTOMER_STAGES.IN_CARE;
+  if (upper === 'CO_TIEM_NANG') return CUSTOMER_STAGES.POTENTIAL_CLOSING;
+  if (upper === 'CHUA_TIEM_NANG') return CUSTOMER_STAGES.NOT_POTENTIAL;
+  if (upper === 'KHONG_NHU_CAU') return CUSTOMER_STAGES.NO_DEMAND;
+  if (upper === 'DA_KY_HOP_DONG' || upper === 'DA_KI_HOP_DONG') return CUSTOMER_STAGES.CONTRACT_SIGNED;
+  if (upper === 'CHAM_SOC_SAU_BAN') return CUSTOMER_STAGES.CARE_NURTURING;
   if (upper === 'DA_CO_GIA') return CUSTOMER_STAGES.PRICE_OFFERED;
   if (upper === 'DANG_THUONG_LUONG') return CUSTOMER_STAGES.NEGOTIATING;
 
@@ -93,37 +126,58 @@ export function toCanonicalStage(stage: unknown): CustomerStage {
  * Vietnamese human-readable labels for Customer Stages
  */
 export const CUSTOMER_STAGE_LABELS: Record<string, string> = {
+  // 12 Canonical Stages for Study Abroad Consulting
   LEAD_NEW: 'Khách mới',
   CONTACT_CYCLE_1: 'Liên hệ lần 1',
   CONTACT_CYCLE_2: 'Liên hệ lần 2',
   CONTACT_CYCLE_3: 'Liên hệ lần 3',
   UNREACHABLE: 'Không nghe máy',
-  SURVEY_REQUESTED: 'Yêu cầu khảo sát',
-  SURVEY_SCHEDULED: 'Đã hẹn khảo sát',
-  SURVEY_COMPLETED: 'Đã khảo sát hiện trường',
-  PRICE_CALCULATED: 'Đã lên giá / tính giá',
-  NEED_INFO: 'Cần bổ sung thông tin',
-  PRICE_OFFERED: 'Đã báo giá phương án',
-  NEGOTIATING: 'Đang đàm phán chốt giá',
-  ORDER_CREATED: 'Đã tạo đơn hàng',
-  DEPOSIT_CONFIRMED: 'Đã đặt cọc',
+  ZALO_FRIENDED: 'Đã kết bạn Zalo',
+  IN_CARE: 'Đang chăm sóc',
+  POTENTIAL_CLOSING: 'Có tiềm năng chốt đơn',
+  NOT_POTENTIAL: 'Chưa có tiềm năng chốt đơn',
+  NO_DEMAND: 'Không có nhu cầu nghe tư vấn',
   CONTRACT_SIGNED: 'Đã ký hợp đồng',
-  IN_PRODUCTION: 'Đang sản xuất',
-  READY_FOR_INSTALL: 'Sẵn sàng lắp đặt',
-  INSTALLING: 'Đang thi công lắp đặt',
-  HANDOVER_COMPLETED: 'Hoàn tất bàn giao',
-  WARRANTY_ACTIVE: 'Đang bảo hành',
-  LOST: 'Mất khách / Đã hủy',
   CARE_NURTURING: 'Đang chăm sóc sau bán',
-  // Business Aliases
+
+  // Legacy mappings for existing DB data
+  SURVEY_REQUESTED: 'Đã kết bạn Zalo',
+  SURVEY_SCHEDULED: 'Đang chăm sóc',
+  SURVEY_COMPLETED: 'Đang chăm sóc',
+  PRICE_CALCULATED: 'Có tiềm năng chốt đơn',
+  NEED_INFO: 'Chưa có tiềm năng chốt đơn',
+  PRICE_OFFERED: 'Có tiềm năng chốt đơn',
+  NEGOTIATING: 'Có tiềm năng chốt đơn',
+  ORDER_CREATED: 'Có tiềm năng chốt đơn',
+  DEPOSIT_CONFIRMED: 'Đã ký hợp đồng',
+  IN_PRODUCTION: 'Đang chăm sóc',
+  READY_FOR_INSTALL: 'Đang chăm sóc',
+  INSTALLING: 'Đang chăm sóc',
+  HANDOVER_COMPLETED: 'Đang chăm sóc sau bán',
+  WARRANTY_ACTIVE: 'Đang chăm sóc sau bán',
+  LOST: 'Không có nhu cầu nghe tư vấn',
+
+  // Business aliases
   KHACH_MOI: 'Khách mới',
-  DA_CO_GIA: 'Đã báo giá phương án',
-  DANG_THUONG_LUONG: 'Đang đàm phán chốt giá',
+  LIEN_HE_LAN_1: 'Liên hệ lần 1',
+  LIEN_HE_LAN_2: 'Liên hệ lần 2',
+  LIEN_HE_LAN_3: 'Liên hệ lần 3',
+  KHONG_NGHE_MAY: 'Không nghe máy',
+  DA_KET_BAN_ZALO: 'Đã kết bạn Zalo',
+  DANG_CHAM_SOC: 'Đang chăm sóc',
+  CO_TIEM_NANG: 'Có tiềm năng chốt đơn',
+  CHUA_TIEM_NANG: 'Chưa có tiềm năng chốt đơn',
+  KHONG_NHU_CAU: 'Không có nhu cầu nghe tư vấn',
+  DA_KY_HOP_DONG: 'Đã ký hợp đồng',
+  DA_KI_HOP_DONG: 'Đã ký hợp đồng',
+  CHAM_SOC_SAU_BAN: 'Đang chăm sóc sau bán',
+  DA_CO_GIA: 'Có tiềm năng chốt đơn',
+  DANG_THUONG_LUONG: 'Có tiềm năng chốt đơn',
 };
 
 /**
  * Full Canonical Stage list with value and display label
- * Strictly covers 100% of canonical stages defined in the DB schema check constraint.
+ * Strictly covers 100% of canonical stages defined for Study Abroad Consulting.
  */
 export const CANONICAL_STAGE_LIST: ReadonlyArray<{ value: CustomerStage; label: string }> = [
   { value: 'LEAD_NEW', label: 'Khách mới' },
@@ -131,22 +185,12 @@ export const CANONICAL_STAGE_LIST: ReadonlyArray<{ value: CustomerStage; label: 
   { value: 'CONTACT_CYCLE_2', label: 'Liên hệ lần 2' },
   { value: 'CONTACT_CYCLE_3', label: 'Liên hệ lần 3' },
   { value: 'UNREACHABLE', label: 'Không nghe máy' },
-  { value: 'SURVEY_REQUESTED', label: 'Yêu cầu khảo sát' },
-  { value: 'SURVEY_SCHEDULED', label: 'Đã hẹn khảo sát' },
-  { value: 'SURVEY_COMPLETED', label: 'Đã khảo sát hiện trường' },
-  { value: 'PRICE_CALCULATED', label: 'Đã lên giá / tính giá' },
-  { value: 'NEED_INFO', label: 'Cần bổ sung thông tin' },
-  { value: 'PRICE_OFFERED', label: 'Đã báo giá phương án' },
-  { value: 'NEGOTIATING', label: 'Đang đàm phán chốt giá' },
-  { value: 'ORDER_CREATED', label: 'Đã tạo đơn hàng' },
-  { value: 'DEPOSIT_CONFIRMED', label: 'Đã đặt cọc' },
+  { value: 'ZALO_FRIENDED', label: 'Đã kết bạn Zalo' },
+  { value: 'IN_CARE', label: 'Đang chăm sóc' },
+  { value: 'POTENTIAL_CLOSING', label: 'Có tiềm năng chốt đơn' },
+  { value: 'NOT_POTENTIAL', label: 'Chưa có tiềm năng chốt đơn' },
+  { value: 'NO_DEMAND', label: 'Không có nhu cầu nghe tư vấn' },
   { value: 'CONTRACT_SIGNED', label: 'Đã ký hợp đồng' },
-  { value: 'IN_PRODUCTION', label: 'Đang sản xuất' },
-  { value: 'READY_FOR_INSTALL', label: 'Sẵn sàng lắp đặt' },
-  { value: 'INSTALLING', label: 'Đang thi công lắp đặt' },
-  { value: 'HANDOVER_COMPLETED', label: 'Hoàn tất bàn giao' },
-  { value: 'WARRANTY_ACTIVE', label: 'Đang bảo hành' },
-  { value: 'LOST', label: 'Mất khách / Đã hủy' },
   { value: 'CARE_NURTURING', label: 'Đang chăm sóc sau bán' },
 ];
 
@@ -163,26 +207,30 @@ export const PIPELINE_STAGE_GROUPS = {
     'UNREACHABLE',
   ],
   SURVEY: [
+    'ZALO_FRIENDED',
+    'IN_CARE',
+    'NOT_POTENTIAL',
     'SURVEY_REQUESTED',
     'SURVEY_SCHEDULED',
     'SURVEY_COMPLETED',
     'NEED_INFO',
   ],
   PRICING: [
+    'POTENTIAL_CLOSING',
     'PRICE_CALCULATED',
     'PRICE_OFFERED',
     'NEGOTIATING',
   ],
   WON: [
+    'CONTRACT_SIGNED',
+    'CARE_NURTURING',
     'ORDER_CREATED',
     'DEPOSIT_CONFIRMED',
-    'CONTRACT_SIGNED',
     'IN_PRODUCTION',
     'READY_FOR_INSTALL',
     'INSTALLING',
     'HANDOVER_COMPLETED',
     'WARRANTY_ACTIVE',
-    'CARE_NURTURING',
   ],
 } as const;
 

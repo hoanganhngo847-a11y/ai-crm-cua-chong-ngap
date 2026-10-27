@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/client';
 import MessageContent from './message-content';
 import ZaloComposer from './zalo-composer';
 import { evaluateSkeletonCorrelation } from '../utils/skeleton-helper';
+import { CUSTOMER_STAGE_LABELS } from '@/features/crm/types/customer.types';
 
 export { mergeDeliveryStatus };
 
@@ -1677,7 +1678,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   <div className="flex justify-between py-1">
                     <span className="text-[var(--text-secondary)]">Giai đoạn:</span>
                     <span className="font-semibold text-blue-700">
-                      {selectedConversation.customer_stage || 'LEAD_NEW'}
+                      {(selectedConversation.customer_stage && CUSTOMER_STAGE_LABELS[selectedConversation.customer_stage]) || selectedConversation.customer_stage || 'Khách mới'}
                     </span>
                   </div>
                 </div>

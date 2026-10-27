@@ -18,6 +18,7 @@ import {
   type CampaignData,
   type Template,
 } from "./contracts";
+import { CUSTOMER_STAGE_LABELS } from "../crm/types/customer.types";
 
 const field =
   "w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-primary)] p-2 text-sm";
@@ -240,7 +241,7 @@ export function PersonalZaloCampaignWizard({
                   <div>
                     {customer.name} · {customer.customer_code}
                     <p className="text-xs text-[var(--text-secondary)]">
-                      {customer.channels.join(", ") || "Chưa có định danh"} · {customer.stage}
+                      {customer.channels.join(", ") || "Chưa có định danh"} · {CUSTOMER_STAGE_LABELS[customer.stage] || customer.stage}
                     </p>
                   </div>
                   <Button

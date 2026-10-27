@@ -19,59 +19,51 @@ async function runUiUxRegressionTests() {
   // ============================================================================
   console.log('--- Section 1: Customer Stage Modal & Canonical Stages Coverage ---');
 
-  // Required canonical stages from database check constraint
-  const EXPECTED_CANONICAL_STAGES = [
+  // Required canonical stages for Study Abroad Consulting workflow
+  const EXPECTED_STUDY_ABROAD_STAGES = [
     'LEAD_NEW',
     'CONTACT_CYCLE_1',
     'CONTACT_CYCLE_2',
     'CONTACT_CYCLE_3',
     'UNREACHABLE',
-    'SURVEY_REQUESTED',
-    'SURVEY_SCHEDULED',
-    'SURVEY_COMPLETED',
-    'PRICE_CALCULATED',
-    'NEED_INFO',
-    'PRICE_OFFERED',
-    'NEGOTIATING',
-    'ORDER_CREATED',
-    'DEPOSIT_CONFIRMED',
+    'ZALO_FRIENDED',
+    'IN_CARE',
+    'POTENTIAL_CLOSING',
+    'NOT_POTENTIAL',
+    'NO_DEMAND',
     'CONTRACT_SIGNED',
-    'IN_PRODUCTION',
-    'READY_FOR_INSTALL',
-    'INSTALLING',
-    'HANDOVER_COMPLETED',
-    'WARRANTY_ACTIVE',
-    'LOST',
     'CARE_NURTURING',
   ];
 
   const canonicalValues = CANONICAL_STAGE_LIST.map((s) => s.value);
 
-  // 1a. Verify all expected canonical stages are present in CANONICAL_STAGE_LIST
-  for (const stg of EXPECTED_CANONICAL_STAGES) {
+  // 1a. Verify all 12 study abroad stages are present in CANONICAL_STAGE_LIST
+  assert.strictEqual(CANONICAL_STAGE_LIST.length, 12, 'CANONICAL_STAGE_LIST must contain exactly 12 study abroad stages');
+  for (const stg of EXPECTED_STUDY_ABROAD_STAGES) {
     assert(
       canonicalValues.includes(stg as any),
-      `Missing canonical stage in CANONICAL_STAGE_LIST: ${stg}`
+      `Missing study abroad stage in CANONICAL_STAGE_LIST: ${stg}`
     );
   }
-  console.log('✓ PASS 1a: All 22 DB canonical stages exist in CANONICAL_STAGE_LIST');
+  console.log('✓ PASS 1a: All 12 Study Abroad stages exist in CANONICAL_STAGE_LIST');
 
-  // 1b. Specifically verify the 4 previously-missing stages
-  assert(canonicalValues.includes('PRICE_CALCULATED' as any), 'PRICE_CALCULATED must have an option');
-  assert(canonicalValues.includes('NEED_INFO' as any), 'NEED_INFO must have an option');
-  assert(canonicalValues.includes('WARRANTY_ACTIVE' as any), 'WARRANTY_ACTIVE must have an option');
-  assert(canonicalValues.includes('CARE_NURTURING' as any), 'CARE_NURTURING must have an option');
-  console.log('✓ PASS 1b: PRICE_CALCULATED, NEED_INFO, WARRANTY_ACTIVE, CARE_NURTURING all present');
+  // 1b. Specifically verify new study abroad stages
+  assert(canonicalValues.includes('ZALO_FRIENDED' as any), 'ZALO_FRIENDED must have an option');
+  assert(canonicalValues.includes('IN_CARE' as any), 'IN_CARE must have an option');
+  assert(canonicalValues.includes('POTENTIAL_CLOSING' as any), 'POTENTIAL_CLOSING must have an option');
+  assert(canonicalValues.includes('NOT_POTENTIAL' as any), 'NOT_POTENTIAL must have an option');
+  assert(canonicalValues.includes('NO_DEMAND' as any), 'NO_DEMAND must have an option');
+  console.log('✓ PASS 1b: ZALO_FRIENDED, IN_CARE, POTENTIAL_CLOSING, NOT_POTENTIAL, NO_DEMAND all present');
 
-  // 1c. Verify CUSTOMER_STAGE_LABELS covers all canonical stages with meaningful Vietnamese labels
-  for (const stg of EXPECTED_CANONICAL_STAGES) {
+  // 1c. Verify CUSTOMER_STAGE_LABELS covers all stages with meaningful Vietnamese labels
+  for (const stg of EXPECTED_STUDY_ABROAD_STAGES) {
     const label = CUSTOMER_STAGE_LABELS[stg];
     assert(
       typeof label === 'string' && label.trim().length > 0,
       `CUSTOMER_STAGE_LABELS missing or empty for stage: ${stg}`
     );
   }
-  console.log('✓ PASS 1c: CUSTOMER_STAGE_LABELS contains full human-readable labels for all stages');
+  console.log('✓ PASS 1c: CUSTOMER_STAGE_LABELS contains full human-readable labels for all 12 stages');
 
   // 1d. Statically inspect features/crm/components/customer-list.tsx
   const customerListPath = path.resolve(
@@ -108,10 +100,11 @@ async function runUiUxRegressionTests() {
   assert(Array.isArray(PIPELINE_STAGE_GROUPS.WON), 'WON group must be an array');
 
   // Verify all stages in groups are valid canonical stages
+  const allValidStages = Object.values(CUSTOMER_STAGES) as string[];
   for (const [groupName, stages] of Object.entries(PIPELINE_STAGE_GROUPS)) {
     for (const stg of stages) {
       assert(
-        EXPECTED_CANONICAL_STAGES.includes(stg),
+        allValidStages.includes(stg),
         `Stage ${stg} in group ${groupName} is not a valid canonical stage`
       );
     }

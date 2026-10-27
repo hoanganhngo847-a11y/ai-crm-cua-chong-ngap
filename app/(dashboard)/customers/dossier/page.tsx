@@ -3,7 +3,10 @@ import { BulkSelection, BulkHeader, BulkCell } from '../../../../features/campai
 import { createAdminClient } from '../../../../lib/supabase/admin';
 import { recordingActor } from '../../../../features/zalo-recordings/access';
 import { dossierOwners, listCustomersForActor, listFilters } from '../../../../features/customer-360/service';
-import { CUSTOMER_STAGES } from '../../../../features/crm/types/customer.types';
+import {
+  CANONICAL_STAGE_LIST,
+  CUSTOMER_STAGE_LABELS,
+} from '../../../../features/crm/types/customer.types';
 import { PageHeader } from '../../../../components/ui/page-header';
 import { Button } from '../../../../components/ui/button';
 import { StatusBadge } from '../../../../components/ui/status-badge';
@@ -192,9 +195,9 @@ export default async function CustomerDossierList({
               className="h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             >
               <option value="">Tất cả giai đoạn</option>
-              {[...new Set(Object.values(CUSTOMER_STAGES))].map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {CANONICAL_STAGE_LIST.map((stg) => (
+                <option key={stg.value} value={stg.value}>
+                  {stg.label}
                 </option>
               ))}
             </select>
@@ -290,7 +293,7 @@ export default async function CustomerDossierList({
             )}
             {f.stage && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-primary)]">
-                Giai đoạn: {f.stage}
+                Giai đoạn: {CUSTOMER_STAGE_LABELS[f.stage] || f.stage}
                 <Link href={removeFilterHref('stage')} className="hover:text-[var(--danger)]">
                   <X className="w-3 h-3" />
                 </Link>

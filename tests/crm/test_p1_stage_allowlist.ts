@@ -21,16 +21,30 @@ async function runStageAllowlistTests() {
   assert.strictEqual(toCanonicalStage('PRICE_OFFERED'), 'PRICE_OFFERED');
   assert.strictEqual(toCanonicalStage('CONTRACT_SIGNED'), 'CONTRACT_SIGNED');
   assert.strictEqual(toCanonicalStage('HANDOVER_COMPLETED'), 'HANDOVER_COMPLETED');
+  assert.strictEqual(toCanonicalStage('ZALO_FRIENDED'), 'ZALO_FRIENDED');
+  assert.strictEqual(toCanonicalStage('IN_CARE'), 'IN_CARE');
+  assert.strictEqual(toCanonicalStage('POTENTIAL_CLOSING'), 'POTENTIAL_CLOSING');
+  assert.strictEqual(toCanonicalStage('NOT_POTENTIAL'), 'NOT_POTENTIAL');
+  assert.strictEqual(toCanonicalStage('NO_DEMAND'), 'NO_DEMAND');
   console.log('✓ PASS 1a: Valid canonical stages correctly returned');
 
   // 1b. Case-insensitive and trimmed canonical strings accepted
   assert.strictEqual(toCanonicalStage('  price_offered  '), 'PRICE_OFFERED');
   assert.strictEqual(toCanonicalStage('negotiating'), 'NEGOTIATING');
+  assert.strictEqual(toCanonicalStage('  zalo_friended  '), 'ZALO_FRIENDED');
+  assert.strictEqual(toCanonicalStage('potential_closing'), 'POTENTIAL_CLOSING');
   console.log('✓ PASS 1b: Case-insensitive and trimmed strings correctly normalized');
 
   // 1c. Business aliases correctly mapped to canonical stages
   assert.strictEqual(toCanonicalStage('KHACH_MOI'), 'LEAD_NEW');
   assert.strictEqual(toCanonicalStage('khach_moi'), 'LEAD_NEW');
+  assert.strictEqual(toCanonicalStage('DA_KET_BAN_ZALO'), 'ZALO_FRIENDED');
+  assert.strictEqual(toCanonicalStage('DANG_CHAM_SOC'), 'IN_CARE');
+  assert.strictEqual(toCanonicalStage('CO_TIEM_NANG'), 'POTENTIAL_CLOSING');
+  assert.strictEqual(toCanonicalStage('CHUA_TIEM_NANG'), 'NOT_POTENTIAL');
+  assert.strictEqual(toCanonicalStage('KHONG_NHU_CAU'), 'NO_DEMAND');
+  assert.strictEqual(toCanonicalStage('DA_KI_HOP_DONG'), 'CONTRACT_SIGNED');
+  assert.strictEqual(toCanonicalStage('CHAM_SOC_SAU_BAN'), 'CARE_NURTURING');
   assert.strictEqual(toCanonicalStage('DA_CO_GIA'), 'PRICE_OFFERED');
   assert.strictEqual(toCanonicalStage('da_co_gia'), 'PRICE_OFFERED');
   assert.strictEqual(toCanonicalStage('DANG_THUONG_LUONG'), 'NEGOTIATING');

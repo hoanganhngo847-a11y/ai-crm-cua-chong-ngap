@@ -1295,7 +1295,7 @@ export async function getUrgentClosingCustomers(
       .from('customers')
       .select('*')
       .eq('company_id', effectiveCompanyId)
-      .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING]);
+      .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING, CUSTOMER_STAGES.POTENTIAL_CLOSING]);
 
     const getCustQuery = () =>
       query as

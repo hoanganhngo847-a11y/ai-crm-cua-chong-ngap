@@ -12,6 +12,7 @@ import {
   type CampaignData,
   type Channel,
 } from "./contracts";
+import { CUSTOMER_STAGE_LABELS } from "../crm/types/customer.types";
 function date(value: string | null) {
   return value
     ? new Date(value).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
@@ -188,7 +189,7 @@ export function CampaignDetail({
               <p className="text-xs">
                 {r.recipient_snapshot.channels.join(", ")} ·{" "}
                 {r.recipient_snapshot.assigned_sale_name || "Chưa phân công"} ·{" "}
-                {r.recipient_snapshot.stage}
+                {CUSTOMER_STAGE_LABELS[r.recipient_snapshot.stage] || r.recipient_snapshot.stage}
               </p>
               <p>
                 {reasonLabels[r.eligibility_reason || ""] ||

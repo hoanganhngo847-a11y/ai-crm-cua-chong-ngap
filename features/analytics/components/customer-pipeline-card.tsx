@@ -1,4 +1,5 @@
 import React from 'react';
+import { CUSTOMER_STAGE_LABELS } from '@/features/crm/types/customer.types';
 import type {
   CustomerSourceCount,
   StageDistributionItem,
@@ -85,7 +86,7 @@ export function CustomerPipelineCard({
               return (
                 <div key={item.stage} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-300 font-medium">{item.stage}</span>
+                    <span className="text-slate-300 font-medium">{CUSTOMER_STAGE_LABELS[item.stage] || item.stage}</span>
                     <span className="text-slate-400 font-mono">
                       {item.count} ({pct}%)
                     </span>
@@ -127,7 +128,7 @@ export function CustomerPipelineCard({
               return (
                 <div key={item.toStage} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-300 font-medium">Chuyển sang: {item.toStage}</span>
+                    <span className="text-slate-300 font-medium">Chuyển sang: {CUSTOMER_STAGE_LABELS[item.toStage] || item.toStage}</span>
                     <span className="text-slate-400 font-mono">
                       {item.count} lượt ({pct}%)
                     </span>
