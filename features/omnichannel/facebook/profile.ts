@@ -109,7 +109,7 @@ async function requestGraph(
     }
 }
 
-function normalizeProfileName(value: unknown): string | null {
+export function normalizeFacebookDisplayName(value: unknown): string | null {
     if (typeof value !== 'string') return null;
 
     const normalized = value
@@ -150,7 +150,7 @@ async function lookupDirectProfile(
         result.payload && typeof result.payload === 'object'
             ? (result.payload as { name?: unknown })
             : {};
-    const name = normalizeProfileName(payload.name);
+    const name = normalizeFacebookDisplayName(payload.name);
 
     return { name, failure: name ? null : 'missing_name' };
 }
@@ -210,7 +210,7 @@ async function lookupConversationParticipant(
             const { id, name } = participant as { id?: unknown; name?: unknown };
             if (id !== senderPsid || id === config.page) continue;
 
-            const displayName = normalizeProfileName(name);
+            const displayName = normalizeFacebookDisplayName(name);
             if (displayName) return { name: displayName, failure: null };
         }
     }
