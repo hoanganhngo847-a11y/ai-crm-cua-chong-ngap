@@ -40,7 +40,7 @@
     "test:integration-gate": "tsx --conditions=react-server tests/e2e/run-integration-gate.ts",
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test:operations": "tsx --conditions=react-server --test tests/operations/operations.test.ts tests/operations/database.test.ts",
-    "test:omnichannel": "tsx --conditions=react-server --test tests/omnichannel/runtime.test.ts",
+    "test:omnichannel": "tsx --conditions=react-server --test tests/omnichannel/runtime.test.ts tests/omnichannel/facebook_profile_lookup.test.ts",
     "test:meta-messenger": "tsx --conditions=react-server --test tests/omnichannel/meta_messenger_platform.test.ts",
     "test:meta-deletion:db": "tsx --conditions=react-server --test tests/omnichannel/meta_data_deletion_db.integration.test.ts",
     "test:omnichannel:db": "tsx tests/omnichannel/database.test.ts",
