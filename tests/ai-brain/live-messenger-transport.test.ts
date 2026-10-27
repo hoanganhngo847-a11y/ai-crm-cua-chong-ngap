@@ -214,6 +214,51 @@ test('Messenger transport: successfully sends reply with atomic dispatch-start f
   });
 });
 
+test('Messenger transport: recovers page and recipient from conversation metadata', async () => {
+  const mockDb = createMockSupabase({
+    convData: {
+      id: CONVERSATION_ID,
+      company_id: COMPANY_ID,
+      channel: 'FACEBOOK',
+      external_conversation_id: 'customer-uuid-not-canonical',
+      metadata: { provider: 'botcake', page_id: PAGE_ID, sender_id: RECIPIENT_PSID },
+    },
+  });
+  const dispatchCalls: unknown[] = [];
+
+  const transport = new MessengerDeliveryTransport({
+    supabase: mockDb,
+    dispatchFn: (async (input: unknown) => {
+      dispatchCalls.push(input);
+      return { status: 'SENT' as const, mid: 'mid.metadata.1' };
+    }) as never,
+    resolveBinding: () => ({
+      page: PAGE_ID,
+      company: COMPANY_ID,
+      tokenEnv: 'META_PAGE_ACCESS_TOKEN',
+    }),
+  });
+
+  const result = await transport.sendReply({
+    claim: defaultClaim,
+    draft: DRAFT_TEXT,
+    commandId: `ai-live:${INTERACTION_ID}`,
+    minConfidence: 0.85,
+    lockToken: LOCK_TOKEN,
+  });
+
+  assert.equal(result.outcome, 'SENT');
+  assert.deepEqual(dispatchCalls[0], {
+    page: PAGE_ID,
+    recipient: RECIPIENT_PSID,
+    version: 'v21.0',
+    token: 'EAABtest-page-access-token',
+    content: DRAFT_TEXT,
+  });
+  assert.equal(mockDb.rpcCalls[0].name, 'start_ai_messenger_live_dispatch');
+  assert.equal(mockDb.rpcCalls[0].params.p_page_id, PAGE_ID);
+});
+
 test('Messenger transport: missing lock token denies send immediately', async () => {
   const mockDb = createMockSupabase();
   let dispatchCalled = false;

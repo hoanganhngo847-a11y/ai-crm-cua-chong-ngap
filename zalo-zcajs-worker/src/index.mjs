@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { Zalo, MessageType } from 'zca-js';
 import { normalizeDirectMessage } from './message-normalizer.mjs';
+import { createInboundDelivery } from './inbound-delivery.mjs';
 
 const PORT = Number(process.env.PORT || 10000);
 const COMPANY_ID = (process.env.ZCAJS_COMPANY_ID || '').trim();
@@ -13,7 +14,6 @@ const WORKER_SECRET = process.env.ZCAJS_WORKER_SECRET || '';
 const COOKIE_RAW = process.env.ZCAJS_COOKIE || '';
 const IMEI = process.env.ZCAJS_IMEI || '';
 const USER_AGENT = process.env.ZCAJS_USER_AGENT || '';
-const INBOUND_MAX_RETRIES = 6;
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_MEDIA_BODY_BYTES = 30 * 1024 * 1024;
 const MAX_MEDIA_FILES = 5;
@@ -28,6 +28,7 @@ let listenerConnected = false;
 let listenerRestartAttempt = 0;
 let listenerRestartTimer = null;
 let loginLoopRunning = false;
+let inboundDelivery = null;
 
 // Used only to suppress the self-listener echo created by a CRM-originated send.
 // Manual messages sent directly in Zalo are not placed in these maps and are forwarded to CRM.
@@ -127,27 +128,14 @@ function shouldSuppressCrmSelfEcho(message) {
   return false;
 }
 
-async function postInbound(payload, attempt = 0) {
-  try {
-    const response = await fetch(`${CRM_BASE_URL}/api/inbox/zalo-zcajs/inbound`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${WORKER_SECRET}`,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15_000),
+async function postInbound(payload) {
+  if (!inboundDelivery) {
+    inboundDelivery = createInboundDelivery({
+      crmBaseUrl: CRM_BASE_URL,
+      workerSecret: WORKER_SECRET,
     });
-    if (response.ok) return;
-    throw new Error(`CRM_HTTP_${response.status}`);
-  } catch (error) {
-    if (attempt >= INBOUND_MAX_RETRIES - 1) {
-      console.error('[ZCAJS] inbound delivery exhausted retries:', error instanceof Error ? error.message : 'unknown');
-      return;
-    }
-    const delayMs = Math.min(60_000, 1000 * 2 ** attempt);
-    setTimeout(() => void postInbound(payload, attempt + 1), delayMs);
   }
+  return inboundDelivery.deliver(payload);
 }
 
 function scheduleListenerRestart() {
@@ -506,6 +494,7 @@ server.listen(PORT, '0.0.0.0', () => {
 function shutdown(signal) {
   console.log(`[ZCAJS] received ${signal}; shutting down`);
   if (listenerRestartTimer) clearTimeout(listenerRestartTimer);
+  inboundDelivery?.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();
 }

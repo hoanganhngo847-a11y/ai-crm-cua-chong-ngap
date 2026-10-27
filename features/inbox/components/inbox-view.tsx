@@ -922,7 +922,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
           )
         );
       } else {
-        const errorMsg = json?.error || `Gửi tin nhắn thất bại (HTTP ${res.status})`;
+        const errorMsg = json?.message || json?.error || `Gửi tin nhắn thất bại (HTTP ${res.status})`;
         handleSendFailure(sendConversationId, commandId, text, errorMsg);
       }
     } catch (err: unknown) {

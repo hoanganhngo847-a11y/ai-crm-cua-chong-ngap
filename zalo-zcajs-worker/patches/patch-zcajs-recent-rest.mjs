@@ -141,16 +141,17 @@ const recentSyncBlock = `
             }
         };
 
-        this.listener.on("message", rememberRecent);
-        this.listener.on("connected", () => {
+        const startRecentSync = () => {
             setTimeout(() => void syncRecent(), 1_000);
             if (recentSyncTimer) clearInterval(recentSyncTimer);
             recentSyncTimer = setInterval(() => void syncRecent(), 30_000);
-        });
-        this.listener.on("closed", () => {
-            if (recentSyncTimer) clearInterval(recentSyncTimer);
-            recentSyncTimer = undefined;
-        });`;
+        };
+
+        this.listener.on("message", rememberRecent);
+        this.listener.on("connected", startRecentSync);
+        // Recovery must not depend on the websocket "connected" event: a broken or
+        // silently dropped listener is exactly when REST recovery matters most.
+        startRecentSync();`;
 
 if (!zalo.includes('Recovered recent Zalo DMs via REST')) {
     zalo = zalo.replace(ctorAnchor, `${ctorAnchor}${recentSyncBlock}`);

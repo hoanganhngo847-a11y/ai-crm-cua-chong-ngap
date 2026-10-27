@@ -77,6 +77,8 @@ export interface NormalizedIngressEvent {
   message_id: string;
   content: string;
   timestamp: string;
+  /** Canonical provider conversation key, e.g. `pageId:psid` for Messenger. */
+  external_conversation_id?: string;
   metadata?: Record<string, unknown>;
 }
 

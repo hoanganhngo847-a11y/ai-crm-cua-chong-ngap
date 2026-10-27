@@ -43,6 +43,25 @@ async function runInboxNavigationAndRbacTests() {
   );
   console.log('[PASS] Navigation separates CRM (/crm) and Hộp thư (/inbox) strictly for BOSS_ADMIN and SALE');
 
+  // 1b. Default landing page: BOSS_ADMIN and SALE go straight to Inbox.
+  console.log('\n--- 1b. Default Landing Page Redirects ---');
+  const homePagePath = path.resolve(process.cwd(), 'app/page.tsx');
+  const homePageContent = fs.readFileSync(homePagePath, 'utf8');
+
+  assert.ok(
+    /APPLICATION_ROLES\.BOSS_ADMIN[\s\S]*?APPLICATION_ROLES\.SALE[\s\S]*?redirect\('\/inbox'\)/.test(homePageContent),
+    'FAIL: BOSS_ADMIN and SALE must land on /inbox'
+  );
+  assert.ok(
+    !/APPLICATION_ROLES\.BOSS_ADMIN[\s\S]{0,120}redirect\('\/admin'\)/.test(homePageContent),
+    'FAIL: BOSS_ADMIN must not be forced through /admin MFA on login'
+  );
+  assert.ok(
+    /APPLICATION_ROLES\.TECHNICIAN[\s\S]*?redirect\('\/field'\)/.test(homePageContent),
+    'FAIL: TECHNICIAN must still land on /field'
+  );
+  console.log('[PASS] BOSS_ADMIN and SALE land on /inbox; TECHNICIAN lands on /field');
+
   // 2. Server-side RBAC in app/(dashboard)/inbox/page.tsx
   console.log('\n--- 2. Server-Side RBAC Guard in app/(dashboard)/inbox/page.tsx ---');
   const inboxPagePath = path.resolve(process.cwd(), 'app/(dashboard)/inbox/page.tsx');

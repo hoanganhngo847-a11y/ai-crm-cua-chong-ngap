@@ -87,6 +87,30 @@ async function persistZaloConversationDisplayName(
   }
 }
 
+async function applyZaloDisplayName(
+  supabase: ReturnType<typeof createAdminClient>,
+  companyId: string,
+  externalUserId: string,
+  displayName: string | undefined,
+  displayNameSource: string | undefined
+): Promise<void> {
+  const cleanName = normalizeZaloDisplayName(displayName);
+  if (!cleanName || !/^[0-9]{5,40}$/.test(externalUserId)) return;
+
+  const { error } = await supabase.rpc('apply_zalo_display_name', {
+    p_company: companyId,
+    p_external_id: externalUserId,
+    p_display_name: cleanName,
+    p_source: displayNameSource || 'message_dname',
+  });
+
+  if (error) {
+    // Display-name propagation is fail-soft: the message itself must never be lost
+    // because a denormalized CRM projection could not be refreshed.
+    console.warn('[ZCAJS inbound] could not apply Zalo display name:', error.message);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (getZaloTransportMode() !== 'ZCAJS') {
@@ -238,6 +262,14 @@ export async function POST(request: NextRequest) {
       senderName,
       senderNameSource,
       normalizedObservedAt
+    );
+
+    await applyZaloDisplayName(
+      supabase,
+      companyId,
+      externalUserId,
+      senderName,
+      senderNameSource
     );
 
     return NextResponse.json({
