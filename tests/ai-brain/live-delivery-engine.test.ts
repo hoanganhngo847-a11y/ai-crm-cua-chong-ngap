@@ -30,6 +30,7 @@ interface MockDbConfig {
   convFbStatus?: string;
   convFbAssignedTo?: string | null;
   convFbAiMode?: string;
+  convZaloStatus?: string;
   handoverRpcError?: Error | null;
 }
 
@@ -120,7 +121,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                   company_id: COMPANY_ID,
                   customer_id: CUSTOMER_ID,
                   channel: 'ZALO',
-                  status: 'OPEN',
+                  status: config.convZaloStatus ?? 'OPEN',
                   assigned_to: null,
                   ai_mode: 'ACTIVE',
                   external_conversation_id: 'oa_user_1',
@@ -366,6 +367,71 @@ test('Generic Engine: Messenger pre-send canary restriction halts delivery witho
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'SKIPPED');
   assert.equal(finishCall.params.p_error_code, 'CANARY_RESTRICTED');
+});
+
+test('Generic Engine: Messenger conversation in PENDING_SALE status is processed and auto-replied (remove pending sale gate)', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    convFbStatus: 'PENDING_SALE', // PENDING_SALE must NOT block Messenger AI auto-reply
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider();
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 1);
+  assert.equal(result.skipped, 0);
+  assert.equal(messengerTransport.sendCalls.length, 1);
+  assert.equal(messengerTransport.sendCalls[0].claim.channel, 'MESSENGER');
+});
+
+test('Generic Engine: Zalo conversation in PENDING_SALE status remains skipped (preserves Zalo SLA gate)', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_ZALO,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_ZALO,
+        source_interaction_id: INTERACTION_ID_ZALO,
+        channel: 'ZALO',
+        attempts: 1,
+      },
+    ],
+    convZaloStatus: 'PENDING_SALE', // PENDING_SALE must STILL block Zalo
+  });
+
+  const zaloTransport = new MockTransport('ZALO');
+  const mockProvider = createMockProvider();
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { ZALO: zaloTransport },
+    channel: 'ZALO',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(zaloTransport.sendCalls.length, 0);
 });
 
 test('Generic Engine: Human ownership on Messenger conversation halts delivery', async () => {

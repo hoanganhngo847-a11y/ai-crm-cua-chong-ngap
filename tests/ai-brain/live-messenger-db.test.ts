@@ -755,6 +755,71 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
       .eq('source_interaction_id', interactionAssignedId)
       .maybeSingle();
     assert.equal(noDeliveryAssigned, null, 'Human assigned conversation must not enqueue');
+
+    // PENDING_SALE conversation for Messenger: MUST enqueue and allow dispatch fence (remove pending sale gate)
+    const pendingSaleConvId = randomUUID();
+    await service.from('conversations').insert({
+      id: pendingSaleConvId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'FACEBOOK',
+      external_conversation_id: `${PAGE_ID}:87654321098765004`,
+      status: 'PENDING_SALE',
+      assigned_to: null,
+      ai_mode: 'ACTIVE',
+    });
+    await service.from('ai_brain_live_canary_allowlist').insert({
+      company_id: COMPANY_ID,
+      channel: 'MESSENGER',
+      conversation_id: pendingSaleConvId,
+      page_id: PAGE_ID,
+      enabled: true,
+    });
+
+    const interactionPendingSaleId = randomUUID();
+    await service.from('interactions').insert({
+      id: interactionPendingSaleId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: pendingSaleConvId,
+      channel: 'FACEBOOK',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Chào fanpage, tư vấn cho mình ngay nhé!',
+      sanitization_status: 'SUCCEEDED',
+    });
+
+    const { data: deliveryPendingSale } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', interactionPendingSaleId)
+      .maybeSingle();
+    assert.ok(deliveryPendingSale, 'PENDING_SALE Messenger conversation MUST enqueue delivery without waiting for sale');
+
+    // Claim and test dispatch fence
+    const lockPending = randomUUID();
+    const { data: claimedPending } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 5,
+      p_lock_token: lockPending,
+      p_channel: 'MESSENGER',
+    });
+    const foundPending = (claimedPending as Array<{ id: string }>).find((c) => c.id === deliveryPendingSale.id);
+    assert.ok(foundPending, 'PENDING_SALE Messenger delivery must be claimable');
+
+    const { data: fenceAcquiredPending, error: fenceErrPending } = await service.rpc('start_ai_messenger_live_dispatch', {
+      p_delivery_id: deliveryPendingSale.id,
+      p_lock_token: lockPending,
+      p_company_id: COMPANY_ID,
+      p_customer_id: CUSTOMER_ID,
+      p_conversation_id: pendingSaleConvId,
+      p_source_interaction_id: interactionPendingSaleId,
+      p_page_id: PAGE_ID,
+      p_min_confidence: 0.85,
+      p_turn_confidence: 0.9,
+    });
+    assert.ifError(fenceErrPending);
+    assert.equal(fenceAcquiredPending, true, 'start_ai_messenger_live_dispatch fence must be acquired for PENDING_SALE conversation');
   } finally {
     await harness.close();
   }
