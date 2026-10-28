@@ -314,7 +314,7 @@ export async function getContactCycleStatus(
       currentAttemptNo: null,
       isCycleComplete: false,
       attempts: [],
-      customerStage: customer?.stage || 'LEAD_NEW',
+      customerStage: customer?.stage || 'awareness',
     };
   }
 
@@ -343,7 +343,7 @@ export async function getContactCycleStatus(
     currentAttemptNo: maxAttempt,
     isCycleComplete: !hasPending,
     attempts: dtos,
-    customerStage: customer?.stage || 'LEAD_NEW',
+    customerStage: customer?.stage || 'awareness',
   };
 }
 

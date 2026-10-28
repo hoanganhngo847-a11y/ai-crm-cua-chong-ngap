@@ -8,14 +8,24 @@ if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'production' && t
   process.env.DEMO_MODE = 'true';
 }
 import {
+  CANONICAL_CUSTOMER_STAGES,
+  CANONICAL_STAGE_LIST,
   CUSTOMER_SOURCES,
   CUSTOMER_STAGES,
+  DB_STAGE_VALUES_BY_CANONICAL,
   STAGE_ACTOR_TYPES,
+  stageNeedsReview,
+  type CanonicalCustomerStage,
   type Customer,
+  type CustomerPipelineResponse,
+  type CustomerPipelineStageCount,
   type CustomerPrivateContact,
   type CustomerResponse,
+  type CustomerSource,
   type CustomerStage,
   type CustomerStageHistory,
+  type CustomerStageSuggestion,
+  type CustomerStageSuggestionEvidence,
   type CustomerWithContact,
   type FindOrCreateCustomerParams,
   type FindOrCreateCustomerResult,
@@ -23,6 +33,7 @@ import {
   type StageActorType,
   type UpdateCustomerStageParams,
   toCanonicalStage,
+  tryToCanonicalStage,
 } from '../types/customer.types';
 
 declare module '../types/customer.types' {
@@ -486,11 +497,19 @@ export async function findOrCreateByPhone(
           ? CUSTOMER_SOURCES.WEBSITE
           : CUSTOMER_SOURCES.MANUAL);
 
-  // Ánh xạ stage ban đầu: Nếu truyền 'KHACH_MOI' hoặc không truyền thì mặc định là LEAD_NEW (Khách mới)
-  const initialStage =
-    params.stage === 'KHACH_MOI' || !params.stage
-      ? CUSTOMER_STAGES.LEAD_NEW
-      : params.stage;
+  // Giai đoạn ban đầu:
+  // - Nếu caller truyền stage cụ thể, chuẩn hóa về canonical.
+  // - Nếu không, áp dụng quy tắc nguồn: ZALO/ZALO_OA/WEBSITE -> interested,
+  //   các nguồn còn lại -> awareness.
+  // Quy tắc nguồn chỉ là gợi ý ban đầu; bằng chứng hội thoại sau đó có thể
+  // được AI/ nhân viên cập nhật theo thực tế.
+  const initialStage: CanonicalCustomerStage = params.stage
+    ? toCanonicalStage(params.stage)
+    : initialSource === CUSTOMER_SOURCES.ZALO ||
+        initialSource === CUSTOMER_SOURCES.ZALO_OA ||
+        initialSource === CUSTOMER_SOURCES.WEBSITE
+      ? CUSTOMER_STAGES.INTERESTED
+      : CUSTOMER_STAGES.AWARENESS;
 
   // Tuân thủ Lỗi P0 số 1 & P0 số 3: Bắt buộc Atomic RPC trong Production, khóa hoàn toàn non-atomic fallback
   const isDemo = isDemoModeActive();
@@ -745,10 +764,10 @@ export async function findOrCreateByPhone(
 // In-Memory Mock Stage & History Tracking for Phase 2
 // ============================================================================
 export const mockCustomerStages: Record<string, CustomerStage> = {
-  'cust-1': 'PRICE_OFFERED',
-  'cust-2': 'SURVEY_SCHEDULED',
-  'cust-3': 'WARRANTY_ACTIVE',
-  'cust-4': 'DEPOSIT_CONFIRMED',
+  'cust-1': CUSTOMER_STAGES.HIGH_POTENTIAL,
+  'cust-2': CUSTOMER_STAGES.INTERESTED,
+  'cust-3': CUSTOMER_STAGES.CONTRACT_SIGNED,
+  'cust-4': CUSTOMER_STAGES.HIGH_POTENTIAL,
 };
 
 export const mockStageHistories: CustomerStageHistory[] = [];
@@ -774,7 +793,7 @@ export async function updateStage(
   actorType?: StageActorType | string,
   note?: string,
   client?: SupabaseClient
-): Promise<{ customer: Customer; history: CustomerStageHistory }> {
+): Promise<{ customer: Customer; history: CustomerStageHistory | null; changed: boolean }> {
   let customerId: string;
   let companyId: string;
   let newStage: string;
@@ -782,6 +801,9 @@ export async function updateStage(
   let actorId: string | null = null;
   let noteVal: string | undefined = undefined;
   let sourceRefVal: string | null = null;
+  let expectedStageVal: string | null = null;
+  let evidenceVal: string | null = null;
+  let confidenceVal: number | null = null;
   let adminClient: SupabaseClient;
 
   if (typeof customerIdOrParams === 'object' && customerIdOrParams !== null) {
@@ -793,13 +815,19 @@ export async function updateStage(
     actorId = p.actorId || p.userId || null;
     noteVal = p.note;
     sourceRefVal = p.sourceRef || null;
+    expectedStageVal = p.expectedStage ? String(p.expectedStage) : null;
+    evidenceVal = p.evidence || null;
+    confidenceVal =
+      typeof p.confidence === 'number' && Number.isFinite(p.confidence)
+        ? Math.round(p.confidence * 100) / 100
+        : null;
     adminClient = (companyIdOrNewStage as SupabaseClient) || client || createAdminClient();
   } else {
     customerId = customerIdOrParams;
     const secondArg = String(companyIdOrNewStage || '');
     const isSecondArgStage =
       (Object.values(CUSTOMER_STAGES) as string[]).includes(secondArg) ||
-      ['DA_CO_GIA', 'DANG_THUONG_LUONG', 'KHACH_MOI'].includes(secondArg.toUpperCase());
+      (Object.values(CUSTOMER_STAGES) as string[]).includes(secondArg.toUpperCase());
 
     if (isSecondArgStage) {
       throw new Error('companyId là tham số bắt buộc để xác thực quyền truy cập và ngăn chặn lỗ hổng Cross-Tenant.');
@@ -822,17 +850,92 @@ export async function updateStage(
     throw new Error('Giai đoạn mới (newStage) là bắt buộc.');
   }
 
-  // Thắt chặt Runtime Allowlist - Lỗi P1 (Mục 12):
-  // Thẩm định to_stage/newStage qua allowlist trước khi thực hiện UPDATE vào CSDL
+  // Thẩm định to_stage/newStage qua allowlist canonical trước khi ghi CSDL.
   const canonicalNewStage = toCanonicalStage(newStage);
+  const canonicalExpectedStage = expectedStageVal ? toCanonicalStage(expectedStageVal) : null;
   const now = new Date().toISOString();
   const stageReason = noteVal || `Chuyển giai đoạn sang [${canonicalNewStage}]`;
 
-  // Tuân thủ Lỗi P0 số 1 & P0 số 3: Bắt buộc Atomic RPC trong Production, khóa hoàn toàn non-atomic fallback
+  const buildResult = (rpcData: Record<string, unknown> | null | undefined) => {
+    if (!rpcData || typeof rpcData !== 'object' || !('customer' in rpcData) || !rpcData.customer) {
+      return null;
+    }
+    const updatedCustomer = rpcData.customer as Customer;
+    const historyRow = (rpcData.history || null) as Record<string, unknown> | null;
+    const changed = rpcData.changed !== false;
+
+    const historyRecord: CustomerStageHistory | null = historyRow
+      ? {
+          id: String(historyRow.id || ''),
+          company_id: String(historyRow.company_id || companyId),
+          customer_id: String(historyRow.customer_id || customerId),
+          from_stage: (historyRow.from_stage as CustomerStage) || null,
+          to_stage: historyRow.to_stage as CustomerStage,
+          actor_type: (historyRow.actor_type as StageActorType) || actorTypeVal,
+          changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
+          reason: String(historyRow.reason || historyRow.note || stageReason),
+          note: String(historyRow.note || historyRow.reason || stageReason),
+          source_ref: historyRow.source_ref ? String(historyRow.source_ref) : sourceRefVal,
+          evidence: historyRow.evidence ? String(historyRow.evidence) : evidenceVal,
+          confidence:
+            historyRow.confidence !== null && historyRow.confidence !== undefined
+              ? Number(historyRow.confidence)
+              : confidenceVal,
+          verification_status: (historyRow.verification_status as CustomerStageHistory['verification_status']) || null,
+          changed_at: String(historyRow.changed_at || now),
+        }
+      : null;
+
+    return { customer: updatedCustomer, history: historyRecord, changed };
+  };
+
+  const handleRpcError = (rpcError: { message?: string; hint?: string; details?: string; code?: string }): never => {
+    const errMsg = String(rpcError?.message || '');
+    const errHint = String(rpcError?.hint || '');
+    const errDetails = String(rpcError?.details || '');
+    const errCode = String(rpcError?.code || '');
+
+    if (
+      errMsg.includes('STAGE_CONFLICT') ||
+      errHint.includes('STAGE_CONFLICT') ||
+      errCode === '40001'
+    ) {
+      const conflictError = new Error(
+        'Giai đoạn khách hàng vừa được người khác cập nhật. Vui lòng tải lại và thử lại.'
+      ) as ServiceCodedError;
+      conflictError.status = 409;
+      conflictError.code = 'STAGE_CONFLICT';
+      throw conflictError;
+    }
+
+    if (
+      errMsg.includes('CUSTOMER_NOT_FOUND') ||
+      errMsg.includes('không thuộc quyền quản lý') ||
+      errMsg.includes('không tồn tại') ||
+      errCode === 'P0002' ||
+      errHint.includes('CUSTOMER_NOT_FOUND') ||
+      errDetails.includes('CUSTOMER_NOT_FOUND')
+    ) {
+      const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
+      notFoundError.status = 404;
+      notFoundError.code = 'NOT_FOUND';
+      throw notFoundError;
+    }
+
+    if (errMsg.includes('INVALID_STAGE')) {
+      const invalidError = new Error('Giai đoạn khách hàng không hợp lệ.') as ServiceCodedError;
+      invalidError.status = 400;
+      invalidError.code = 'INVALID_STAGE';
+      throw invalidError;
+    }
+
+    throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
+  };
+
+  // Tuân thủ P0: Production bắt buộc Atomic RPC, không fallback non-atomic.
   const isDemo = isDemoModeActive();
 
   if (!isDemo) {
-    // 1. Luồng Production (!isDemoModeActive()): Bắt buộc dùng RPC atomic update_customer_stage_atomic
     if (typeof adminClient.rpc !== 'function') {
       throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
     }
@@ -849,64 +952,33 @@ export async function updateStage(
         p_changed_by: actorId,
         p_actor_type: actorTypeVal,
         p_source_ref: sourceRefVal,
+        p_expected_stage: canonicalExpectedStage,
+        p_evidence: evidenceVal,
+        p_confidence: confidenceVal,
       });
     } catch (err: unknown) {
       rpcThrew = true;
       caughtErr = err;
     }
 
-    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string; hint?: string; details?: string; code?: string } | undefined;
+    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as
+      | { message?: string; hint?: string; details?: string; code?: string }
+      | undefined;
     const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
 
     if (rpcError) {
-      const errMsg = String(rpcError?.message || '');
-      const errHint = String(rpcError?.hint || '');
-      const errDetails = String(rpcError?.details || '');
-      const errCode = String(rpcError?.code || '');
-      if (
-        errMsg.includes('CUSTOMER_NOT_FOUND') ||
-        errMsg.includes('không thuộc quyền quản lý') ||
-        errMsg.includes('không tồn tại') ||
-        errCode === 'P0002' ||
-        errHint.includes('CUSTOMER_NOT_FOUND') ||
-        errDetails.includes('CUSTOMER_NOT_FOUND')
-      ) {
-        const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
-        notFoundError.status = 404;
-        notFoundError.code = 'NOT_FOUND';
-        throw notFoundError;
-      }
-      throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
+      handleRpcError(rpcError);
     }
 
-    if (rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
-      const updatedCustomer = rpcData.customer as Customer;
-      const historyRow = (rpcData.history || {}) as Record<string, unknown>;
-
-      const historyRecord: CustomerStageHistory = {
-        id: String(historyRow.id || ''),
-        company_id: String(historyRow.company_id || companyId),
-        customer_id: String(historyRow.customer_id || customerId),
-        from_stage: (historyRow.from_stage as CustomerStage) || null,
-        to_stage: historyRow.to_stage as CustomerStage,
-        actor_type: (historyRow.actor_type as StageActorType) || actorTypeVal,
-        changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
-        reason: String(historyRow.reason || historyRow.note || stageReason),
-        note: String(historyRow.note || historyRow.reason || stageReason),
-        source_ref: historyRow.source_ref ? String(historyRow.source_ref) : sourceRefVal,
-        changed_at: String(historyRow.changed_at || now),
-      };
-
-      return {
-        customer: updatedCustomer,
-        history: historyRecord,
-      };
+    const result = buildResult(rpcData);
+    if (result) {
+      return result;
     }
 
     throw new Error('Không thể cập nhật giai đoạn: Thao tác Atomic RPC thất bại (Fail-Closed).');
   }
 
-  // 2. Luồng Demo/Mock (isDemoModeActive() === true):
+  // Demo/Mock: ưu tiên RPC nếu client hỗ trợ.
   if (typeof adminClient.rpc === 'function') {
     let rpcRes: { data: unknown; error: unknown } | null = null;
     let rpcThrew = false;
@@ -920,63 +992,31 @@ export async function updateStage(
         p_changed_by: actorId,
         p_actor_type: actorTypeVal,
         p_source_ref: sourceRefVal,
+        p_expected_stage: canonicalExpectedStage,
+        p_evidence: evidenceVal,
+        p_confidence: confidenceVal,
       });
     } catch (err: unknown) {
       rpcThrew = true;
       caughtErr = err;
     }
 
-    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as { message?: string; hint?: string; details?: string; code?: string } | undefined;
+    const rpcError = (rpcThrew ? caughtErr : rpcRes?.error) as
+      | { message?: string; hint?: string; details?: string; code?: string }
+      | undefined;
     const rpcData = rpcRes?.data as Record<string, unknown> | null | undefined;
 
     if (rpcError) {
-      const errMsg = String(rpcError?.message || '');
-      const errHint = String(rpcError?.hint || '');
-      const errDetails = String(rpcError?.details || '');
-      const errCode = String(rpcError?.code || '');
-      if (
-        errMsg.includes('CUSTOMER_NOT_FOUND') ||
-        errMsg.includes('không thuộc quyền quản lý') ||
-        errMsg.includes('không tồn tại') ||
-        errCode === 'P0002' ||
-        errHint.includes('CUSTOMER_NOT_FOUND') ||
-        errDetails.includes('CUSTOMER_NOT_FOUND')
-      ) {
-        const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
-        notFoundError.status = 404;
-        notFoundError.code = 'NOT_FOUND';
-        throw notFoundError;
-      }
+      handleRpcError(rpcError);
     }
 
-    if (!rpcError && rpcData && typeof rpcData === 'object' && 'customer' in rpcData && rpcData.customer) {
-      const updatedCustomer = rpcData.customer as Customer;
-      const historyRow = (rpcData.history || {}) as Record<string, unknown>;
-
-      const historyRecord: CustomerStageHistory = {
-        id: String(historyRow.id || ''),
-        company_id: String(historyRow.company_id || companyId),
-        customer_id: String(historyRow.customer_id || customerId),
-        from_stage: (historyRow.from_stage as CustomerStage) || null,
-        to_stage: historyRow.to_stage as CustomerStage,
-        actor_type: (historyRow.actor_type as StageActorType) || actorTypeVal,
-        changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
-        reason: String(historyRow.reason || historyRow.note || stageReason),
-        note: String(historyRow.note || historyRow.reason || stageReason),
-        source_ref: historyRow.source_ref ? String(historyRow.source_ref) : sourceRefVal,
-        changed_at: String(historyRow.changed_at || now),
-      };
-
-      return {
-        customer: updatedCustomer,
-        history: historyRecord,
-      };
+    const result = buildResult(rpcData);
+    if (result) {
+      return result;
     }
   }
 
-  // Fallback cho môi trường test/mock đơn giản không có rpc (Chỉ cho phép khi isDemoModeActive() === true)
-  // 1. Resource Authorization trước khi update:
-  // Truy vấn customer từ database với điều kiện cả id = customerId VÀ company_id = companyId
+  // Fallback cho môi trường test/mock đơn giản không có rpc (chỉ demo mode).
   const { data: dbCustomer, error: fetchErr } = await adminClient
     .from('customers')
     .select('*')
@@ -988,7 +1028,6 @@ export async function updateStage(
     throw new Error(`Lỗi truy vấn cơ sở dữ liệu: ${fetchErr.message}`);
   }
 
-  // Nếu không tìm thấy hoặc customer thuộc công ty khác: Ném lỗi 404 Not Found (chặn đứng cross-tenant)
   if (!dbCustomer) {
     const notFoundError = new Error('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của tổ chức.') as ServiceCodedError;
     notFoundError.status = 404;
@@ -997,8 +1036,21 @@ export async function updateStage(
   }
 
   const oldStage = dbCustomer.stage as CustomerStage;
+  const oldCanonical = toCanonicalStage(oldStage);
 
-  // 2. Cập nhật stage và updated_at cho customer với điều kiện id = customerId VÀ company_id = companyId
+  if (canonicalExpectedStage && canonicalExpectedStage !== oldCanonical) {
+    const conflictError = new Error(
+      'Giai đoạn khách hàng vừa được người khác cập nhật. Vui lòng tải lại và thử lại.'
+    ) as ServiceCodedError;
+    conflictError.status = 409;
+    conflictError.code = 'STAGE_CONFLICT';
+    throw conflictError;
+  }
+
+  if (oldCanonical === canonicalNewStage) {
+    return { customer: dbCustomer as Customer, history: null, changed: false };
+  }
+
   const { data: updCustomer, error: updErr } = await adminClient
     .from('customers')
     .update({
@@ -1014,8 +1066,6 @@ export async function updateStage(
     throw new Error(`Lỗi cập nhật bảng customers: ${updErr?.message || 'Không thể cập nhật khách hàng'}`);
   }
 
-  // 3. Ghi bản ghi mới vào bảng customer_stage_histories (Strict Append-Only)
-  // chứa customer_id, company_id, from_stage, to_stage, actor_type, actor_id, note, created_at
   let histInsertQuery: unknown = adminClient
     .from('customer_stage_histories')
     .insert({
@@ -1027,6 +1077,9 @@ export async function updateStage(
       changed_by_user_id: actorId,
       reason: stageReason,
       source_ref: sourceRefVal,
+      evidence: evidenceVal,
+      confidence: confidenceVal,
+      verification_status: actorTypeVal === STAGE_ACTOR_TYPES.AI ? 'AI_SUGGESTED' : 'VERIFIED',
       changed_at: now,
     });
 
@@ -1060,18 +1113,22 @@ export async function updateStage(
     reason: String(rawHist.reason || stageReason),
     note: String(rawHist.reason || stageReason),
     source_ref: rawHist.source_ref ? String(rawHist.source_ref) : sourceRefVal,
+    evidence: rawHist.evidence ? String(rawHist.evidence) : evidenceVal,
+    confidence:
+      rawHist.confidence !== null && rawHist.confidence !== undefined
+        ? Number(rawHist.confidence)
+        : confidenceVal,
+    verification_status: (rawHist.verification_status as CustomerStageHistory['verification_status']) || null,
     changed_at: String(rawHist.changed_at || now),
   };
 
   return {
     customer: updCustomer as Customer,
     history: historyRecord,
+    changed: true,
   };
 }
 
-/**
- * Lấy lịch sử chuyển đổi giai đoạn của khách hàng (Strict Append-Only)
- */
 export async function getStageHistories(
   companyId: string,
   customerId: string,
@@ -1144,14 +1201,13 @@ export async function getStageHistories(
 
 /**
  * 6. evaluateUrgency: Xác định lý do ưu tiên cao trong Hàng chờ "CẦN SALE CHỐT"
- * - DA_CO_GIA (PRICE_OFFERED) -> "Đã có giá"
- * - DANG_THUONG_LUONG (NEGOTIATING) -> "Đang thương lượng"
+ * - high_potential -> "Có tiềm năng - cần chốt"
  * - PENDING_SALE -> "Khách phản hồi mới"
  */
 export function evaluateUrgency(
   customer: { id: string; stage: string },
   pendingSaleCustomerIds?: Set<string>
-): { isUrgent: boolean; reason?: 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY'; label?: string } {
+): { isUrgent: boolean; reason?: 'HIGH_POTENTIAL' | 'PENDING_REPLY'; label?: string } {
   if (pendingSaleCustomerIds?.has(customer.id)) {
     return {
       isUrgent: true,
@@ -1160,25 +1216,18 @@ export function evaluateUrgency(
     };
   }
 
-  let canonicalStage: CustomerStage | null = null;
+  let canonicalStage: CanonicalCustomerStage | null = null;
   try {
     canonicalStage = customer.stage ? toCanonicalStage(customer.stage) : null;
   } catch {
     canonicalStage = null;
   }
-  if (canonicalStage === CUSTOMER_STAGES.PRICE_OFFERED) {
-    return {
-      isUrgent: true,
-      reason: 'PRICE_OFFERED',
-      label: 'Đã có giá',
-    };
-  }
 
-  if (canonicalStage === CUSTOMER_STAGES.NEGOTIATING) {
+  if (canonicalStage === CUSTOMER_STAGES.HIGH_POTENTIAL) {
     return {
       isUrgent: true,
-      reason: 'NEGOTIATING',
-      label: 'Đang thương lượng',
+      reason: 'HIGH_POTENTIAL',
+      label: 'Có tiềm năng - cần chốt',
     };
   }
 
@@ -1238,6 +1287,8 @@ export function sanitizeForRole(
     name: customerData.customer.name,
     source: customerData.customer.source,
     stage: customerData.customer.stage,
+    canonical_stage: tryToCanonicalStage(customerData.customer.stage) || undefined,
+    stage_needs_review: stageNeedsReview(customerData.customer.stage),
     phone: displayPhone,
     masked_phone: maskedPhoneVal,
     is_phone_masked: !isBossAdmin,
@@ -1295,7 +1346,7 @@ export async function getUrgentClosingCustomers(
       .from('customers')
       .select('*')
       .eq('company_id', effectiveCompanyId)
-      .in('stage', [CUSTOMER_STAGES.PRICE_OFFERED, CUSTOMER_STAGES.NEGOTIATING, CUSTOMER_STAGES.POTENTIAL_CLOSING]);
+      .in('stage', [...DB_STAGE_VALUES_BY_CANONICAL.high_potential]);
 
     const getCustQuery = () =>
       query as
@@ -1335,7 +1386,7 @@ export async function getUrgentClosingCustomers(
         customer_code: 'KH-000001',
         name: 'Anh Hoàng Nam',
         source: CUSTOMER_SOURCES.FACEBOOK,
-        stage: mockCustomerStages['cust-1'] || CUSTOMER_STAGES.PRICE_OFFERED,
+        stage: mockCustomerStages['cust-1'] || CUSTOMER_STAGES.HIGH_POTENTIAL,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
@@ -1345,7 +1396,7 @@ export async function getUrgentClosingCustomers(
         customer_code: 'KH-000002',
         name: 'Chị Mai Phương',
         source: CUSTOMER_SOURCES.ZALO,
-        stage: mockCustomerStages['cust-2'] || CUSTOMER_STAGES.NEGOTIATING,
+        stage: mockCustomerStages['cust-2'] || CUSTOMER_STAGES.HIGH_POTENTIAL,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
@@ -1355,7 +1406,7 @@ export async function getUrgentClosingCustomers(
         customer_code: 'KH-000003',
         name: 'Bác Quốc Tuấn',
         source: CUSTOMER_SOURCES.HOTLINE,
-        stage: mockCustomerStages['cust-3'] || CUSTOMER_STAGES.CARE_NURTURING,
+        stage: mockCustomerStages['cust-3'] || CUSTOMER_STAGES.CONTRACT_SIGNED,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
@@ -1391,6 +1442,554 @@ export async function getUrgentClosingCustomers(
   return urgentList.slice(0, effectiveLimit);
 }
 
+export interface GetCustomerPipelineParams {
+  companyId: string;
+  role?: ApplicationRole | string | null;
+  search?: string | null;
+  source?: CustomerSource | string | null;
+  from?: string | null;
+  to?: string | null;
+  stage?: CanonicalCustomerStage | string | null;
+  limit?: number;
+  client?: SupabaseClient;
+}
+
+function parseSuggestionEvidence(raw: unknown): CustomerStageSuggestionEvidence[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item))
+    .map((item): CustomerStageSuggestionEvidence => ({
+      quote: String(item.quote || ''),
+      source: String(item.source || 'UNKNOWN'),
+      occurredAt: item.occurredAt ? String(item.occurredAt) : null,
+      speaker:
+        item.speaker === 'CUSTOMER' || item.speaker === 'STAFF' || item.speaker === 'UNKNOWN'
+          ? item.speaker
+          : 'UNKNOWN',
+      signal: item.signal ? String(item.signal) : null,
+      stage: tryToCanonicalStage(item.stage),
+      weight: item.weight !== null && item.weight !== undefined ? Number(item.weight) : null,
+    }))
+    .filter((item) => item.quote.trim().length > 0);
+}
+
+function parseStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+/**
+ * 9. getPipeline: nguồn dữ liệu duy nhất cho cả Kanban và Funnel.
+ *
+ * - Số lượng theo giai đoạn lấy từ RPC get_customer_stage_counts để không bỏ sót
+ *   dữ liệu legacy và không phụ thuộc vào trang hiện tại.
+ * - Danh sách khách hàng trả về đã được sanitize theo vai trò.
+ * - Funnel dùng `percentage` = tỉ trọng phân bố trên tổng số khách hàng thuộc
+ *   6 giai đoạn; đây KHÔNG phải tỉ lệ chuyển đổi giữa các giai đoạn.
+ */
+export async function getPipeline(params: GetCustomerPipelineParams): Promise<CustomerPipelineResponse> {
+  const companyId = String(params?.companyId || '').trim();
+  if (!companyId) {
+    throw new Error('companyId là tham số bắt buộc để xác thực quyền truy cập và ngăn chặn lỗ hổng Cross-Tenant.');
+  }
+
+  const isDemoMode = isDemoModeActive();
+  const effectiveLimit = Math.min(Math.max(Number(params.limit) || 200, 1), 500);
+  const search = params.search?.trim() || '';
+  const source = params.source?.trim() || null;
+  const from = params.from?.trim() || null;
+  const to = params.to?.trim() || null;
+  const requestedStage = params.stage ? tryToCanonicalStage(params.stage) : null;
+
+  let adminClient: SupabaseClient | null = null;
+  try {
+    adminClient = params.client || createAdminClient();
+  } catch (err) {
+    if (!isDemoMode) {
+      throw new Error(
+        `DATABASE_ERROR: Không thể kết nối database: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  let customers: Customer[] = [];
+
+  if (adminClient) {
+    let query: unknown = adminClient.from('customers').select('*').eq('company_id', companyId);
+
+    const getQuery = () =>
+      query as
+        | {
+            eq?: (k: string, v: string) => unknown;
+            in?: (k: string, values: string[]) => unknown;
+            or?: (filter: string) => unknown;
+            gte?: (k: string, v: string) => unknown;
+            lte?: (k: string, v: string) => unknown;
+            order?: (k: string, opt: { ascending: boolean }) => unknown;
+            limit?: (n: number) => unknown;
+          }
+        | undefined;
+
+    if (search && typeof getQuery()?.or === 'function') {
+      const escaped = search.replace(/[%,()]/g, ' ');
+      query = getQuery()!.or!(`name.ilike.%${escaped}%,customer_code.ilike.%${escaped}%`);
+    }
+    if (source && typeof getQuery()?.eq === 'function') {
+      query = getQuery()!.eq!('source', source);
+    }
+    if (requestedStage && typeof getQuery()?.in === 'function') {
+      query = getQuery()!.in!('stage', [...DB_STAGE_VALUES_BY_CANONICAL[requestedStage]]);
+    }
+    if (from && typeof getQuery()?.gte === 'function') {
+      query = getQuery()!.gte!('created_at', from);
+    }
+    if (to && typeof getQuery()?.lte === 'function') {
+      query = getQuery()!.lte!('created_at', to);
+    }
+    if (typeof getQuery()?.order === 'function') {
+      query = getQuery()!.order!('created_at', { ascending: false });
+    }
+    if (typeof getQuery()?.limit === 'function') {
+      query = getQuery()!.limit!(effectiveLimit);
+    }
+
+    const { data, error } =
+      (await (query as Promise<{ data: unknown; error: { message?: string } | null }>)) || {};
+
+    if (error) {
+      if (!isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi truy vấn pipeline khách hàng: ${error.message}`);
+      }
+    } else if (data) {
+      customers = (data as Customer[]).filter((c) => c.company_id === companyId);
+    }
+  }
+
+  // Demo fallback: chỉ dùng khi không có dữ liệu thật và không có bộ lọc.
+  if (
+    isDemoMode &&
+    customers.length === 0 &&
+    !search &&
+    !source &&
+    !from &&
+    !to &&
+    !requestedStage
+  ) {
+    const now = new Date().toISOString();
+    customers = [
+      {
+        id: 'cust-1',
+        company_id: companyId,
+        customer_code: 'KH-000001',
+        name: 'Anh Hoàng Nam',
+        source: CUSTOMER_SOURCES.FACEBOOK,
+        stage: CUSTOMER_STAGES.HIGH_POTENTIAL,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'cust-2',
+        company_id: companyId,
+        customer_code: 'KH-000002',
+        name: 'Chị Mai Phương',
+        source: CUSTOMER_SOURCES.ZALO,
+        stage: CUSTOMER_STAGES.INTERESTED,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'cust-3',
+        company_id: companyId,
+        customer_code: 'KH-000003',
+        name: 'Bác Quốc Tuấn',
+        source: CUSTOMER_SOURCES.HOTLINE,
+        stage: CUSTOMER_STAGES.CONTRACT_SIGNED,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'cust-4',
+        company_id: companyId,
+        customer_code: 'KH-000004',
+        name: 'Anh Trọng Hiếu',
+        source: CUSTOMER_SOURCES.ZALO,
+        stage: CUSTOMER_STAGES.DEEP_RESEARCH,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'cust-5',
+        company_id: companyId,
+        customer_code: 'KH-000005',
+        name: 'Chị Thu Hà',
+        source: CUSTOMER_SOURCES.WEBSITE,
+        stage: CUSTOMER_STAGES.AWARENESS,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'cust-6',
+        company_id: companyId,
+        customer_code: 'KH-000006',
+        name: 'Anh Đức Long',
+        source: CUSTOMER_SOURCES.FACEBOOK,
+        stage: CUSTOMER_STAGES.LOW_POTENTIAL,
+        created_at: now,
+        updated_at: now,
+      },
+    ];
+  }
+
+  const rawCounts = new Map<CanonicalCustomerStage, { count: number; needsReview: number }>();
+  for (const stage of CANONICAL_CUSTOMER_STAGES) {
+    rawCounts.set(stage, { count: 0, needsReview: 0 });
+  }
+  let unmappedCount = 0;
+
+  let countsLoadedFromRpc = false;
+  if (adminClient && typeof adminClient.rpc === 'function') {
+    const { data, error } = await adminClient.rpc('get_customer_stage_counts', {
+      p_company_id: companyId,
+      p_from: from,
+      p_to: to,
+      p_source: source,
+      p_search: search || null,
+    });
+
+    if (error) {
+      if (!isDemoMode) {
+        throw new Error(`DATABASE_ERROR: Lỗi đếm giai đoạn khách hàng: ${error.message}`);
+      }
+    } else if (Array.isArray(data)) {
+      countsLoadedFromRpc = true;
+      for (const row of data as Array<Record<string, unknown>>) {
+        const stageValue = String(row.stage || '');
+        const count = Number(row.customer_count || 0);
+        const needsReview = Number(row.needs_review_count || 0);
+        if (stageValue === 'unmapped') {
+          unmappedCount = count;
+          continue;
+        }
+        const canonical = tryToCanonicalStage(stageValue);
+        if (canonical) {
+          rawCounts.set(canonical, { count, needsReview });
+        }
+      }
+    }
+  }
+
+  // Nếu RPC không khả dụng trong demo mode, đếm trên tập dữ liệu đang có.
+  if (!countsLoadedFromRpc && isDemoMode) {
+    for (const customer of customers) {
+      const canonical = tryToCanonicalStage(customer.stage);
+      if (!canonical) {
+        unmappedCount += 1;
+        continue;
+      }
+      const current = rawCounts.get(canonical) || { count: 0, needsReview: 0 };
+      rawCounts.set(canonical, {
+        count: current.count + 1,
+        needsReview: current.needsReview + (stageNeedsReview(customer.stage) ? 1 : 0),
+      });
+    }
+  }
+
+  if (!countsLoadedFromRpc && !isDemoMode) {
+    throw new Error('DATABASE_ERROR: Không thể đếm giai đoạn khách hàng (RPC không khả dụng).');
+  }
+
+  const eligibleCustomers = CANONICAL_CUSTOMER_STAGES.reduce(
+    (sum, stage) => sum + (rawCounts.get(stage)?.count || 0),
+    0
+  );
+  const totalCustomers = eligibleCustomers + unmappedCount;
+  const needsReviewCount =
+    CANONICAL_CUSTOMER_STAGES.reduce(
+      (sum, stage) => sum + (rawCounts.get(stage)?.needsReview || 0),
+      0
+    ) + unmappedCount;
+
+  const stages: CustomerPipelineStageCount[] = CANONICAL_STAGE_LIST.map((stage) => {
+    const entry = rawCounts.get(stage.value) || { count: 0, needsReview: 0 };
+    return {
+      stage: stage.value,
+      label: stage.label,
+      count: entry.count,
+      percentage: eligibleCustomers > 0 ? Math.round((entry.count / eligibleCustomers) * 1000) / 10 : 0,
+      needs_review_count: entry.needsReview,
+    };
+  });
+
+  const sanitizedCustomers = sanitizeCustomersForRole(
+    customers.map((customer) => ({ customer })),
+    params.role
+  );
+
+  return {
+    stages,
+    customers: sanitizedCustomers,
+    total: sanitizedCustomers.length,
+    total_customers: totalCustomers,
+    eligible_customers: eligibleCustomers,
+    unmapped_count: unmappedCount,
+    needs_review_count: needsReviewCount,
+    truncated: totalCustomers > sanitizedCustomers.length,
+    filters: {
+      search,
+      source: (source as CustomerSource) || null,
+      from,
+      to,
+      stage: requestedStage,
+    },
+  };
+}
+
+/**
+ * 10. getStageSuggestions: đọc các đề xuất giai đoạn do AI tạo cho một khách hàng.
+ * Đề xuất KHÔNG thay đổi giai đoạn chính thức.
+ */
+export async function getStageSuggestions(
+  companyId: string,
+  customerId: string,
+  limit: number = 10,
+  client?: SupabaseClient
+): Promise<CustomerStageSuggestion[]> {
+  if (!companyId?.trim()) {
+    throw new Error('companyId là tham số bắt buộc để xác thực quyền truy cập.');
+  }
+  if (!customerId?.trim()) {
+    throw new Error('customerId là tham số bắt buộc.');
+  }
+
+  const isDemoMode = isDemoModeActive();
+  let adminClient: SupabaseClient | null = null;
+  try {
+    adminClient = client || createAdminClient();
+  } catch (err) {
+    if (!isDemoMode) {
+      throw new Error(
+        `DATABASE_ERROR: Không thể kết nối database: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  if (!adminClient || typeof adminClient.rpc !== 'function') {
+    return [];
+  }
+
+  const { data, error } = await adminClient.rpc('get_customer_stage_suggestions', {
+    p_company_id: companyId,
+    p_customer_id: customerId,
+    p_limit: Math.min(Math.max(Number(limit) || 10, 1), 50),
+  });
+
+  if (error) {
+    if (!isDemoMode) {
+      throw new Error(`DATABASE_ERROR: Lỗi đọc đề xuất giai đoạn: ${error.message}`);
+    }
+    return [];
+  }
+
+  if (!Array.isArray(data)) return [];
+
+  return (data as Array<Record<string, unknown>>)
+    .filter((row) => row.company_id === companyId && row.customer_id === customerId)
+    .map((row) => {
+      const verificationStatus = String(row.verification_status || 'PENDING');
+      return {
+        id: String(row.id || ''),
+        company_id: String(row.company_id || companyId),
+        customer_id: String(row.customer_id || customerId),
+        summary: String(row.summary || ''),
+        stage_suggestion: tryToCanonicalStage(row.stage_suggestion),
+        current_stage: tryToCanonicalStage(row.current_stage),
+        confidence: Number(row.confidence || 0),
+        evidence: String(row.evidence || ''),
+        evidence_items: parseSuggestionEvidence(row.evidence_items),
+        reason: row.reason ? String(row.reason) : null,
+        stop_reason: row.stop_reason ? String(row.stop_reason) : null,
+        objections: parseStringArray(row.objections),
+        next_action: row.next_action ? String(row.next_action) : null,
+        requires_verification: row.requires_verification !== false,
+        verification_status:
+          verificationStatus === 'ACCEPTED' ||
+          verificationStatus === 'REJECTED' ||
+          verificationStatus === 'NOT_REQUIRED'
+            ? verificationStatus
+            : 'PENDING',
+        verified_by: row.verified_by ? String(row.verified_by) : null,
+        verified_at: row.verified_at ? String(row.verified_at) : null,
+        verification_note: row.verification_note ? String(row.verification_note) : null,
+        classifier_version: row.classifier_version ? String(row.classifier_version) : null,
+        model_version: String(row.model_version || ''),
+        created_at: String(row.created_at || ''),
+      };
+    });
+}
+
+export interface VerifyAiStageSuggestionParams {
+  companyId: string;
+  customerId: string;
+  analysisId: string;
+  decision: 'ACCEPTED' | 'REJECTED';
+  verifiedBy: string;
+  verifierRole: string;
+  note?: string | null;
+  client?: SupabaseClient;
+}
+
+export interface VerifyAiStageSuggestionResult {
+  suggestion: CustomerStageSuggestion;
+  customer: Customer | null;
+  history: CustomerStageHistory | null;
+}
+
+/**
+ * 11. verifyAiStageSuggestion: con người xác nhận hoặc từ chối đề xuất AI.
+ * Chỉ sau bước này giai đoạn chính thức mới có thể thay đổi.
+ */
+export async function verifyAiStageSuggestion(
+  params: VerifyAiStageSuggestionParams
+): Promise<VerifyAiStageSuggestionResult> {
+  const companyId = String(params?.companyId || '').trim();
+  const customerId = String(params?.customerId || '').trim();
+  const analysisId = String(params?.analysisId || '').trim();
+  const verifiedBy = String(params?.verifiedBy || '').trim();
+  const decision = String(params?.decision || '').toUpperCase();
+  const verifierRole = String(params?.verifierRole || '').toUpperCase();
+
+  if (!companyId) throw new Error('companyId là tham số bắt buộc.');
+  if (!customerId) throw new Error('customerId là tham số bắt buộc.');
+  if (!analysisId) throw new Error('analysisId là tham số bắt buộc.');
+  if (!verifiedBy) throw new Error('verifiedBy là tham số bắt buộc.');
+  if (decision !== 'ACCEPTED' && decision !== 'REJECTED') {
+    throw new Error('Quyết định xác minh không hợp lệ.');
+  }
+  if (verifierRole !== APPLICATION_ROLES.SALE && verifierRole !== APPLICATION_ROLES.BOSS_ADMIN) {
+    const forbidden = new Error('Chỉ nhân viên SALE hoặc BOSS_ADMIN mới có quyền xác minh đề xuất AI.') as ServiceCodedError;
+    forbidden.status = 403;
+    forbidden.code = 'ROLE_FORBIDDEN';
+    throw forbidden;
+  }
+
+  const adminClient = params.client || createAdminClient();
+  if (typeof adminClient.rpc !== 'function') {
+    throw new Error('Không thể xác minh đề xuất AI: RPC không khả dụng.');
+  }
+
+  const { data, error } = await adminClient.rpc('verify_ai_stage_suggestion', {
+    p_company_id: companyId,
+    p_analysis_id: analysisId,
+    p_decision: decision,
+    p_verified_by: verifiedBy,
+    p_verifier_role: verifierRole,
+    p_note: params.note?.trim() || null,
+    p_customer_id: customerId,
+  });
+
+  if (error) {
+    const errMsg = String(error.message || '');
+    const code = String((error as { code?: string }).code || '');
+    const codedError = new Error(errMsg || 'Không thể xác minh đề xuất AI.') as ServiceCodedError;
+
+    if (errMsg.includes('STAGE_CHANGED_SINCE_ANALYSIS') || code === '40001') {
+      codedError.status = 409;
+      codedError.code = 'STAGE_CHANGED_SINCE_ANALYSIS';
+      codedError.message =
+        'Giai đoạn khách hàng đã thay đổi kể từ khi AI phân tích. Vui lòng chạy lại phân tích hoặc cập nhật thủ công.';
+    } else if (errMsg.includes('CONTRACT_SIGNED_REQUIRES_BOSS_ADMIN')) {
+      codedError.status = 403;
+      codedError.code = 'CONTRACT_SIGNED_REQUIRES_BOSS_ADMIN';
+      codedError.message = 'Chỉ BOSS_ADMIN mới được xác nhận trạng thái Đã ký hợp đồng.';
+    } else if (errMsg.includes('CONTRACT_SIGNED_NOTE_REQUIRED')) {
+      codedError.status = 400;
+      codedError.code = 'CONTRACT_SIGNED_NOTE_REQUIRED';
+      codedError.message =
+        'Để chấp nhận trạng thái Đã ký hợp đồng, cần ghi rõ bằng chứng hợp đồng đã ký (ít nhất 10 ký tự).';
+    } else if (errMsg.includes('ANALYSIS_ALREADY_VERIFIED')) {
+      codedError.status = 409;
+      codedError.code = 'ANALYSIS_ALREADY_VERIFIED';
+      codedError.message = 'Đề xuất này đã được xác minh trước đó.';
+    } else if (errMsg.includes('ANALYSIS_NOT_FOUND')) {
+      codedError.status = 404;
+      codedError.code = 'NOT_FOUND';
+      codedError.message = 'Không tìm thấy đề xuất AI.';
+    } else if (errMsg.includes('ROLE_FORBIDDEN')) {
+      codedError.status = 403;
+      codedError.code = 'ROLE_FORBIDDEN';
+    } else if (errMsg.includes('NOTHING_TO_ACCEPT') || errMsg.includes('INVALID_DECISION')) {
+      codedError.status = 400;
+      codedError.code = 'INVALID_REQUEST';
+    } else {
+      codedError.status = 500;
+      codedError.code = 'DATABASE_ERROR';
+    }
+    throw codedError;
+  }
+
+  const payload = (data || {}) as Record<string, unknown>;
+  const analysisRow = (payload.analysis || {}) as Record<string, unknown>;
+  const customerRow = (payload.customer || null) as Record<string, unknown> | null;
+  const historyRow = (payload.history || null) as Record<string, unknown> | null;
+
+  const suggestion: CustomerStageSuggestion = {
+    id: String(analysisRow.id || analysisId),
+    company_id: String(analysisRow.company_id || companyId),
+    customer_id: String(analysisRow.customer_id || ''),
+    summary: String(analysisRow.summary || ''),
+    stage_suggestion: tryToCanonicalStage(analysisRow.stage_suggestion),
+    current_stage: tryToCanonicalStage(analysisRow.current_stage),
+    confidence: Number(analysisRow.confidence || 0),
+    evidence: String(analysisRow.evidence || ''),
+    evidence_items: parseSuggestionEvidence(analysisRow.evidence_items),
+    reason: analysisRow.reason ? String(analysisRow.reason) : null,
+    stop_reason: analysisRow.stop_reason ? String(analysisRow.stop_reason) : null,
+    objections: parseStringArray(analysisRow.objections),
+    next_action: analysisRow.next_action ? String(analysisRow.next_action) : null,
+    requires_verification: analysisRow.requires_verification !== false,
+    verification_status:
+      String(analysisRow.verification_status || '') === 'ACCEPTED'
+        ? 'ACCEPTED'
+        : String(analysisRow.verification_status || '') === 'REJECTED'
+          ? 'REJECTED'
+          : String(analysisRow.verification_status || '') === 'NOT_REQUIRED'
+            ? 'NOT_REQUIRED'
+            : 'PENDING',
+    verified_by: analysisRow.verified_by ? String(analysisRow.verified_by) : null,
+    verified_at: analysisRow.verified_at ? String(analysisRow.verified_at) : null,
+    verification_note: analysisRow.verification_note ? String(analysisRow.verification_note) : null,
+    classifier_version: analysisRow.classifier_version ? String(analysisRow.classifier_version) : null,
+    model_version: String(analysisRow.model_version || ''),
+    created_at: String(analysisRow.created_at || ''),
+  };
+
+  const customer = customerRow ? (customerRow as unknown as Customer) : null;
+  const history: CustomerStageHistory | null = historyRow
+    ? {
+        id: String(historyRow.id || ''),
+        company_id: String(historyRow.company_id || companyId),
+        customer_id: String(historyRow.customer_id || suggestion.customer_id),
+        from_stage: (historyRow.from_stage as CustomerStage) || null,
+        to_stage: historyRow.to_stage as CustomerStage,
+        actor_type: (historyRow.actor_type as StageActorType) || STAGE_ACTOR_TYPES.USER,
+        changed_by_user_id: historyRow.changed_by_user_id ? String(historyRow.changed_by_user_id) : null,
+        reason: String(historyRow.reason || ''),
+        note: String(historyRow.reason || ''),
+        source_ref: historyRow.source_ref ? String(historyRow.source_ref) : null,
+        evidence: historyRow.evidence ? String(historyRow.evidence) : null,
+        confidence:
+          historyRow.confidence !== null && historyRow.confidence !== undefined
+            ? Number(historyRow.confidence)
+            : null,
+        verification_status:
+          (historyRow.verification_status as CustomerStageHistory['verification_status']) || null,
+        changed_at: String(historyRow.changed_at || ''),
+      }
+    : null;
+
+  return { suggestion, customer, history };
+}
+
 /**
  * Namespace đóng gói toàn bộ dịch vụ CustomerService
  */
@@ -1404,6 +2003,9 @@ export const CustomerService = {
   toCanonicalStage,
   updateStage,
   getStageHistories,
+  getPipeline,
+  getStageSuggestions,
+  verifyAiStageSuggestion,
   evaluateUrgency,
   getUrgentClosingCustomers,
   mockCustomerStages,

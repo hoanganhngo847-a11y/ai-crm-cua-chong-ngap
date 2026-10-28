@@ -277,12 +277,24 @@ function makeClient(
   return client as unknown as SupabaseClient;
 }
 
-export async function createPgliteSupabase(): Promise<PgliteSupabase> {
+export interface PgliteSupabaseOptions {
+  /** Migration filename prefixes to skip (e.g. to seed legacy data before a migration). */
+  skipMigrations?: string[];
+}
+
+export async function createPgliteSupabase(
+  options: PgliteSupabaseOptions = {}
+): Promise<PgliteSupabase> {
   const db = new PGlite({ extensions: { pg_trgm } });
   await db.exec(PLATFORM_STUBS);
 
   const dir = path.resolve(__dirname, '../../../supabase/migrations');
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  const skipped = options.skipMigrations || [];
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .filter((f) => !skipped.some((prefix) => f.startsWith(prefix)));
   for (const file of files) {
     const sql = fs.readFileSync(path.join(dir, file), 'utf8');
     try {

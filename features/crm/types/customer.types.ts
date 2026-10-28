@@ -24,11 +24,82 @@ export const CUSTOMER_SOURCES = {
 export type CustomerSource = (typeof CUSTOMER_SOURCES)[keyof typeof CUSTOMER_SOURCES];
 
 /**
- * Canonical Customer Journey Stages (FROZEN ARCHITECTURE)
- * Database check constraint on public.customers.stage
+ * Sáu giai đoạn chuẩn của phễu khách hàng.
+ *
+ * Mã nội bộ dùng chữ thường, ổn định và là nguồn duy nhất cho:
+ * - CHECK constraint mới của public.customers.stage
+ * - Kanban / Funnel
+ * - AI stage suggestion
+ *
+ * Các giá trị legacy dạng CHỮ HOA vẫn được giữ trong DB để bảo toàn dữ liệu cũ
+ * và để các tích hợp hiện hữu không bị vỡ trong thời gian chuyển đổi.
+ */
+export const CANONICAL_CUSTOMER_STAGES = [
+  'awareness',
+  'interested',
+  'deep_research',
+  'low_potential',
+  'high_potential',
+  'contract_signed',
+] as const;
+
+export type CanonicalCustomerStage = (typeof CANONICAL_CUSTOMER_STAGES)[number];
+
+/**
+ * Giá trị legacy còn tồn tại trong public.customers.stage.
+ * Không xóa các giá trị này khỏi CHECK constraint cho đến khi có migration
+ * chuẩn hóa và xác nhận thủ công.
+ */
+export const LEGACY_CUSTOMER_STAGES = [
+  'LEAD_NEW',
+  'CONTACT_CYCLE_1',
+  'CONTACT_CYCLE_2',
+  'CONTACT_CYCLE_3',
+  'UNREACHABLE',
+  'ZALO_FRIENDED',
+  'IN_CARE',
+  'POTENTIAL_CLOSING',
+  'NOT_POTENTIAL',
+  'NO_DEMAND',
+  'CONTRACT_SIGNED',
+  'CARE_NURTURING',
+  'SURVEY_REQUESTED',
+  'SURVEY_SCHEDULED',
+  'SURVEY_COMPLETED',
+  'PRICE_CALCULATED',
+  'NEED_INFO',
+  'PRICE_OFFERED',
+  'NEGOTIATING',
+  'ORDER_CREATED',
+  'DEPOSIT_CONFIRMED',
+  'IN_PRODUCTION',
+  'READY_FOR_INSTALL',
+  'INSTALLING',
+  'HANDOVER_COMPLETED',
+  'WARRANTY_ACTIVE',
+  'LOST',
+] as const;
+
+export type LegacyCustomerStage = (typeof LEGACY_CUSTOMER_STAGES)[number];
+
+export type CustomerStage = CanonicalCustomerStage | LegacyCustomerStage;
+
+/**
+ * Public stage constants.
+ *
+ * Các key canonical là nguồn chuẩn cho code mới. Các key legacy được giữ lại
+ * để tương thích với module cũ và dữ liệu lịch sử.
  */
 export const CUSTOMER_STAGES = {
-  // 12 Canonical Stages for Study Abroad Consulting (Tư vấn du học)
+  // Canonical six-stage funnel
+  AWARENESS: 'awareness',
+  INTERESTED: 'interested',
+  DEEP_RESEARCH: 'deep_research',
+  LOW_POTENTIAL: 'low_potential',
+  HIGH_POTENTIAL: 'high_potential',
+  CONTRACT_SIGNED: 'contract_signed',
+
+  // Legacy study-abroad stages (kept for DB compatibility)
   LEAD_NEW: 'LEAD_NEW',
   CONTACT_CYCLE_1: 'CONTACT_CYCLE_1',
   CONTACT_CYCLE_2: 'CONTACT_CYCLE_2',
@@ -39,10 +110,10 @@ export const CUSTOMER_STAGES = {
   POTENTIAL_CLOSING: 'POTENTIAL_CLOSING',
   NOT_POTENTIAL: 'NOT_POTENTIAL',
   NO_DEMAND: 'NO_DEMAND',
-  CONTRACT_SIGNED: 'CONTRACT_SIGNED',
+  LEGACY_CONTRACT_SIGNED: 'CONTRACT_SIGNED',
   CARE_NURTURING: 'CARE_NURTURING',
 
-  // Legacy Door stages kept for DB backward compatibility
+  // Legacy door/flood-barrier stages (kept for DB compatibility)
   SURVEY_REQUESTED: 'SURVEY_REQUESTED',
   SURVEY_SCHEDULED: 'SURVEY_SCHEDULED',
   SURVEY_COMPLETED: 'SURVEY_COMPLETED',
@@ -59,179 +130,321 @@ export const CUSTOMER_STAGES = {
   WARRANTY_ACTIVE: 'WARRANTY_ACTIVE',
   LOST: 'LOST',
 
-  // Business aliases
-  KHACH_MOI: 'LEAD_NEW',
-  LIEN_HE_LAN_1: 'CONTACT_CYCLE_1',
-  LIEN_HE_LAN_2: 'CONTACT_CYCLE_2',
-  LIEN_HE_LAN_3: 'CONTACT_CYCLE_3',
-  KHONG_NGHE_MAY: 'UNREACHABLE',
-  DA_KET_BAN_ZALO: 'ZALO_FRIENDED',
-  DANG_CHAM_SOC: 'IN_CARE',
-  CO_TIEM_NANG: 'POTENTIAL_CLOSING',
-  CHUA_TIEM_NANG: 'NOT_POTENTIAL',
-  KHONG_NHU_CAU: 'NO_DEMAND',
-  DA_KY_HOP_DONG: 'CONTRACT_SIGNED',
-  DA_KI_HOP_DONG: 'CONTRACT_SIGNED',
-  CHAM_SOC_SAU_BAN: 'CARE_NURTURING',
-  DA_CO_GIA: 'PRICE_OFFERED',
-  DANG_THUONG_LUONG: 'NEGOTIATING',
+  // Vietnamese business aliases (normalized to canonical values)
+  KHACH_MOI: 'awareness',
+  LIEN_HE_LAN_1: 'awareness',
+  LIEN_HE_LAN_2: 'awareness',
+  LIEN_HE_LAN_3: 'awareness',
+  KHONG_NGHE_MAY: 'awareness',
+  DA_KET_BAN_ZALO: 'awareness',
+  DANG_CHAM_SOC: 'interested',
+  CO_TIEM_NANG: 'high_potential',
+  CHUA_TIEM_NANG: 'low_potential',
+  KHONG_NHU_CAU: 'low_potential',
+  DA_KY_HOP_DONG: 'contract_signed',
+  DA_KI_HOP_DONG: 'contract_signed',
+  CHAM_SOC_SAU_BAN: 'contract_signed',
+  DA_CO_GIA: 'high_potential',
+  DANG_THUONG_LUONG: 'high_potential',
 } as const;
 
-export type CustomerStage =
-  | (typeof CUSTOMER_STAGES)[keyof typeof CUSTOMER_STAGES]
-  | 'KHACH_MOI'
-  | 'DA_CO_GIA'
-  | 'DANG_THUONG_LUONG';
+/**
+ * Bảng ánh xạ legacy -> canonical dùng chung cho runtime.
+ * Đây là ánh xạ HIỂN THỊ/TƯƠNG THÍCH, không phải bằng chứng nghiệp vụ.
+ * Giá trị nào không có trong bảng này sẽ bị từ chối (fail-closed).
+ */
+export const LEGACY_STAGE_TO_CANONICAL: Record<string, CanonicalCustomerStage> = {
+  AWARENESS: 'awareness',
+  INTERESTED: 'interested',
+  DEEP_RESEARCH: 'deep_research',
+  LOW_POTENTIAL: 'low_potential',
+  HIGH_POTENTIAL: 'high_potential',
+  CONTRACT_SIGNED: 'contract_signed',
+
+  LEAD_NEW: 'awareness',
+  CONTACT_CYCLE_1: 'awareness',
+  CONTACT_CYCLE_2: 'awareness',
+  CONTACT_CYCLE_3: 'awareness',
+  UNREACHABLE: 'awareness',
+  ZALO_FRIENDED: 'awareness',
+  KHACH_MOI: 'awareness',
+  LIEN_HE_LAN_1: 'awareness',
+  LIEN_HE_LAN_2: 'awareness',
+  LIEN_HE_LAN_3: 'awareness',
+  KHONG_NGHE_MAY: 'awareness',
+  DA_KET_BAN_ZALO: 'awareness',
+
+  IN_CARE: 'interested',
+  DANG_CHAM_SOC: 'interested',
+  SURVEY_REQUESTED: 'interested',
+  SURVEY_SCHEDULED: 'interested',
+  SURVEY_COMPLETED: 'interested',
+  NEED_INFO: 'interested',
+
+  POTENTIAL_CLOSING: 'high_potential',
+  CO_TIEM_NANG: 'high_potential',
+  NEGOTIATING: 'high_potential',
+  DANG_THUONG_LUONG: 'high_potential',
+  PRICE_CALCULATED: 'high_potential',
+  PRICE_OFFERED: 'high_potential',
+  DA_CO_GIA: 'high_potential',
+  ORDER_CREATED: 'high_potential',
+  DEPOSIT_CONFIRMED: 'high_potential',
+
+  NOT_POTENTIAL: 'low_potential',
+  CHUA_TIEM_NANG: 'low_potential',
+  NO_DEMAND: 'low_potential',
+  KHONG_NHU_CAU: 'low_potential',
+  LOST: 'low_potential',
+
+  CARE_NURTURING: 'contract_signed',
+  CHAM_SOC_SAU_BAN: 'contract_signed',
+  DA_KY_HOP_DONG: 'contract_signed',
+  DA_KI_HOP_DONG: 'contract_signed',
+  IN_PRODUCTION: 'contract_signed',
+  READY_FOR_INSTALL: 'contract_signed',
+  INSTALLING: 'contract_signed',
+  HANDOVER_COMPLETED: 'contract_signed',
+  WARRANTY_ACTIVE: 'contract_signed',
+};
 
 /**
- * Helper chuẩn hóa và kiểm thực danh mục giai đoạn khách hàng (Strict Runtime Allowlist)
- * Thắt chặt Runtime Allowlist - Lỗi P1 (Mục 12)
+ * Các giá trị legacy được migration tự động chuyển sang canonical vì
+ * ý nghĩa nghiệp vụ đủ rõ ràng.
+ *
+ * Các giá trị legacy KHÔNG nằm trong danh sách này sẽ được giữ nguyên
+ * và đưa vào danh sách "cần rà soát" (xem STAGE_REVIEW_VALUES).
  */
-export function toCanonicalStage(stage: unknown): CustomerStage {
+export const SAFE_MIGRATION_STAGE_MAP: Record<string, CanonicalCustomerStage> = {
+  LEAD_NEW: 'awareness',
+  CONTACT_CYCLE_1: 'awareness',
+  CONTACT_CYCLE_2: 'awareness',
+  CONTACT_CYCLE_3: 'awareness',
+  UNREACHABLE: 'awareness',
+  ZALO_FRIENDED: 'awareness',
+  IN_CARE: 'interested',
+  POTENTIAL_CLOSING: 'high_potential',
+  NEGOTIATING: 'high_potential',
+  ORDER_CREATED: 'high_potential',
+  DEPOSIT_CONFIRMED: 'high_potential',
+  NOT_POTENTIAL: 'low_potential',
+  NO_DEMAND: 'low_potential',
+  LOST: 'low_potential',
+  CONTRACT_SIGNED: 'contract_signed',
+};
+
+/**
+ * Legacy values intentionally left untouched by the automatic migration.
+ * They remain visible and are counted as "cần rà soát".
+ */
+export const STAGE_REVIEW_VALUES: ReadonlyArray<LegacyCustomerStage> = [
+  'SURVEY_REQUESTED',
+  'SURVEY_SCHEDULED',
+  'SURVEY_COMPLETED',
+  'PRICE_CALCULATED',
+  'NEED_INFO',
+  'PRICE_OFFERED',
+  'CARE_NURTURING',
+  'IN_PRODUCTION',
+  'READY_FOR_INSTALL',
+  'INSTALLING',
+  'HANDOVER_COMPLETED',
+  'WARRANTY_ACTIVE',
+];
+
+const CANONICAL_STAGE_SET = new Set<string>(CANONICAL_CUSTOMER_STAGES);
+const LEGACY_STAGE_SET = new Set<string>(LEGACY_CUSTOMER_STAGES);
+
+export function isCanonicalCustomerStage(value: unknown): value is CanonicalCustomerStage {
+  return typeof value === 'string' && CANONICAL_STAGE_SET.has(value);
+}
+
+export function isLegacyCustomerStage(value: unknown): value is LegacyCustomerStage {
+  return typeof value === 'string' && LEGACY_STAGE_SET.has(value);
+}
+
+/**
+ * Chuẩn hóa bất kỳ giá trị giai đoạn hợp lệ nào về một trong 6 mã canonical.
+ * Ném lỗi với giá trị rỗng/không xác định (fail-closed).
+ */
+export function toCanonicalStage(stage: unknown): CanonicalCustomerStage {
   if (typeof stage !== 'string' || !stage.trim()) {
-    throw new Error(`Giai đoạn khách hàng không hợp lệ: ${stage}`);
+    throw new Error(`Giai đoạn khách hàng không hợp lệ: ${String(stage)}`);
   }
 
-  const upper = stage.trim().toUpperCase();
-
-  // Hỗ trợ business alias sang canonical stage
-  if (upper === 'KHACH_MOI') return CUSTOMER_STAGES.LEAD_NEW;
-  if (upper === 'LIEN_HE_LAN_1') return CUSTOMER_STAGES.CONTACT_CYCLE_1;
-  if (upper === 'LIEN_HE_LAN_2') return CUSTOMER_STAGES.CONTACT_CYCLE_2;
-  if (upper === 'LIEN_HE_LAN_3') return CUSTOMER_STAGES.CONTACT_CYCLE_3;
-  if (upper === 'KHONG_NGHE_MAY') return CUSTOMER_STAGES.UNREACHABLE;
-  if (upper === 'DA_KET_BAN_ZALO') return CUSTOMER_STAGES.ZALO_FRIENDED;
-  if (upper === 'DANG_CHAM_SOC') return CUSTOMER_STAGES.IN_CARE;
-  if (upper === 'CO_TIEM_NANG') return CUSTOMER_STAGES.POTENTIAL_CLOSING;
-  if (upper === 'CHUA_TIEM_NANG') return CUSTOMER_STAGES.NOT_POTENTIAL;
-  if (upper === 'KHONG_NHU_CAU') return CUSTOMER_STAGES.NO_DEMAND;
-  if (upper === 'DA_KY_HOP_DONG' || upper === 'DA_KI_HOP_DONG') return CUSTOMER_STAGES.CONTRACT_SIGNED;
-  if (upper === 'CHAM_SOC_SAU_BAN') return CUSTOMER_STAGES.CARE_NURTURING;
-  if (upper === 'DA_CO_GIA') return CUSTOMER_STAGES.PRICE_OFFERED;
-  if (upper === 'DANG_THUONG_LUONG') return CUSTOMER_STAGES.NEGOTIATING;
-
-  const validStages = Object.values(CUSTOMER_STAGES) as string[];
-  if (validStages.includes(upper)) {
-    return upper as CustomerStage;
+  const trimmed = stage.trim();
+  if (isCanonicalCustomerStage(trimmed)) {
+    return trimmed;
   }
 
-  if (upper in CUSTOMER_STAGES) {
-    return (CUSTOMER_STAGES as Record<string, CustomerStage>)[upper];
+  const upper = trimmed.toUpperCase();
+  const mapped = LEGACY_STAGE_TO_CANONICAL[upper];
+  if (mapped) {
+    return mapped;
   }
 
   throw new Error(`Giai đoạn khách hàng không hợp lệ: ${stage}`);
 }
 
 /**
- * Vietnamese human-readable labels for Customer Stages
+ * Phiên bản không ném lỗi, dùng cho dữ liệu legacy chưa xác định.
+ */
+export function tryToCanonicalStage(stage: unknown): CanonicalCustomerStage | null {
+  try {
+    return toCanonicalStage(stage);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Giá trị cần rà soát: legacy còn trong DB hoặc không nhận diện được.
+ */
+export function stageNeedsReview(stage: unknown): boolean {
+  if (typeof stage !== 'string' || !stage.trim()) {
+    return true;
+  }
+  return !isCanonicalCustomerStage(stage.trim());
+}
+
+/**
+ * Vietnamese human-readable labels for canonical and legacy Customer Stages.
  */
 export const CUSTOMER_STAGE_LABELS: Record<string, string> = {
-  // 12 Canonical Stages for Study Abroad Consulting
-  LEAD_NEW: 'Khách mới',
-  CONTACT_CYCLE_1: 'Liên hệ lần 1',
-  CONTACT_CYCLE_2: 'Liên hệ lần 2',
-  CONTACT_CYCLE_3: 'Liên hệ lần 3',
-  UNREACHABLE: 'Không nghe máy',
-  ZALO_FRIENDED: 'Đã kết bạn Zalo',
-  IN_CARE: 'Đang chăm sóc',
-  POTENTIAL_CLOSING: 'Có tiềm năng chốt đơn',
-  NOT_POTENTIAL: 'Chưa có tiềm năng chốt đơn',
-  NO_DEMAND: 'Không có nhu cầu nghe tư vấn',
-  CONTRACT_SIGNED: 'Đã ký hợp đồng',
-  CARE_NURTURING: 'Đang chăm sóc sau bán',
+  // Canonical six-stage funnel
+  awareness: 'Nhận biết',
+  interested: 'Quan tâm',
+  deep_research: 'Tìm hiểu sâu',
+  low_potential: 'Ít tiềm năng',
+  high_potential: 'Có tiềm năng',
+  contract_signed: 'Đã ký hợp đồng',
 
-  // Legacy mappings for existing DB data
-  SURVEY_REQUESTED: 'Đã kết bạn Zalo',
-  SURVEY_SCHEDULED: 'Đang chăm sóc',
-  SURVEY_COMPLETED: 'Đang chăm sóc',
-  PRICE_CALCULATED: 'Có tiềm năng chốt đơn',
-  NEED_INFO: 'Chưa có tiềm năng chốt đơn',
-  PRICE_OFFERED: 'Có tiềm năng chốt đơn',
-  NEGOTIATING: 'Có tiềm năng chốt đơn',
-  ORDER_CREATED: 'Có tiềm năng chốt đơn',
-  DEPOSIT_CONFIRMED: 'Đã ký hợp đồng',
-  IN_PRODUCTION: 'Đang chăm sóc',
-  READY_FOR_INSTALL: 'Đang chăm sóc',
-  INSTALLING: 'Đang chăm sóc',
-  HANDOVER_COMPLETED: 'Đang chăm sóc sau bán',
-  WARRANTY_ACTIVE: 'Đang chăm sóc sau bán',
-  LOST: 'Không có nhu cầu nghe tư vấn',
+  // Legacy study-abroad stages
+  LEAD_NEW: 'Nhận biết (dữ liệu cũ)',
+  CONTACT_CYCLE_1: 'Nhận biết (dữ liệu cũ)',
+  CONTACT_CYCLE_2: 'Nhận biết (dữ liệu cũ)',
+  CONTACT_CYCLE_3: 'Nhận biết (dữ liệu cũ)',
+  UNREACHABLE: 'Nhận biết (dữ liệu cũ)',
+  ZALO_FRIENDED: 'Nhận biết (dữ liệu cũ)',
+  IN_CARE: 'Quan tâm (dữ liệu cũ)',
+  POTENTIAL_CLOSING: 'Có tiềm năng (dữ liệu cũ)',
+  NOT_POTENTIAL: 'Ít tiềm năng (dữ liệu cũ)',
+  NO_DEMAND: 'Ít tiềm năng (dữ liệu cũ)',
+  CONTRACT_SIGNED: 'Đã ký hợp đồng (dữ liệu cũ)',
+  CARE_NURTURING: 'Đã ký hợp đồng (cần rà soát)',
+
+  // Legacy door/flood-barrier stages
+  SURVEY_REQUESTED: 'Quan tâm (cần rà soát)',
+  SURVEY_SCHEDULED: 'Quan tâm (cần rà soát)',
+  SURVEY_COMPLETED: 'Quan tâm (cần rà soát)',
+  PRICE_CALCULATED: 'Có tiềm năng (cần rà soát)',
+  NEED_INFO: 'Quan tâm (cần rà soát)',
+  PRICE_OFFERED: 'Có tiềm năng (cần rà soát)',
+  NEGOTIATING: 'Có tiềm năng (dữ liệu cũ)',
+  ORDER_CREATED: 'Có tiềm năng (dữ liệu cũ)',
+  DEPOSIT_CONFIRMED: 'Có tiềm năng (dữ liệu cũ)',
+  IN_PRODUCTION: 'Đã ký hợp đồng (cần rà soát)',
+  READY_FOR_INSTALL: 'Đã ký hợp đồng (cần rà soát)',
+  INSTALLING: 'Đã ký hợp đồng (cần rà soát)',
+  HANDOVER_COMPLETED: 'Đã ký hợp đồng (cần rà soát)',
+  WARRANTY_ACTIVE: 'Đã ký hợp đồng (cần rà soát)',
+  LOST: 'Ít tiềm năng (dữ liệu cũ)',
 
   // Business aliases
-  KHACH_MOI: 'Khách mới',
-  LIEN_HE_LAN_1: 'Liên hệ lần 1',
-  LIEN_HE_LAN_2: 'Liên hệ lần 2',
-  LIEN_HE_LAN_3: 'Liên hệ lần 3',
-  KHONG_NGHE_MAY: 'Không nghe máy',
-  DA_KET_BAN_ZALO: 'Đã kết bạn Zalo',
-  DANG_CHAM_SOC: 'Đang chăm sóc',
-  CO_TIEM_NANG: 'Có tiềm năng chốt đơn',
-  CHUA_TIEM_NANG: 'Chưa có tiềm năng chốt đơn',
-  KHONG_NHU_CAU: 'Không có nhu cầu nghe tư vấn',
+  KHACH_MOI: 'Nhận biết',
+  LIEN_HE_LAN_1: 'Nhận biết',
+  LIEN_HE_LAN_2: 'Nhận biết',
+  LIEN_HE_LAN_3: 'Nhận biết',
+  KHONG_NGHE_MAY: 'Nhận biết',
+  DA_KET_BAN_ZALO: 'Nhận biết',
+  DANG_CHAM_SOC: 'Quan tâm',
+  CO_TIEM_NANG: 'Có tiềm năng',
+  CHUA_TIEM_NANG: 'Ít tiềm năng',
+  KHONG_NHU_CAU: 'Ít tiềm năng',
   DA_KY_HOP_DONG: 'Đã ký hợp đồng',
   DA_KI_HOP_DONG: 'Đã ký hợp đồng',
-  CHAM_SOC_SAU_BAN: 'Đang chăm sóc sau bán',
-  DA_CO_GIA: 'Có tiềm năng chốt đơn',
-  DANG_THUONG_LUONG: 'Có tiềm năng chốt đơn',
+  CHAM_SOC_SAU_BAN: 'Đã ký hợp đồng',
+  DA_CO_GIA: 'Có tiềm năng',
+  DANG_THUONG_LUONG: 'Có tiềm năng',
 };
 
 /**
- * Full Canonical Stage list with value and display label
- * Strictly covers 100% of canonical stages defined for Study Abroad Consulting.
+ * Full Canonical Stage list with value, label and business meaning.
+ * Thứ tự này là thứ tự cột Kanban và thứ tự thanh Funnel.
  */
-export const CANONICAL_STAGE_LIST: ReadonlyArray<{ value: CustomerStage; label: string }> = [
-  { value: 'LEAD_NEW', label: 'Khách mới' },
-  { value: 'CONTACT_CYCLE_1', label: 'Liên hệ lần 1' },
-  { value: 'CONTACT_CYCLE_2', label: 'Liên hệ lần 2' },
-  { value: 'CONTACT_CYCLE_3', label: 'Liên hệ lần 3' },
-  { value: 'UNREACHABLE', label: 'Không nghe máy' },
-  { value: 'ZALO_FRIENDED', label: 'Đã kết bạn Zalo' },
-  { value: 'IN_CARE', label: 'Đang chăm sóc' },
-  { value: 'POTENTIAL_CLOSING', label: 'Có tiềm năng chốt đơn' },
-  { value: 'NOT_POTENTIAL', label: 'Chưa có tiềm năng chốt đơn' },
-  { value: 'NO_DEMAND', label: 'Không có nhu cầu nghe tư vấn' },
-  { value: 'CONTRACT_SIGNED', label: 'Đã ký hợp đồng' },
-  { value: 'CARE_NURTURING', label: 'Đang chăm sóc sau bán' },
+export const CANONICAL_STAGE_LIST: ReadonlyArray<{
+  value: CanonicalCustomerStage;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'awareness',
+    label: 'Nhận biết',
+    description: 'Khách mới tiếp xúc, chưa có nhu cầu cụ thể rõ ràng.',
+  },
+  {
+    value: 'interested',
+    label: 'Quan tâm',
+    description: 'Khách bắt đầu hỏi về sản phẩm, giá, tính năng hoặc dịch vụ.',
+  },
+  {
+    value: 'deep_research',
+    label: 'Tìm hiểu sâu',
+    description: 'Khách so sánh, yêu cầu chi tiết, kiểm tra điều kiện hoặc đánh giá phương án.',
+  },
+  {
+    value: 'low_potential',
+    label: 'Ít tiềm năng',
+    description: 'Chưa có nhu cầu phù hợp, thiếu điều kiện hoặc chưa có kế hoạch hiện tại.',
+  },
+  {
+    value: 'high_potential',
+    label: 'Có tiềm năng',
+    description: 'Có nhu cầu thực tế, khả năng mua hoặc bước tiếp theo tương đối rõ ràng.',
+  },
+  {
+    value: 'contract_signed',
+    label: 'Đã ký hợp đồng',
+    description: 'Có bằng chứng đáng tin cậy xác nhận hợp đồng với doanh nghiệp đã được ký.',
+  },
 ];
 
+export const CANONICAL_STAGE_ORDER: ReadonlyArray<CanonicalCustomerStage> =
+  CANONICAL_CUSTOMER_STAGES;
+
 /**
- * Canonical Pipeline Stage Groups for CRM Dashboard
- * Direction A: Each group consists of explicit canonical customer stages (no subtractions, no guessing).
+ * Tất cả giá trị DB (canonical + legacy) thuộc về một giai đoạn canonical.
+ * Dùng cho bộ lọc `.in('stage', ...)` để không bỏ sót dữ liệu legacy.
+ */
+export const DB_STAGE_VALUES_BY_CANONICAL: Record<CanonicalCustomerStage, CustomerStage[]> = {
+  awareness: ['awareness', 'LEAD_NEW', 'CONTACT_CYCLE_1', 'CONTACT_CYCLE_2', 'CONTACT_CYCLE_3', 'UNREACHABLE', 'ZALO_FRIENDED'],
+  interested: ['interested', 'IN_CARE', 'SURVEY_REQUESTED', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'NEED_INFO'],
+  deep_research: ['deep_research'],
+  low_potential: ['low_potential', 'NOT_POTENTIAL', 'NO_DEMAND', 'LOST'],
+  high_potential: ['high_potential', 'POTENTIAL_CLOSING', 'NEGOTIATING', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'ORDER_CREATED', 'DEPOSIT_CONFIRMED'],
+  contract_signed: ['contract_signed', 'CONTRACT_SIGNED', 'CARE_NURTURING', 'IN_PRODUCTION', 'READY_FOR_INSTALL', 'INSTALLING', 'HANDOVER_COMPLETED', 'WARRANTY_ACTIVE'],
+};
+
+/**
+ * Canonical Pipeline Stage Groups for CRM Dashboard.
+ *
+ * Mỗi nhóm chứa TOÀN BỘ giá trị DB (canonical + legacy) để phép đếm
+ * không bỏ sót khách hàng cũ. Các key NEW_LEADS/SURVEY/PRICING/WON được
+ * giữ như alias tương thích cho dashboard hiện tại.
  */
 export const PIPELINE_STAGE_GROUPS = {
-  NEW_LEADS: [
-    'LEAD_NEW',
-    'CONTACT_CYCLE_1',
-    'CONTACT_CYCLE_2',
-    'CONTACT_CYCLE_3',
-    'UNREACHABLE',
-  ],
-  SURVEY: [
-    'ZALO_FRIENDED',
-    'IN_CARE',
-    'NOT_POTENTIAL',
-    'SURVEY_REQUESTED',
-    'SURVEY_SCHEDULED',
-    'SURVEY_COMPLETED',
-    'NEED_INFO',
-  ],
-  PRICING: [
-    'POTENTIAL_CLOSING',
-    'PRICE_CALCULATED',
-    'PRICE_OFFERED',
-    'NEGOTIATING',
-  ],
-  WON: [
-    'CONTRACT_SIGNED',
-    'CARE_NURTURING',
-    'ORDER_CREATED',
-    'DEPOSIT_CONFIRMED',
-    'IN_PRODUCTION',
-    'READY_FOR_INSTALL',
-    'INSTALLING',
-    'HANDOVER_COMPLETED',
-    'WARRANTY_ACTIVE',
-  ],
+  AWARENESS: DB_STAGE_VALUES_BY_CANONICAL.awareness,
+  INTERESTED: DB_STAGE_VALUES_BY_CANONICAL.interested,
+  DEEP_RESEARCH: DB_STAGE_VALUES_BY_CANONICAL.deep_research,
+  LOW_POTENTIAL: DB_STAGE_VALUES_BY_CANONICAL.low_potential,
+  HIGH_POTENTIAL: DB_STAGE_VALUES_BY_CANONICAL.high_potential,
+  CONTRACT_SIGNED: DB_STAGE_VALUES_BY_CANONICAL.contract_signed,
+
+  // Backward-compatible aliases
+  NEW_LEADS: DB_STAGE_VALUES_BY_CANONICAL.awareness,
+  SURVEY: [...DB_STAGE_VALUES_BY_CANONICAL.interested, ...DB_STAGE_VALUES_BY_CANONICAL.deep_research],
+  PRICING: DB_STAGE_VALUES_BY_CANONICAL.high_potential,
+  WON: DB_STAGE_VALUES_BY_CANONICAL.contract_signed,
 } as const;
 
 /**
@@ -257,6 +470,16 @@ export const STAGE_ACTOR_TYPES = {
 } as const;
 
 export type StageActorType = (typeof STAGE_ACTOR_TYPES)[keyof typeof STAGE_ACTOR_TYPES];
+
+export const STAGE_VERIFICATION_STATUSES = {
+  UNVERIFIED: 'UNVERIFIED',
+  AI_SUGGESTED: 'AI_SUGGESTED',
+  VERIFIED: 'VERIFIED',
+  REJECTED: 'REJECTED',
+} as const;
+
+export type StageVerificationStatus =
+  (typeof STAGE_VERIFICATION_STATUSES)[keyof typeof STAGE_VERIFICATION_STATUSES];
 
 // ============================================================================
 // Database Entities
@@ -324,6 +547,9 @@ export interface CustomerStageHistory {
   reason: string;
   note?: string;
   source_ref: string | null;
+  evidence?: string | null;
+  confidence?: number | null;
+  verification_status?: StageVerificationStatus | null;
   changed_at: string;
   created_at?: string;
 }
@@ -359,10 +585,12 @@ export interface CustomerResponse {
   name: string;
   source: CustomerSource;
   stage: CustomerStage;
+  canonical_stage?: CanonicalCustomerStage;
+  stage_needs_review?: boolean;
   phone?: string;
   is_phone_masked: boolean;
   identities?: Identity[];
-  urgency_reason?: 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY' | string;
+  urgency_reason?: 'HIGH_POTENTIAL' | 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY' | string;
   urgency_label?: string;
   created_at: string;
   updated_at: string;
@@ -376,11 +604,15 @@ export interface UpdateCustomerStageParams {
   companyId: string;
   newStage?: CustomerStage | string;
   to_stage?: CustomerStage | string; // Business alias for newStage
+  expectedStage?: CustomerStage | string | null;
   actorType?: StageActorType;
   note?: string;
   userId?: string | null;
   actorId?: string | null;
   sourceRef?: string;
+  evidence?: string;
+  confidence?: number;
+  verificationStatus?: StageVerificationStatus;
 }
 
 /**
@@ -442,4 +674,70 @@ export interface CustomerListResponse {
     limit: number;
     offset: number;
   };
+}
+
+// ============================================================================
+// Pipeline / Funnel DTOs
+// ============================================================================
+
+export interface CustomerPipelineStageCount {
+  stage: CanonicalCustomerStage;
+  label: string;
+  count: number;
+  percentage: number;
+  needs_review_count: number;
+}
+
+export interface CustomerPipelineFilters {
+  search: string;
+  source: CustomerSource | null;
+  from: string | null;
+  to: string | null;
+  stage: CanonicalCustomerStage | null;
+}
+
+export interface CustomerPipelineResponse {
+  stages: CustomerPipelineStageCount[];
+  customers: CustomerResponse[];
+  total: number;
+  total_customers: number;
+  eligible_customers: number;
+  unmapped_count: number;
+  needs_review_count: number;
+  truncated: boolean;
+  filters: CustomerPipelineFilters;
+}
+
+export interface CustomerStageSuggestionEvidence {
+  quote: string;
+  source: string;
+  occurredAt: string | null;
+  speaker: 'CUSTOMER' | 'STAFF' | 'UNKNOWN';
+  signal?: string | null;
+  stage?: CanonicalCustomerStage | null;
+  weight?: number | null;
+}
+
+export interface CustomerStageSuggestion {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  summary: string;
+  stage_suggestion: CanonicalCustomerStage | null;
+  current_stage: CanonicalCustomerStage | null;
+  confidence: number;
+  evidence: string;
+  evidence_items: CustomerStageSuggestionEvidence[];
+  reason: string | null;
+  stop_reason: string | null;
+  objections: string[];
+  next_action: string | null;
+  requires_verification: boolean;
+  verification_status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'NOT_REQUIRED';
+  verified_by: string | null;
+  verified_at: string | null;
+  verification_note: string | null;
+  classifier_version: string | null;
+  model_version: string;
+  created_at: string;
 }

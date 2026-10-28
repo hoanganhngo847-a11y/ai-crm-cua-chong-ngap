@@ -5,6 +5,8 @@ import { DossierError, getDossier } from '../../../../../features/customer-360/s
 import { SnapshotPanel } from '../../../../../features/customer-360/snapshot-panel';
 import { DossierNote, DossierRefresh, DossierProfileForm } from '../../../../../features/customer-360/forms';
 import ZaloRecordingHistory from '../../../calls/components/ZaloRecordingHistory';
+import StageSuggestionPanel from '../../../../../features/crm/components/stage-suggestion-panel';
+import { getActorContext } from '../../../../../lib/auth/context';
 import { Button } from '../../../../../components/ui/button';
 import { StatusBadge } from '../../../../../components/ui/status-badge';
 import { Badge } from '../../../../../components/ui/badge';
@@ -95,6 +97,7 @@ export default async function CustomerDossier({
   }
 
   const { customer: c, profile, history, timeline, queue, boss } = dossier;
+  const actor = await getActorContext();
   const current = history[0];
   const assignedSale =
     profile?.assigned_sale_name ||
@@ -314,6 +317,7 @@ export default async function CustomerDossier({
             </Card>
 
             {/* Quick Note Input */}
+            <StageSuggestionPanel customerId={id} userRole={actor?.role} />
             <DossierNote customerId={id} />
           </div>
 

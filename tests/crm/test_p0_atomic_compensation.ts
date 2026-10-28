@@ -27,7 +27,7 @@ async function runAtomicCompensationTests() {
         company_id: companyId,
         customer_code: 'KH-001',
         name: 'Nguyễn Văn Atomic',
-        stage: CUSTOMER_STAGES.LEAD_NEW,
+        stage: CUSTOMER_STAGES.AWARENESS,
         created_at: initialUpdatedAt,
         updated_at: initialUpdatedAt,
       },
@@ -94,7 +94,7 @@ async function runAtomicCompensationTests() {
     {
       customerId: 'cust-atomic-001',
       companyId: companyId,
-      newStage: CUSTOMER_STAGES.PRICE_OFFERED,
+      newStage: CUSTOMER_STAGES.HIGH_POTENTIAL,
       note: 'Báo giá thành công',
       actorType: STAGE_ACTOR_TYPES.USER,
       actorId: 'user-001',
@@ -103,13 +103,13 @@ async function runAtomicCompensationTests() {
   );
 
   assert(mockClientSuccess.wasRpcCalled(), 'update_customer_stage_atomic RPC must be invoked');
-  assert.strictEqual(successResult.customer.stage, CUSTOMER_STAGES.PRICE_OFFERED);
-  assert.strictEqual(dbState.customers[0].stage, CUSTOMER_STAGES.PRICE_OFFERED);
+  assert.strictEqual(successResult.customer.stage, CUSTOMER_STAGES.HIGH_POTENTIAL);
+  assert.strictEqual(dbState.customers[0].stage, CUSTOMER_STAGES.HIGH_POTENTIAL);
   assert.strictEqual(dbState.customer_stage_histories.length, 1);
   console.log('✓ 1a. Normal updateStage succeeded and persisted both customer.stage and history via RPC atomic transaction');
 
-  // Reset stage to LEAD_NEW
-  dbState.customers[0].stage = CUSTOMER_STAGES.LEAD_NEW;
+  // Reset stage to AWARENESS
+  dbState.customers[0].stage = CUSTOMER_STAGES.AWARENESS;
   dbState.customers[0].updated_at = initialUpdatedAt;
   dbState.customer_stage_histories = [];
 
@@ -134,11 +134,11 @@ async function runAtomicCompensationTests() {
   );
 
   assert(mockClientWithFailure.wasRpcCalled(), 'update_customer_stage_atomic RPC must be invoked on failure');
-  // Assert atomic rollback: customer stage must remain at LEAD_NEW, not CONTRACT_SIGNED
+  // Assert atomic rollback: customer stage must remain at AWARENESS, not CONTRACT_SIGNED
   assert.strictEqual(
     dbState.customers[0].stage,
-    CUSTOMER_STAGES.LEAD_NEW,
-    'Database transaction rollback MUST leave customer.stage at oldStage (LEAD_NEW)'
+    CUSTOMER_STAGES.AWARENESS,
+    'Database transaction rollback MUST leave customer.stage at oldStage (AWARENESS)'
   );
   assert.strictEqual(
     dbState.customers[0].updated_at,
@@ -150,7 +150,7 @@ async function runAtomicCompensationTests() {
     0,
     'customer_stage_histories must remain empty (zero partial records committed in DB)'
   );
-  console.log('✓ 1b. PASS: When RPC fails, database transaction rolls back and customers.stage remains at oldStage (LEAD_NEW)!');
+  console.log('✓ 1b. PASS: When RPC fails, database transaction rolls back and customers.stage remains at oldStage (AWARENESS)!');
 
   // 1c. Missing RPC method on adminClient -> Fail-Closed immediately in production (DEMO_MODE !== 'true')
   const mockClientWithoutRpc = {
@@ -172,7 +172,7 @@ async function runAtomicCompensationTests() {
   );
   assert.strictEqual(
     dbState.customers[0].stage,
-    CUSTOMER_STAGES.LEAD_NEW,
+    CUSTOMER_STAGES.AWARENESS,
     'Missing RPC must not mutate customer.stage'
   );
   console.log('✓ 1c. PASS: When RPC method is missing in production, updateStage throws Fail-Closed immediately!');
@@ -198,7 +198,7 @@ async function runAtomicCompensationTests() {
         {
           customerId: 'cust-cross-tenant-999',
           companyId: companyId,
-          newStage: CUSTOMER_STAGES.PRICE_OFFERED,
+          newStage: CUSTOMER_STAGES.HIGH_POTENTIAL,
         },
         mockClientNotFound
       ),

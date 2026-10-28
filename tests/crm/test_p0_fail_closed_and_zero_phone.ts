@@ -395,17 +395,49 @@ async function runFailClosedAndZeroPhoneTests() {
         }
         return {};
       },
-      rpc: async () => ({
-        data: [{ raw_phone: '0912345678', normalized_phone: '+84912345678', is_verified: true }],
-        error: null,
-      }),
+      rpc: async (fnName: string, params: any) => {
+        if (fnName === 'update_customer_stage_atomic') {
+          return {
+            data: {
+              customer: {
+                id: 'cust-101',
+                company_id: companyA,
+                customer_code: 'KH-101',
+                name: 'Nguyễn Văn A',
+                source: 'FACEBOOK',
+                stage: params.p_new_stage,
+                masked_phone: '09******78',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              },
+              history: {
+                id: 'hist-1',
+                company_id: companyA,
+                customer_id: 'cust-101',
+                from_stage: 'awareness',
+                to_stage: params.p_new_stage,
+                actor_type: STAGE_ACTOR_TYPES.USER,
+                changed_by_user_id: saleUserId,
+                reason: params.p_note,
+                changed_at: new Date().toISOString(),
+              },
+              changed: true,
+            },
+            error: null,
+          };
+        }
+        return {
+          data: [{ raw_phone: '0912345678', normalized_phone: '+84912345678', is_verified: true }],
+          error: null,
+        };
+      },
     } as any;
   }
 
   // 5a. SALE updates stage: Zero-Phone strictly enforced
   const reqStageSale = new NextRequest('http://localhost:3000/api/customers/cust-101/stage', {
     method: 'PATCH',
-    body: JSON.stringify({ stage: 'PRICE_OFFERED', note: 'Báo giá hoàn tất' }),
+    body: JSON.stringify({ stage: 'high_potential', note: 'Báo giá hoàn tất' }),
   });
   const resStageSale = await stagePatchHandler(reqStageSale, {
     params: Promise.resolve({ id: 'cust-101' }),
