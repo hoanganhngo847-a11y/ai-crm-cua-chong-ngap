@@ -88,9 +88,11 @@ async function loadEligibleInput(
   }
 
   // Conversation closed, human-owned, or AI paused -> AI silent
+  // For Zalo, PENDING_SALE means waiting for human sale SLA.
+  // For Messenger, AI replies immediately without waiting for sale (remove pending sale gate).
   if (
     conversation.status === 'CLOSED' ||
-    conversation.status === 'PENDING_SALE' ||
+    (claim.channel === 'ZALO' && conversation.status === 'PENDING_SALE') ||
     conversation.assigned_to !== null ||
     conversation.ai_mode !== 'ACTIVE'
   ) {
@@ -412,7 +414,7 @@ async function processClaim(
     convCheckError ||
     !currentConv ||
     currentConv.status === 'CLOSED' ||
-    currentConv.status === 'PENDING_SALE' ||
+    (claim.channel === 'ZALO' && currentConv.status === 'PENDING_SALE') ||
     currentConv.assigned_to !== null ||
     currentConv.ai_mode !== 'ACTIVE'
   ) {
