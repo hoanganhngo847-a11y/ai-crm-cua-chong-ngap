@@ -154,7 +154,7 @@ export async function getAiControlState(): Promise<AiControlState> {
       company_id: companyId,
       channel: 'MESSENGER',
       enabled: false,
-      min_confidence: 0.850,
+      min_confidence: 0.700,
       voice_mode: 'OFF',
       model_routing_profile: 'STANDARD',
       updated_at: new Date().toISOString(),
