@@ -5,7 +5,11 @@ import { getActorContext } from '../../../lib/auth/context';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { createAdminClient } from '../../../lib/supabase/admin';
 import { CustomerService } from '../../../features/crm/services/customer.service';
-import { PIPELINE_STAGE_GROUPS } from '../../../features/crm/types/customer.types';
+import {
+  CANONICAL_STAGE_LIST,
+  PIPELINE_STAGE_GROUPS,
+  type CanonicalCustomerStage,
+} from '../../../features/crm/types/customer.types';
 import {
   Users,
   Flame,
@@ -17,6 +21,7 @@ import {
   ChevronRight,
   TrendingUp,
   CheckCircle2,
+  KanbanSquare,
 } from 'lucide-react';
 import { PageHeader } from '../../../components/ui/page-header';
 import { Metric } from '../../../components/ui/metric';
@@ -82,10 +87,12 @@ export default async function CrmDashboardPage() {
   const [
     urgentRes,
     totalRes,
-    newLeadsRes,
-    surveyRes,
-    pricingRes,
-    wonRes,
+    awarenessRes,
+    interestedRes,
+    deepResearchRes,
+    lowPotentialRes,
+    highPotentialRes,
+    contractSignedRes,
     ordersRes,
   ] = await Promise.allSettled([
     CustomerService.getUrgentClosingCustomers(companyId, 6, actor.role),
@@ -94,22 +101,32 @@ export default async function CrmDashboardPage() {
       .from('customers')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
-      .in('stage', [...PIPELINE_STAGE_GROUPS.NEW_LEADS]),
+      .in('stage', [...PIPELINE_STAGE_GROUPS.AWARENESS]),
     db
       .from('customers')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
-      .in('stage', [...PIPELINE_STAGE_GROUPS.SURVEY]),
+      .in('stage', [...PIPELINE_STAGE_GROUPS.INTERESTED]),
     db
       .from('customers')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
-      .in('stage', [...PIPELINE_STAGE_GROUPS.PRICING]),
+      .in('stage', [...PIPELINE_STAGE_GROUPS.DEEP_RESEARCH]),
     db
       .from('customers')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
-      .in('stage', [...PIPELINE_STAGE_GROUPS.WON]),
+      .in('stage', [...PIPELINE_STAGE_GROUPS.LOW_POTENTIAL]),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.HIGH_POTENTIAL]),
+    db
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('stage', [...PIPELINE_STAGE_GROUPS.CONTRACT_SIGNED]),
     db.from('orders').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
   ]);
 
@@ -124,35 +141,34 @@ export default async function CrmDashboardPage() {
   }
 
   const totalCustomers = parseCountResult(totalRes, 'totalCustomers');
-  const newLeadsCount = parseCountResult(newLeadsRes, 'newLeadsCount');
-  const surveyCount = parseCountResult(surveyRes, 'surveyCount');
-  const pricingCount = parseCountResult(pricingRes, 'pricingCount');
-  const wonCount = parseCountResult(wonRes, 'wonCount');
   const totalOrders = parseCountResult(ordersRes, 'totalOrders');
+  const stageCountResults: Record<CanonicalCustomerStage, MetricResult<number | null>> = {
+    awareness: parseCountResult(awarenessRes, 'awarenessCount'),
+    interested: parseCountResult(interestedRes, 'interestedCount'),
+    deep_research: parseCountResult(deepResearchRes, 'deepResearchCount'),
+    low_potential: parseCountResult(lowPotentialRes, 'lowPotentialCount'),
+    high_potential: parseCountResult(highPotentialRes, 'highPotentialCount'),
+    contract_signed: parseCountResult(contractSignedRes, 'contractSignedCount'),
+  };
+  const highPotentialCount = stageCountResults.high_potential;
 
-  // Explicit canonical pipeline groups: Direction A (Zero subtraction, no cardinality mismatch)
-  const pipelineStages = [
-    {
-      label: 'Khách mới / Tiếp cận',
-      result: newLeadsCount,
-      color: 'bg-blue-500',
-    },
-    {
-      label: 'Khảo sát / Nhu cầu',
-      result: surveyCount,
-      color: 'bg-indigo-500',
-    },
-    {
-      label: 'Báo giá & Đàm phán',
-      result: pricingCount,
-      color: 'bg-amber-500',
-    },
-    {
-      label: 'Đã chốt & Triển khai',
-      result: wonCount,
-      color: 'bg-emerald-500',
-    },
-  ];
+  const STAGE_COLORS: Record<CanonicalCustomerStage, string> = {
+    awareness: 'bg-sky-500',
+    interested: 'bg-cyan-500',
+    deep_research: 'bg-indigo-500',
+    low_potential: 'bg-slate-400',
+    high_potential: 'bg-amber-500',
+    contract_signed: 'bg-emerald-500',
+  };
+
+  // Sáu giai đoạn canonical; mỗi nhóm đã bao gồm giá trị legacy tương ứng.
+  const pipelineStages = CANONICAL_STAGE_LIST.map((stage) => ({
+    stage: stage.value,
+    label: stage.label,
+    description: stage.description,
+    result: stageCountResults[stage.value],
+    color: STAGE_COLORS[stage.value],
+  }));
 
   return (
     <div className="space-y-6">
@@ -168,11 +184,22 @@ export default async function CrmDashboardPage() {
           </Link>
         }
         secondaryActions={
-          <Link href="/inbox">
-            <Button variant="secondary" size="sm" leftIcon={<Inbox className="w-3.5 h-3.5" />}>
-              Mở Hộp thư
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/crm/pipeline">
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<KanbanSquare className="w-3.5 h-3.5" />}
+              >
+                Phễu Kanban
+              </Button>
+            </Link>
+            <Link href="/inbox">
+              <Button variant="secondary" size="sm" leftIcon={<Inbox className="w-3.5 h-3.5" />}>
+                Mở Hộp thư
+              </Button>
+            </Link>
+          </div>
         }
       />
 
@@ -213,12 +240,12 @@ export default async function CrmDashboardPage() {
           }
         />
         <Metric
-          label="Đang báo giá & đàm phán"
-          value={pricingCount.status === 'success' ? pricingCount.value : '—'}
+          label="Có tiềm năng / cần chốt"
+          value={highPotentialCount.status === 'success' ? highPotentialCount.value : '—'}
           icon={<TrendingUp className="w-4 h-4 text-amber-600" />}
           subtitle={
-            pricingCount.status === 'success' ? (
-              'Khách hàng trong giai đoạn chốt giá'
+            highPotentialCount.status === 'success' ? (
+              'Khách hàng đang ở giai đoạn Có tiềm năng'
             ) : (
               <span className="text-amber-600 font-normal">Không tải được</span>
             )
@@ -330,8 +357,18 @@ export default async function CrmDashboardPage() {
 
           {/* Sales Pipeline Distribution Summary */}
           <Card>
-            <CardHeader>
-              <CardTitle>Tổng quan phễu bán hàng (Sales Pipeline)</CardTitle>
+            <CardHeader className="flex items-center justify-between">
+              <div>
+                <CardTitle>Tổng quan phễu bán hàng (6 giai đoạn)</CardTitle>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  Tỉ lệ là tỉ trọng phân bố trên tổng khách hàng, không phải tỉ lệ chuyển đổi.
+                </p>
+              </div>
+              <Link href="/crm/pipeline">
+                <Button variant="ghost" size="xs" rightIcon={<ChevronRight className="w-3 h-3" />}>
+                  Mở Kanban &amp; Funnel
+                </Button>
+              </Link>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
@@ -413,6 +450,17 @@ export default async function CrmDashboardPage() {
               <CardTitle>Lối tắt thao tác nhanh</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 p-3">
+              <Link
+                href="/crm/pipeline"
+                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <KanbanSquare className="w-4 h-4 text-sky-600" />
+                  <span className="font-medium group-hover:text-[var(--accent)]">Phễu Kanban &amp; Funnel</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+              </Link>
+
               <Link
                 href="/inbox"
                 className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"

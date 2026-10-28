@@ -126,7 +126,7 @@ async function setupDatabaseFixtures() {
       customer_code: 'KH-AI-001',
       name: 'Khách AI A1',
       source: 'FACEBOOK',
-      stage: 'LEAD_NEW',
+      stage: 'awareness',
     },
     {
       id: CUSTOMER_A2_ID,
@@ -134,7 +134,7 @@ async function setupDatabaseFixtures() {
       customer_code: 'KH-AI-002',
       name: 'Khách AI A2',
       source: 'ZALO',
-      stage: 'CONTACT_CYCLE_1',
+      stage: 'awareness',
     },
     {
       id: CUSTOMER_B1_ID,
@@ -142,7 +142,7 @@ async function setupDatabaseFixtures() {
       customer_code: 'KH-AI-B01',
       name: 'Khách AI B1',
       source: 'WEBSITE',
-      stage: 'LEAD_NEW',
+      stage: 'awareness',
     },
     {
       id: CUSTOMER_PAGING_ID,
@@ -150,7 +150,7 @@ async function setupDatabaseFixtures() {
       customer_code: 'KH-AI-PAG',
       name: 'Khách AI Phân Trang',
       source: 'FACEBOOK',
-      stage: 'LEAD_NEW',
+      stage: 'awareness',
     },
   ]);
   if (errCust) throw new Error(`Customers upsert failed: ${errCust.message}`);
@@ -457,7 +457,7 @@ async function runAllTests() {
   // ---------------------------------------------------------------------------
   const validOutput: AiCustomerAnalysisOutput = {
     summary: 'Khách hàng có nhu cầu bảo vệ nhà trước đợt triều cường, cửa rộng 3m.',
-    stageSuggestion: 'SURVEY_REQUESTED',
+    stageSuggestion: 'interested',
     stopReason: 'Cần biết báo giá dự toán trước khi quyết định.',
     objections: ['Băn khoăn về chi phí lắp đặt', 'Lo ngại tính thẩm mỹ của cửa'],
     nextAction: 'Gửi bảng giá sơ bộ và đề xuất đặt lịch kỹ thuật khảo sát tận nơi.',
@@ -466,6 +466,14 @@ async function runAllTests() {
   };
   const validated = validateAiAnalysisOutput(validOutput);
   assert(validated.confidence === 0.85, 'Test 8: validator accepts valid result correctly');
+  assert(
+    validated.stageSuggestion === 'interested',
+    `Test 8: validator normalizes canonical stage (got: ${validated.stageSuggestion})`
+  );
+  assert(
+    validated.requiresVerification === true,
+    'Test 8: validator always forces human verification'
+  );
 
   // ---------------------------------------------------------------------------
   // Test 9: confidence < 0 -> reject
@@ -657,7 +665,7 @@ async function runAllTests() {
   const validOutput2: AiCustomerAnalysisOutput = {
     ...validOutput,
     summary: 'Phân tích lần hai sau khi khách nhắn thêm thông tin chi tiết.',
-    stageSuggestion: 'PRICE_CALCULATED',
+    stageSuggestion: 'high_potential',
     confidence: 0.9,
   };
   const analysis2 = await persistAiAnalysis(adminClient, {
@@ -688,8 +696,8 @@ async function runAllTests() {
     .eq('id', CUSTOMER_A1_ID)
     .single();
   assert(
-    customerAfter?.stage === 'LEAD_NEW',
-    `Test 18: Customer stage remains LEAD_NEW (got: ${customerAfter?.stage}) - ZERO stage mutation`
+    customerAfter?.stage === 'awareness',
+    `Test 18: Customer stage remains awareness (got: ${customerAfter?.stage}) - ZERO stage mutation`
   );
 
   // ---------------------------------------------------------------------------
@@ -858,7 +866,9 @@ async function runAllTests() {
     'trusted-pipeline-v1',
     (input: AiAnalysisInput) => ({
       summary: `Phân tích tự động dựa trên ${input.sources.length} tương tác của khách ${input.customer.name}`,
-      stageSuggestion: 'SURVEY_REQUESTED' as const,
+      // Matches the deterministic deep_research baseline for these sources, so
+      // reconciliation keeps the model confidence and stage.
+      stageSuggestion: 'deep_research' as const,
       stopReason: null,
       objections: ['Đang cân nhắc phương án kỹ thuật'],
       nextAction: 'Liên hệ tư vấn kích thước chi tiết',
@@ -885,6 +895,23 @@ async function runAllTests() {
   assert(
     pipelineResult.confidence === 0.92,
     'Test 28: Pipeline persists validated confidence'
+  );
+  assert(
+    pipelineResult.stageSuggestion === 'deep_research',
+    `Test 28: Pipeline keeps the baseline-matching canonical stage (got: ${pipelineResult.stageSuggestion})`
+  );
+  assert(
+    pipelineResult.currentStage === 'awareness',
+    `Test 28: Pipeline snapshots the canonical current stage (got: ${pipelineResult.currentStage})`
+  );
+  assert(
+    pipelineResult.requiresVerification === true,
+    'Test 28: Pipeline output always requires human verification'
+  );
+  assert(
+    pipelineResult.evidenceItems.length > 0 &&
+      pipelineResult.evidenceItems.every((item) => item.quote.trim().length > 0),
+    'Test 28: Pipeline attaches grounded evidence items'
   );
 
   // ---------------------------------------------------------------------------

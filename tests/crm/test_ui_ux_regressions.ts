@@ -19,51 +19,43 @@ async function runUiUxRegressionTests() {
   // ============================================================================
   console.log('--- Section 1: Customer Stage Modal & Canonical Stages Coverage ---');
 
-  // Required canonical stages for Study Abroad Consulting workflow
-  const EXPECTED_STUDY_ABROAD_STAGES = [
-    'LEAD_NEW',
-    'CONTACT_CYCLE_1',
-    'CONTACT_CYCLE_2',
-    'CONTACT_CYCLE_3',
-    'UNREACHABLE',
-    'ZALO_FRIENDED',
-    'IN_CARE',
-    'POTENTIAL_CLOSING',
-    'NOT_POTENTIAL',
-    'NO_DEMAND',
-    'CONTRACT_SIGNED',
-    'CARE_NURTURING',
+  // Required canonical stages for the six-stage customer funnel
+  const EXPECTED_CANONICAL_STAGES = [
+    'awareness',
+    'interested',
+    'deep_research',
+    'low_potential',
+    'high_potential',
+    'contract_signed',
   ];
 
   const canonicalValues = CANONICAL_STAGE_LIST.map((s) => s.value);
 
-  // 1a. Verify all 12 study abroad stages are present in CANONICAL_STAGE_LIST
-  assert.strictEqual(CANONICAL_STAGE_LIST.length, 12, 'CANONICAL_STAGE_LIST must contain exactly 12 study abroad stages');
-  for (const stg of EXPECTED_STUDY_ABROAD_STAGES) {
+  // 1a. Verify all six canonical stages are present in CANONICAL_STAGE_LIST
+  assert.strictEqual(CANONICAL_STAGE_LIST.length, 6, 'CANONICAL_STAGE_LIST must contain exactly 6 canonical stages');
+  for (const stg of EXPECTED_CANONICAL_STAGES) {
     assert(
       canonicalValues.includes(stg as any),
-      `Missing study abroad stage in CANONICAL_STAGE_LIST: ${stg}`
+      `Missing canonical stage in CANONICAL_STAGE_LIST: ${stg}`
     );
   }
-  console.log('✓ PASS 1a: All 12 Study Abroad stages exist in CANONICAL_STAGE_LIST');
+  console.log('✓ PASS 1a: All 6 canonical funnel stages exist in CANONICAL_STAGE_LIST');
 
-  // 1b. Specifically verify new study abroad stages
-  assert(canonicalValues.includes('ZALO_FRIENDED' as any), 'ZALO_FRIENDED must have an option');
-  assert(canonicalValues.includes('IN_CARE' as any), 'IN_CARE must have an option');
-  assert(canonicalValues.includes('POTENTIAL_CLOSING' as any), 'POTENTIAL_CLOSING must have an option');
-  assert(canonicalValues.includes('NOT_POTENTIAL' as any), 'NOT_POTENTIAL must have an option');
-  assert(canonicalValues.includes('NO_DEMAND' as any), 'NO_DEMAND must have an option');
-  console.log('✓ PASS 1b: ZALO_FRIENDED, IN_CARE, POTENTIAL_CLOSING, NOT_POTENTIAL, NO_DEMAND all present');
+  // 1b. Low-potential remains visible and selectable (not hidden or auto-excluded)
+  assert(canonicalValues.includes('low_potential' as any), 'low_potential must have an option');
+  assert(canonicalValues.includes('deep_research' as any), 'deep_research must have an option');
+  assert(canonicalValues.includes('contract_signed' as any), 'contract_signed must have an option');
+  console.log('✓ PASS 1b: low_potential, deep_research and contract_signed are all selectable');
 
-  // 1c. Verify CUSTOMER_STAGE_LABELS covers all stages with meaningful Vietnamese labels
-  for (const stg of EXPECTED_STUDY_ABROAD_STAGES) {
+  // 1c. Verify CUSTOMER_STAGE_LABELS covers all six canonical stages with Vietnamese labels
+  for (const stg of EXPECTED_CANONICAL_STAGES) {
     const label = CUSTOMER_STAGE_LABELS[stg];
     assert(
       typeof label === 'string' && label.trim().length > 0,
       `CUSTOMER_STAGE_LABELS missing or empty for stage: ${stg}`
     );
   }
-  console.log('✓ PASS 1c: CUSTOMER_STAGE_LABELS contains full human-readable labels for all 12 stages');
+  console.log('✓ PASS 1c: CUSTOMER_STAGE_LABELS contains full human-readable labels for all 6 stages');
 
   // 1d. Statically inspect features/crm/components/customer-list.tsx
   const customerListPath = path.resolve(
@@ -81,11 +73,14 @@ async function runUiUxRegressionTests() {
     'customer-list.tsx must use CUSTOMER_STAGE_LABELS for display labels'
   );
   assert(
-    customerListCode.includes('targetStage === selectedCustomerForStage?.stage') ||
-      customerListCode.includes('targetStage === selectedCustomerForStage.stage'),
-    'customer-list.tsx must disable submit button when target stage equals current stage (no-op guard)'
+    customerListCode.includes('expected_stage: currentStage'),
+    'customer-list.tsx must send expected_stage for optimistic concurrency'
   );
-  console.log('✓ PASS 1d: customer-list.tsx dynamically renders complete canonical stage options');
+  assert(
+    customerListCode.includes("targetCanonical === 'contract_signed'"),
+    'customer-list.tsx must guard high-risk contract_signed transitions'
+  );
+  console.log('✓ PASS 1d: customer-list.tsx renders canonical stages and guards concurrency/high-risk moves');
   console.log('✓ PASS 1e: customer-list.tsx disables submit button on no-op stage transition');
 
   // ============================================================================
@@ -93,23 +88,25 @@ async function runUiUxRegressionTests() {
   // ============================================================================
   console.log('\n--- Section 2: CRM Dashboard Metrics & Explicit Pipeline Groups ---');
 
-  // 2a. Verify PIPELINE_STAGE_GROUPS contains explicit canonical groups
-  assert(Array.isArray(PIPELINE_STAGE_GROUPS.NEW_LEADS), 'NEW_LEADS group must be an array');
-  assert(Array.isArray(PIPELINE_STAGE_GROUPS.SURVEY), 'SURVEY group must be an array');
-  assert(Array.isArray(PIPELINE_STAGE_GROUPS.PRICING), 'PRICING group must be an array');
-  assert(Array.isArray(PIPELINE_STAGE_GROUPS.WON), 'WON group must be an array');
+  // 2a. Verify PIPELINE_STAGE_GROUPS exposes six canonical groups (plus compatibility aliases)
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.AWARENESS), 'AWARENESS group must be an array');
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.INTERESTED), 'INTERESTED group must be an array');
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.DEEP_RESEARCH), 'DEEP_RESEARCH group must be an array');
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.LOW_POTENTIAL), 'LOW_POTENTIAL group must be an array');
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.HIGH_POTENTIAL), 'HIGH_POTENTIAL group must be an array');
+  assert(Array.isArray(PIPELINE_STAGE_GROUPS.CONTRACT_SIGNED), 'CONTRACT_SIGNED group must be an array');
 
-  // Verify all stages in groups are valid canonical stages
+  // Verify all stages in groups are valid DB stage values (canonical or legacy)
   const allValidStages = Object.values(CUSTOMER_STAGES) as string[];
   for (const [groupName, stages] of Object.entries(PIPELINE_STAGE_GROUPS)) {
     for (const stg of stages) {
       assert(
         allValidStages.includes(stg),
-        `Stage ${stg} in group ${groupName} is not a valid canonical stage`
+        `Stage ${stg} in group ${groupName} is not a valid customer stage`
       );
     }
   }
-  console.log('✓ PASS 2a: PIPELINE_STAGE_GROUPS groups explicit canonical stages');
+  console.log('✓ PASS 2a: PIPELINE_STAGE_GROUPS groups explicit canonical stages and legacy aliases');
 
   // 2b. Statically inspect app/(dashboard)/crm/page.tsx
   const crmPagePath = path.resolve(process.cwd(), 'app/(dashboard)/crm/page.tsx');

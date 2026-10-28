@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '../../../../../lib/supabase/server';
+import { createAdminClient } from '../../../../../lib/supabase/admin';
 import { APPLICATION_ROLES } from '../../../../../shared/constants/roles';
 import { CustomerService } from '../../../../../features/crm/services/customer.service';
 import {
   STAGE_ACTOR_TYPES,
   toCanonicalStage,
+  type CanonicalCustomerStage,
   type CustomerStage,
 } from '../../../../../features/crm/types/customer.types';
 import type { ActorContext } from '../../../../../shared/contracts/auth';
@@ -148,7 +150,7 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       );
     }
 
-    const { stage, to_stage, note, source_ref } = body;
+    const { stage, to_stage, note, source_ref, expected_stage, evidence, confidence, confirm_contract_signed } = body;
     const rawStage = to_stage !== undefined ? to_stage : stage;
     if (rawStage === undefined || rawStage === null || (typeof rawStage === 'string' && !rawStage.trim())) {
       return NextResponse.json(
@@ -173,7 +175,60 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       );
     }
 
-    const routeClient = context?.adminClient || context?.supabaseClient;
+    // Đã ký hợp đồng là thay đổi rủi ro cao: chỉ BOSS_ADMIN và phải xác nhận rõ ràng.
+    if (canonicalStage === 'contract_signed') {
+      if (userRole !== APPLICATION_ROLES.BOSS_ADMIN) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'CONTRACT_SIGNED_REQUIRES_BOSS_ADMIN',
+            message: 'Chỉ BOSS_ADMIN mới được xác nhận trạng thái Đã ký hợp đồng.',
+          },
+          { status: 403 }
+        );
+      }
+      const confirmationNote =
+        typeof note === 'string' ? note.trim() : typeof evidence === 'string' ? evidence.trim() : '';
+      if (confirm_contract_signed !== true || confirmationNote.length < 10) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'CONFIRMATION_REQUIRED',
+            message:
+              'Cần xác nhận thủ công (confirm_contract_signed=true) và ghi rõ bằng chứng hợp đồng đã ký.',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    let expectedCanonicalStage: CanonicalCustomerStage | null = null;
+    if (expected_stage !== undefined && expected_stage !== null && String(expected_stage).trim()) {
+      try {
+        expectedCanonicalStage = toCanonicalStage(expected_stage);
+      } catch {
+        return NextResponse.json(
+          { success: false, error: 'INVALID_STAGE', message: 'Giai đoạn hiện tại (expected_stage) không hợp lệ.' },
+          { status: 400 }
+        );
+      }
+    }
+
+    const parsedConfidence =
+      typeof confidence === 'number' && Number.isFinite(confidence) && confidence >= 0 && confidence <= 1
+        ? confidence
+        : undefined;
+
+    let routeClient: SupabaseClient;
+    try {
+      routeClient = context?.adminClient || createAdminClient();
+    } catch (clientErr) {
+      if (context?.supabaseClient) {
+        routeClient = context.supabaseClient;
+      } else {
+        throw clientErr;
+      }
+    }
 
     // Call CustomerService.updateStage with mandatory companyId derived directly from server context
     const result = await CustomerService.updateStage(
@@ -182,11 +237,14 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
         companyId, // DERIVED DIRECTLY FROM SERVER CONTEXT
         newStage: canonicalStage,
         to_stage: canonicalStage,
+        expectedStage: expectedCanonicalStage,
         actorType: STAGE_ACTOR_TYPES.USER,
         note: note ? String(note).trim() : undefined,
         userId,
         actorId: userId,
         sourceRef: source_ref ? String(source_ref).trim() : undefined,
+        evidence: evidence ? String(evidence).trim() : undefined,
+        confidence: parsedConfidence,
       },
       routeClient
     );
@@ -245,7 +303,10 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
       success: true,
       data: sanitized,
       history: result.history,
-      message: `Chuyển giai đoạn khách hàng sang [${result.customer.stage}] thành công.`,
+      changed: result.changed,
+      message: result.changed
+        ? `Chuyển giai đoạn khách hàng sang [${sanitized.canonical_stage || result.customer.stage}] thành công.`
+        : 'Khách hàng đã ở giai đoạn này, không có thay đổi.',
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.message.includes('Giai đoạn khách hàng không hợp lệ')) {
@@ -256,6 +317,18 @@ export async function PATCH(request: NextRequest, context: StageRouteContext) {
     }
     const errorObj = err as { message?: string; status?: number; code?: string } | undefined;
     const errorMsg = String(errorObj?.message || '');
+    if (errorObj?.status === 409 || errorObj?.code === 'STAGE_CONFLICT') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'STAGE_CONFLICT',
+          message:
+            errorObj?.message ||
+            'Giai đoạn khách hàng vừa được người khác cập nhật. Vui lòng tải lại và thử lại.',
+        },
+        { status: 409 }
+      );
+    }
     if (
       errorObj?.status === 404 ||
       errorObj?.code === 'NOT_FOUND' ||

@@ -854,13 +854,21 @@ export async function scheduleSurveyAppointment(
   // 7. Advance customer stage if currently at an early stage
   try {
     const { CustomerService } = await import('../../../features/crm/services/customer.service');
-    const earlyStages = ['LEAD_NEW', 'CONTACT_CYCLE_1', 'CONTACT_CYCLE_2', 'CONTACT_CYCLE_3', 'SURVEY_REQUESTED'];
+    const earlyStages = [
+      'awareness',
+      'interested',
+      'LEAD_NEW',
+      'CONTACT_CYCLE_1',
+      'CONTACT_CYCLE_2',
+      'CONTACT_CYCLE_3',
+      'SURVEY_REQUESTED',
+    ];
     if (earlyStages.includes(customer.stage)) {
       await CustomerService.updateStage(
         {
           customerId: customer.id,
           companyId: actor.companyId,
-          to_stage: 'SURVEY_SCHEDULED',
+          to_stage: 'interested',
           note: `Lên lịch khảo sát hiện trường với kỹ thuật viên ngày ${new Date(input.appointmentDate).toLocaleString('vi-VN')}`,
           actorId: actor.userId,
         },

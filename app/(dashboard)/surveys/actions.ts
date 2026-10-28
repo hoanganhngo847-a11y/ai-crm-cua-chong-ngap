@@ -651,7 +651,7 @@ export async function calculatePriceFromSurveyAction(
         await CustomerService.updateStage({
           customerId: calcResult.customer_id,
           companyId: actor.companyId,
-          to_stage: 'PRICE_CALCULATED',
+          to_stage: 'high_potential',
           note: `Đã tính giá từ khảo sát: ${calcResult.amount != null ? Number(calcResult.amount).toLocaleString('vi-VN') + ' đ' : 'Thành công'}`,
           actorId: actor.userId,
         });

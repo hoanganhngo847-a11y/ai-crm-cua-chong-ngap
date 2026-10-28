@@ -16,40 +16,50 @@ async function runStageAllowlistTests() {
   // ============================================================================
   console.log('\n--- Section 1: toCanonicalStage Runtime Allowlist ---');
 
-  // 1a. Valid canonical stages accepted
-  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.LEAD_NEW), 'LEAD_NEW');
-  assert.strictEqual(toCanonicalStage('PRICE_OFFERED'), 'PRICE_OFFERED');
-  assert.strictEqual(toCanonicalStage('CONTRACT_SIGNED'), 'CONTRACT_SIGNED');
-  assert.strictEqual(toCanonicalStage('HANDOVER_COMPLETED'), 'HANDOVER_COMPLETED');
-  assert.strictEqual(toCanonicalStage('ZALO_FRIENDED'), 'ZALO_FRIENDED');
-  assert.strictEqual(toCanonicalStage('IN_CARE'), 'IN_CARE');
-  assert.strictEqual(toCanonicalStage('POTENTIAL_CLOSING'), 'POTENTIAL_CLOSING');
-  assert.strictEqual(toCanonicalStage('NOT_POTENTIAL'), 'NOT_POTENTIAL');
-  assert.strictEqual(toCanonicalStage('NO_DEMAND'), 'NO_DEMAND');
-  console.log('✓ PASS 1a: Valid canonical stages correctly returned');
+  // 1a. Canonical six-stage values returned as-is
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.AWARENESS), 'awareness');
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.INTERESTED), 'interested');
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.DEEP_RESEARCH), 'deep_research');
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.LOW_POTENTIAL), 'low_potential');
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.HIGH_POTENTIAL), 'high_potential');
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.CONTRACT_SIGNED), 'contract_signed');
+  console.log('✓ PASS 1a: Canonical six-stage values correctly returned');
 
-  // 1b. Case-insensitive and trimmed canonical strings accepted
-  assert.strictEqual(toCanonicalStage('  price_offered  '), 'PRICE_OFFERED');
-  assert.strictEqual(toCanonicalStage('negotiating'), 'NEGOTIATING');
-  assert.strictEqual(toCanonicalStage('  zalo_friended  '), 'ZALO_FRIENDED');
-  assert.strictEqual(toCanonicalStage('potential_closing'), 'POTENTIAL_CLOSING');
-  console.log('✓ PASS 1b: Case-insensitive and trimmed strings correctly normalized');
+  // 1b. Legacy values are normalized to the canonical six stages
+  assert.strictEqual(toCanonicalStage(CUSTOMER_STAGES.LEAD_NEW), 'awareness');
+  assert.strictEqual(toCanonicalStage('PRICE_OFFERED'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('CONTRACT_SIGNED'), 'contract_signed');
+  assert.strictEqual(toCanonicalStage('HANDOVER_COMPLETED'), 'contract_signed');
+  assert.strictEqual(toCanonicalStage('ZALO_FRIENDED'), 'awareness');
+  assert.strictEqual(toCanonicalStage('IN_CARE'), 'interested');
+  assert.strictEqual(toCanonicalStage('POTENTIAL_CLOSING'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('NOT_POTENTIAL'), 'low_potential');
+  assert.strictEqual(toCanonicalStage('NO_DEMAND'), 'low_potential');
+  console.log('✓ PASS 1b: Legacy stage values normalized to canonical stages');
 
-  // 1c. Business aliases correctly mapped to canonical stages
-  assert.strictEqual(toCanonicalStage('KHACH_MOI'), 'LEAD_NEW');
-  assert.strictEqual(toCanonicalStage('khach_moi'), 'LEAD_NEW');
-  assert.strictEqual(toCanonicalStage('DA_KET_BAN_ZALO'), 'ZALO_FRIENDED');
-  assert.strictEqual(toCanonicalStage('DANG_CHAM_SOC'), 'IN_CARE');
-  assert.strictEqual(toCanonicalStage('CO_TIEM_NANG'), 'POTENTIAL_CLOSING');
-  assert.strictEqual(toCanonicalStage('CHUA_TIEM_NANG'), 'NOT_POTENTIAL');
-  assert.strictEqual(toCanonicalStage('KHONG_NHU_CAU'), 'NO_DEMAND');
-  assert.strictEqual(toCanonicalStage('DA_KI_HOP_DONG'), 'CONTRACT_SIGNED');
-  assert.strictEqual(toCanonicalStage('CHAM_SOC_SAU_BAN'), 'CARE_NURTURING');
-  assert.strictEqual(toCanonicalStage('DA_CO_GIA'), 'PRICE_OFFERED');
-  assert.strictEqual(toCanonicalStage('da_co_gia'), 'PRICE_OFFERED');
-  assert.strictEqual(toCanonicalStage('DANG_THUONG_LUONG'), 'NEGOTIATING');
-  assert.strictEqual(toCanonicalStage('dang_thuong_luong'), 'NEGOTIATING');
-  console.log('✓ PASS 1c: Business aliases mapped to canonical stages without type coercion bypass');
+  // 1c. Case-insensitive and trimmed strings accepted
+  assert.strictEqual(toCanonicalStage('  price_offered  '), 'high_potential');
+  assert.strictEqual(toCanonicalStage('negotiating'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('  zalo_friended  '), 'awareness');
+  assert.strictEqual(toCanonicalStage('potential_closing'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('  DEEP_RESEARCH  '), 'deep_research');
+  console.log('✓ PASS 1c: Case-insensitive and trimmed strings correctly normalized');
+
+  // 1d. Business aliases correctly mapped to canonical stages
+  assert.strictEqual(toCanonicalStage('KHACH_MOI'), 'awareness');
+  assert.strictEqual(toCanonicalStage('khach_moi'), 'awareness');
+  assert.strictEqual(toCanonicalStage('DA_KET_BAN_ZALO'), 'awareness');
+  assert.strictEqual(toCanonicalStage('DANG_CHAM_SOC'), 'interested');
+  assert.strictEqual(toCanonicalStage('CO_TIEM_NANG'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('CHUA_TIEM_NANG'), 'low_potential');
+  assert.strictEqual(toCanonicalStage('KHONG_NHU_CAU'), 'low_potential');
+  assert.strictEqual(toCanonicalStage('DA_KI_HOP_DONG'), 'contract_signed');
+  assert.strictEqual(toCanonicalStage('CHAM_SOC_SAU_BAN'), 'contract_signed');
+  assert.strictEqual(toCanonicalStage('DA_CO_GIA'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('da_co_gia'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('DANG_THUONG_LUONG'), 'high_potential');
+  assert.strictEqual(toCanonicalStage('dang_thuong_luong'), 'high_potential');
+  console.log('✓ PASS 1d: Business aliases mapped to canonical stages without type coercion bypass');
 
   // 1d. Invalid stage strings REJECTED (Fail-Closed)
   const invalidStrings = ['HACKED_STAGE', 'random_string', 'UNKNOWN', 'ADMIN_BYPASS', 'SQL_INJECTION'];
@@ -234,69 +244,43 @@ async function runStageAllowlistTests() {
   assert.strictEqual(bodyNumericStage.error, 'INVALID_STAGE');
   console.log('✓ PASS 3c: PATCH /api/customers/[id]/stage rejects numeric stage with 400 INVALID_STAGE');
 
-  // 3d. Valid stage 'PRICE_OFFERED' passes validation and processes successfully
+  // 3d. Valid canonical stage 'high_potential' passes validation and processes successfully
   const mockWorkingSupabase = {
-    from: (table: string) => {
-      if (table === 'customers') {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => {
-                const getCustomer = async () => ({
-                  data: {
-                    id: 'cust-test-1',
-                    company_id: testCompanyId,
-                    stage: CUSTOMER_STAGES.LEAD_NEW,
-                    full_name: 'Khách Hàng Hợp Lệ',
-                    phone: '0912345678',
-                  },
-                  error: null,
-                });
-                return {
-                  single: getCustomer,
-                  maybeSingle: getCustomer,
-                };
-              },
-            }),
-          }),
-          update: (fields: any) => ({
-            eq: () => ({
-              eq: () => ({
-                select: () => ({
-                  single: async () => ({
-                    data: {
-                      id: 'cust-test-1',
-                      company_id: testCompanyId,
-                      stage: fields.stage,
-                      full_name: 'Khách Hàng Hợp Lệ',
-                    },
-                    error: null,
-                  }),
-                }),
-              }),
-            }),
-          }),
-        };
-      }
-      if (table === 'customer_stage_histories') {
-        return {
-          insert: (row: any) => ({
-            select: () => ({
-              single: async () => ({
-                data: { id: 'hist-1', ...row },
-                error: null,
-              }),
-            }),
-          }),
-        };
-      }
-      return {};
+    rpc: async (fnName: string, params: any) => {
+      assert.strictEqual(fnName, 'update_customer_stage_atomic');
+      return {
+        data: {
+          customer: {
+            id: 'cust-test-1',
+            company_id: testCompanyId,
+            customer_code: 'KH-000001',
+            name: 'Khách Hàng Hợp Lệ',
+            source: 'MANUAL',
+            stage: params.p_new_stage,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          history: {
+            id: 'hist-1',
+            company_id: testCompanyId,
+            customer_id: 'cust-test-1',
+            from_stage: 'awareness',
+            to_stage: params.p_new_stage,
+            actor_type: 'USER',
+            changed_by_user_id: 'user-sale-1',
+            reason: params.p_note,
+            changed_at: new Date().toISOString(),
+          },
+          changed: true,
+        },
+        error: null,
+      };
     },
   } as any;
 
   const reqValidStage = new NextRequest('http://localhost:3000/api/customers/cust-test-1/stage', {
     method: 'PATCH',
-    body: JSON.stringify({ to_stage: 'PRICE_OFFERED', note: 'Báo giá thành công' }),
+    body: JSON.stringify({ to_stage: 'high_potential', note: 'Báo giá thành công' }),
   });
   const resValidStage = await stagePatchHandler(reqValidStage, {
     params: Promise.resolve({ id: 'cust-test-1' }),
@@ -306,10 +290,11 @@ async function runStageAllowlistTests() {
   assert.strictEqual(resValidStage.status, 200, 'Valid stage should return 200 OK');
   const bodyValidStage = await resValidStage.json();
   assert.strictEqual(bodyValidStage.success, true);
-  assert.strictEqual(bodyValidStage.data.stage, 'PRICE_OFFERED');
-  console.log('✓ PASS 3d: PATCH /api/customers/[id]/stage accepts canonical "PRICE_OFFERED" with 200 OK');
+  assert.strictEqual(bodyValidStage.data.stage, 'high_potential');
+  assert.strictEqual(bodyValidStage.data.canonical_stage, 'high_potential');
+  console.log('✓ PASS 3d: PATCH /api/customers/[id]/stage accepts canonical "high_potential" with 200 OK');
 
-  // 3e. Valid business alias 'DA_CO_GIA' normalized to 'PRICE_OFFERED'
+  // 3e. Valid business alias 'DA_CO_GIA' normalized to 'high_potential'
   const reqAliasStage = new NextRequest('http://localhost:3000/api/customers/cust-test-1/stage', {
     method: 'PATCH',
     body: JSON.stringify({ stage: 'DA_CO_GIA', note: 'Chuyển qua alias' }),
@@ -321,8 +306,9 @@ async function runStageAllowlistTests() {
   });
   assert.strictEqual(resAliasStage.status, 200);
   const bodyAliasStage = await resAliasStage.json();
-  assert.strictEqual(bodyAliasStage.data.stage, 'PRICE_OFFERED');
-  console.log('✓ PASS 3e: Business alias "DA_CO_GIA" normalized to canonical stage "PRICE_OFFERED"');
+  assert.strictEqual(bodyAliasStage.data.stage, 'high_potential');
+  assert.strictEqual(bodyAliasStage.data.canonical_stage, 'high_potential');
+  console.log('✓ PASS 3e: Business alias "DA_CO_GIA" normalized to canonical stage "high_potential"');
 
   // ============================================================================
   // SECTION 4: SAFE ERROR MESSAGES FOR normalizePhone (ZERO PHONE LEAK)

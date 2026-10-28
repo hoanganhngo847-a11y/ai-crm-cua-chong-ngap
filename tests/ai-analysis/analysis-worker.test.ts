@@ -42,20 +42,20 @@ async function setupFixtures() {
     status: 'ACTIVE',
   });
 
-  // Upsert customer with stage = LEAD_NEW
+  // Upsert customer with canonical awareness stage
   await adminClient.from('customers').upsert([
     {
       id: CUSTOMER_ID,
       company_id: COMPANY_ID,
       name: 'Bác Ba Cửa Lớn',
-      stage: 'LEAD_NEW',
+      stage: 'awareness',
       source: 'FACEBOOK',
     },
     {
       id: EMPTY_CUSTOMER_ID,
       company_id: COMPANY_ID,
       name: 'Khách Không Có Tin Nhắn',
-      stage: 'LEAD_NEW',
+      stage: 'awareness',
       source: 'WEBSITE',
     },
   ]);
@@ -208,7 +208,10 @@ async function runTests() {
   assert(record.id, 'Test 2: Persisted analysis record has valid ID');
   assert(record.modelVersion === 'test-worker-model-v1', `Test 2: ModelVersion is trusted "test-worker-model-v1" (got: ${record.modelVersion})`);
   assert((record.modelVersion as string) !== 'FORGED_ATTACKER_MODEL_V999', 'Test 2: Forged modelVersion strictly discarded');
-  assert(record.stageSuggestion === 'NEED_INFO', 'Test 2: stageSuggestion correctly saved');
+  assert(record.stageSuggestion === 'interested', `Test 2: legacy NEED_INFO is normalized to interested (got: ${record.stageSuggestion})`);
+  assert(record.currentStage === 'awareness', `Test 2: currentStage snapshot is canonical awareness (got: ${record.currentStage})`);
+  assert(record.requiresVerification === true, 'Test 2: AI suggestion always requires human verification');
+  assert((record.evidenceItems?.length || 0) > 0, 'Test 2: evidence items are grounded in real sources');
   assert(record.sourceRefs.length === 2, `Test 2: sourceRefs points to exactly 2 source interactions (got: ${record.sourceRefs.length})`);
   console.log('[PASS] Test 2: Sanitized-only ingestion, source provenance, and forged modelVersion rejection verified');
 
@@ -216,15 +219,15 @@ async function runTests() {
   // TEST 3: Customer Stage Immutability Invariant
   // ============================================================================
   console.log('\n--- Test 3: Customer Stage Immutability Invariant ---');
-  // Verify that despite analysis suggesting 'NEED_SURVEY', customers.stage is UNCHANGED (remains LEAD_NEW)
+  // Verify that despite analysis suggesting 'NEED_INFO', customers.stage is UNCHANGED (remains awareness)
   const { data: customerAfter } = await adminClient
     .from('customers')
     .select('stage')
     .eq('id', CUSTOMER_ID)
     .single();
 
-  assert(customerAfter?.stage === 'LEAD_NEW', `Test 3: Customer stage remains LEAD_NEW (got: ${customerAfter?.stage})`);
-  console.log('[PASS] Test 3: Customer stage remains strictly immutable (LEAD_NEW)');
+  assert(customerAfter?.stage === 'awareness', `Test 3: Customer stage remains awareness (got: ${customerAfter?.stage})`);
+  console.log('[PASS] Test 3: Customer stage remains strictly immutable (awareness)');
 
   // ============================================================================
   // TEST 4: Bounded Limit Parameter

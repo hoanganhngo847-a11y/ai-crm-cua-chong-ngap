@@ -6,6 +6,7 @@ import type { CustomerResponse } from '../types/customer.types';
 import {
   CANONICAL_STAGE_LIST,
   CUSTOMER_STAGE_LABELS,
+  tryToCanonicalStage,
 } from '../types/customer.types';
 import {
   Users,
@@ -15,6 +16,7 @@ import {
   ShieldAlert,
   MessageSquare,
   Flame,
+  KanbanSquare,
 } from 'lucide-react';
 import { Card } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
@@ -91,6 +93,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
     useState<CustomerResponse | null>(null);
   const [targetStage, setTargetStage] = useState<string>('');
   const [stageNote, setStageNote] = useState<string>('');
+  const [confirmContractSigned, setConfirmContractSigned] = useState<boolean>(false);
   const [updatingStage, setUpdatingStage] = useState<boolean>(false);
   const [stageNotification, setStageNotification] = useState<{
     type: 'success' | 'error';
@@ -161,11 +164,34 @@ export default function CustomerList({ userRole }: CustomerListProps) {
 
   const handleUpdateStageSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedCustomerForStage || !targetStage) {
+      return;
+    }
+
+    const currentStage =
+      selectedCustomerForStage.canonical_stage ||
+      tryToCanonicalStage(selectedCustomerForStage.stage);
+    const targetCanonical = tryToCanonicalStage(targetStage);
+    if (!targetCanonical || targetCanonical === currentStage) {
+      return;
+    }
+
+    if (targetCanonical === 'contract_signed' && !isBossAdmin) {
+      setStageNotification({
+        type: 'error',
+        message: 'Chỉ BOSS_ADMIN mới được xác nhận trạng thái Đã ký hợp đồng.',
+      });
+      return;
+    }
     if (
-      !selectedCustomerForStage ||
-      !targetStage ||
-      targetStage === selectedCustomerForStage.stage
+      targetCanonical === 'contract_signed' &&
+      (!confirmContractSigned || stageNote.trim().length < 10)
     ) {
+      setStageNotification({
+        type: 'error',
+        message:
+          'Cần xác nhận thủ công và ghi rõ bằng chứng hợp đồng đã ký (ít nhất 10 ký tự).',
+      });
       return;
     }
 
@@ -179,27 +205,48 @@ export default function CustomerList({ userRole }: CustomerListProps) {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            stage: targetStage,
+            stage: targetCanonical,
+            expected_stage: currentStage,
             note: stageNote.trim() || undefined,
+            confirm_contract_signed:
+              targetCanonical === 'contract_signed' ? confirmContractSigned : undefined,
           }),
         }
       );
 
       const json = await res.json();
       if (!res.ok || !json.success) {
+        if (res.status === 409) {
+          setStageNotification({
+            type: 'error',
+            message:
+              'Khách hàng vừa được người khác cập nhật giai đoạn. Đã tải lại dữ liệu, vui lòng thử lại.',
+          });
+          setSelectedCustomerForStage(null);
+          await fetchCustomers();
+          return;
+        }
         throw new Error(json.message || 'Không thể cập nhật giai đoạn.');
       }
 
       setStageNotification({
         type: 'success',
-        message: 'Cập nhật giai đoạn thành công!',
+        message:
+          json.changed === false
+            ? 'Khách hàng đã ở giai đoạn này.'
+            : 'Cập nhật giai đoạn thành công!',
       });
 
-      // Update in place
+      // Update in place using canonical values so the UI does not show legacy codes.
       setCustomers((prev) =>
         prev.map((c) =>
           c.id === selectedCustomerForStage.id
-            ? { ...c, stage: targetStage as CustomerResponse['stage'] }
+            ? {
+                ...c,
+                stage: targetCanonical as CustomerResponse['stage'],
+                canonical_stage: targetCanonical,
+                stage_needs_review: false,
+              }
             : c
         )
       );
@@ -313,6 +360,16 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               Quản trị viên (Số thật &amp; Audit Log)
             </Badge>
           ) : null}
+
+          <Link href="/crm/pipeline">
+            <Button
+              variant="outline"
+              size="sm"
+              leftIcon={<KanbanSquare className="w-3.5 h-3.5" />}
+            >
+              Phễu Kanban
+            </Button>
+          </Link>
 
           <Button
             onClick={() => setIsModalOpen(true)}
@@ -550,7 +607,19 @@ export default function CustomerList({ userRole }: CustomerListProps) {
                   {/* Stage & Urgency */}
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
-                      <StatusBadge status={c.stage} size="xs" />
+                      <StatusBadge
+                        status={
+                          c.canonical_stage ||
+                          tryToCanonicalStage(c.stage) ||
+                          c.stage
+                        }
+                        size="xs"
+                      />
+                      {c.stage_needs_review && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-50 text-slate-700 border border-slate-200">
+                          <ShieldAlert className="w-3 h-3" /> Cần rà soát
+                        </span>
+                      )}
                       {c.urgency_reason && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
                           ⚡ {c.urgency_label || 'Cần sale chốt'}
@@ -574,8 +643,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
                         size="xs"
                         onClick={() => {
                           setSelectedCustomerForStage(c);
-                          setTargetStage(c.stage);
+                          setTargetStage(
+                            c.canonical_stage || tryToCanonicalStage(c.stage) || ''
+                          );
                           setStageNote('');
+                          setConfirmContractSigned(false);
                           setStageNotification(null);
                         }}
                       >
@@ -737,8 +809,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
             </label>
             <div className="text-xs font-mono px-2.5 py-1.5 rounded-md bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
               {selectedCustomerForStage
-                ? CUSTOMER_STAGE_LABELS[selectedCustomerForStage.stage] ||
-                  selectedCustomerForStage.stage
+                ? CUSTOMER_STAGE_LABELS[
+                    selectedCustomerForStage.canonical_stage ||
+                      tryToCanonicalStage(selectedCustomerForStage.stage) ||
+                      selectedCustomerForStage.stage
+                  ] || selectedCustomerForStage.stage
                 : '—'}
             </div>
           </div>
@@ -757,7 +832,8 @@ export default function CustomerList({ userRole }: CustomerListProps) {
 
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-[var(--text-secondary)]">
-              Ghi chú lý do chuyển giai đoạn (tùy chọn)
+              Ghi chú lý do chuyển giai đoạn{' '}
+              {targetStage === 'contract_signed' ? '(bắt buộc, tối thiểu 10 ký tự)' : '(tùy chọn)'}
             </label>
             <textarea
               value={stageNote}
@@ -767,6 +843,21 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               className="w-full p-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             />
           </div>
+
+          {targetStage === 'contract_signed' && (
+            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <input
+                type="checkbox"
+                checked={confirmContractSigned}
+                onChange={(e) => setConfirmContractSigned(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Tôi đã kiểm tra hợp đồng thực tế và xác nhận khách hàng đã ký với doanh nghiệp.
+                Chỉ BOSS_ADMIN được thực hiện thao tác này.
+              </span>
+            </label>
+          )}
 
           <div className="pt-3 flex items-center justify-end gap-2 border-t border-[var(--border-subtle)]">
             <Button
@@ -785,7 +876,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               disabled={
                 updatingStage ||
                 !targetStage ||
-                targetStage === selectedCustomerForStage?.stage
+                targetStage ===
+                  (selectedCustomerForStage?.canonical_stage ||
+                    tryToCanonicalStage(selectedCustomerForStage?.stage)) ||
+                (targetStage === 'contract_signed' &&
+                  (!confirmContractSigned || stageNote.trim().length < 10))
               }
             >
               Xác nhận chuyển giai đoạn

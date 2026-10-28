@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Search,
   Sparkles,
+  KanbanSquare,
 } from 'lucide-react';
 import { Avatar } from '../ui/avatar';
 import { Tooltip } from '../ui/tooltip';
@@ -72,6 +73,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: 'CRM',
           href: '/crm',
           icon: <LayoutDashboard className="w-4 h-4 shrink-0" />,
+          roles: ['BOSS_ADMIN', 'SALE'],
+        },
+        {
+          label: 'Phễu Kanban',
+          href: '/crm/pipeline',
+          icon: <KanbanSquare className="w-4 h-4 shrink-0" />,
           roles: ['BOSS_ADMIN', 'SALE'],
         },
         {

@@ -377,7 +377,7 @@ async function ingestOutboundFallback(
                     company_id: config.company,
                     name: 'Khách Messenger',
                     source: 'FACEBOOK',
-                    stage: 'LEAD_NEW',
+                    stage: 'awareness',
                 })
                 .select('id')
                 .single();

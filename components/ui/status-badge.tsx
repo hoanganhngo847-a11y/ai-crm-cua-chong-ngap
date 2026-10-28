@@ -13,6 +13,13 @@ const STAGE_CONFIG: Record<
   string,
   { label: string; variant: BadgeProps['variant'] }
 > = {
+  // Canonical six-stage funnel (keys are upper-cased before lookup)
+  AWARENESS: { label: 'Nhận biết', variant: 'info' },
+  INTERESTED: { label: 'Quan tâm', variant: 'accent' },
+  DEEP_RESEARCH: { label: 'Tìm hiểu sâu', variant: 'info' },
+  LOW_POTENTIAL: { label: 'Ít tiềm năng', variant: 'neutral' },
+  HIGH_POTENTIAL: { label: 'Có tiềm năng', variant: 'warning' },
+
   LEAD_NEW: { label: 'Khách mới', variant: 'info' },
   KHACH_MOI: { label: 'Khách mới', variant: 'info' },
   CONTACT_CYCLE_1: { label: 'Liên hệ lần 1', variant: 'neutral' },
