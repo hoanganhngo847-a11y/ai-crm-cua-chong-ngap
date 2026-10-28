@@ -25,12 +25,17 @@ export interface CustomerRow {
   zalo_name: string | null; facebook_name: string | null; phone: string | null; email: string | null;
   assigned_sale: string | null; assigned_sale_id: string | null; current_situation: string | null;
   last_interaction: string | null; lead_score: number | null; follow_up_at: string | null; ai_updated_at: string | null;
+  assigned_sale_name?: string | null;
+  sale_notes?: string | null;
+  marketing_notes?: string | null;
+  ai_notes?: string | null;
 }
 export interface TimelineEvent { id: string; kind: string; channel: string; direction: string | null; at: string; content: string | null; source_id: string }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number }
 
 export function sanitizeDossierText(value: string, limit = 2000): string | null {
-  const text = sanitizePhoneInText(value).replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[email]')
+  const bounded = value.slice(0, Math.min(limit, 4000));
+  const text = sanitizePhoneInText(bounded).replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[email]')
     .replace(/\+?\d[\d ().-]{7,}\d/g, '[phone]').trim();
   if (!sanitizeCustomerMemory({ content: text, memoryType: 'AI_INFERENCE', verificationStatus: 'UNVERIFIED' }).safe) return null;
   return text.slice(0, limit);
@@ -66,7 +71,7 @@ export async function getDossier(customerId: string, page = 1, filter = 'ALL') {
   const customer = await customerForActor(db, actor, customerId);
   const boss = actor.role === 'BOSS_ADMIN';
   const responses = await Promise.all([
-    db.from('customer_dossier_profiles').select('address,birth_year,special_notes,assigned_sale_id,updated_at').eq('company_id', actor.companyId).eq('customer_id', customerId).maybeSingle(),
+    db.from('customer_dossier_profiles').select('address,birth_year,special_notes,assigned_sale_id,assigned_sale_name,sale_notes,marketing_notes,ai_notes,updated_at').eq('company_id', actor.companyId).eq('customer_id', customerId).maybeSingle(),
     db.from('identities').select('channel,display_name,legacy_name:metadata->>display_name,verified').eq('company_id', actor.companyId).eq('customer_id', customerId).order('created_at').limit(30),
     db.rpc('c360_emails', { p_company_id: actor.companyId, p_customer_id: customerId }),
     db.rpc('c360_timeline', { p_company_id: actor.companyId, p_customer_id: customerId, p_page: page, p_filter: filter,
@@ -82,7 +87,7 @@ export async function getDossier(customerId: string, page = 1, filter = 'ALL') {
   // Stored data still crosses a validation boundary. No silently fabricated empty snapshot.
   for (const entry of history) dossierSnapshotSchema.parse(entry.snapshot);
   const owners = await dossierOwners(db, actor.companyId);
-  return { customer, profile: profile.data as { address: string | null; birth_year: number | null; special_notes: string | null; assigned_sale_id: string | null } | null,
+  return { customer, profile: profile.data as { address: string | null; birth_year: number | null; special_notes: string | null; assigned_sale_id: string | null; assigned_sale_name?: string | null; sale_notes?: string | null; marketing_notes?: string | null; ai_notes?: string | null } | null,
     identities: (identities.data || []) as { channel: string; display_name: string | null; legacy_name: string | null; verified: boolean }[],
     emails: (emails.data || []) as string[], timeline: timeline.data as Page<TimelineEvent>, history,
     queue: queue.data as { requested_version: number; completed_version: number; lock_token: string | null; lease_until: string | null; error_code: string | null; attempts: number } | null,

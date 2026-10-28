@@ -26,6 +26,7 @@ import {
   PhoneRevealProvider,
   SecurePhoneRow,
 } from '../../../../features/crm/components/secure-phone-reveal';
+import { Customer360EditableCell } from '../../../../features/customer-360/editable-cell';
 import {
   Search,
   X,
@@ -337,22 +338,23 @@ export default async function CustomerDossierList({
           <TableHeader>
             <TableRow>
               <BulkHeader />
-              <TableHead className="min-w-[220px]">Khách hàng</TableHead>
-              <TableHead className="min-w-[130px]">Giai đoạn</TableHead>
-              <TableHead className="w-[80px]" alignRight>Điểm</TableHead>
-              <TableHead className="min-w-[150px]">Liên hệ</TableHead>
-              <TableHead className="min-w-[120px]">Sale phụ trách</TableHead>
-              <TableHead className="min-w-[260px] max-w-sm">Tình trạng hiện tại (AI)</TableHead>
-              <TableHead className="min-w-[120px]">Liên hệ gần nhất</TableHead>
-              <TableHead className="min-w-[120px]">Hạn gọi lại</TableHead>
-              <TableHead className="w-[100px] text-right">Thao tác</TableHead>
+              <TableHead className="min-w-[200px]">Khách hàng</TableHead>
+              <TableHead className="min-w-[110px]">Giai đoạn</TableHead>
+              <TableHead className="min-w-[130px]">Liên hệ</TableHead>
+              <TableHead className="min-w-[140px]">Phân công cho Sale</TableHead>
+              <TableHead className="min-w-[170px]">Ghi chú của Sale</TableHead>
+              <TableHead className="min-w-[170px]">Ghi chú của Marketing</TableHead>
+              <TableHead className="min-w-[190px]">Ghi chú của AI</TableHead>
+              <TableHead className="min-w-[110px]">Liên hệ gần nhất</TableHead>
+              <TableHead className="min-w-[110px]">Hạn gọi lại</TableHead>
+              <TableHead className="w-[80px] text-right">Thao tác</TableHead>
             </TableRow>
           </TableHeader>
 
           <TableBody>
             {data.items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={process.env.BULK_MESSAGING_ENABLED === 'true' ? 10 : 9} className="p-0">
+                <TableCell colSpan={process.env.BULK_MESSAGING_ENABLED === 'true' ? 11 : 10} className="p-0">
                   <EmptyState
                     type={hasActiveFilters ? 'no-results' : 'empty'}
                     title={
@@ -381,15 +383,6 @@ export default async function CustomerDossierList({
                 const isOverdue =
                   c.follow_up_at &&
                   new Date(c.follow_up_at).getTime() < nowMs;
-
-                const scoreColor =
-                  c.lead_score !== null && c.lead_score !== undefined
-                    ? c.lead_score >= 70
-                      ? 'bg-rose-50 text-rose-700 border-rose-200'
-                      : c.lead_score >= 40
-                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : 'bg-slate-100 text-slate-700 border-slate-200'
-                    : 'text-[var(--text-tertiary)]';
 
                 return (
                   <TableRow key={c.id}>
@@ -427,19 +420,6 @@ export default async function CustomerDossierList({
                       <StatusBadge status={c.stage} size="xs" />
                     </TableCell>
 
-                    {/* Lead Score */}
-                    <TableCell alignRight>
-                      {c.lead_score !== null && c.lead_score !== undefined ? (
-                        <span
-                          className={`inline-block px-1.5 py-0.5 rounded border text-[11px] font-mono font-semibold ${scoreColor}`}
-                        >
-                          {c.lead_score}
-                        </span>
-                      ) : (
-                        <span className="text-[var(--text-tertiary)]">—</span>
-                      )}
-                    </TableCell>
-
                     {/* Contact Phone / Email */}
                     <TableCell>
                       <div className="flex flex-col text-[11px] gap-1">
@@ -452,22 +432,45 @@ export default async function CustomerDossierList({
                       </div>
                     </TableCell>
 
-                    {/* Assigned Sale */}
+                    {/* Phân công cho Sale (Editable) */}
                     <TableCell>
-                      <span className="text-xs text-[var(--text-secondary)]">
-                        {c.assigned_sale || (
-                          <span className="text-[var(--text-tertiary)] italic">Chưa phân công</span>
-                        )}
-                      </span>
+                      <Customer360EditableCell
+                        customerId={c.id}
+                        field="assigned_sale_name"
+                        value={c.assigned_sale_name || c.assigned_sale || ''}
+                        placeholder="Nhập tên sale..."
+                        ownerSuggestions={owners.map((o) => o.name)}
+                      />
                     </TableCell>
 
-                    {/* Current Situation (AI) */}
+                    {/* Ghi chú của Sale (Editable) */}
                     <TableCell>
-                      <p className="text-xs text-[var(--text-secondary)] line-clamp-2 leading-relaxed">
-                        {c.current_situation || (
-                          <span className="text-[var(--text-tertiary)] italic">Chưa có phân tích AI</span>
-                        )}
-                      </p>
+                      <Customer360EditableCell
+                        customerId={c.id}
+                        field="sale_notes"
+                        value={c.sale_notes || ''}
+                        placeholder="Nhập ghi chú sale..."
+                      />
+                    </TableCell>
+
+                    {/* Ghi chú của Marketing (Editable) */}
+                    <TableCell>
+                      <Customer360EditableCell
+                        customerId={c.id}
+                        field="marketing_notes"
+                        value={c.marketing_notes || ''}
+                        placeholder="Nhập ghi chú mkt..."
+                      />
+                    </TableCell>
+
+                    {/* Ghi chú của AI (Editable) */}
+                    <TableCell>
+                      <Customer360EditableCell
+                        customerId={c.id}
+                        field="ai_notes"
+                        value={c.ai_notes || c.current_situation || ''}
+                        placeholder="Nhập ghi chú AI..."
+                      />
                     </TableCell>
 
                     {/* Last Interaction */}

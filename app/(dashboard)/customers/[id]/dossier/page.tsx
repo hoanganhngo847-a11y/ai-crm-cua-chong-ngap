@@ -96,9 +96,11 @@ export default async function CustomerDossier({
 
   const { customer: c, profile, history, timeline, queue, boss } = dossier;
   const current = history[0];
-  const assignedSale = dossier.owners.find(
-    (o) => o.id === (profile?.assigned_sale_id ?? dossier.contacts.assignedSaleId)
-  )?.name;
+  const assignedSale =
+    profile?.assigned_sale_name ||
+    dossier.owners.find(
+      (o) => o.id === (profile?.assigned_sale_id ?? dossier.contacts.assignedSaleId)
+    )?.name;
 
   const stale = queue && queue.requested_version > queue.completed_version;
   const processing =
@@ -371,14 +373,38 @@ export default async function CustomerDossier({
                   </div>
                 </div>
 
-                {/* Special Notes */}
-                {profile?.special_notes && (
+                {/* Sale Notes */}
+                {(profile?.sale_notes || profile?.special_notes) && (
                   <div className="p-3 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
                     <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
-                      Ghi chú đặc biệt
+                      Ghi chú của Sale
                     </div>
                     <p className="text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
-                      {profile.special_notes}
+                      {profile.sale_notes || profile.special_notes}
+                    </p>
+                  </div>
+                )}
+
+                {/* Marketing Notes */}
+                {profile?.marketing_notes && (
+                  <div className="p-3 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
+                    <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
+                      Ghi chú của Marketing
+                    </div>
+                    <p className="text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
+                      {profile.marketing_notes}
+                    </p>
+                  </div>
+                )}
+
+                {/* AI Notes */}
+                {profile?.ai_notes && (
+                  <div className="p-3 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)]">
+                    <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
+                      Ghi chú của AI
+                    </div>
+                    <p className="text-xs text-[var(--text-primary)] whitespace-pre-wrap leading-relaxed">
+                      {profile.ai_notes}
                     </p>
                   </div>
                 )}
