@@ -5,11 +5,14 @@ import {
   processDueLiveDeliveries,
   LIVE_DELIVERY_WORKLOAD_ACTOR_ID,
   MESSENGER_FALLBACK_REPLY,
+  MESSENGER_PHONE_RECEIVED_REPLY,
+  messageContainsCustomerPhone,
   type LiveDeliveryClaim,
   type LiveDeliveryTransport,
   type LiveDeliverySendParams,
   type LiveDeliverySendOutcome,
 } from '../../features/ai-brain/live-delivery';
+import { cleanCustomerReply, hasInternalLeak } from '../../features/ai-brain/validation';
 import type { BrainProvider, BrainTurnRequest, BrainProposal } from '../../features/ai-brain/contracts';
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111';
@@ -33,6 +36,7 @@ interface MockDbConfig {
   convFbAiMode?: string;
   convZaloStatus?: string;
   handoverRpcError?: Error | null;
+  inboundFbContent?: string;
 }
 
 function createMockEngineSupabase(config: MockDbConfig = {}) {
@@ -178,7 +182,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                   direction: 'INBOUND',
                   actor_type: 'CUSTOMER',
                   sanitization_status: 'SUCCEEDED',
-                  sanitized_content: 'Chào shop tư vấn Messenger',
+                  sanitized_content: config.inboundFbContent ?? 'Chào shop tư vấn Messenger',
                 },
                 error: null,
               };
@@ -637,4 +641,197 @@ test('Generic Engine: persists actual Brain latency_ms and preserves MID on OUTB
   assert.equal(finishCall.params.p_external_message_id, 'mid.prov-success-record-failed');
   assert.equal(typeof finishCall.params.p_brain_latency_ms, 'number');
   assert.ok((finishCall.params.p_brain_latency_ms as number) >= 0);
+});
+
+test('Phone Intake Fast Path: Messenger replies immediately with confirmation when customer provides phone number without invoking provider', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Dạ sđt của em là [số điện thoại đã ẩn] ạ',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER', {
+    outcome: 'SENT',
+    externalMessageId: 'mid.fast-path-phone',
+  });
+
+  let providerCalls = 0;
+  const mockProvider: BrainProvider = {
+    descriptor: { id: 'test-provider', model: 'test-model' },
+    async runTurn() {
+      providerCalls++;
+      return {
+        decision: 'RESPOND',
+        draft: 'Should not be called',
+        confidence: 0.9,
+      };
+    },
+  };
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 1);
+  assert.equal(result.failed, 0);
+
+  // Provider was NOT called (0 ms latency, instant dispatch)
+  assert.equal(providerCalls, 0);
+
+  // Transport received exact confirmation template
+  assert.equal(messengerTransport.sendCalls.length, 1);
+  assert.equal(messengerTransport.sendCalls[0].draft, MESSENGER_PHONE_RECEIVED_REPLY);
+  assert.equal(messengerTransport.sendCalls[0].turnConfidence, 1.0);
+
+  // Finish RPC recorded with RESPOND, 1.0 confidence, and 0 latency
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'SENT');
+  assert.equal(finishCall.params.p_decision, 'RESPOND');
+  assert.equal(finishCall.params.p_confidence, 1.0);
+  assert.equal(finishCall.params.p_brain_latency_ms, 0);
+});
+
+test('Reasoning Leak Suppression: strips internal chain-of-thought and sends only customer-facing message', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Tư vấn du học Đức giúp mình',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER', {
+    outcome: 'SENT',
+    externalMessageId: 'mid.clean-reply',
+  });
+
+  const rawLeakedDraft = `Dựa trên yêu cầu của khách hàng Lan Pham và quy tắc tư vấn từ playbook, tôi xin đưa ra quyết định xử lý như sau.
+
+- Khách hàng mới gửi yêu cầu tư vấn chung chung.
+- Theo quy định, yêu cầu tư vấn chung không phải là chuyển giao cho người thật ngay, mà là phản hồi bằng câu hỏi làm rõ hoặc xin thông tin theo kịch bản.
+
+Bạn có thể gửi phản hồi mẫu cho khách hàng:
+Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé. Anh/chị cho em xin số điện thoại liên hệ để chuyên viên bên em hỗ trợ chi tiết hơn cho mình ạ.`;
+
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: rawLeakedDraft,
+    confidence: 0.9,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 1);
+
+  // Transport received ONLY the cleaned customer-facing message
+  assert.equal(messengerTransport.sendCalls.length, 1);
+  assert.equal(
+    messengerTransport.sendCalls[0].draft,
+    'Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé. Anh/chị cho em xin số điện thoại liên hệ để chuyên viên bên em hỗ trợ chi tiết hơn cho mình ạ.'
+  );
+  assert.equal(hasInternalLeak(messengerTransport.sendCalls[0].draft), false);
+});
+
+test('Persistent Internal Leak: provider proposal with thought leak fails closed and never calls transport', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Tư vấn giúp mình',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER', {
+    outcome: 'SENT',
+    externalMessageId: 'mid.fallback-reply',
+  });
+
+  // Pure thought without any customer-facing draft
+  const pureThoughtDraft = `Dựa trên yêu cầu của khách hàng và quy tắc tư vấn từ playbook, cần chuyển giao cho người thật ngay.`;
+
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: pureThoughtDraft,
+    confidence: 0.88,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.failed, 1);
+
+  // Transport was NEVER called with leaked reasoning
+  assert.equal(messengerTransport.sendCalls.length, 0);
+
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'FAILED');
+  assert.equal(finishCall.params.p_error_code, 'BRAIN_PROVIDER_ERROR');
+});
+
+test('Helper functions: messageContainsCustomerPhone and cleanCustomerReply', () => {
+  // Phone detection tests
+  assert.equal(messageContainsCustomerPhone('[số điện thoại đã ẩn]'), true);
+  assert.equal(messageContainsCustomerPhone('Phone number: [số điện thoại đã ẩn]'), true);
+  assert.equal(messageContainsCustomerPhone('Sđt của mình là 0912345678 nhé'), true);
+  assert.equal(messageContainsCustomerPhone('0988 123 456'), true);
+  assert.equal(messageContainsCustomerPhone('+84912345678'), true);
+  assert.equal(messageContainsCustomerPhone('Học phí bên mình bao nhiêu?'), false);
+  assert.equal(messageContainsCustomerPhone('Mình sinh năm 2004, ở Hà Nội'), false);
+
+  // Clean reply tests
+  const withPreamble = `Dựa trên yêu cầu của khách hàng Huệ Nguyễn về việc tư vấn du học Đức và quy trình cần thu thập số điện thoại, bạn có thể gửi phản hồi trực tiếp cho khách hàng như sau:
+
+Dạ em chào anh/chị Huệ Nguyễn ạ. Anh/chị vui lòng cho em xin số điện thoại liên hệ nhé.`;
+  assert.equal(
+    cleanCustomerReply(withPreamble),
+    'Dạ em chào anh/chị Huệ Nguyễn ạ. Anh/chị vui lòng cho em xin số điện thoại liên hệ nhé.'
+  );
+
+  const cleanAlready = 'Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé ạ.';
+  assert.equal(cleanCustomerReply(cleanAlready), cleanAlready);
 });

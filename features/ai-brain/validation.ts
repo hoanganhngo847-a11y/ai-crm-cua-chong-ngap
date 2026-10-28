@@ -110,10 +110,15 @@ export const INTERNAL_LEAK_PATTERNS: readonly RegExp[] = [
   // Confidence labels
   /(?:độ\s*(?:tin\s*cậy|tự\s*tin)|confidence)\s*[:\-]/i,
   // Internal draft labels
-  /(?:dự\s*thảo\s*(?:phản\s*hồi|câu\s*trả\s*lời)|bản\s*nháp|nội\s*dung\s*trả\s*lời)\s*[:\-]/i,
+  /(?:dự\s*thảo\s*(?:phản\s*hồi|câu\s*trả\s*lời)|bản\s*nháp|nội\s*dung\s*(?:trả\s*lời|phản\s*hồi))\s*[:\-]/i,
   // Handover reason labels or tokens
   /(?:lý\s*do(?:\s*chuyển\s*giao)?|handover\s*reason)\s*[:\-]/i,
   /\bhandoverReason\b/,
+  // Meta-reasoning / prompt leaks
+  /(?:dựa\s*trên\s*yêu\s*cầu|tôi\s*xin\s*đưa\s*ra\s*quyết\s*định)/i,
+  /(?:theo\s*quy\s*định|quy\s*tắc\s*tư\s*vấn|playbook|theo\s*kịch\s*bản)/i,
+  /(?:bạn\s*có\s*thể\s*gửi\s*(?:phản\s*hồi|câu\s*trả\s*lời)|phản\s*hồi\s*mẫu)/i,
+  /(?:chuyển\s*giao\s*cho\s*người\s*thật|phản\s*hồi\s*bằng\s*câu\s*hỏi\s*làm\s*rõ)/i,
   // CLI / JSON / internal runtime metadata / explanation
   /(?:kênh\s*hiện\s*tại\s*là\s*CLI|định\s*dạng\s*JSON\s*thuần|giới\s*hạn\s*đầu\s*ra)/i,
   /```/,
@@ -122,6 +127,48 @@ export const INTERNAL_LEAK_PATTERNS: readonly RegExp[] = [
   /<\/?thought>/i,
   /\bchain-of-thought\b/i,
 ] as const;
+
+export function cleanCustomerReply(rawDraft: string): string {
+  if (!rawDraft || typeof rawDraft !== 'string') return '';
+  let text = rawDraft.trim();
+
+  // 1. If text has a transition like "Bạn có thể gửi phản hồi (mẫu|trực tiếp) cho khách hàng (như sau):", extract following text
+  const transitionRegex = /(?:bạn\s*có\s*thể\s*gửi|gợi\s*ý|mẫu|nội\s*dung)?\s*(?:phản\s*hồi|câu\s*trả\s*lời|tin\s*nhắn)\s*(?:mẫu|trực\s*tiếp)?\s*(?:cho\s*khách\s*hàng)?\s*(?:như\s*sau)?\s*[:\-]\s*([\s\S]+)$/i;
+  const match = text.match(transitionRegex);
+  if (match && match[1]?.trim()) {
+    text = match[1].trim();
+  }
+
+  // 2. Strip surrounding quotation marks if any
+  text = text.replace(/^["“'«]([\s\S]+)["”'»]$/, '$1').trim();
+
+  // 3. Strip any leading reasoning paragraphs or bullets
+  const lines = text.split('\n');
+  const keptLines: string[] = [];
+  let pastPreamble = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!pastPreamble) {
+      if (!trimmed) continue;
+      // Skip bullet points
+      if (/^[-*•]\s+/i.test(trimmed)) continue;
+      // Skip meta sentences
+      if (/^(?:dựa\s*trên|theo\s*quy\s*định|tôi\s*xin|quy\s*tắc|phân\s*tích|kịch\s*bản|playbook|đánh\s*giá|lưu\s*ý\s*[:\-])/i.test(trimmed)) {
+        continue;
+      }
+      pastPreamble = true;
+    }
+    keptLines.push(line);
+  }
+
+  return keptLines.join('\n').trim();
+}
+
+export function hasInternalLeak(draftText: string): boolean {
+  if (!draftText || typeof draftText !== 'string') return false;
+  return INTERNAL_LEAK_PATTERNS.some((pattern) => pattern.test(draftText));
+}
 
 export function assertNoInternalLeak(draftText: string, code: BrainErrorCode = 'BRAIN_PROVIDER_ERROR'): void {
   for (const pattern of INTERNAL_LEAK_PATTERNS) {
@@ -140,7 +187,9 @@ export function validateProviderProposal(raw: unknown): BrainProposal {
   }
   let draft: string | undefined;
   if (decision === 'RESPOND') {
-    draft = text(p.draft, code);
+    const rawDraft = text(p.draft, code);
+    const cleaned = cleanCustomerReply(rawDraft);
+    draft = cleaned || rawDraft;
     assertNoInternalLeak(draft, code);
   } else if (p.draft !== undefined) deny(code);
   let handoverReason: string | undefined;
