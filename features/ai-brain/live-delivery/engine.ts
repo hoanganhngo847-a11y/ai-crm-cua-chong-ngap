@@ -25,9 +25,41 @@ import type {
 import { LIVE_DELIVERY_WORKLOAD_ACTOR_ID } from './contracts';
 import { ZaloDeliveryTransport } from './transports/zalo-transport';
 import { MessengerDeliveryTransport } from './transports/messenger-transport';
+import { cleanCustomerReply, hasInternalLeak } from '../validation';
 
 export const MESSENGER_FALLBACK_REPLY =
   'Anh/chị cho em xin sđt liên hệ, để nhân viên bên em tư vấn chi tiết hơn cho nhé.';
+
+export const MESSENGER_PHONE_RECEIVED_REPLY =
+  'Bên em đã nhận thông tin và sớm liên hệ lại. Anh chị nhớ mở chặn người lạ ở zalo và để ý điện thoại giúp em ạ.';
+
+export function messageContainsCustomerPhone(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+
+  // 1. Check for CRM phone intake redaction tag or status
+  if (
+    /\[(?:số\s*điện\s*thoại\s*đã\s*ẩn|phone\s*number\s*hidden)\]/i.test(text) ||
+    /số\s*điện\s*thoại\s*đã\s*ẩn/i.test(text) ||
+    /đã\s*ghi\s*nhận\s*một\s*số\s*hợp\s*lệ/i.test(text)
+  ) {
+    return true;
+  }
+
+  // 2. Check for Vietnamese phone numbers (mobile or landline, optional +84 or 0084 or 0)
+  // Mobile prefixes: 3[2-9], 5[25689], 7[06789], 8[1-9], 9[0-46-9]
+  const vnPhoneRegex = /(?:(?:\+|00)84|0)\s*(?:3[2-9]|5[25689]|7[06789]|8[1-9]|9[0-46-9])(?:[\s()./_,:\-]*\d){7}\b/;
+  if (vnPhoneRegex.test(text)) {
+    return true;
+  }
+
+  // 3. Check for general phone intent with digits (e.g. "sđt: 091...", "zalo 09...")
+  const phoneIntentWithDigits = /(?:sđt|sdt|số\s*(?:điện\s*thoại|dt)|phone|zalo)[\s:]*(?:(?:\+|00)84|0)?\s*[1-9](?:[\s()./_,:\-]*\d){7,9}\b/i;
+  if (phoneIntentWithDigits.test(text)) {
+    return true;
+  }
+
+  return false;
+}
 
 interface EligibleLiveInput {
   text: string;
@@ -230,6 +262,78 @@ async function finish(
   if (error || data !== true) throw new Error('LIVE_FINISH_FENCED');
 }
 
+async function checkPreSendGuards(
+  client: SupabaseClient,
+  claim: LiveDeliveryClaim,
+): Promise<{ allowed: boolean; errorCode?: string }> {
+  // PRE-SEND RE-CHECK 1: Kill switch re-check right before sending!
+  const settingChannel = claim.channel;
+  const { data: currentSetting, error: killSwitchCheckError } = await client
+    .from('ai_brain_live_settings')
+    .select('enabled')
+    .eq('company_id', claim.company_id)
+    .eq('channel', settingChannel)
+    .maybeSingle();
+
+  if (killSwitchCheckError || !currentSetting?.enabled) {
+    return { allowed: false, errorCode: 'KILL_SWITCH_ENGAGED' };
+  }
+
+  // PRE-SEND RE-CHECK 2: Human ownership / AI pause re-check right before sending!
+  const { data: currentConv, error: convCheckError } = await client
+    .from('conversations')
+    .select('status, assigned_to, ai_mode')
+    .eq('id', claim.conversation_id)
+    .maybeSingle();
+
+  if (
+    convCheckError ||
+    !currentConv ||
+    currentConv.status === 'CLOSED' ||
+    (claim.channel === 'ZALO' && currentConv.status === 'PENDING_SALE') ||
+    currentConv.assigned_to !== null ||
+    currentConv.ai_mode !== 'ACTIVE'
+  ) {
+    return {
+      allowed: false,
+      errorCode: currentConv?.ai_mode === 'PAUSED' ? 'AI_PAUSED' : 'HUMAN_TAKEN_OVER',
+    };
+  }
+
+  // PRE-SEND RE-CHECK 3: Canary allowlist re-check right before sending!
+  if (claim.channel === 'MESSENGER') {
+    const { data: convExternal } = await client
+      .from('conversations')
+      .select('external_conversation_id, metadata')
+      .eq('id', claim.conversation_id)
+      .eq('company_id', claim.company_id)
+      .maybeSingle();
+
+    const pageId = extractMessengerPageId(
+      (convExternal as { external_conversation_id?: string | null } | null)?.external_conversation_id,
+      (convExternal as { metadata?: unknown } | null)?.metadata,
+    );
+
+    const { data: canaryActive, error: canaryCheckErr } = pageId
+      ? await client
+          .from('ai_brain_live_canary_allowlist')
+          .select('id')
+          .eq('company_id', claim.company_id)
+          .eq('channel', 'MESSENGER')
+          .eq('conversation_id', claim.conversation_id)
+          .eq('page_id', pageId)
+          .eq('enabled', true)
+          .maybeSingle()
+      : { data: null, error: null };
+
+    if (canaryCheckErr || !canaryActive) {
+      return { allowed: false, errorCode: 'CANARY_RESTRICTED' };
+    }
+  }
+
+  return { allowed: true };
+}
+
 async function processClaim(
   client: SupabaseClient,
   claim: LiveDeliveryClaim,
@@ -265,6 +369,73 @@ async function processClaim(
     return 'skipped';
   }
 
+  // FAST PATH FOR MESSENGER: Customer provided a phone number
+  if (claim.channel === 'MESSENGER' && messageContainsCustomerPhone(eligible.text)) {
+    const guard = await checkPreSendGuards(client, claim);
+    if (!guard.allowed) {
+      await finish(client, claim, lockToken, 'SKIPPED', {
+        decision: 'RESPOND',
+        confidence: 1.0,
+        errorCode: guard.errorCode,
+      });
+      return 'skipped';
+    }
+
+    const transport = transports.get('MESSENGER');
+    if (!transport) {
+      await finish(client, claim, lockToken, 'FAILED', {
+        decision: 'RESPOND',
+        confidence: 1.0,
+        errorCode: 'NO_TRANSPORT_AVAILABLE',
+      });
+      return 'failed';
+    }
+
+    const turnId = randomUUID();
+    const commandId = `ai-live:${claim.source_interaction_id}`;
+    const sendOutcome = await transport.sendReply({
+      claim,
+      draft: MESSENGER_PHONE_RECEIVED_REPLY,
+      commandId,
+      minConfidence: eligible.minConfidence,
+      turnConfidence: 1.0,
+      turnId,
+      lockToken,
+    });
+
+    if (sendOutcome.outcome === 'SENT') {
+      await finish(client, claim, lockToken, 'SENT', {
+        decision: 'RESPOND',
+        confidence: 1.0,
+        externalMessageId: sendOutcome.externalMessageId ?? null,
+        errorCode: sendOutcome.errorCode ?? null,
+        turnId,
+        brainLatencyMs: 0,
+      });
+      return 'sent';
+    }
+
+    if (sendOutcome.outcome === 'SKIPPED') {
+      await finish(client, claim, lockToken, 'SKIPPED', {
+        decision: 'RESPOND',
+        confidence: 1.0,
+        errorCode: sendOutcome.errorCode ?? 'SKIPPED_BY_TRANSPORT',
+        turnId,
+        brainLatencyMs: 0,
+      });
+      return 'skipped';
+    }
+
+    await finish(client, claim, lockToken, 'FAILED', {
+      decision: 'RESPOND',
+      confidence: 1.0,
+      errorCode: sendOutcome.errorCode || 'MESSENGER_DISPATCH_UNCERTAIN',
+      turnId,
+      brainLatencyMs: 0,
+    });
+    return 'failed';
+  }
+
   const rawTimeout = process.env.LIVE_TIMEOUT_MS ? parseInt(process.env.LIVE_TIMEOUT_MS, 10) : 25000;
   const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 1000 && rawTimeout <= 30000 ? rawTimeout : 25000;
 
@@ -286,7 +457,7 @@ async function processClaim(
     },
   });
 
-  const result = await service.handleBrainTurn({
+  let result = await service.handleBrainTurn({
     customerId: claim.customer_id,
     conversationId: claim.conversation_id,
     channel: expectedBrainChannel,
@@ -377,7 +548,7 @@ async function processClaim(
     return 'skipped';
   }
 
-  const proposedDraft = (claim.channel === 'MESSENGER' && result.decision === 'HANDOVER')
+  let proposedDraft = (claim.channel === 'MESSENGER' && result.decision === 'HANDOVER')
     ? (result.draft?.trim() || MESSENGER_FALLBACK_REPLY)
     : result.draft?.trim();
 
@@ -392,87 +563,36 @@ async function processClaim(
     return 'skipped';
   }
 
-  // PRE-SEND RE-CHECK 1: Kill switch re-check right before sending!
-  const settingChannel = claim.channel;
-  const { data: currentSetting, error: killSwitchCheckError } = await client
-    .from('ai_brain_live_settings')
-    .select('enabled')
-    .eq('company_id', claim.company_id)
-    .eq('channel', settingChannel)
-    .maybeSingle();
+  // Clean preamble / chain-of-thought from proposed draft
+  proposedDraft = cleanCustomerReply(proposedDraft) || (claim.channel === 'MESSENGER' ? MESSENGER_FALLBACK_REPLY : '');
 
-  if (killSwitchCheckError || !currentSetting?.enabled) {
-    await finish(client, claim, lockToken, 'SKIPPED', {
-      decision: 'RESPOND',
-      confidence: result.confidence,
-      errorCode: 'KILL_SWITCH_ENGAGED',
-      turnId: result.turnId,
-      brainLatencyMs,
-    });
-    return 'skipped';
-  }
-
-  // PRE-SEND RE-CHECK 2: Human ownership / AI pause re-check right before sending!
-  const { data: currentConv, error: convCheckError } = await client
-    .from('conversations')
-    .select('status, assigned_to, ai_mode')
-    .eq('id', claim.conversation_id)
-    .maybeSingle();
-
-  if (
-    convCheckError ||
-    !currentConv ||
-    currentConv.status === 'CLOSED' ||
-    (claim.channel === 'ZALO' && currentConv.status === 'PENDING_SALE') ||
-    currentConv.assigned_to !== null ||
-    currentConv.ai_mode !== 'ACTIVE'
-  ) {
-    await finish(client, claim, lockToken, 'SKIPPED', {
-      decision: 'RESPOND',
-      confidence: result.confidence,
-      errorCode: currentConv?.ai_mode === 'PAUSED' ? 'AI_PAUSED' : 'HUMAN_TAKEN_OVER',
-      turnId: result.turnId,
-      brainLatencyMs,
-    });
-    return 'skipped';
-  }
-
-  // PRE-SEND RE-CHECK 3: Canary allowlist re-check right before sending!
-  if (claim.channel === 'MESSENGER') {
-    const { data: convExternal } = await client
-      .from('conversations')
-      .select('external_conversation_id, metadata')
-      .eq('id', claim.conversation_id)
-      .eq('company_id', claim.company_id)
-      .maybeSingle();
-
-    const pageId = extractMessengerPageId(
-      (convExternal as { external_conversation_id?: string | null } | null)?.external_conversation_id,
-      (convExternal as { metadata?: unknown } | null)?.metadata,
-    );
-
-    const { data: canaryActive, error: canaryCheckErr } = pageId
-      ? await client
-          .from('ai_brain_live_canary_allowlist')
-          .select('id')
-          .eq('company_id', claim.company_id)
-          .eq('channel', 'MESSENGER')
-          .eq('conversation_id', claim.conversation_id)
-          .eq('page_id', pageId)
-          .eq('enabled', true)
-          .maybeSingle()
-      : { data: null, error: null };
-
-    if (canaryCheckErr || !canaryActive) {
-      await finish(client, claim, lockToken, 'SKIPPED', {
+  // Guard against any remaining internal thought or meta leaks
+  if (hasInternalLeak(proposedDraft)) {
+    if (claim.channel === 'MESSENGER') {
+      console.warn(`[ai-brain-live-delivery] Internal leak detected in proposed draft, substituted fallback reply.`);
+      proposedDraft = MESSENGER_FALLBACK_REPLY;
+    } else {
+      await finish(client, claim, lockToken, 'FAILED', {
         decision: 'RESPOND',
         confidence: result.confidence,
-        errorCode: 'CANARY_RESTRICTED',
+        errorCode: 'INTERNAL_LEAK_DETECTED',
         turnId: result.turnId,
         brainLatencyMs,
       });
-      return 'skipped';
+      return 'failed';
     }
+  }
+
+  const guard = await checkPreSendGuards(client, claim);
+  if (!guard.allowed) {
+    await finish(client, claim, lockToken, 'SKIPPED', {
+      decision: 'RESPOND',
+      confidence: result.confidence,
+      errorCode: guard.errorCode,
+      turnId: result.turnId,
+      brainLatencyMs,
+    });
+    return 'skipped';
   }
 
   // Recheck after generation: a Sale reply during the model call wins.
@@ -483,6 +603,7 @@ async function processClaim(
 
   console.info(JSON.stringify({ event: 'BRAIN_PROPOSAL_READY', deliveryId: claim.id,
     turnId: result.turnId, traceId: result.traceId, latencyMs: brainLatencyMs }));
+
   // SENDER TRANSPORT CALL (CRM is the delivery authority)
   const transport = transports.get(claim.channel);
   if (!transport) {
@@ -497,7 +618,7 @@ async function processClaim(
   }
 
   const effectiveConfidence =
-    claim.channel === 'MESSENGER' && result.decision === 'HANDOVER'
+    claim.channel === 'MESSENGER' && (result.decision === 'HANDOVER' || result.confidence < eligible.minConfidence)
       ? Math.max(result.confidence ?? 0.8, eligible.minConfidence)
       : result.confidence;
 
