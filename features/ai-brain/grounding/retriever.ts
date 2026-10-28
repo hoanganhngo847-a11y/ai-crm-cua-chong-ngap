@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { BrainContextDataSource, BrainContextScope } from '../context-contracts';
 import { sanitizeCustomerMemory } from '../memory/sanitizer';
+import { builtInPagePlaybook } from './page-playbook';
 import type {
   BrainTurnGrounding,
   GroundingBusinessFacts,
@@ -103,7 +104,7 @@ export async function resolveGroundingContext(options: {
     .reverse(); // interactions are returned descending, so reverse to chronological
 
   // 4. Company knowledge (max 5 verified items)
-  let knowledgeItems: GroundingKnowledgeItem[] = (knowledgeRaw || [])
+  let companyKnowledgeItems: GroundingKnowledgeItem[] = (knowledgeRaw || [])
     .slice(0, MAX_KNOWLEDGE_ITEMS)
     .map((k) => ({
       category: k.category,
@@ -112,10 +113,10 @@ export async function resolveGroundingContext(options: {
     }));
 
   // If search returned 0 items, attempt a fallback search for general profile/policy
-  if (knowledgeItems.length === 0 && searchQuery !== 'công ty') {
+  if (companyKnowledgeItems.length === 0 && searchQuery !== 'công ty') {
     try {
       const fallbackKnowledge = await dataSource.searchCompanyKnowledge(scope, 'công ty');
-      knowledgeItems = (fallbackKnowledge || [])
+      companyKnowledgeItems = (fallbackKnowledge || [])
         .slice(0, 3)
         .map((k) => ({
           category: k.category,
@@ -124,6 +125,37 @@ export async function resolveGroundingContext(options: {
         }));
     } catch {}
   }
+
+  // 4b. Page-scoped playbook. A verified page playbook from ai_company_knowledge
+  // overrides the built-in fallback; the built-in keeps the page working before
+  // an operator edits/creates the knowledge row.
+  const pageId = currentConversation?.pageId ?? null;
+  let pagePlaybook = builtInPagePlaybook(scope.channel, pageId);
+  if (pagePlaybook && dataSource.getPagePlaybook) {
+    try {
+      const storedPlaybook = await dataSource.getPagePlaybook(scope, pagePlaybook.pageId);
+      if (storedPlaybook) {
+        pagePlaybook = {
+          pageId: pagePlaybook.pageId,
+          channel: pagePlaybook.channel,
+          category: storedPlaybook.category,
+          title: storedPlaybook.title,
+          content: storedPlaybook.content,
+        };
+      }
+    } catch {
+      // Grounding is best-effort; keep the built-in playbook.
+    }
+  }
+
+  const knowledgeItems: GroundingKnowledgeItem[] = (pagePlaybook
+    ? [{ category: pagePlaybook.category, title: pagePlaybook.title, content: pagePlaybook.content }]
+    : []
+  ).concat(
+    pagePlaybook
+      ? companyKnowledgeItems.filter((item) => item.category !== 'SALES_PLAYBOOK')
+      : companyKnowledgeItems
+  ).slice(0, MAX_KNOWLEDGE_ITEMS);
 
   // 5. Customer memories (filtered through sanitizer, max 8 items)
   const memories: GroundingMemoryItem[] = (memoriesRaw || [])

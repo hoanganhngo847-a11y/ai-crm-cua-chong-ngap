@@ -75,6 +75,8 @@ export interface BrainConversationContext {
   readonly status: string;
   readonly assignedTo: string | null;
   readonly aiMode?: string | null;
+  /** Facebook Page ID resolved from the canonical external ID or ingestion metadata. */
+  readonly pageId?: string | null;
   readonly createdAt: string;
 }
 
@@ -223,6 +225,8 @@ export interface BrainContextDataSource {
   getRecentCallSummaries(scope: BrainContextScope): Promise<readonly BrainCallSummaryContext[]>;
   getCustomerMemory(scope: BrainContextScope): Promise<readonly BrainCustomerMemoryContext[]>;
   searchCompanyKnowledge(scope: BrainContextScope, query: string): Promise<readonly BrainCompanyKnowledgeContext[]>;
+  /** Optional page-scoped playbook override stored as verified company knowledge. */
+  getPagePlaybook?(scope: BrainContextScope, pageId: string): Promise<BrainCompanyKnowledgeContext | null>;
 }
 
 export interface BrainContextSession {

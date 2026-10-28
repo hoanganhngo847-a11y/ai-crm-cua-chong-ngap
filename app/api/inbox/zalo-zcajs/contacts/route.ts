@@ -60,10 +60,22 @@ export async function POST(request: NextRequest) {
     }
 
     const result = (data || {}) as Record<string, unknown>;
+
+    const { data: repairData, error: repairError } = await createAdminClient().rpc(
+      'repair_zalo_personal_display_names',
+      { p_company: configuredCompanyId }
+    );
+    if (repairError) {
+      // Directory sync must still succeed even if the display-name repair projection fails.
+      console.warn('[ZCAJS contacts] display-name repair failed:', repairError.message);
+    }
+    const repaired = (repairData || {}) as Record<string, unknown>;
+
     return NextResponse.json({
       success: true,
       seen: Number(result.seen || 0),
       autoLinked: Number(result.auto_linked || 0),
+      displayNamesRepaired: Number(repaired.customers || 0),
     });
   } catch (error) {
     console.error('[ZCAJS contacts] unexpected failure:', error instanceof Error ? error.message : 'unknown');

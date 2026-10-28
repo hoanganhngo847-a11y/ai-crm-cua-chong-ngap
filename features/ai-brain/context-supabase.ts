@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createAdminClient } from '../../lib/supabase/admin';
+import { extractMessengerPageId } from './page-id';
 import type {
   BrainAppointmentContext,
   BrainCallHistoryContext,
@@ -110,7 +111,7 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
       const admin = createAdminClient();
       const { data, error } = await admin
         .from('conversations')
-        .select('id,channel,last_message_at,status,assigned_to,ai_mode,created_at')
+        .select('id,channel,last_message_at,status,assigned_to,ai_mode,external_conversation_id,metadata,created_at')
         .eq('company_id', scope.companyId)
         .eq('customer_id', scope.customerId)
         .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -123,6 +124,7 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
         status: text(row.status, 64),
         assignedTo: nullableText(row.assigned_to, 64),
         aiMode: nullableText(row.ai_mode, 64),
+        pageId: extractMessengerPageId(row.external_conversation_id, row.metadata),
         createdAt: String(row.created_at),
       })));
     },
@@ -328,6 +330,34 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
         updatedAt: String(row.updated_at),
         verified: true as const,
       })));
+    },
+
+    async getPagePlaybook(scope: BrainContextScope, pageId: string): Promise<BrainCompanyKnowledgeContext | null> {
+      if (!/^\d{1,100}$/.test(pageId)) return null;
+      const admin = createAdminClient();
+      const { data, error } = await admin
+        .from('ai_company_knowledge')
+        .select('id,category,title,content,source_type,version,updated_at')
+        .eq('company_id', scope.companyId)
+        .eq('verification_status', 'VERIFIED')
+        .eq('lifecycle_status', 'ACTIVE')
+        .eq('category', 'SALES_PLAYBOOK')
+        .eq('metadata->>page_id', pageId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) failClosed(error);
+      if (!data) return null;
+      return Object.freeze({
+        id: String(data.id),
+        category: text(data.category, 64),
+        title: text(data.title, 300),
+        content: text(data.content, MAX_KNOWLEDGE_TEXT),
+        sourceType: text(data.source_type, 64),
+        version: Number(data.version || 1),
+        updatedAt: String(data.updated_at),
+        verified: true as const,
+      });
     },
   });
 }

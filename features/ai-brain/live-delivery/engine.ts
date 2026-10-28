@@ -3,6 +3,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { extractMessengerPageId } from '../page-id';
 import type {
   BrainDecision,
   BrainProvider,
@@ -75,7 +76,7 @@ async function loadEligibleInput(
   // 2. Check conversation state
   const { data: conversation, error: conversationError } = await client
     .from('conversations')
-    .select('id, company_id, customer_id, channel, status, assigned_to, ai_mode, external_conversation_id')
+    .select('id, company_id, customer_id, channel, status, assigned_to, ai_mode, external_conversation_id, metadata')
     .eq('id', claim.conversation_id)
     .eq('company_id', claim.company_id)
     .eq('customer_id', claim.customer_id)
@@ -98,9 +99,10 @@ async function loadEligibleInput(
 
   // Canary restriction for Messenger: default deny unless explicitly allowlisted
   if (claim.channel === 'MESSENGER') {
-    const externalId = (conversation as { external_conversation_id?: string | null }).external_conversation_id || '';
-    const colonIdx = externalId.indexOf(':');
-    const pageId = colonIdx > 0 ? externalId.slice(0, colonIdx) : null;
+    const pageId = extractMessengerPageId(
+      (conversation as { external_conversation_id?: string | null }).external_conversation_id,
+      (conversation as { metadata?: unknown }).metadata,
+    );
     if (!pageId) return null;
 
     const { data: canaryAllowed, error: canaryErr } = await client
@@ -428,14 +430,15 @@ async function processClaim(
   if (claim.channel === 'MESSENGER') {
     const { data: convExternal } = await client
       .from('conversations')
-      .select('external_conversation_id')
+      .select('external_conversation_id, metadata')
       .eq('id', claim.conversation_id)
       .eq('company_id', claim.company_id)
       .maybeSingle();
 
-    const externalId = (convExternal as { external_conversation_id?: string | null })?.external_conversation_id || '';
-    const colonIdx = externalId.indexOf(':');
-    const pageId = colonIdx > 0 ? externalId.slice(0, colonIdx) : null;
+    const pageId = extractMessengerPageId(
+      (convExternal as { external_conversation_id?: string | null } | null)?.external_conversation_id,
+      (convExternal as { metadata?: unknown } | null)?.metadata,
+    );
 
     const { data: canaryActive, error: canaryCheckErr } = pageId
       ? await client

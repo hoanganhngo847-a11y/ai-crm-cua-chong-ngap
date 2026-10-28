@@ -16,3 +16,13 @@ test('recent Zalo REST recovery forwards manually sent self messages', () => {
     /if \(message\.isSelf \|\| \(ownUid && senderUid === ownUid\)\) continue;/,
   );
 });
+
+test('recent Zalo REST recovery runs without waiting for the websocket', () => {
+  assert.match(patchSource, /const startRecentSync = \(\) => \{/);
+  assert.match(patchSource, /this\.listener\.on\("connected", startRecentSync\);/);
+  assert.match(patchSource, /startRecentSync\(\);/);
+  assert.doesNotMatch(
+    patchSource,
+    /this\.listener\.on\("closed", \(\) => \{[\s\S]*?recentSyncTimer = undefined;/,
+  );
+});

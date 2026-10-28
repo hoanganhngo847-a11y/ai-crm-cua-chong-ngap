@@ -104,7 +104,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                 company_id: COMPANY_ID,
                 channel: 'MESSENGER',
                 conversation_id: CONVERSATION_ID_FB,
-                page_id: 'page123',
+                page_id: '100000000000001',
                 enabled: true,
               },
               error: null,
@@ -138,7 +138,7 @@ function createMockEngineSupabase(config: MockDbConfig = {}) {
                   status: config.convFbStatus ?? 'OPEN',
                   assigned_to: config.convFbAssignedTo ?? null,
                   ai_mode: config.convFbAiMode ?? 'ACTIVE',
-                  external_conversation_id: 'page123:user456',
+                  external_conversation_id: '100000000000001:200000000000002',
                 },
                 error: null,
               };
