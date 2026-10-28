@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { binding as defaultBinding, type PageBinding } from '@/features/omnichannel/facebook/binding';
 import { canReply } from '@/features/omnichannel/facebook/core';
 import { dispatchMessage } from '@/features/omnichannel/facebook/transport';
+import { extractMessengerPageId, extractMessengerRecipientId } from '../../page-id';
 import type {
   LiveDeliverySendParams,
   LiveDeliverySendOutcome,
@@ -47,7 +48,7 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
     // 1. Resolve conversation external ID (format: "pageId:recipientPsid")
     const { data: conv, error: convError } = await this.supabase
       .from('conversations')
-      .select('id, company_id, channel, external_conversation_id')
+      .select('id, company_id, channel, external_conversation_id, metadata')
       .eq('id', claim.conversation_id)
       .eq('company_id', claim.company_id)
       .maybeSingle();
@@ -60,17 +61,9 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
       return { outcome: 'FAILED', errorCode: 'CHANNEL_OR_COMPANY_MISMATCH' };
     }
 
-    const externalId = conv.external_conversation_id || '';
-    const colonIdx = externalId.indexOf(':');
-    if (colonIdx <= 0 || colonIdx === externalId.length - 1) {
-      return { outcome: 'FAILED', errorCode: 'INVALID_EXTERNAL_CONVERSATION_ID' };
-    }
-
-    const pageId = externalId.slice(0, colonIdx);
-    const recipientPsid = externalId.slice(colonIdx + 1);
-
-    // Strictly validate that Page ID consists only of numeric digits
-    if (!/^\d+$/.test(pageId)) {
+    const pageId = extractMessengerPageId(conv.external_conversation_id, conv.metadata);
+    const recipientPsid = extractMessengerRecipientId(conv.external_conversation_id, conv.metadata);
+    if (!pageId || !recipientPsid) {
       return { outcome: 'FAILED', errorCode: 'INVALID_EXTERNAL_CONVERSATION_ID' };
     }
 

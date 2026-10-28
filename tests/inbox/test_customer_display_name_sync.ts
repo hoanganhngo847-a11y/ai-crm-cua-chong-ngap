@@ -77,6 +77,10 @@ async function runDisplayNameSyncTests() {
   assert.strictEqual(isGenericCustomerName('Facebook User'), true);
   assert.strictEqual(isGenericCustomerName('Unknown'), true);
   assert.strictEqual(isGenericCustomerName('Ẩn danh'), true);
+  assert.strictEqual(isGenericCustomerName('Khách Zalo 3267'), true);
+  assert.strictEqual(isGenericCustomerName('Khách hàng Zalo'), true);
+  assert.strictEqual(isGenericCustomerName('Khách Zalo OA'), true);
+  assert.strictEqual(isGenericCustomerName('Khách hàng Zalo OA'), true);
   assert.strictEqual(isGenericCustomerName(''), true);
   assert.strictEqual(isGenericCustomerName(null), true);
   assert.strictEqual(isGenericCustomerName('Nguyễn Văn Nam'), false);
@@ -97,11 +101,13 @@ async function runDisplayNameSyncTests() {
   let liveDomSource: string | null = null;
   let liveMetaTestPassed = false;
 
+  let browserContext: { close(): Promise<void> } | undefined;
   try {
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
       headless: true,
       viewport: { width: 1440, height: 900 }
     });
+    browserContext = context;
 
     const page = context.pages()[0] || await context.newPage();
 
@@ -143,8 +149,6 @@ async function runDisplayNameSyncTests() {
 
     liveMetaTestPassed = true;
     console.log('✓ LIVE_META_TEST = PASS (Production parser extracted "HoàngAnh Ngô" / FB ID 61592309996204 natively without __name shim)');
-
-    await context.close();
   } catch (browserErr: unknown) {
     const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
 
@@ -158,6 +162,8 @@ async function runDisplayNameSyncTests() {
     liveCustomerFbId = '61592309996204';
     liveExtractedName = 'HoàngAnh Ngô';
     liveDomSource = 'thread_header ([data-surface*="detail_view_header"])';
+  } finally {
+    await browserContext?.close().catch(() => {});
   }
 
   // --------------------------------------------------------------------------------------

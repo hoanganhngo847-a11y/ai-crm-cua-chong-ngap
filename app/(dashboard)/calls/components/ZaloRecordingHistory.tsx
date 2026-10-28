@@ -707,6 +707,15 @@ export default function ZaloRecordingHistory({
           <p className="text-xs text-[var(--text-secondary)] mt-0.5">
             Các cuộc gọi Zalo được Agent ghi âm và bóc băng tự động bằng AI.
           </p>
+          {customerId && (
+            <p className="text-[11px] text-[var(--text-tertiary)] mt-1">
+              Chỉ hiển thị cuộc gọi đã ghép với khách hàng này.{' '}
+              <Link href="/calls" className="text-[var(--accent)] hover:underline">
+                Xem tất cả cuộc gọi Zalo
+              </Link>{' '}
+              để liên kết các cuộc gọi chưa ghép.
+            </p>
+          )}
         </div>
 
         <Button
@@ -734,7 +743,16 @@ export default function ZaloRecordingHistory({
         </div>
       ) : calls.length === 0 ? (
         <div className="py-8 text-center text-xs text-[var(--text-tertiary)] italic">
-          Chưa có cuộc gọi Zalo nào được ghi nhận.
+          <p>Chưa có cuộc gọi Zalo nào được ghi nhận.</p>
+          {customerId && (
+            <p className="mt-2 not-italic">
+              Cuộc gọi vừa thực hiện chưa thấy ở đây?{' '}
+              <Link href="/calls" className="text-[var(--accent)] hover:underline">
+                Mở trang Cuộc gọi để liên kết thủ công
+              </Link>
+              .
+            </p>
+          )}
         </div>
       ) : (
         <div className="space-y-3">

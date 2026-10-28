@@ -11,6 +11,7 @@ import type {
   BrainCompanyKnowledgeContext,
 } from '../../features/ai-brain/context-contracts';
 import { resolveGroundingContext } from '../../features/ai-brain/grounding/retriever';
+import { DU_HOC_PAGE_ID } from '../../features/ai-brain/grounding/page-playbook';
 
 const FIXTURE_COMPANY_ID = '00000000-0000-4000-8000-000000000078';
 const FIXTURE_CUSTOMER_ID = '00000000-0000-4000-8000-000000000079';
@@ -243,6 +244,123 @@ test('Grounding Retriever: falls back to company profile when specific search re
   assert.equal(grounding.knowledge.length, 1);
   assert.equal(grounding.knowledge[0].title, 'Hồ sơ công ty');
   assert.match(grounding.knowledge[0].content, /8:00 - 17:30/);
+});
+
+test('Grounding Retriever: injects the built-in Du học playbook ahead of page knowledge', async () => {
+  const scope: BrainContextScope = {
+    companyId: FIXTURE_COMPANY_ID,
+    customerId: FIXTURE_CUSTOMER_ID,
+    conversationId: FIXTURE_CONVERSATION_ID,
+    channel: 'MESSENGER',
+    traceId: randomUUID(),
+  };
+
+  const dataSource = createMockDataSource({
+    async getRecentConversations(): Promise<readonly BrainConversationContext[]> {
+      return [{
+        id: scope.conversationId,
+        channel: 'FACEBOOK',
+        lastMessageAt: '2026-10-23T01:00:00.000Z',
+        status: 'OPEN',
+        assignedTo: null,
+        aiMode: 'ACTIVE',
+        pageId: DU_HOC_PAGE_ID,
+        createdAt: '2026-10-23T00:00:00.000Z',
+      }];
+    },
+  });
+
+  const grounding = await resolveGroundingContext({
+    scope,
+    inputText: 'Em muốn tư vấn du học',
+    dataSource,
+  });
+
+  assert.equal(grounding.knowledge[0].category, 'SALES_PLAYBOOK');
+  assert.equal(grounding.knowledge[0].title, 'Playbook tư vấn du học');
+  assert.match(grounding.knowledge[0].content, /Số điện thoại liên hệ/);
+  assert.match(grounding.knowledge[0].content, /Năm sinh của người đi học/);
+  assert.match(grounding.knowledge[0].content, /bản thân khách hay người khác/);
+  assert.match(grounding.knowledge[0].content, /Nơi ở\/đang sinh sống hiện tại/);
+});
+
+test('Grounding Retriever: verified page playbook overrides the built-in fallback', async () => {
+  const scope: BrainContextScope = {
+    companyId: FIXTURE_COMPANY_ID,
+    customerId: FIXTURE_CUSTOMER_ID,
+    conversationId: FIXTURE_CONVERSATION_ID,
+    channel: 'MESSENGER',
+    traceId: randomUUID(),
+  };
+
+  let requestedPageId: string | null = null;
+  const dataSource = createMockDataSource({
+    async getRecentConversations(): Promise<readonly BrainConversationContext[]> {
+      return [{
+        id: scope.conversationId,
+        channel: 'FACEBOOK',
+        lastMessageAt: '2026-10-23T01:00:00.000Z',
+        status: 'OPEN',
+        assignedTo: null,
+        aiMode: 'ACTIVE',
+        pageId: DU_HOC_PAGE_ID,
+        createdAt: '2026-10-23T00:00:00.000Z',
+      }];
+    },
+    async getPagePlaybook(_scope, pageId: string): Promise<BrainCompanyKnowledgeContext | null> {
+      requestedPageId = pageId;
+      return {
+        id: 'know-page-playbook',
+        category: 'SALES_PLAYBOOK',
+        title: 'Playbook du học bản vận hành',
+        content: 'Nội dung playbook do công ty cấu hình.',
+        sourceType: 'MANUAL',
+        version: 2,
+        updatedAt: '2026-10-23T00:00:00.000Z',
+        verified: true,
+      };
+    },
+    async searchCompanyKnowledge(): Promise<readonly BrainCompanyKnowledgeContext[]> {
+      return [
+        {
+          id: 'know-stale-playbook',
+          category: 'SALES_PLAYBOOK',
+          title: 'Playbook cũ',
+          content: 'Không được nhân đôi playbook.',
+          sourceType: 'MANUAL',
+          version: 1,
+          updatedAt: '2026-10-23T00:00:00.000Z',
+          verified: true,
+        },
+        {
+          id: 'know-product',
+          category: 'PRODUCT',
+          title: 'Ngành đào tạo',
+          content: 'Thông tin ngành học đã xác minh.',
+          sourceType: 'MANUAL',
+          version: 1,
+          updatedAt: '2026-10-23T00:00:00.000Z',
+          verified: true,
+        },
+      ];
+    },
+  });
+
+  const grounding = await resolveGroundingContext({
+    scope,
+    inputText: 'Em muốn tư vấn du học',
+    dataSource,
+  });
+
+  assert.equal(requestedPageId, DU_HOC_PAGE_ID);
+  assert.equal(grounding.knowledge[0].title, 'Playbook du học bản vận hành');
+  assert.equal(grounding.knowledge[0].content, 'Nội dung playbook do công ty cấu hình.');
+  assert.equal(grounding.knowledge.length, 2);
+  assert.equal(grounding.knowledge[1].title, 'Ngành đào tạo');
+  assert.equal(
+    grounding.knowledge.some((item) => item.title === 'Playbook tư vấn du học' || item.title === 'Playbook cũ'),
+    false,
+  );
 });
 
 test('Grounding Retriever: isolates tenant and customer scope (returns null/empty for mismatched scope)', async () => {

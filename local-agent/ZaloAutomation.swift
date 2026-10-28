@@ -328,12 +328,33 @@ public final class ZaloAutomation {
     /// Detect the ringing invite before ZaloCall creates its separate call
     /// window. This is intentionally read-only and does not activate Zalo.
     public func hasIncomingVoiceCallUI() -> Bool {
+        incomingVoiceCallInfo().detected
+    }
+
+    public struct IncomingCallInfo {
+        public let detected: Bool
+        public let callerName: String?
+
+        public init(detected: Bool, callerName: String?) {
+            self.detected = detected
+            self.callerName = callerName
+        }
+    }
+
+    /// Read the ringing invite once so the detector can persist the caller name
+    /// before auto-answer replaces the invite with the ZaloCall window (which
+    /// often exposes only a generic title or no title at all).
+    public func incomingVoiceCallInfo() -> IncomingCallInfo {
         for app in zaloApplications() {
             let appAx = AXUIElementCreateApplication(app.processIdentifier)
-            if incomingAcceptTarget(appAx: appAx) != nil { return true }
-            if incomingZaloCallFallbackPoint(appAx: appAx) != nil { return true }
+            if let target = incomingAcceptTarget(appAx: appAx) {
+                return IncomingCallInfo(detected: true, callerName: target.callerName)
+            }
+            if incomingZaloCallFallbackPoint(appAx: appAx) != nil {
+                return IncomingCallInfo(detected: true, callerName: nil)
+            }
         }
-        return false
+        return IncomingCallInfo(detected: false, callerName: nil)
     }
 
     private func zaloApplications() -> [NSRunningApplication] {
@@ -350,6 +371,7 @@ public final class ZaloAutomation {
         let element: AXUIElement
         let point: CGPoint?
         let pressable: Bool
+        var callerName: String? = nil
     }
 
     private func incomingAcceptTarget(appAx: AXUIElement) -> IncomingAcceptTarget? {
@@ -379,19 +401,32 @@ public final class ZaloAutomation {
         var result: IncomingAcceptTarget?
         var checkboxTargets: [IncomingAcceptTarget] = []
         var hasIncomingText = false
+        var incomingAnchor: CGPoint?
+        var callerCandidates: [(priority: Int, value: String, point: CGPoint?)] = []
+
+        var rootTitleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(root, kAXTitleAttribute as CFString, &rootTitleRef) == .success,
+           let rootTitle = rootTitleRef as? String,
+           let candidate = callerNameCandidate(rootTitle) {
+            callerCandidates.append((priority: 1, value: candidate, point: nil))
+        }
+
         func walk(_ element: AXUIElement, depth: Int) {
-            if result != nil || depth > 20 { return }
+            if depth > 20 { return }
             var roleRef: CFTypeRef?, titleRef: CFTypeRef?, descriptionRef: CFTypeRef?, valueRef: CFTypeRef?
             AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
             AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
             AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &descriptionRef)
             AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
             let role = (roleRef as? String) ?? ""
-            let labels = [titleRef as? String, descriptionRef as? String, valueRef as? String]
+            let rawLabels = [titleRef as? String, descriptionRef as? String, valueRef as? String]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let labels = rawLabels
                 .map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN")).lowercased() }
             if labels.contains(where: { $0.contains("cuoc goi thoai den") || $0.contains("incoming call") || $0.contains("incoming voice call") }) {
                 hasIncomingText = true
+                if incomingAnchor == nil { incomingAnchor = axCenter(element) }
             }
             let normalizedAccepted = acceptedLabels.map {
                 $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN")).lowercased()
@@ -403,7 +438,7 @@ public final class ZaloAutomation {
             let isAccepted = !isRejected && labels.contains { label in
                 normalizedAccepted.contains(where: { label == $0 || label.contains($0) })
             }
-            if isAccepted {
+            if result == nil, isAccepted {
                 var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
                 AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef)
                 AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
@@ -419,7 +454,14 @@ public final class ZaloAutomation {
                 if pressable || center != nil {
                     result = IncomingAcceptTarget(element: element, point: center, pressable: pressable)
                 }
-                return
+            }
+            if ["AXStaticText", "AXHeading", "AXTextField", ""].contains(role) {
+                let center = axCenter(element)
+                for raw in rawLabels {
+                    if let candidate = callerNameCandidate(raw) {
+                        callerCandidates.append((priority: 0, value: candidate, point: center))
+                    }
+                }
             }
             if role == "AXCheckBox", let target = targetFor(element: element) {
                 checkboxTargets.append(target)
@@ -431,13 +473,81 @@ public final class ZaloAutomation {
             }
         }
         walk(root, depth: 0)
+
+        let callerName = incomingCallerName(from: callerCandidates, anchor: incomingAnchor)
         // ZaloCall exposes the incoming voice dialog as two unlabeled AXCheckBox
         // elements: decline on the left, accept on the right. Require the exact
         // incoming text and exactly two controls before selecting the right one.
         if result == nil, hasIncomingText, checkboxTargets.count == 2 {
-            return checkboxTargets[1]
+            var target = checkboxTargets[1]
+            target.callerName = callerName
+            return target
         }
-        return result
+        if var target = result {
+            target.callerName = callerName
+            return target
+        }
+        return nil
+    }
+
+    /// Caller display names appear as ordinary text in the ringing invite.
+    /// Filter Zalo's own status/control labels so they never become a customer name.
+    private func callerNameCandidate(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count >= 2, value.count <= 120 else { return nil }
+        let folded = value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN"))
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericPhrases = [
+            "cuoc goi thoai den", "cuoc goi video den", "cuoc goi den", "incoming call",
+            "incoming voice call", "incoming video call", "dang goi", "dang ket noi",
+            "connecting", "calling", "zalo", "zalo call", "zalocall", "unknown",
+            "tra loi", "nhan cuoc goi", "nghe may", "answer", "answer call",
+            "accept", "accept call", "join call", "tu choi", "decline", "reject",
+            "end call", "cancel", "huy", "danh ba", "tro chuyen", "tin nhan",
+            "phut truoc", "giay truoc"
+        ]
+        if genericPhrases.contains(where: { folded == $0 || folded.contains($0) }) { return nil }
+        if value.range(of: #"^\d{1,2}:\d{2}(:\d{2})?$"#, options: .regularExpression) != nil { return nil }
+        if value.rangeOfCharacter(from: .controlCharacters) != nil { return nil }
+        let digits = value.filter(\.isNumber)
+        if !digits.isEmpty, digits.count == value.count, !(9...15).contains(digits.count) {
+            return nil
+        }
+        return value
+    }
+
+    private func axCenter(_ element: AXUIElement) -> CGPoint? {
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef)
+        AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+        var point = CGPoint.zero, size = CGSize.zero
+        if let positionRef { AXValueGetValue(positionRef as! AXValue, .cgPoint, &point) }
+        if let sizeRef { AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) }
+        guard size.width > 0, size.height > 0 else { return nil }
+        return CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2)
+    }
+
+    private func incomingCallerName(
+        from candidates: [(priority: Int, value: String, point: CGPoint?)],
+        anchor: CGPoint?
+    ) -> String? {
+        let textCandidates = candidates.filter { $0.priority == 0 }
+        if let anchor, !textCandidates.isEmpty {
+            func score(_ candidate: (priority: Int, value: String, point: CGPoint?)) -> CGFloat {
+                guard let point = candidate.point else { return .greatestFiniteMagnitude }
+                let dx = point.x - anchor.x
+                let dy = point.y - anchor.y
+                // The caller name normally sits above the incoming-call status label.
+                let belowPenalty = dy > 20 ? dy * 1.5 : 0
+                return abs(dx) + abs(dy) + belowPenalty
+            }
+            if let best = textCandidates.sorted(by: { score($0) < score($1) }).first {
+                return best.value
+            }
+        }
+        return textCandidates.first?.value ?? candidates.first(where: { $0.priority == 1 })?.value
     }
 
     private func targetFor(element: AXUIElement) -> IncomingAcceptTarget? {

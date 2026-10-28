@@ -30,7 +30,31 @@ export async function uploadRecording(request: Request, admin: SupabaseClient) {
   if(typeof raw!=='string' || raw.length>16*1024 || !(file instanceof File) || !['audio/mp4','audio/x-m4a'].includes(file.type) || !file.name.endsWith('.m4a')) throw new RecordingError('INVALID_RECORDING',415);
   if(file.size<32 || file.size>MAX_RECORDING_BYTES) throw new RecordingError('RECORDING_TOO_LARGE',413);
   let parsed:unknown;try {parsed=JSON.parse(raw);} catch {throw new RecordingError('INVALID_METADATA');}
-  const metadata=validateMetadata(parsed,device.toLowerCase());
+  let metadata=validateMetadata(parsed,device.toLowerCase());
+  // The inbound caller name may have been known to the live-voice session but
+  // missing from the recording metadata (the ZaloCall window often exposes no
+  // title after auto-answer). Recover it before reserving/linking the call.
+  if (!metadata.remote_display_name) {
+    const { data: liveSession } = await admin
+      .from('zalo_personal_live_voice_sessions')
+      .select('remote_display_name')
+      .eq('device_id', device.toLowerCase())
+      .eq('local_call_id', metadata.local_call_id)
+      .maybeSingle();
+    const sessionName = typeof liveSession?.remote_display_name === 'string'
+      ? liveSession.remote_display_name.trim().slice(0, 200)
+      : '';
+    if (sessionName) {
+      try {
+        metadata = validateMetadata(
+          { ...metadata, remote_display_name: sessionName, identity_confidence: 'MEDIUM' },
+          device.toLowerCase()
+        );
+      } catch {
+        // An unusable cached name must not block the recording upload.
+      }
+    }
+  }
   const bytes=Buffer.from(await file.arrayBuffer());validateM4a(bytes,metadata.duration_seconds);
   const checksum=sha256(bytes), fingerprint=sha256(JSON.stringify(metadata));
   const {data:reserved,error:reserveError}=await admin.rpc('zalo_reserve_recording',{p_device:device,p_key_hash:hash,p_metadata:metadata,p_checksum:checksum,p_bytes:bytes.length,p_fingerprint:fingerprint});

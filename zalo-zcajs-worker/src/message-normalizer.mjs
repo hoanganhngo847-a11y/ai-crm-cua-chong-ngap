@@ -76,13 +76,34 @@ function attachmentCaption(content) {
   return [...new Set(values)].join('\n');
 }
 
+function attachmentKind(data) {
+  const msgType = String(data?.msgType || '').toLowerCase();
+  if (/photo|image|picture/.test(msgType)) return 'image';
+  if (msgType) return 'attachment';
+  return '';
+}
+
 export function normalizeMessageContent(data) {
   const content = data?.content;
   if (typeof content === 'string') {
-    return content.trim();
+    const trimmed = content.trim();
+    if (trimmed) return trimmed;
+    const kind = attachmentKind(data);
+    if (kind === 'image') return '[Hình ảnh]';
+    if (kind === 'attachment') return '[Tin nhắn đính kèm]';
+    return '';
   }
 
-  if (!content || typeof content !== 'object') return '';
+  if (content == null) {
+    // Some Zalo payloads describe an attachment only through msgType and omit
+    // content. Dropping those would silently lose the customer's message.
+    const kind = attachmentKind(data);
+    if (kind === 'image') return '[Hình ảnh]';
+    if (kind === 'attachment') return '[Tin nhắn đính kèm]';
+    return '';
+  }
+
+  if (typeof content !== 'object') return '';
 
   if (isLikelyImagePayload(data, content)) {
     const [bestImageUrl] = collectImageCandidates(content);
@@ -103,7 +124,10 @@ export function normalizeMessageContent(data) {
 }
 
 export function normalizeDirectMessage(message) {
-  if (!message || message.type !== DIRECT_MESSAGE_TYPE) return null;
+  if (!message) return null;
+  if (message.type !== undefined && message.type !== null && Number(message.type) !== DIRECT_MESSAGE_TYPE) {
+    return null;
+  }
 
   const data = message.data || {};
   const messageId = String(data.msgId || data.realMsgId || data.cliMsgId || '').trim();
