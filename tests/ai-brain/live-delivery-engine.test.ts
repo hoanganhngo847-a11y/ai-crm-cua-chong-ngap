@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   processDueLiveDeliveries,
   LIVE_DELIVERY_WORKLOAD_ACTOR_ID,
+  MESSENGER_FALLBACK_REPLY,
   type LiveDeliveryClaim,
   type LiveDeliveryTransport,
   type LiveDeliverySendParams,
@@ -466,7 +467,7 @@ test('Generic Engine: Human ownership on Messenger conversation halts delivery',
   assert.equal(messengerTransport.sendCalls.length, 0);
 });
 
-test('Generic Engine: Handover on Messenger creates handover case and skips send', async () => {
+test('Generic Engine: Handover on Messenger creates handover case and sends fallback reply', async () => {
   const mockDb = createMockEngineSupabase({
     claims: [
       {
@@ -496,13 +497,49 @@ test('Generic Engine: Handover on Messenger creates handover case and skips send
   });
 
   assert.equal(result.claimed, 1);
-  assert.equal(result.sent, 0);
-  assert.equal(result.skipped, 1);
-  assert.equal(messengerTransport.sendCalls.length, 0);
+  assert.equal(result.sent, 1);
+  assert.equal(result.skipped, 0);
+  assert.equal(messengerTransport.sendCalls.length, 1);
+  assert.equal(messengerTransport.sendCalls[0].draft, MESSENGER_FALLBACK_REPLY);
 
   const handoverCall = mockDb.rpcCalls.find((c) => c.name === 'create_ai_handover_case');
   assert.ok(handoverCall);
   assert.equal(handoverCall.params.p_reason, 'CUSTOMER_REQUESTED_HUMAN');
+});
+
+test('Generic Engine: Handover on Zalo creates handover case and skips send (Zalo safety preserved)', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_ZALO,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_ZALO,
+        source_interaction_id: INTERACTION_ID_ZALO,
+        channel: 'ZALO',
+        attempts: 1,
+      },
+    ],
+  });
+
+  const zaloTransport = new MockTransport('ZALO');
+  const mockProvider = createMockProvider({
+    decision: 'HANDOVER',
+    handoverReason: 'CUSTOMER_REQUESTED_HUMAN',
+    confidence: 0.9,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { ZALO: zaloTransport },
+    channel: 'ZALO',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(zaloTransport.sendCalls.length, 0);
 });
 
 test('Generic Engine: Handover case creation failure fails closed and records visible error', async () => {
