@@ -24,6 +24,10 @@ export function DossierProfileForm({
     special_notes: string | null;
     birth_year: number | null;
     assigned_sale_id: string | null;
+    assigned_sale_name?: string | null;
+    sale_notes?: string | null;
+    marketing_notes?: string | null;
+    ai_notes?: string | null;
   } | null;
   owners: { id: string; name: string }[];
 }) {
@@ -70,30 +74,55 @@ export function DossierProfileForm({
             />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="font-medium text-[var(--text-secondary)]">Sale phụ trách</label>
-            <select
-              name="assignedSale"
-              defaultValue={profile?.assigned_sale_id || ''}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className="font-medium text-[var(--text-secondary)]">Phân công cho Sale</label>
+            <input
+              name="assignedSaleName"
+              list="owners-list"
+              defaultValue={profile?.assigned_sale_name || owners.find((o) => o.id === profile?.assigned_sale_id)?.name || ''}
+              maxLength={200}
+              placeholder="Nhập tên sale hoặc chọn từ danh sách gợi ý..."
               className={inputStyle}
-            >
-              <option value="">Theo hội thoại / Chưa phân công</option>
+            />
+            <datalist id="owners-list">
               {owners.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
+                <option key={o.id} value={o.name} />
               ))}
-            </select>
+            </datalist>
           </div>
 
           <div className="flex flex-col gap-1 sm:col-span-2">
-            <label className="font-medium text-[var(--text-secondary)]">Ghi chú đặc biệt (nhập thủ công)</label>
+            <label className="font-medium text-[var(--text-secondary)]">Ghi chú của Sale</label>
             <textarea
-              name="specialNotes"
-              defaultValue={profile?.special_notes || ''}
+              name="saleNotes"
+              defaultValue={profile?.sale_notes || profile?.special_notes || ''}
               maxLength={4000}
-              rows={3}
-              placeholder="Yêu cầu riêng về vật liệu, thời gian hẹn, độ ngập nước tại địa chỉ..."
+              rows={2}
+              placeholder="Ghi chú riêng của sale về tình trạng tư vấn, yêu cầu khách hàng..."
+              className="mt-1 w-full p-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className="font-medium text-[var(--text-secondary)]">Ghi chú của Marketing</label>
+            <textarea
+              name="marketingNotes"
+              defaultValue={profile?.marketing_notes || ''}
+              maxLength={4000}
+              rows={2}
+              placeholder="Nguồn chiến dịch, đối tượng mục tiêu, ghi chú từ marketing..."
+              className="mt-1 w-full p-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className="font-medium text-[var(--text-secondary)]">Ghi chú của AI</label>
+            <textarea
+              name="aiNotes"
+              defaultValue={profile?.ai_notes || ''}
+              maxLength={4000}
+              rows={2}
+              placeholder="Ghi chú phân tích AI, đặc điểm khách hàng hoặc tóm tắt nhu cầu..."
               className="mt-1 w-full p-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             />
           </div>
