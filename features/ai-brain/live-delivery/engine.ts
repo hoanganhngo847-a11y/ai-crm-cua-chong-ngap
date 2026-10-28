@@ -26,6 +26,9 @@ import { LIVE_DELIVERY_WORKLOAD_ACTOR_ID } from './contracts';
 import { ZaloDeliveryTransport } from './transports/zalo-transport';
 import { MessengerDeliveryTransport } from './transports/messenger-transport';
 
+export const MESSENGER_FALLBACK_REPLY =
+  'Anh/chị cho em xin sđt liên hệ, để nhân viên bên em tư vấn chi tiết hơn cho nhé.';
+
 interface EligibleLiveInput {
   text: string;
   minConfidence: number;
@@ -312,7 +315,7 @@ async function processClaim(
     return 'failed';
   }
 
-  // Decision Gate: Only RESPOND can auto-send. HANDOVER or NO_REPLY must not send.
+  // Handover case handling
   if (result.decision === 'HANDOVER') {
     const { reason, priority } = classifyHandoverReason(result.handoverReason, {
       confidence: result.confidence,
@@ -340,16 +343,19 @@ async function processClaim(
       return 'failed';
     }
 
-    await finish(client, claim, lockToken, 'SKIPPED', {
-      decision: 'HANDOVER',
-      confidence: result.confidence,
-      turnId: result.turnId,
-      brainLatencyMs,
-    });
-    return 'skipped';
+    // For Zalo, handover skips send. For Messenger, we continue to auto-reply with draft or fallback.
+    if (claim.channel !== 'MESSENGER') {
+      await finish(client, claim, lockToken, 'SKIPPED', {
+        decision: 'HANDOVER',
+        confidence: result.confidence,
+        turnId: result.turnId,
+        brainLatencyMs,
+      });
+      return 'skipped';
+    }
   }
 
-  if (result.decision !== 'RESPOND') {
+  if (result.decision !== 'RESPOND' && (claim.channel !== 'MESSENGER' || result.decision !== 'HANDOVER')) {
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: result.decision,
       confidence: result.confidence,
@@ -371,7 +377,10 @@ async function processClaim(
     return 'skipped';
   }
 
-  const proposedDraft = result.draft?.trim();
+  const proposedDraft = (claim.channel === 'MESSENGER' && result.decision === 'HANDOVER')
+    ? (result.draft?.trim() || MESSENGER_FALLBACK_REPLY)
+    : result.draft?.trim();
+
   if (!proposedDraft) {
     await finish(client, claim, lockToken, 'SKIPPED', {
       decision: 'RESPOND',
@@ -487,20 +496,25 @@ async function processClaim(
     return 'failed';
   }
 
+  const effectiveConfidence =
+    claim.channel === 'MESSENGER' && result.decision === 'HANDOVER'
+      ? Math.max(result.confidence ?? 0.8, eligible.minConfidence)
+      : result.confidence;
+
   const commandId = `ai-live:${claim.source_interaction_id}`;
   const sendOutcome = await transport.sendReply({
     claim,
     draft: proposedDraft,
     commandId,
     minConfidence: eligible.minConfidence,
-    turnConfidence: result.confidence,
+    turnConfidence: effectiveConfidence,
     turnId: result.turnId,
     lockToken,
   });
 
   if (sendOutcome.outcome === 'SENT') {
     await finish(client, claim, lockToken, 'SENT', {
-      decision: 'RESPOND',
+      decision: result.decision === 'HANDOVER' ? 'HANDOVER' : 'RESPOND',
       confidence: result.confidence,
       externalMessageId: sendOutcome.externalMessageId ?? null,
       errorCode: sendOutcome.errorCode ?? null,

@@ -14,14 +14,15 @@ export interface PagePlaybook extends GroundingKnowledgeItem {
 }
 
 export const DU_HOC_PAGE_ID = '1343097708890171';
+export const CUA_CHONG_NGAP_PAGE_ID = '1026991374010112';
 
 const DU_HOC_PLAYBOOK_CONTENT = `Mục tiêu bắt buộc của trang này: thu thập đủ 4 thông tin trước khi tư vấn chuyên sâu:
 (1) Số điện thoại liên hệ;
 (2) Năm sinh của người đi học;
 (3) Người cần tư vấn là bản thân khách hay người khác (nếu là người khác, hỏi rõ quan hệ);
 (4) Nơi ở/đang sinh sống hiện tại (tỉnh/thành hoặc quốc gia).
-Cách tư vấn: xưng "em", gọi khách "anh/chị" trong nội dung câu; TUYỆT ĐỐI KHÔNG mở đầu bằng câu chào ("Dạ chào anh/chị", "Chào anh A/chị B", "Em chào...") — vào thẳng nội dung hoặc câu hỏi cần thiết; mỗi lượt chỉ hỏi 1-2 thông tin còn thiếu, ngắn gọn, tự nhiên, không hỏi dồn. Nếu khách đã cung cấp thông tin nào thì ghi nhận và không hỏi lại.
-Khi khách hỏi chương trình, trường, học phí, học bổng, điều kiện hoặc visa: chỉ trả lời khi thông tin có trong [VERIFIED COMPANY KNOWLEDGE]; nếu không có, nói sẽ kết nối chuyên viên và không tự bịa, không cam kết kết quả visa/đậu/trượt/học bổng.
+Cách tư vấn: xưng "em", gọi khách "anh/chị" trong nội dung câu; ngắn gọn, tự nhiên, không hỏi dồn. Nếu khách đã cung cấp thông tin nào thì ghi nhận và không hỏi lại.
+Bất kể khách nhắn gì, AI cũng đều phải phản hồi cho khách. Khi khách hỏi bất kỳ thông tin nào chưa có trong tài liệu, thông tin chưa rõ, hoặc hỏi về chi phí, học phí, biểu phí, điều kiện hoặc báo giá: hãy phản hồi: "Anh/chị cho em xin sđt liên hệ, để nhân viên bên em tư vấn chi tiết hơn cho nhé." và xin số điện thoại để nhân viên tư vấn chi tiết.
 Khi đã đủ 4 thông tin: tóm tắt lại ngắn gọn, xác nhận với khách và nói chuyên viên sẽ liên hệ trong thời gian sớm nhất.`;
 
 const PAGE_PLAYBOOKS: readonly PagePlaybook[] = Object.freeze([
@@ -30,6 +31,13 @@ const PAGE_PLAYBOOKS: readonly PagePlaybook[] = Object.freeze([
     channel: 'MESSENGER' as const,
     category: 'SALES_PLAYBOOK',
     title: 'Playbook tư vấn du học',
+    content: DU_HOC_PLAYBOOK_CONTENT,
+  }),
+  Object.freeze({
+    pageId: CUA_CHONG_NGAP_PAGE_ID,
+    channel: 'MESSENGER' as const,
+    category: 'SALES_PLAYBOOK',
+    title: 'Playbook tư vấn Fanpage Cửa chống ngập',
     content: DU_HOC_PLAYBOOK_CONTENT,
   }),
 ]);
