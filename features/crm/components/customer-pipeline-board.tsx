@@ -3,8 +3,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  AlertCircle,
-  ArrowRight,
   BarChart3,
   ChevronDown,
   KanbanSquare,
@@ -12,15 +10,12 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
-  Sparkles,
-  Users,
   X,
 } from 'lucide-react';
 import { Card } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
 import { EmptyState } from '../../../components/ui/empty-state';
 import { StatusBadge } from '../../../components/ui/status-badge';
-import { Badge } from '../../../components/ui/badge';
 import {
   CANONICAL_STAGE_LIST,
   CUSTOMER_STAGE_LABELS,
@@ -294,68 +289,50 @@ export default function CustomerPipelineBoard({
 
   return (
     <div className="space-y-4">
-      {/* Header + view toggle */}
+      {/* Toolbar */}
       <Card className="p-4">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[var(--accent)]" />
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-                Phễu khách hàng 6 giai đoạn
-              </h2>
-              <Badge variant="ai" size="sm">
-                AI hỗ trợ phân loại
-              </Badge>
-            </div>
-            <p className="text-xs text-[var(--text-secondary)] mt-1">
-              Kanban và Funnel dùng chung một nguồn dữ liệu. Tỉ lệ hiển thị là tỉ trọng phân bố,
-              không phải tỉ lệ chuyển đổi giữa các giai đoạn.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="inline-flex rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-secondary)] p-1">
-              <button
-                type="button"
-                onClick={() => setView('kanban')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition ${
-                  view === 'kanban'
-                    ? 'bg-[var(--surface-primary)] text-[var(--text-primary)] shadow-xs font-semibold'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <KanbanSquare className="w-3.5 h-3.5" />
-                Kanban
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('funnel')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition ${
-                  view === 'funnel'
-                    ? 'bg-[var(--surface-primary)] text-[var(--text-primary)] shadow-xs font-semibold'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <BarChart3 className="w-3.5 h-3.5" />
-                Funnel
-              </button>
-            </div>
-            <Button
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-secondary)] p-1">
+            <button
               type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void fetchPipeline()}
-              disabled={loading}
-              leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
+              onClick={() => setView('kanban')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition ${
+                view === 'kanban'
+                  ? 'bg-[var(--surface-primary)] text-[var(--text-primary)] shadow-xs font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
             >
-              Làm mới
-            </Button>
+              <KanbanSquare className="w-3.5 h-3.5" />
+              Kanban
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('funnel')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition ${
+                view === 'funnel'
+                  ? 'bg-[var(--surface-primary)] text-[var(--text-primary)] shadow-xs font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              Funnel
+            </button>
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void fetchPipeline()}
+            disabled={loading}
+            leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
+          >
+            Làm mới
+          </Button>
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2.5 mt-4 pt-4 border-t border-[var(--border-subtle)]">
-          <div className="relative xl:col-span-2">
+        <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-subtle)] pt-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="relative min-w-0 flex-1 sm:min-w-[220px]">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[var(--text-tertiary)] pointer-events-none" />
             <input
               value={search}
@@ -367,7 +344,7 @@ export default function CustomerPipelineBoard({
           <select
             value={source}
             onChange={(event) => setSource(event.target.value)}
-            className="h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+            className="h-8 w-full px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)] sm:w-auto"
           >
             <option value="">Tất cả nguồn</option>
             {Object.entries(SOURCE_LABELS).map(([value, label]) => (
@@ -376,65 +353,54 @@ export default function CustomerPipelineBoard({
               </option>
             ))}
           </select>
-          <div className="flex items-center gap-1.5">
+          <select
+            value={stageFilter}
+            onChange={(event) => setStageFilter(event.target.value as '' | CanonicalCustomerStage)}
+            className="h-8 w-full px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)] sm:w-auto"
+          >
+            <option value="">Tất cả giai đoạn</option>
+            {CANONICAL_STAGE_LIST.map((stage) => (
+              <option key={stage.value} value={stage.value}>
+                {stage.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex w-full items-center gap-1.5 sm:w-auto">
             <input
               type="date"
               value={fromDate}
               onChange={(event) => setFromDate(event.target.value)}
-              className="h-8 w-full px-2 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              className="h-8 min-w-0 flex-1 px-2 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)] sm:w-[128px] sm:flex-none"
               aria-label="Từ ngày"
             />
-            <ArrowRight className="w-3 h-3 text-[var(--text-tertiary)] shrink-0" />
+            <span className="shrink-0 text-xs text-[var(--text-tertiary)]">–</span>
             <input
               type="date"
               value={toDate}
               onChange={(event) => setToDate(event.target.value)}
-              className="h-8 w-full px-2 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              className="h-8 min-w-0 flex-1 px-2 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)] sm:w-[128px] sm:flex-none"
               aria-label="Đến ngày"
             />
           </div>
-          <div className="flex items-center gap-1.5">
-            <select
-              value={stageFilter}
-              onChange={(event) => setStageFilter(event.target.value as '' | CanonicalCustomerStage)}
-              className="h-8 w-full px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-            >
-              <option value="">Tất cả giai đoạn</option>
-              {CANONICAL_STAGE_LIST.map((stage) => (
-                <option key={stage.value} value={stage.value}>
-                  {stage.label}
-                </option>
-              ))}
-            </select>
-            {(search || source || fromDate || toDate || stageFilter) && (
-              <Button type="button" variant="ghost" size="sm" onClick={resetFilters} aria-label="Xóa bộ lọc">
-                <X className="w-3.5 h-3.5" />
-              </Button>
-            )}
-          </div>
+          {(search || source || fromDate || toDate || stageFilter) && (
+            <Button type="button" variant="ghost" size="sm" onClick={resetFilters} aria-label="Xóa bộ lọc">
+              <X className="w-3.5 h-3.5" />
+            </Button>
+          )}
         </div>
 
         {/* Summary */}
-        <div className="flex flex-wrap items-center gap-2 mt-3 text-[11px] text-[var(--text-secondary)]">
-          <span className="inline-flex items-center gap-1">
-            <Users className="w-3.5 h-3.5" />
-            {totalEligible} khách trong 6 giai đoạn
-          </span>
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-secondary)]">
+          <span>{totalEligible} khách</span>
           {unmapped > 0 && (
-            <span className="inline-flex items-center gap-1 text-amber-700">
-              <AlertCircle className="w-3.5 h-3.5" />
-              {unmapped} khách có giai đoạn chưa nhận diện
-            </span>
+            <span className="text-amber-700">· {unmapped} chưa nhận diện</span>
           )}
           {needsReview > 0 && (
-            <span className="inline-flex items-center gap-1 text-amber-700">
-              <ShieldAlert className="w-3.5 h-3.5" />
-              {needsReview} khách cần rà soát giai đoạn cũ
-            </span>
+            <span className="text-amber-700">· {needsReview} cần rà soát</span>
           )}
           {data?.truncated && (
             <span className="text-[var(--text-tertiary)]">
-              Đang hiển thị {data.customers.length}/{data.total_customers} khách hàng.
+              · hiển thị {data.customers.length}/{data.total_customers}
             </span>
           )}
         </div>
