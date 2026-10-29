@@ -7,6 +7,11 @@ import { pageBindings, type PageBinding } from './binding';
 import { sanitize } from './core';
 import { processFacebookInboundPhonePrivacy } from './phone-intake';
 import {
+    detectLeadForm,
+    persistLeadFormToCustomer360,
+    readIngestedInteractionId,
+} from './lead-form';
+import {
     normalizeFacebookDisplayName,
     promoteFacebookCustomerDisplayName,
 } from './profile';
@@ -262,6 +267,7 @@ async function ingestInboundMessage(
     if (dryRun) return 'ingested';
 
     const content = messageContent(message);
+    const leadForm = detectLeadForm(content);
     const privacy = processFacebookInboundPhonePrivacy(content);
 
     const { data, error } = await client.rpc('han_ingest', {
@@ -270,7 +276,7 @@ async function ingestInboundMessage(
         p_external: `${config.page}:${customerPsid}`,
         p_key: `${config.page}:${mid}`,
         p_name: 'Khách Messenger',
-        p_phone: privacy.phone,
+        p_phone: leadForm?.phone ?? privacy.phone,
         p_content: content,
         p_safe: privacy.safeContent,
         p_safe_status: privacy.safeStatus,
@@ -289,6 +295,7 @@ async function ingestInboundMessage(
                 valid_count: privacy.validPhones.length,
                 invalid_count: privacy.invalidCandidates.length,
             },
+            ...(leadForm ? { crm_lead_form: true } : {}),
         },
     });
 
@@ -299,6 +306,24 @@ async function ingestInboundMessage(
 
         errors.push(`han_ingest:${error.message.slice(0, 120)}`);
         return 'skipped';
+    }
+
+    if (leadForm) {
+        const interactionId = readIngestedInteractionId(data);
+        if (interactionId) {
+            try {
+                await persistLeadFormToCustomer360(client, {
+                    companyId: config.company,
+                    sourceInteractionId: interactionId,
+                    form: leadForm,
+                });
+            } catch {
+                // The message is already ingested. Retry on the next poll; the note
+                // write is idempotent so a later pass will fill the gap.
+                errors.push('lead_form_persist_failed');
+                return 'skipped';
+            }
+        }
     }
 
     const status = asRecord(data)?.status;
