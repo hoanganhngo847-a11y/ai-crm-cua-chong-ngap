@@ -54,6 +54,21 @@ INSERT INTO public.interactions(id,company_id,customer_id,channel,type,direction
 VALUES('ee360000-0000-4000-8000-000000000003','${context.companyId}','${context.customerId}','ZALO','MESSAGE','INBOUND','Tôi quan tâm cửa chống ngập. Tôi lo chi phí lắp đặt.','SUCCEEDED','CUSTOMER','2026-10-23T10:00:00Z'),
 ('ee360000-0000-4000-8000-000000000004','${context.companyId}','${context.customerId}','FACEBOOK','MESSAGE','OUTBOUND','Sale đã gửi thông tin chương trình.','SUCCEEDED','SALE','2026-10-23T10:01:00Z'),
 ('ee360000-0000-4000-8000-000000000005','${context.companyId}','${context.customerId}','WEBSITE','NOTE','OUTBOUND','Ghi chú do sale nhập.','SUCCEEDED','SALE','2026-10-23T10:02:00Z');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'facebook_name')='Synthetic Facebook','list exposes facebook display name');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'zalo_name')='Synthetic Zalo','list exposes zalo display name');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'facebook_outreach_at') IS NOT NULL,'facebook outreach from outbound message');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'facebook_outreach_source')='AUTO','facebook outreach source is auto');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'zalo_outreach_at') IS NULL,'inbound zalo does not mark outreach');
+CREATE TEMP TABLE pre_outreach AS SELECT requested_version FROM public.customer_dossier_refresh WHERE company_id='${context.companyId}' AND customer_id='${context.customerId}';
+UPDATE public.customer_dossier_profiles SET zalo_outreach_at='2026-10-24T09:00:00Z' WHERE company_id='${context.companyId}' AND customer_id='${context.customerId}';
+SELECT pg_temp.check_ok((SELECT requested_version FROM public.customer_dossier_refresh WHERE company_id='${context.companyId}' AND customer_id='${context.customerId}')=(SELECT requested_version FROM pre_outreach),'outreach mark does not dirty the AI queue');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'zalo_outreach_source')='MANUAL','manual zalo outreach after friend request');
+INSERT INTO public.interactions(id,company_id,customer_id,channel,type,direction,sanitized_content,sanitization_status,actor_type,created_at)
+VALUES('ee360000-0000-4000-8000-000000000006','${context.companyId}','${context.customerId}','ZALO','CALL_EVENT','OUTBOUND','Sale gọi Zalo cho khách.','SUCCEEDED','SALE','2026-10-23T09:59:00Z');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'zalo_outreach_source')='AUTO','automatic evidence overrides manual mark');
+SELECT pg_temp.check_ok((public.c360_list('${context.companyId}',p_search=>'Synthetic Customer 360')->'items'->0->>'zalo_outreach_at')::timestamptz='2026-10-23T09:59:00Z'::timestamptz,'outreach keeps first outbound timestamp');
+SELECT pg_temp.check_ok((public.c360_contacts('${context.companyId}','${context.customerId}')->>'facebookOutreachAt')::timestamptz='2026-10-23T10:01:00Z'::timestamptz,'contacts expose facebook outreach');
+SELECT pg_temp.check_ok((public.c360_contacts('${context.companyId}','${context.customerId}')->>'zaloOutreachAt')::timestamptz='2026-10-23T09:59:00Z'::timestamptz,'contacts expose zalo outreach');
 SELECT pg_temp.check_ok(NOT public.c360_finish_refresh('${context.companyId}','${context.customerId}',(SELECT lock_token FROM claim1),(SELECT claimed_version FROM claim1),'${JSON.stringify(snapshot)}','synthetic-javis'),'stale generation rejected');
 UPDATE public.customer_dossier_refresh SET due_at=now()-interval '1 second' WHERE company_id='${context.companyId}' AND customer_id='${context.customerId}';
 CREATE TEMP TABLE claim2 AS SELECT * FROM public.c360_claim_refresh('${context.companyId}','${context.customerId}');

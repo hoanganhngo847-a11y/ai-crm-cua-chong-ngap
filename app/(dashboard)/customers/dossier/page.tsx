@@ -27,6 +27,7 @@ import {
   SecurePhoneRow,
 } from '../../../../features/crm/components/secure-phone-reveal';
 import { Customer360EditableCell } from '../../../../features/customer-360/editable-cell';
+import { Customer360OutreachCell } from '../../../../features/customer-360/outreach-cell';
 import {
   Search,
   X,
@@ -341,6 +342,18 @@ export default async function CustomerDossierList({
               <TableHead className="min-w-[200px]">Khách hàng</TableHead>
               <TableHead className="min-w-[110px]">Giai đoạn</TableHead>
               <TableHead className="min-w-[130px]">Liên hệ</TableHead>
+              <TableHead
+                className="min-w-[150px]"
+                title="Tên khách trên Facebook và trạng thái đã tiếp cận. Bấm vào trạng thái để đánh dấu thủ công."
+              >
+                Đã tiếp cận qua Facebook
+              </TableHead>
+              <TableHead
+                className="min-w-[150px]"
+                title="Tên khách trên Zalo và trạng thái đã tiếp cận. Bấm vào trạng thái để đánh dấu thủ công."
+              >
+                Đã tiếp cận qua Zalo
+              </TableHead>
               <TableHead className="min-w-[140px]">Phân công cho Sale</TableHead>
               <TableHead className="min-w-[170px]">Ghi chú của Sale</TableHead>
               <TableHead className="min-w-[170px]">Ghi chú của Marketing</TableHead>
@@ -354,7 +367,7 @@ export default async function CustomerDossierList({
           <TableBody>
             {data.items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={process.env.BULK_MESSAGING_ENABLED === 'true' ? 11 : 10} className="p-0">
+                <TableCell colSpan={process.env.BULK_MESSAGING_ENABLED === 'true' ? 13 : 12} className="p-0">
                   <EmptyState
                     type={hasActiveFilters ? 'no-results' : 'empty'}
                     title={
@@ -430,6 +443,27 @@ export default async function CustomerDossierList({
                           </span>
                         )}
                       </div>
+                    </TableCell>
+
+                    {/* Facebook / Zalo outreach */}
+                    <TableCell>
+                      <Customer360OutreachCell
+                        customerId={c.id}
+                        channel="FACEBOOK"
+                        name={c.facebook_name}
+                        at={c.facebook_outreach_at}
+                        source={c.facebook_outreach_source}
+                      />
+                    </TableCell>
+
+                    <TableCell>
+                      <Customer360OutreachCell
+                        customerId={c.id}
+                        channel="ZALO"
+                        name={c.zalo_name}
+                        at={c.zalo_outreach_at}
+                        source={c.zalo_outreach_source}
+                      />
                     </TableCell>
 
                     {/* Phân công cho Sale (Editable) */}

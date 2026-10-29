@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { DossierError, getDossier } from '../../../../../features/customer-360/service';
 import { SnapshotPanel } from '../../../../../features/customer-360/snapshot-panel';
 import { DossierNote, DossierRefresh, DossierProfileForm } from '../../../../../features/customer-360/forms';
+import { Customer360OutreachCell } from '../../../../../features/customer-360/outreach-cell';
+import { resolveOutreachState } from '../../../../../features/customer-360/outreach';
 import ZaloRecordingHistory from '../../../calls/components/ZaloRecordingHistory';
 import StageSuggestionPanel from '../../../../../features/crm/components/stage-suggestion-panel';
 import { getActorContext } from '../../../../../lib/auth/context';
@@ -55,6 +57,18 @@ function formatDate(value: string | null | undefined) {
   }
 }
 
+function channelDisplayName(
+  identities: { channel: string; display_name: string | null; legacy_name: string | null }[],
+  channel: 'FACEBOOK' | 'ZALO'
+) {
+  const names = identities
+    .filter((identity) => identity.channel === channel)
+    .map((identity) => identity.display_name || identity.legacy_name)
+    .filter((name): name is string => Boolean(name))
+    .sort();
+  return names.length > 0 ? names[names.length - 1] : null;
+}
+
 export default async function CustomerDossier({
   params,
   searchParams,
@@ -104,6 +118,17 @@ export default async function CustomerDossier({
     dossier.owners.find(
       (o) => o.id === (profile?.assigned_sale_id ?? dossier.contacts.assignedSaleId)
     )?.name;
+
+  const facebookName = channelDisplayName(dossier.identities, 'FACEBOOK');
+  const zaloName = channelDisplayName(dossier.identities, 'ZALO');
+  const facebookOutreach = resolveOutreachState(
+    profile?.facebook_outreach_at,
+    dossier.contacts.facebookOutreachAt
+  );
+  const zaloOutreach = resolveOutreachState(
+    profile?.zalo_outreach_at,
+    dossier.contacts.zaloOutreachAt
+  );
 
   const stale = queue && queue.requested_version > queue.completed_version;
   const processing =
@@ -447,6 +472,34 @@ export default async function CustomerDossier({
               </CardContent>
             </Card>
             </PhoneRevealProvider>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Tiếp cận đa kênh</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2.5 text-xs">
+                <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+                  Hệ thống tự ghi nhận khi có tin nhắn hoặc cuộc gọi ra trên kênh. Bấm trạng thái để đánh dấu
+                  thủ công, ví dụ sau khi gửi lời mời kết bạn Zalo từ số điện thoại khách gửi qua Facebook.
+                </p>
+                <Customer360OutreachCell
+                  customerId={id}
+                  channel="FACEBOOK"
+                  name={facebookName}
+                  at={facebookOutreach.at}
+                  source={facebookOutreach.source}
+                  variant="detail"
+                />
+                <Customer360OutreachCell
+                  customerId={id}
+                  channel="ZALO"
+                  name={zaloName}
+                  at={zaloOutreach.at}
+                  source={zaloOutreach.source}
+                  variant="detail"
+                />
+              </CardContent>
+            </Card>
           </aside>
         </div>
       )}
