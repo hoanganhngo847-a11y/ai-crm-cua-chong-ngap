@@ -79,30 +79,11 @@ export function cleanupCompanyFixtures(
 DO $$
 BEGIN
   -- 0. Disable append-only / immutable snapshot triggers
-  ALTER TABLE public.price_calculations DISABLE TRIGGER trg_price_calculations_immutability;
   ALTER TABLE public.audit_logs DISABLE TRIGGER trg_append_only_audit_logs;
   ALTER TABLE private.interaction_raw_contents DISABLE TRIGGER trg_append_only_raw_contents;
   ALTER TABLE public.customer_stage_histories DISABLE TRIGGER trg_append_only_stage_histories;
 
   BEGIN
-    -- 1. Operations, Warranty, Installation & Commercial Order descendants
-    DELETE FROM public.survey_photo_operations WHERE appointment_id IN (
-      SELECT id FROM public.appointments WHERE company_id IN (${idList})
-    );
-    DELETE FROM public.operations_outbox WHERE company_id IN (${idList});
-    DELETE FROM public.warranty_tickets WHERE company_id IN (${idList});
-    DELETE FROM public.installations WHERE company_id IN (${idList});
-    DELETE FROM public.contracts WHERE company_id IN (${idList});
-    DELETE FROM public.production_orders WHERE company_id IN (${idList});
-    DELETE FROM public.finance_summaries WHERE company_id IN (${idList});
-    DELETE FROM public.payment_transactions WHERE company_id IN (${idList});
-    DELETE FROM public.orders WHERE company_id IN (${idList});
-
-    -- 2. Calculations, Surveys & Appointments
-    DELETE FROM public.price_calculations WHERE company_id IN (${idList});
-    DELETE FROM public.surveys WHERE company_id IN (${idList});
-    DELETE FROM public.appointments WHERE company_id IN (${idList});
-
     -- 3. Care, Channels, SLA & Messaging descendants
     DELETE FROM private.han_outbox WHERE company_id IN (${idList});
     DELETE FROM private.han_intake_events WHERE company_id IN (${idList});
@@ -146,8 +127,6 @@ BEGIN
     DELETE FROM public.customers WHERE company_id IN (${idList});
 
     -- 7. Company-level config
-    DELETE FROM public.pricing_policies WHERE company_id IN (${idList});
-    DELETE FROM public.company_bank_accounts WHERE company_id IN (${idList});
     DELETE FROM public.zalo_oa_configs WHERE company_id IN (${idList});
     DELETE FROM private.zalo_oa_secrets WHERE company_id IN (${idList});
 
@@ -159,7 +138,8 @@ BEGIN
     ALTER TABLE public.customer_stage_histories ENABLE TRIGGER trg_append_only_stage_histories;
     ALTER TABLE private.interaction_raw_contents ENABLE TRIGGER trg_append_only_raw_contents;
     ALTER TABLE public.audit_logs ENABLE TRIGGER trg_append_only_audit_logs;
-    ALTER TABLE public.price_calculations ENABLE TRIGGER trg_price_calculations_immutability;
+    ALTER TABLE private.interaction_raw_contents ENABLE TRIGGER trg_append_only_raw_contents;
+    ALTER TABLE public.customer_stage_histories ENABLE TRIGGER trg_append_only_stage_histories;
     RAISE;
   END;
 
@@ -167,7 +147,6 @@ BEGIN
   ALTER TABLE public.customer_stage_histories ENABLE TRIGGER trg_append_only_stage_histories;
   ALTER TABLE private.interaction_raw_contents ENABLE TRIGGER trg_append_only_raw_contents;
   ALTER TABLE public.audit_logs ENABLE TRIGGER trg_append_only_audit_logs;
-  ALTER TABLE public.price_calculations ENABLE TRIGGER trg_price_calculations_immutability;
 END $$;
 `;
 

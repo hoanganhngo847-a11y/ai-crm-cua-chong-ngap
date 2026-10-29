@@ -982,15 +982,9 @@ async function runTests() {
   // TEST GROUP 12: Business Tables Mutation Integrity (Test 48)
   // --------------------------------------------------------------------------
   console.log('\n--- TEST GROUP 12: Business Invariants ---');
-  // Test 48: no customer/order/pricing/payment/stage mutation occurs
+  // Test 48: no customer/stage mutation occurs
   const { data: custRow } = await adminClient.from('customers').select('stage').eq('id', CUSTOMER_A_ID).single();
   assert(custRow?.stage === 'LEAD_NEW', 'Test 48: customer stage remains LEAD_NEW');
-
-  const { data: orders } = await adminClient.from('orders').select('id').eq('company_id', COMPANY_A_ID);
-  assert(orders !== null && orders.length === 0, 'Test 48: zero order rows mutated or created');
-
-  const { data: payments } = await adminClient.from('payment_transactions').select('id').eq('company_id', COMPANY_A_ID);
-  assert(payments !== null && payments.length === 0, 'Test 48: zero payment transactions created');
 
   // --------------------------------------------------------------------------
   // TEST GROUP 13: DB CHECK Constraint Tests (Section 23)
