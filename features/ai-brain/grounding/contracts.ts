@@ -44,6 +44,10 @@ export interface BrainTurnGrounding {
     readonly status: string;
     readonly aiMode?: string | null;
     readonly assignedTo?: string | null;
+    /** Facebook Page ID resolved from the canonical external ID or ingestion metadata. */
+    readonly pageId?: string | null;
+    /** Configured Page name for page-scoped topic guidance. */
+    readonly pageName?: string | null;
   };
   readonly recentMessages: readonly GroundingMessageItem[];
   readonly knowledge: readonly GroundingKnowledgeItem[];

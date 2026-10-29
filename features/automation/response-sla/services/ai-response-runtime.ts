@@ -19,6 +19,12 @@ import {
   formatMessagingPolicy,
   sanitizeCustomerFacingReply,
 } from '@/features/ai-brain/messaging-style';
+import { extractMessengerPageId } from '@/features/ai-brain/page-id';
+import {
+  formatPageTopicPolicy,
+  pageTopicContext,
+  sanitizePageScopedReply,
+} from '@/features/ai-brain/page-topic-policy';
 import {
   ZaloInboxService,
   type ZaloSystemPrincipal,
@@ -340,7 +346,7 @@ export async function executeAiResponseRuntime(
   // Step 2: Fetch Conversation Metadata (Fail-Closed)
   const { data: conv, error: convErr } = await client
     .from('conversations')
-    .select('id, company_id, channel, status, assigned_to')
+    .select('id, company_id, channel, status, assigned_to, external_conversation_id, metadata')
     .eq('id', conversationId)
     .eq('company_id', companyId)
     .single();
@@ -395,6 +401,12 @@ export async function executeAiResponseRuntime(
 
   // Facebook Page turns use the same persona/contact policy as the Javis live
   // path so this SLA runtime cannot send phone-first or reasoning-heavy replies.
+  const pageContext = conv.channel === 'FACEBOOK'
+    ? pageTopicContext(extractMessengerPageId(
+        (conv as { external_conversation_id?: string | null }).external_conversation_id,
+        (conv as { metadata?: unknown }).metadata,
+      ))
+    : null;
   const latestInbound = [...history]
     .reverse()
     .find((i) => i.direction === 'INBOUND' && i.actor_type === 'CUSTOMER');
@@ -410,11 +422,11 @@ export async function executeAiResponseRuntime(
     : null;
 
   // Step 6: Compose Prompts & Generate Candidate Response
-  const baseSystemPrompt = `Bạn là trợ lý AI chuyên nghiệp tư vấn sản phẩm cửa chống ngập cho khách hàng.
+  const baseSystemPrompt = `Bạn là trợ lý AI chuyên nghiệp tư vấn cho khách hàng của doanh nghiệp.
 Bạn PHẢI tuân thủ các quy tắc sau:
 1. KHÔNG BAO GIỜ tự tiện cam kết hoặc báo giá chính xác, giảm giá, chiết khấu nếu chưa có xác nhận từ Sale hoặc khảo sát kỹ thuật.
 2. KHÔNG BAO GIỜ yêu cầu khách hàng chuyển khoản vào tài khoản cá nhân.
-3. Luôn giữ thái độ lịch sự, chuyên nghiệp, hỗ trợ giải đáp thắc mắc kỹ thuật về cửa chống ngập.
+3. Luôn giữ thái độ lịch sự, chuyên nghiệp, hỗ trợ giải đáp thắc mắc trong đúng phạm vi sản phẩm/dịch vụ mà khách đang quan tâm.
 
 ${styleContext.styleContextPrompt}
 
@@ -428,9 +440,13 @@ ${
     : 'Chưa có dữ liệu phân tích khách hàng trước đó. Hãy phản hồi chu đáo.'
 }`;
 
-  const systemPrompt = messagingProfile
-    ? `${baseSystemPrompt}\n\n${formatMessagingPolicy(messagingProfile)}\n- Trả lời trực tiếp câu hỏi của khách trước; không chỉ xin số điện thoại.`
-    : baseSystemPrompt;
+  const systemPrompt = [
+    baseSystemPrompt,
+    pageContext ? formatPageTopicPolicy(pageContext) : '',
+    messagingProfile
+      ? `${formatMessagingPolicy(messagingProfile)}\n- Trả lời trực tiếp câu hỏi của khách trước; không chỉ xin số điện thoại.`
+      : '',
+  ].filter(Boolean).join('\n\n');
 
   const userPrompt = `Lịch sử hội thoại gần đây:\n${conversationHistoryText}\n\nHãy tạo phản hồi hỗ trợ khách hàng tiếp theo một cách phù hợp.`;
 
@@ -441,9 +457,12 @@ ${
 
   // Step 7: Strip reasoning before anything reaches a customer, then apply the
   // same phone-timing policy as the Javis live path. Fail closed on any leak.
-  const generatedText = sanitizeCustomerFacingReply(rawGeneratedText, messagingProfile);
+  let generatedText = sanitizeCustomerFacingReply(rawGeneratedText, messagingProfile);
+  if (generatedText && pageContext) {
+    generatedText = sanitizePageScopedReply(generatedText, pageContext);
+  }
   if (!generatedText) {
-    throw new PolicyFirewallViolationError('Model generated response contains internal reasoning');
+    throw new PolicyFirewallViolationError('Model generated response contains internal reasoning or an out-of-scope topic');
   }
 
   // Step 7b: Business Policy Firewall Check (Fail-Closed)

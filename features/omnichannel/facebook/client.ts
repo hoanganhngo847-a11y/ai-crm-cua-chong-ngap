@@ -1,5 +1,5 @@
 export const PHONE_REQUEST_TEMPLATE =
-    'Anh/chị vui lòng để lại số điện thoại để bên em liên hệ tư vấn cửa chống ngập ạ.';
+    'Anh/chị vui lòng để lại số điện thoại để bên em liên hệ tư vấn ạ.';
 
 export type InboxMessage = {
     id: string;
