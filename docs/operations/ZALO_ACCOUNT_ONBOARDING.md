@@ -11,6 +11,8 @@ Instructions and the official extension link are included on the page.
   `20261029170648_zalo_account_guard_privileges.sql` before the CRM release.
 - Set the CRM-only `ZALO_ACCOUNT_ENCRYPTION_KEY` to 32 random bytes in base64.
   Keep this key stable and preserve it with the deployment's secret backups.
+- Set `ZALO_ACCOUNT_CRM_ORIGIN` (or `WEBSITE_ORIGIN`) to the public HTTPS CRM
+  origin. Form CSRF checks must not compare with Render's internal HTTP address.
 - Credentials use AES-256-GCM with company/account authenticated data. Private
   tables and service-only RPCs keep credentials out of browser reads and audit
   payloads. Only metadata appears in account lists.
