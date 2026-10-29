@@ -16,6 +16,14 @@ export const ZALO_IMAGE_MARKER = '[[ZALO_IMAGE]]';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GROUP_ID_RE = /^[0-9]{5,40}$/;
 
+export interface ZcaJsGroupMember {
+  id: string;
+  name: string;
+  avatar?: string;
+  isAdmin?: boolean;
+  isCreator?: boolean;
+}
+
 export interface ZcaJsInboundMessage {
   messageId: string;
   externalUserId: string;
@@ -30,6 +38,9 @@ export interface ZcaJsInboundMessage {
   isGroup: boolean;
   groupId?: string;
   groupName?: string;
+  totalMember?: number;
+  groupAvatar?: string;
+  groupMembers?: ZcaJsGroupMember[];
 }
 
 export type ZcaJsInboundParseResult =
@@ -124,6 +135,20 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
     ? formatGroupMessageContent(rawContent, senderDisplayName, isSelf)
     : rawContent;
 
+  const totalMember = typeof raw.totalMember === 'number' && raw.totalMember > 0 ? raw.totalMember : undefined;
+  const groupAvatar = typeof raw.groupAvatar === 'string' && raw.groupAvatar.trim() ? raw.groupAvatar.trim() : undefined;
+  const groupMembers = Array.isArray(raw.groupMembers)
+    ? (raw.groupMembers as Array<Record<string, unknown>>)
+        .map((m) => ({
+          id: String(m.id || '').trim(),
+          name: String(m.name || '').trim(),
+          avatar: typeof m.avatar === 'string' ? m.avatar : undefined,
+          isAdmin: Boolean(m.isAdmin),
+          isCreator: Boolean(m.isCreator),
+        }))
+        .filter((m) => Boolean(m.id && m.name))
+    : undefined;
+
   return {
     ok: true,
     data: {
@@ -140,6 +165,9 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
       isGroup,
       ...(groupId ? { groupId } : {}),
       ...(groupName ? { groupName } : {}),
+      ...(totalMember ? { totalMember } : {}),
+      ...(groupAvatar ? { groupAvatar } : {}),
+      ...(groupMembers && groupMembers.length > 0 ? { groupMembers } : {}),
     },
   };
 }
@@ -153,6 +181,9 @@ export function buildZcaJsSourceMetadata(message: ZcaJsInboundMessage): Record<s
     is_group: message.isGroup,
     ...(message.groupId ? { group_id: message.groupId } : {}),
     ...(message.groupName ? { group_name: message.groupName } : {}),
+    ...(message.totalMember ? { member_count: message.totalMember } : {}),
+    ...(message.groupAvatar ? { group_avatar: message.groupAvatar } : {}),
+    ...(message.groupMembers ? { members: message.groupMembers } : {}),
     ...(message.senderDisplayName ? { zalo_sender_name: message.senderDisplayName } : {}),
     ...(message.senderName
       ? {

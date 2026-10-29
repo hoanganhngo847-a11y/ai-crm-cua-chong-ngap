@@ -23,7 +23,7 @@ const CRM_ECHO_WINDOW_MS = 30_000;
 const RECENT_PROVIDER_ID_TTL_MS = 10 * 60_000;
 const GROUP_NAME_TTL_MS = 6 * 60 * 60_000;
 const GROUP_NAME_NEGATIVE_TTL_MS = 5 * 60_000;
-const GROUP_NAME_LOOKUP_TIMEOUT_MS = 1_500;
+const GROUP_NAME_LOOKUP_TIMEOUT_MS = 8_000;
 
 let api = null;
 let loggedIn = false;
@@ -33,8 +33,19 @@ let listenerRestartTimer = null;
 let loginLoopRunning = false;
 let inboundDelivery = null;
 
-const groupNameCache = new Map();
-const groupNameLookups = new Map();
+const groupDetailsCache = new Map();
+const groupDetailsLookups = new Map();
+
+// Backwards-compatibility alias for group name cache tests if any
+const groupNameCache = {
+  get: (k) => {
+    const item = groupDetailsCache.get(k);
+    return item ? { name: item.data?.groupName, expiresAt: item.expiresAt } : undefined;
+  },
+  set: (k, v) => groupDetailsCache.set(k, { data: { groupName: v.name }, expiresAt: v.expiresAt }),
+  delete: (k) => groupDetailsCache.delete(k),
+};
+const groupNameLookups = groupDetailsLookups;
 
 // Used only to suppress the self-listener echo created by a CRM-originated send.
 // Manual messages sent directly in Zalo are not placed in these maps and are forwarded to CRM.
@@ -173,15 +184,15 @@ function groupNameCacheKey(groupId) {
   return String(groupId || '').trim();
 }
 
-async function lookupGroupName(currentApi, groupId) {
+async function lookupGroupDetails(currentApi, groupId) {
   if (!currentApi || typeof currentApi.getGroupInfo !== 'function') return undefined;
   const key = groupNameCacheKey(groupId);
   if (!key) return undefined;
 
-  const cached = groupNameCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.name;
+  const cached = groupDetailsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  const existing = groupNameLookups.get(key);
+  const existing = groupDetailsLookups.get(key);
   if (existing) return existing;
 
   const lookup = (async () => {
@@ -193,33 +204,68 @@ async function lookupGroupName(currentApi, groupId) {
         }),
       ]);
       const raw = result?.gridInfoMap?.[key] || result?.gridInfoMap?.[Number(key)];
-      const name = String(raw?.name || raw?.groupName || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-      if (name) {
-        groupNameCache.set(key, { name, expiresAt: Date.now() + GROUP_NAME_TTL_MS });
-        return name;
+      if (raw) {
+        const name = String(raw?.name || raw?.groupName || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+        const avatar = typeof raw?.avt === 'string' && raw.avt ? raw.avt : (typeof raw?.fullAvt === 'string' ? raw.fullAvt : undefined);
+        const adminIds = Array.isArray(raw?.adminIds) ? raw.adminIds.map(String) : [];
+        const creatorId = raw?.creatorId ? String(raw.creatorId) : undefined;
+        const rawMems = Array.isArray(raw?.currentMems) ? raw.currentMems : (Array.isArray(raw?.members) ? raw.members : []);
+        const totalMember = Number(raw?.totalMember ?? (rawMems.length || (Array.isArray(raw?.memberIds) ? raw.memberIds.length : 0)));
+
+        const members = rawMems.map((m) => {
+          const id = String(m?.id || m?.uid || m?.userId || '').replace(/_0$/, '');
+          const dname = String(m?.dname || m?.dName || m?.displayName || m?.name || '').trim();
+          const memAvatar = typeof m?.avatar === 'string' ? m.avatar : (typeof m?.avt === 'string' ? m.avt : undefined);
+          const isAdmin = adminIds.includes(id) || id === creatorId;
+          const isCreator = id === creatorId;
+          return { id, name: dname, avatar: memAvatar, isAdmin, isCreator };
+        }).filter((m) => Boolean(m.name || m.id));
+
+        const groupData = {
+          groupId: key,
+          groupName: name || undefined,
+          totalMember: totalMember || members.length || 0,
+          avatar,
+          members: members.length > 0 ? members : undefined,
+          adminIds,
+          creatorId,
+        };
+
+        groupDetailsCache.set(key, { data: groupData, expiresAt: Date.now() + GROUP_NAME_TTL_MS });
+        return groupData;
       }
-      groupNameCache.set(key, { name: undefined, expiresAt: Date.now() + GROUP_NAME_NEGATIVE_TTL_MS });
+      groupDetailsCache.set(key, { data: undefined, expiresAt: Date.now() + 15_000 });
       return undefined;
     } catch (error) {
-      groupNameCache.set(key, { name: undefined, expiresAt: Date.now() + GROUP_NAME_NEGATIVE_TTL_MS });
+      groupDetailsCache.set(key, { data: undefined, expiresAt: Date.now() + 15_000 });
       console.warn(
-        '[ZCAJS] group name lookup failed:',
+        '[ZCAJS] group details lookup failed:',
         error instanceof Error ? error.message : 'unknown'
       );
       return undefined;
     } finally {
-      groupNameLookups.delete(key);
+      groupDetailsLookups.delete(key);
     }
   })();
 
-  groupNameLookups.set(key, lookup);
+  groupDetailsLookups.set(key, lookup);
   return lookup;
 }
 
+async function lookupGroupName(currentApi, groupId) {
+  const details = await lookupGroupDetails(currentApi, groupId);
+  return details?.groupName;
+}
+
 async function postNormalizedInbound(currentApi, normalized) {
-  if (normalized.isGroup && !normalized.groupName && normalized.groupId) {
-    const groupName = await lookupGroupName(currentApi, normalized.groupId);
-    if (groupName) normalized.groupName = groupName;
+  if (normalized.isGroup && normalized.groupId) {
+    const details = await lookupGroupDetails(currentApi, normalized.groupId);
+    if (details) {
+      if (details.groupName && !normalized.groupName) normalized.groupName = details.groupName;
+      if (details.totalMember) normalized.totalMember = details.totalMember;
+      if (details.avatar) normalized.groupAvatar = details.avatar;
+      if (details.members) normalized.groupMembers = details.members;
+    }
   }
   await postInbound(normalized);
 }
@@ -538,6 +584,25 @@ async function handleSendMedia(req, res) {
   }
 }
 
+async function handleGroupDetails(req, res, url) {
+  if (!isAuthorized(req)) {
+    return json(res, 401, { success: false, error: 'UNAUTHORIZED' });
+  }
+  const groupId = String(url.searchParams.get('groupId') || '').trim();
+  if (!/^[0-9]{5,40}$/.test(groupId)) {
+    return json(res, 400, { success: false, error: 'INVALID_GROUP_ID' });
+  }
+  if (!api || !loggedIn) {
+    return json(res, 503, { success: false, error: 'ZCAJS_NOT_LOGGED_IN' });
+  }
+  try {
+    const details = await lookupGroupDetails(api, groupId);
+    return json(res, 200, { success: true, group: details || null });
+  } catch (error) {
+    return json(res, 502, { success: false, error: 'GROUP_LOOKUP_FAILED' });
+  }
+}
+
 function requestHandler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
@@ -555,6 +620,11 @@ function requestHandler(req, res) {
       ready: Boolean(api && loggedIn),
       listenerConnected,
     });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/v1/group-details') {
+    void handleGroupDetails(req, res, url);
+    return;
   }
 
   if (req.method === 'POST' && url.pathname === '/v1/send-media') {

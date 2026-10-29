@@ -91,6 +91,75 @@ async function persistZaloConversationDisplayName(
   }
 }
 
+async function persistZaloGroupMetadata(
+  supabase: ReturnType<typeof createAdminClient>,
+  companyId: string,
+  conversationId: string | undefined,
+  customerId: string | undefined,
+  externalUserId: string,
+  event: import('@/features/omnichannel/zalo/zcajs-inbound').ZcaJsInboundMessage,
+  observedAt: string
+): Promise<void> {
+  if (!conversationId) return;
+
+  const { data: conversation, error: readError } = await supabase
+    .from('conversations')
+    .select('metadata, customer_id')
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .eq('channel', 'ZALO')
+    .maybeSingle();
+
+  if (readError || !conversation) return;
+
+  const currentMetadata =
+    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+
+  const existingGroupName = typeof currentMetadata.group_name === 'string' ? currentMetadata.group_name.trim() : '';
+  const newGroupName = event.groupName ? normalizeZaloDisplayName(event.groupName) : undefined;
+  const finalGroupName = newGroupName || existingGroupName || event.senderName || `Nhóm Zalo ${event.groupId?.slice(-4) || ''}`;
+
+  const nextMetadata: Record<string, unknown> = {
+    ...currentMetadata,
+    is_group: true,
+    group_id: event.groupId || currentMetadata.group_id,
+    group_name: finalGroupName,
+    zalo_display_name: finalGroupName,
+    zalo_display_name_source: newGroupName ? 'group_info' : (currentMetadata.zalo_display_name_source || 'message_dname'),
+    zalo_display_name_updated_at: observedAt,
+    ...(event.totalMember ? { member_count: event.totalMember } : {}),
+    ...(event.groupAvatar ? { group_avatar: event.groupAvatar } : {}),
+    ...(event.groupMembers && event.groupMembers.length > 0 ? { members: event.groupMembers } : {}),
+  };
+
+  await supabase
+    .from('conversations')
+    .update({ metadata: nextMetadata })
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .eq('channel', 'ZALO');
+
+  const targetCustomerId = customerId || conversation.customer_id;
+  if (targetCustomerId && finalGroupName) {
+    await supabase
+      .from('customers')
+      .update({ name: finalGroupName })
+      .eq('id', targetCustomerId)
+      .eq('company_id', companyId);
+  }
+
+  if (finalGroupName && externalUserId) {
+    await supabase
+      .from('identities')
+      .update({ display_name: finalGroupName, updated_at: observedAt })
+      .eq('company_id', companyId)
+      .eq('channel', 'ZALO')
+      .eq('external_id', externalUserId);
+  }
+}
+
 async function applyZaloDisplayName(
   supabase: ReturnType<typeof createAdminClient>,
   companyId: string,
@@ -220,6 +289,15 @@ export async function POST(request: NextRequest) {
         typeof result.conversation_id === 'string' ? result.conversation_id : undefined;
       if (event.isGroup) {
         await pauseZaloGroupAi(supabase, companyId, conversationId);
+        await persistZaloGroupMetadata(
+          supabase,
+          companyId,
+          conversationId,
+          typeof result.customer_id === 'string' ? result.customer_id : undefined,
+          event.externalConversationId,
+          event,
+          normalizedObservedAt
+        );
       }
 
       return NextResponse.json({
@@ -260,19 +338,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await persistZaloConversationDisplayName(
-      supabase,
-      companyId,
-      result.conversation_id,
-      event.senderName,
-      event.senderNameSource,
-      normalizedObservedAt
-    );
-
     if (event.isGroup) {
+      await persistZaloGroupMetadata(
+        supabase,
+        companyId,
+        result.conversation_id,
+        result.customer_id,
+        event.externalUserId,
+        event,
+        normalizedObservedAt
+      );
       // Groups are observational in the CRM: never let AI answer a whole group.
       await pauseZaloGroupAi(supabase, companyId, result.conversation_id);
     } else {
+      await persistZaloConversationDisplayName(
+        supabase,
+        companyId,
+        result.conversation_id,
+        event.senderName,
+        event.senderNameSource,
+        normalizedObservedAt
+      );
       await applyZaloDisplayName(
         supabase,
         companyId,
