@@ -707,6 +707,71 @@ test('Phone Intake Fast Path: Messenger replies immediately with confirmation wh
   assert.equal(finishCall.params.p_brain_latency_ms, 0);
 });
 
+test('Lead Form Silence: Messenger pre-filled lead form is skipped without provider or transport calls', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: [
+      'Đã điền mẫu',
+      'Phone number: [số điện thoại đã ẩn]',
+      'Date of birth: 15/05/2001',
+      'Email: [email đã ẩn]',
+      'Full name: Lan Pham',
+      'GPA: 8.5',
+      'City: Hà Nội',
+    ].join('\n'),
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER', {
+    outcome: 'SENT',
+    externalMessageId: 'mid.lead-form-must-not-send',
+  });
+
+  let providerCalls = 0;
+  const mockProvider: BrainProvider = {
+    descriptor: { id: 'test-provider', model: 'test-model' },
+    async runTurn() {
+      providerCalls++;
+      return {
+        decision: 'RESPOND',
+        draft: 'Should not be called',
+        confidence: 0.9,
+      };
+    },
+  };
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(result.sent, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(providerCalls, 0);
+  assert.equal(messengerTransport.sendCalls.length, 0);
+
+  const finishCall = mockDb.rpcCalls.find(
+    (c) => c.name === 'finish_ai_brain_live_delivery_extended' || c.name === 'finish_ai_brain_live_delivery'
+  );
+  assert.ok(finishCall);
+  assert.equal(finishCall.params.p_send_status, 'SKIPPED');
+  assert.equal(finishCall.params.p_decision, 'NO_REPLY');
+  assert.equal(finishCall.params.p_error_code, 'LEAD_FORM_NO_REPLY');
+});
+
 test('Reasoning Leak Suppression: strips internal chain-of-thought and sends only customer-facing message', async () => {
   const mockDb = createMockEngineSupabase({
     claims: [

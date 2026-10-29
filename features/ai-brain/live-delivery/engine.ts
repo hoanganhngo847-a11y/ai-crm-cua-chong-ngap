@@ -16,6 +16,7 @@ import { classifyHandoverReason, createHandoverCase } from '../handover';
 import type { BrainContextDataSource } from '../context-contracts';
 import { createSupabaseBrainContextDataSource } from '../context-supabase';
 import { resolveGroundingContext, type BrainTurnGrounding } from '../grounding';
+import { detectLeadForm } from '../../omnichannel/facebook/lead-form';
 import type {
   LiveDeliveryChannel,
   LiveDeliveryClaim,
@@ -366,6 +367,17 @@ async function processClaim(
 
   if (!eligible) {
     await finish(client, claim, lockToken, 'SKIPPED');
+    return 'skipped';
+  }
+
+  // LEAD FORM SILENCE: A Messenger lead form is pre-filled by the customer.
+  // Never answer it with a greeting, confirmation, or guidance; the data is
+  // stored by intake and summarised as a Customer 360 note instead.
+  if (claim.channel === 'MESSENGER' && detectLeadForm(eligible.text)) {
+    await finish(client, claim, lockToken, 'SKIPPED', {
+      decision: 'NO_REPLY',
+      errorCode: 'LEAD_FORM_NO_REPLY',
+    });
     return 'skipped';
   }
 

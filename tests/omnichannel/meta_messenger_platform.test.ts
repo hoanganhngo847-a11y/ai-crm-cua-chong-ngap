@@ -379,6 +379,111 @@ test('7. Webhook retry with identical Meta MID is handled idempotently without d
     }
 });
 
+test('7b. Pre-filled lead form is ingested with its phone and stored as one Customer 360 note', async () => {
+    const originalFetch = globalThis.fetch;
+    const sourceInteractionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const noteInteractionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const customerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const conversationId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const rpcCalls: any[] = [];
+    const writes: Array<{ url: string; body: any }> = [];
+
+    globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+
+        if (url.includes('/rest/v1/rpc/han_ingest')) {
+            const body = JSON.parse(String(init?.body));
+            rpcCalls.push(body);
+            return Response.json({
+                status: 'ACCEPTED',
+                interaction_id: sourceInteractionId,
+            });
+        }
+
+        if (url.includes('graph.facebook.com')) {
+            return Response.json({ name: 'Lan Pham' });
+        }
+
+        if (url.includes('/rest/v1/interactions')) {
+            if (method === 'GET') {
+                if (url.includes('external_ref=eq.')) {
+                    return Response.json([]);
+                }
+                return Response.json([
+                    {
+                        id: sourceInteractionId,
+                        customer_id: customerId,
+                        conversation_id: conversationId,
+                        created_at: '2026-10-29T10:00:00.000Z',
+                    },
+                ]);
+            }
+            if (method === 'POST') {
+                writes.push({ url, body: JSON.parse(String(init?.body)) });
+                return Response.json({ id: noteInteractionId }, { status: 201 });
+            }
+        }
+
+        if (url.includes('/rest/v1/customer_dossier_profiles')) {
+            if (method === 'GET') return Response.json([]);
+            if (method === 'POST') {
+                writes.push({ url, body: JSON.parse(String(init?.body)) });
+                return new Response(null, { status: 201 });
+            }
+        }
+
+        return Response.json([]);
+    };
+
+    try {
+        const formText = [
+            'Đã điền mẫu',
+            'Phone number: 0912345678',
+            'Date of birth: 15/05/2001',
+            'Email: lan@example.com',
+            'Full name: Lan Pham',
+            'GPA: 8.5',
+            'City: Hà Nội',
+        ].join('\n');
+        const event = makeWebhookEvent(
+            TARGET_PAGE_ID,
+            '9988776655',
+            formText,
+            'mid.$lead_form_001',
+        );
+        const raw = JSON.stringify(event);
+        const res = await webhookPost(
+            new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/webhooks/meta', {
+                method: 'POST',
+                headers: { 'x-hub-signature-256': signPayload(raw) },
+                body: raw,
+            }),
+        );
+
+        assert.equal(res.status, 200);
+        assert.equal(rpcCalls.length, 1);
+        assert.equal(rpcCalls[0].p_phone, '+84912345678');
+        assert.equal(rpcCalls[0].p_payload.crm_lead_form, true);
+
+        const note = writes.find(
+            (write) =>
+                write.url.includes('/rest/v1/interactions') &&
+                write.body?.external_ref === `lead-form:${sourceInteractionId}`,
+        );
+        assert.ok(note, 'lead form note must be inserted');
+        assert.equal(note.body.customer_id, customerId);
+        assert.equal(note.body.type, 'NOTE');
+        assert.equal(note.body.actor_type, 'SYSTEM');
+        assert.ok(!String(note.body.sanitized_content).includes('0912345678'));
+        assert.ok(!String(note.body.sanitized_content).includes('+84912345678'));
+        assert.match(String(note.body.sanitized_content), /lan@example\.com/);
+        assert.match(String(note.body.sanitized_content), /15\/05\/2001/);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
 test('8. Outbound routing: uses correct Page ID, correct Page token, and enforces tenant isolation', async () => {
     const originalFetch = globalThis.fetch;
     const graphRequests: Array<{ url: string; headers: Headers; body: any }> = [];

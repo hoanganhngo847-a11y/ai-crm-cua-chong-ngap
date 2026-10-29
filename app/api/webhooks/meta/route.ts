@@ -12,9 +12,15 @@ import {
     processFacebookInboundPhonePrivacy,
 } from '@/features/omnichannel/facebook/phone-intake';
 import {
+    detectLeadForm,
+    persistLeadFormToCustomer360,
+    readIngestedInteractionId,
+} from '@/features/omnichannel/facebook/lead-form';
+import {
     lookupFacebookDisplayName,
     promoteFacebookCustomerDisplayName,
 } from '@/features/omnichannel/facebook/profile';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import {
     binding,
@@ -101,19 +107,20 @@ export async function POST(request: Request) {
             events.map((event) => ({ config, event })),
         )) {
             if (event.kind === 'MESSAGE') {
+                const leadForm = detectLeadForm(event.content);
                 const phonePrivacy = processFacebookInboundPhonePrivacy(event.content);
 
                 // Keep the intake payload name stable for idempotent retries. Profile enrichment
                 // is deliberately best-effort and promoted to the customer record after ingestion.
                 const displayNamePromise = lookupFacebookDisplayName(config, event.sender);
 
-                await rpc('han_ingest', {
+                const ingestResult = await rpc('han_ingest', {
                     p_company: config.company,
                     p_channel: 'FACEBOOK',
                     p_external: `${config.page}:${event.sender}`,
                     p_key: event.key,
                     p_name: 'Khách Messenger',
-                    p_phone: phonePrivacy.phone,
+                    p_phone: leadForm?.phone ?? phonePrivacy.phone,
                     p_content: event.content,
                     p_safe: phonePrivacy.safeContent,
                     p_safe_status: phonePrivacy.safeStatus,
@@ -125,8 +132,20 @@ export async function POST(request: Request) {
                             valid_count: phonePrivacy.validPhones.length,
                             invalid_count: phonePrivacy.invalidCandidates.length,
                         },
+                        ...(leadForm ? { crm_lead_form: true } : {}),
                     },
                 });
+
+                if (leadForm) {
+                    const interactionId = readIngestedInteractionId(ingestResult);
+                    if (interactionId) {
+                        await persistLeadFormToCustomer360(createAdminClient(), {
+                            companyId: config.company,
+                            sourceInteractionId: interactionId,
+                            form: leadForm,
+                        });
+                    }
+                }
 
                 const displayName = await displayNamePromise;
                 await promoteFacebookCustomerDisplayName(
