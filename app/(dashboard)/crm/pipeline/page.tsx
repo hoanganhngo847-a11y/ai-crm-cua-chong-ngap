@@ -21,7 +21,7 @@ export default async function CrmPipelinePage() {
   }
 
   if (actor.role !== APPLICATION_ROLES.BOSS_ADMIN && actor.role !== APPLICATION_ROLES.SALE) {
-    redirect('/field');
+    redirect('/account');
   }
 
   return (

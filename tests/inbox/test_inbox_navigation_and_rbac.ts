@@ -57,10 +57,10 @@ async function runInboxNavigationAndRbacTests() {
     'FAIL: BOSS_ADMIN must not be forced through /admin MFA on login'
   );
   assert.ok(
-    /APPLICATION_ROLES\.TECHNICIAN[\s\S]*?redirect\('\/field'\)/.test(homePageContent),
-    'FAIL: TECHNICIAN must still land on /field'
+    /APPLICATION_ROLES\.TECHNICIAN[\s\S]*?redirect\('\/account'\)/.test(homePageContent),
+    'FAIL: TECHNICIAN must land on /account'
   );
-  console.log('[PASS] BOSS_ADMIN and SALE land on /inbox; TECHNICIAN lands on /field');
+  console.log('[PASS] BOSS_ADMIN and SALE land on /inbox; TECHNICIAN lands on /account');
 
   // 2. Server-side RBAC in app/(dashboard)/inbox/page.tsx
   console.log('\n--- 2. Server-Side RBAC Guard in app/(dashboard)/inbox/page.tsx ---');
@@ -78,7 +78,11 @@ async function runInboxNavigationAndRbacTests() {
   );
   assert.ok(
     inboxPageContent.includes('KỸ THUẬT VIÊN'),
-    'FAIL: app/(dashboard)/inbox/page.tsx must specifically instruct TECHNICIAN to visit /field'
+    'FAIL: app/(dashboard)/inbox/page.tsx must specifically instruct TECHNICIAN to visit /account'
+  );
+  assert.ok(
+    inboxPageContent.includes('href="/account"'),
+    'FAIL: app/(dashboard)/inbox/page.tsx must route TECHNICIAN to /account'
   );
   console.log('[PASS] Inbox page blocks TECHNICIAN and enforces access solely for SALE and BOSS_ADMIN');
 

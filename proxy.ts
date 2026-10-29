@@ -59,7 +59,6 @@ type CookieOptions = Parameters<NextResponse['cookies']['set']>[2];
   const isProtectedRoute =
     pathname.startsWith('/admin') ||
     pathname.startsWith('/crm') ||
-    pathname.startsWith('/field') ||
     pathname.startsWith('/account');
 
   // Public auth route patterns

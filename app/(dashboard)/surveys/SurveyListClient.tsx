@@ -253,7 +253,6 @@ export default function SurveyListClient({
       {/* Header & Persona */}
       <PageHeader
         breadcrumbs={[
-          { label: 'Vận hành', href: '/field' },
           { label: 'Khảo sát hiện trường' },
         ]}
         title="Lịch Khảo Sát Hiện Trường"

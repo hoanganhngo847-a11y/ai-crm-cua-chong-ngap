@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useTransition } from 'react';
-import Link from 'next/link';
 import { calculatePriceFromSurveyAction } from '../../../app/(dashboard)/surveys/actions';
 
 interface CalculatePriceFromSurveyButtonProps {
@@ -99,15 +98,6 @@ export default function CalculatePriceFromSurveyButton({
             </>
           )}
         </button>
-
-        {result?.status === 'CALCULATED' && (
-          <Link
-            href="/quotations"
-            className="text-[11px] text-blue-600 hover:text-blue-700 underline font-medium"
-          >
-            Xem bảng báo giá &rarr;
-          </Link>
-        )}
       </div>
 
       {/* Result feedback */}

@@ -73,7 +73,7 @@ export async function loginAction(formData: FormData): Promise<LoginResult> {
   if (actor.role === APPLICATION_ROLES.BOSS_ADMIN) {
     destination = '/admin';
   } else if (actor.role === APPLICATION_ROLES.TECHNICIAN) {
-    destination = '/field';
+    destination = '/account';
   }
 
   return {
