@@ -483,17 +483,6 @@ export default async function CrmDashboardPage() {
                 <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
               </Link>
 
-              <Link
-                href="/quotations"
-                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[var(--surface-hover)] transition-colors group text-xs text-[var(--text-primary)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <TrendingUp className="w-4 h-4 text-amber-600" />
-                  <span className="font-medium group-hover:text-[var(--accent)]">Bảng báo giá &amp; Phương án</span>
-                </div>
-                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
-              </Link>
-
               {actor.role === 'BOSS_ADMIN' && (
                 <Link
                   href="/admin/ai"
