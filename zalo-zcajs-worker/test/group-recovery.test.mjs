@@ -23,13 +23,13 @@ async function harness() {
     execFileSync(process.execPath, [patch], { cwd: dir });
     assert.equal(await fs.readFile(path.join(dir, 'src/apis/listen.ts'), 'utf8'), source);
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
-    let socket;
+    const sockets = [];
     const frames = [];
     class Socket {
       static OPEN = 1;
       static CLOSED = 3;
       readyState = 1;
-      constructor() { socket = this; }
+      constructor() { sockets.push(this); }
       send(frame) { frames.push({ command: frame.readUInt16LE(1), body: JSON.parse(frame.subarray(4).toString()) }); }
     }
     class Message {
@@ -55,6 +55,7 @@ async function harness() {
     listener.on('message', (message) => messages.push(normalizeZaloMessage(message)));
     listener.on('error', (error) => { throw error; });
     listener.start();
+    const socket = sockets.at(-1);
     const receive = async (command, body) => {
       const header = Buffer.from([1, 0, 0, 1]); header.writeUInt16LE(command, 1);
       await socket.onmessage({ data: Buffer.concat([header, Buffer.from(JSON.stringify(body))]) });
