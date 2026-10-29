@@ -503,11 +503,16 @@ export async function getConversations(
         : rawLastMsg;
     const lastMsgAt = latestMsg?.created_at || row.last_message_at || row.updated_at;
 
+    const rowMeta = (row.metadata as Record<string, unknown>) || {};
+    const isGroupConv = Boolean(rowMeta.is_group);
+    const groupDisplayName = (rowMeta.group_name as string) || (rowMeta.zalo_display_name as string);
+    const resolvedCustomerName = isGroupConv && groupDisplayName ? groupDisplayName : (cust?.name || 'Khách hàng');
+
     return {
       id: row.id,
       company_id: row.company_id,
       customer_id: row.customer_id,
-      customer_name: cust?.name || 'Khách hàng',
+      customer_name: resolvedCustomerName,
       customer_code: cust?.customer_code || 'KH-000000',
       customer_stage: cust?.stage || 'awareness',
       customer_source: cust?.source || row.channel,
@@ -616,11 +621,16 @@ export async function getConversationById(
       : rawLastMsg;
   const lastMsgAt = latestInteractions?.[0]?.created_at || row.last_message_at || row.updated_at;
 
+  const rowMeta = (row.metadata as Record<string, unknown>) || {};
+  const isGroupConv = Boolean(rowMeta.is_group);
+  const groupDisplayName = (rowMeta.group_name as string) || (rowMeta.zalo_display_name as string);
+  const resolvedCustomerName = isGroupConv && groupDisplayName ? groupDisplayName : (cust?.name || 'Khách hàng');
+
   return {
     id: row.id,
     company_id: row.company_id,
     customer_id: row.customer_id,
-    customer_name: cust?.name || 'Khách hàng',
+    customer_name: resolvedCustomerName,
     customer_code: cust?.customer_code || 'KH-000000',
     customer_stage: cust?.stage || 'awareness',
     customer_source: cust?.source || row.channel,
@@ -923,6 +933,20 @@ export async function getMessagesByConversationId(
         m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
       const isOutbound = (m.direction || '').toUpperCase() === 'OUTBOUND';
 
+      let senderName: string | undefined = undefined;
+      let displayRaw = raw;
+      let displaySanitized = sanitized;
+
+      if (!isOutbound && senderType === 'customer') {
+        const prefixMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(sanitized);
+        if (prefixMatch) {
+          senderName = prefixMatch[1].trim();
+          displaySanitized = prefixMatch[2];
+          const rawMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(raw);
+          displayRaw = rawMatch ? rawMatch[2] : raw;
+        }
+      }
+
       return {
         id: m.id,
         company_id: m.company_id,
@@ -930,10 +954,11 @@ export async function getMessagesByConversationId(
         customer_id: m.customer_id,
         channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
         sender_type: senderType,
-        content: sanitizeAiMessageForDisplay(raw, m.actor_type), // BOSS_ADMIN nhận nguyên văn bản gốc
-        sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.actor_type),
+        sender_name: senderName,
+        content: sanitizeAiMessageForDisplay(displayRaw, m.actor_type), // BOSS_ADMIN nhận nguyên văn bản gốc
+        sanitized_content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type),
         sanitization_status: canonicalStatus,
-        raw_content: raw,
+        raw_content: displayRaw,
         created_at: m.created_at,
         direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
         delivery_status: isOutbound ? (deliveryStatusMap.get(m.id) ?? m.delivery_status ?? undefined) : undefined,
@@ -948,6 +973,17 @@ export async function getMessagesByConversationId(
       m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
     const isOutbound = (m.direction || '').toUpperCase() === 'OUTBOUND';
 
+    let senderName: string | undefined = undefined;
+    let displaySanitized = sanitized;
+
+    if (!isOutbound && senderType === 'customer') {
+      const prefixMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(sanitized);
+      if (prefixMatch) {
+        senderName = prefixMatch[1].trim();
+        displaySanitized = prefixMatch[2];
+      }
+    }
+
     return {
       id: m.id,
       company_id: m.company_id,
@@ -955,8 +991,9 @@ export async function getMessagesByConversationId(
       customer_id: m.customer_id,
       channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
       sender_type: senderType,
-      content: sanitizeAiMessageForDisplay(sanitized, m.actor_type), // Mặc định hiển thị sanitized_content
-      sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.actor_type),
+      sender_name: senderName,
+      content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type), // Mặc định hiển thị sanitized_content
+      sanitized_content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type),
       sanitization_status: (() => { const s = m.sanitization_status || 'SUCCEEDED'; return (s === 'CLEAN' || s === 'SANITIZED') ? 'SUCCEEDED' : s; })() as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
       created_at: m.created_at,
       direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',

@@ -85,9 +85,33 @@ function renderDeliveryBadge(deliveryStatus?: string): React.ReactNode {
   return null;
 }
 
+const AVATAR_COLOR_PALETTES = [
+  'bg-emerald-100 text-emerald-800 border-emerald-300',
+  'bg-sky-100 text-sky-800 border-sky-300',
+  'bg-indigo-100 text-indigo-800 border-indigo-300',
+  'bg-purple-100 text-purple-800 border-purple-300',
+  'bg-pink-100 text-pink-800 border-pink-300',
+  'bg-amber-100 text-amber-800 border-amber-300',
+  'bg-teal-100 text-teal-800 border-teal-300',
+  'bg-rose-100 text-rose-800 border-rose-300',
+];
+
+function getAvatarColorClass(name?: string): string {
+  if (!name) return AVATAR_COLOR_PALETTES[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return AVATAR_COLOR_PALETTES[Math.abs(hash) % AVATAR_COLOR_PALETTES.length];
+}
+
 export default function InboxView({ initialCustomerId, userFullName, userRole }: InboxViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+
+  // Group details & members state
+  const [syncingGroup, setSyncingGroup] = useState<boolean>(false);
+  const [groupMemberSearch, setGroupMemberSearch] = useState<string>('');
 
   // P0-A: Store messages strictly keyed by conversationId
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, InboxMessage[]>>({});
@@ -145,6 +169,70 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
       if (syncingTimeoutRef.current) clearTimeout(syncingTimeoutRef.current);
     };
   }, []);
+
+  const handleSyncGroup = useCallback(async () => {
+    if (!selectedConversation?.id) return;
+    setSyncingGroup(true);
+    try {
+      const res = await fetch('/api/inbox/zalo-zcajs/group-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: selectedConversation.id }),
+      });
+      const data = await res.json();
+      if (data?.success && data?.group) {
+        const updatedGroupName = data.group.groupName || selectedConversation.customer_name;
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === selectedConversation.id
+              ? {
+                  ...c,
+                  customer_name: updatedGroupName,
+                  metadata: {
+                    ...(c.metadata || {}),
+                    is_group: true,
+                    group_name: data.group.groupName,
+                    member_count: data.group.totalMember,
+                    members: data.group.members,
+                    group_avatar: data.group.avatar,
+                  },
+                }
+              : c
+          )
+        );
+      }
+    } catch (err) {
+      console.warn('Sync group error:', err);
+    } finally {
+      setSyncingGroup(false);
+    }
+  }, [selectedConversation]);
+
+  const groupMembersList = useMemo(() => {
+    if (!selectedConversation?.metadata?.is_group) return [];
+    const raw = selectedConversation.metadata?.members;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw as Array<{ id: string; name: string; avatar?: string; isAdmin?: boolean; isCreator?: boolean }>;
+    }
+    return [];
+  }, [selectedConversation]);
+
+  const filteredMembers = useMemo(() => {
+    if (!groupMemberSearch.trim()) return groupMembersList;
+    const q = groupMemberSearch.trim().toLowerCase();
+    return groupMembersList.filter((m) => m.name.toLowerCase().includes(q));
+  }, [groupMembersList, groupMemberSearch]);
+
+  const isSelectedGroup = Boolean(selectedConversation?.metadata?.is_group);
+  const selectedGroupName = typeof selectedConversation?.metadata?.group_name === 'string'
+    ? selectedConversation.metadata.group_name
+    : selectedConversation?.customer_name || 'Nhóm Zalo';
+  const selectedGroupId = typeof selectedConversation?.metadata?.group_id === 'string'
+    ? selectedConversation.metadata.group_id
+    : '';
+  const selectedMemberCount = typeof selectedConversation?.metadata?.member_count === 'number'
+    ? selectedConversation.metadata.member_count
+    : groupMembersList.length || 7;
 
   // AI Suggestion states (scoped & isolated)
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -1203,23 +1291,32 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 min-w-0">
                         {/* Channel Badge Icon */}
-                        <span
-                          className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 ${
-                            isZalo
-                              ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
-                              : 'bg-blue-50 text-blue-700 border border-blue-200'
-                          }`}
-                          title={isZalo ? 'Zalo OA' : 'Facebook Messenger'}
-                        >
-                          {isZalo ? 'Z' : 'F'}
-                        </span>
+                        {Boolean(conv.metadata?.is_group) ? (
+                          <span
+                            className="w-5 h-5 rounded flex items-center justify-center text-[11px] font-bold shrink-0 bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-xs"
+                            title="Nhóm Zalo"
+                          >
+                            👥
+                          </span>
+                        ) : (
+                          <span
+                            className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                              isZalo
+                                ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                                : 'bg-blue-50 text-blue-700 border border-blue-200'
+                            }`}
+                            title={isZalo ? 'Zalo OA' : 'Facebook Messenger'}
+                          >
+                            {isZalo ? 'Z' : 'F'}
+                          </span>
+                        )}
                         <span className="font-medium text-[var(--text-primary)] text-xs truncate max-w-[120px]">
                           {conv.customer_name || 'Khách hàng'}
                         </span>
                         {Boolean(conv.metadata?.is_group) && (
                           <span
                             className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 flex items-center gap-0.5"
-                            title="Nhóm Zalo"
+                            title={`Nhóm Zalo: ${conv.customer_name}`}
                           >
                             Nhóm
                           </span>
@@ -1284,9 +1381,15 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               {/* Chat Header */}
               <div className="shrink-0 p-3 px-4 bg-[var(--surface-primary)] border-b border-[var(--border-subtle)] flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-xs text-blue-700">
-                    {getInitials(selectedConversation.customer_name)}
-                  </div>
+                  {selectedConversation.metadata?.is_group ? (
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-sm shadow-xs border border-emerald-300">
+                      👥
+                    </div>
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-xs text-blue-700">
+                      {getInitials(selectedConversation.customer_name)}
+                    </div>
+                  )}
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-[var(--text-primary)] text-sm">
@@ -1313,14 +1416,36 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                           : `Facebook · ${selectedConversation.channel_page_name || 'Messenger'}`}
                       </span>
                     </div>
-                    <span className="text-xs text-[var(--text-secondary)] font-mono">
-                      {selectedConversation.customer_code}
-                    </span>
+                    {isSelectedGroup ? (
+                      <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                        <span>👥 {selectedMemberCount} thành viên</span>
+                        <span>•</span>
+                        <span className="text-[var(--text-tertiary)] font-mono text-[10px]">{selectedConversation.customer_code}</span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-[var(--text-secondary)] font-mono">
+                        {selectedConversation.customer_code}
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <div className="text-xs text-[var(--text-secondary)] flex items-center gap-2">
-                  {selectedConversation.customer_id && (userRole === 'SALE' || userRole === 'BOSS_ADMIN') && (
+                  {isSelectedGroup && (
+                    <button
+                      type="button"
+                      onClick={handleSyncGroup}
+                      disabled={syncingGroup}
+                      className="rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 text-emerald-700 font-medium text-xs transition flex items-center gap-1.5 shadow-xs"
+                      title="Đồng bộ lại thành viên và tên nhóm từ Zalo"
+                    >
+                      <svg className={`w-3.5 h-3.5 ${syncingGroup ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span>{syncingGroup ? 'Đang tải...' : 'Làm mới nhóm'}</span>
+                    </button>
+                  )}
+                  {!selectedConversation.metadata?.is_group && selectedConversation.customer_id && (userRole === 'SALE' || userRole === 'BOSS_ADMIN') && (
                     <Link
                       href={`/calls/${selectedConversation.customer_id}`}
                       className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-white font-medium text-xs transition shadow-subtle"
@@ -1354,6 +1479,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   visibleMessages.map((msg) => {
                     const isSaleMsg = msg.sender_type === 'sale';
                     const isAiMsg = msg.sender_type === 'ai';
+                    const isGroup = Boolean(selectedConversation.metadata?.is_group);
+                    const displayName = msg.sender_name || (isGroup ? 'Thành viên nhóm' : selectedConversation.customer_name);
 
                     return (
                       <div
@@ -1373,10 +1500,12 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                             </span>
                           )}
                           {isSaleMsg && (
-                            <span className="text-blue-600 font-medium">Bạn (Sale)</span>
+                            <span className="text-blue-600 font-semibold">Bạn (Sale)</span>
                           )}
                           {!isSaleMsg && !isAiMsg && (
-                            <span className="text-[var(--text-primary)] font-medium">{msg.sender_name}</span>
+                            <span className={`font-semibold ${isGroup ? 'text-emerald-700 dark:text-emerald-400' : 'text-[var(--text-primary)]'}`}>
+                              {displayName}
+                            </span>
                           )}
                           <span>•</span>
                           <span>
@@ -1392,23 +1521,35 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                           )}
                         </div>
 
-                        {/* Message Bubble */}
-                        <div
-                          className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed ${
-                            isSaleMsg
-                              ? (msg.delivery_status || '').toUpperCase() === 'FAILED'
-                                ? 'bg-rose-50 border border-rose-300 text-rose-900 rounded-tr-none shadow-subtle'
-                                : (msg.delivery_status || '').toUpperCase() === 'RECONCILE_REQUIRED'
-                                  ? 'bg-amber-50 border border-amber-300 text-amber-900 rounded-tr-none shadow-subtle'
-                                  : isPendingDelivery(msg.delivery_status)
-                                    ? 'bg-blue-600 text-white rounded-tr-none shadow-subtle opacity-90'
-                                    : 'bg-blue-600 text-white rounded-tr-none shadow-subtle'
-                              : isAiMsg
-                                ? 'bg-purple-50 border border-purple-200 text-purple-900 rounded-tl-none shadow-subtle'
-                                : 'bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-tl-none shadow-subtle'
-                          }`}
-                        >
-                          <MessageContent content={msg.content} isOutbound={isSaleMsg} />
+                        {/* Message Row with Avatar for Inbound Group Messages */}
+                        <div className={`flex items-end gap-2 max-w-[85%] ${isSaleMsg ? 'justify-end' : 'justify-start'}`}>
+                          {!isSaleMsg && !isAiMsg && isGroup && (
+                            <div
+                              className={`w-7 h-7 rounded-full border flex items-center justify-center font-bold text-[10px] shrink-0 mb-0.5 shadow-xs ${getAvatarColorClass(displayName)}`}
+                              title={displayName}
+                            >
+                              {getInitials(displayName)}
+                            </div>
+                          )}
+
+                          {/* Message Bubble */}
+                          <div
+                            className={`rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed ${
+                              isSaleMsg
+                                ? (msg.delivery_status || '').toUpperCase() === 'FAILED'
+                                  ? 'bg-rose-50 border border-rose-300 text-rose-900 rounded-tr-none shadow-subtle'
+                                  : (msg.delivery_status || '').toUpperCase() === 'RECONCILE_REQUIRED'
+                                    ? 'bg-amber-50 border border-amber-300 text-amber-900 rounded-tr-none shadow-subtle'
+                                    : isPendingDelivery(msg.delivery_status)
+                                      ? 'bg-blue-600 text-white rounded-tr-none shadow-subtle opacity-90'
+                                      : 'bg-blue-600 text-white rounded-tr-none shadow-subtle'
+                                : isAiMsg
+                                  ? 'bg-purple-50 border border-purple-200 text-purple-900 rounded-tl-none shadow-subtle'
+                                  : 'bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-tl-none shadow-subtle'
+                            }`}
+                          >
+                            <MessageContent content={msg.content} isOutbound={isSaleMsg} />
+                          </div>
                         </div>
 
                         {isSaleMsg && msg.delivery_status === 'FAILED' && (
@@ -1624,107 +1765,262 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         {/* ================================================================== */}
         <div className="hidden lg:flex lg:flex-col lg:col-span-3 min-h-0 h-full p-4 bg-[var(--surface-secondary)] overflow-y-auto space-y-4 text-xs border-l border-[var(--border-subtle)]">
           {selectedConversation ? (
-            <>
-              {/* Profile Card */}
-              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-3 shadow-subtle">
-                <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 mx-auto flex items-center justify-center font-bold text-sm">
-                  {getInitials(selectedConversation.customer_name)}
-                </div>
-                <div>
-                  <h3 className="font-semibold text-[var(--text-primary)] text-sm">
-                    {selectedConversation.customer_name || 'Khách hàng'}
-                  </h3>
-                  <span className="font-mono text-[var(--text-secondary)] text-xs">
-                    {selectedConversation.customer_code}
-                  </span>
-                </div>
-
-                <Link
-                  href={`/customers/${selectedConversation.customer_id}`}
-                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-medium transition text-xs"
-                >
-                  <span>Xem Hồ Sơ 360</span>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </Link>
-              </div>
-
-              {/* Details List */}
-              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle">
-                <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px]">
-                  Thông tin liên hệ
-                </h4>
-
-                <div className="space-y-2 text-[var(--text-primary)]">
-                  <div className="flex justify-between items-center py-1 border-b border-[var(--border-subtle)]">
-                    <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
-                    {selectedConversation.metadata?.is_group ? (
-                      <span className="font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[11px]">Hội thoại Nhóm</span>
-                    ) : selectedConversation.customer_phone ? (
-                      <SecurePhoneRow
-                        customerId={selectedConversation.customer_id}
-                        maskedPhone={selectedConversation.customer_phone}
-                      />
-                    ) : (
-                      <span className="font-mono font-medium text-slate-400">Chưa có</span>
-                    )}
-                  </div>
-
-                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
-                    <span className="text-[var(--text-secondary)]">Kênh hội thoại:</span>
-                    <span className="capitalize font-medium text-[var(--text-primary)]">
-                      {selectedConversation.channel === 'zalo'
-                        ? selectedConversation.metadata?.is_group
-                          ? 'Nhóm Zalo'
-                          : 'Zalo'
-                        : 'Facebook Messenger'}
+            selectedConversation.metadata?.is_group ? (
+              <>
+                {/* Group Profile Card */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-3 shadow-subtle">
+                  <div className="relative mx-auto w-14 h-14">
+                    <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-sm border-2 border-white dark:border-slate-800">
+                      👥
+                    </div>
+                    <span className="absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-blue-100 text-blue-800 border border-white">
+                      Zalo
                     </span>
                   </div>
-
-                  {selectedConversation.channel === 'facebook' && (
-                    <div className="flex justify-between gap-3 py-1 border-b border-[var(--border-subtle)]">
-                      <span className="text-[var(--text-secondary)] shrink-0">Khách nhắn vào Page:</span>
-                      <span
-                        className="font-medium text-blue-700 text-right break-words"
-                        title={selectedConversation.channel_page_id || undefined}
-                      >
-                        {selectedConversation.channel_page_name ||
-                          selectedConversation.channel_page_id ||
-                          'Chưa xác định'}
+                  <div>
+                    <h3 className="font-semibold text-[var(--text-primary)] text-sm line-clamp-2">
+                      {selectedGroupName}
+                    </h3>
+                    <div className="flex items-center justify-center gap-1.5 mt-1">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        {selectedMemberCount} thành viên
                       </span>
+                    </div>
+                    {selectedGroupId ? (
+                      <p className="font-mono text-[10px] text-[var(--text-secondary)] mt-1 select-all">
+                        ID: {selectedGroupId}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSyncGroup}
+                    disabled={syncingGroup}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-medium transition text-xs disabled:opacity-60 cursor-pointer"
+                  >
+                    <svg className={`w-3.5 h-3.5 ${syncingGroup ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>{syncingGroup ? 'Đang đồng bộ...' : 'Đồng bộ thông tin nhóm'}</span>
+                  </button>
+                </div>
+
+                {/* Group Members List */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle flex-1 flex flex-col min-h-0">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                      <span>Thành viên nhóm</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px]">
+                        {groupMembersList.length || selectedMemberCount}
+                      </span>
+                    </h4>
+                  </div>
+
+                  {/* Member Search */}
+                  {groupMembersList.length > 0 && (
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Tìm thành viên..."
+                        value={groupMemberSearch}
+                        onChange={(e) => setGroupMemberSearch(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-secondary)] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      {groupMemberSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setGroupMemberSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
-                    <span className="text-[var(--text-secondary)]">Nguồn ban đầu:</span>
-                    <span className="font-medium text-[var(--text-primary)]">
-                      {selectedConversation.customer_source || 'MANUAL'}
+                  {/* Members scrollable box */}
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1 text-xs">
+                    {groupMembersList.length === 0 ? (
+                      <div className="text-center py-4 text-[var(--text-tertiary)] space-y-2">
+                        <p>Chưa có danh sách thành viên chi tiết trong cache.</p>
+                        <button
+                          type="button"
+                          onClick={handleSyncGroup}
+                          disabled={syncingGroup}
+                          className="text-xs text-blue-600 hover:underline font-medium cursor-pointer"
+                        >
+                          Nhấn để tải danh sách thành viên
+                        </button>
+                      </div>
+                    ) : filteredMembers.length === 0 ? (
+                      <div className="text-center py-4 text-[var(--text-tertiary)]">
+                        Không tìm thấy thành viên nào khớp với &quot;{groupMemberSearch}&quot;
+                      </div>
+                    ) : (
+                      filteredMembers.map((member) => (
+                        <div
+                          key={member.id}
+                          className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-[var(--surface-secondary)] transition group"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-100 to-indigo-100 text-blue-800 flex items-center justify-center font-bold text-[10px] shrink-0 border border-blue-200">
+                              {getInitials(member.name)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium text-[var(--text-primary)] truncate text-[11px]" title={member.name}>
+                                {member.name}
+                              </p>
+                              <div className="flex items-center gap-1">
+                                {member.isCreator ? (
+                                  <span className="text-[9px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">
+                                    👑 Trưởng nhóm
+                                  </span>
+                                ) : member.isAdmin ? (
+                                  <span className="text-[9px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1 rounded">
+                                    ⭐ Phó nhóm
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-[var(--text-tertiary)]">
+                                    Thành viên
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            title={`Nhắc tên @${member.name}`}
+                            onClick={() => {
+                              handleDraftChange(currentDraft ? `${currentDraft} @${member.name} ` : `@${member.name} `);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 text-[10px] rounded bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition shrink-0 cursor-pointer"
+                          >
+                            Tag @
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Group Safety & Mode Note */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-2 shadow-subtle">
+                  <div className="flex items-center gap-1.5 text-amber-700 font-semibold text-[11px]">
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>Cơ chế bảo vệ Nhóm Zalo</span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                    AI Auto-Reply tạm khóa tự động trên các hội thoại nhóm Zalo để đảm bảo tư vấn viên / Sale trực tiếp trao đổi với nhiều thành viên, tránh spam tin nhắn.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Profile Card */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-3 shadow-subtle">
+                  <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 mx-auto flex items-center justify-center font-bold text-sm">
+                    {getInitials(selectedConversation.customer_name)}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-[var(--text-primary)] text-sm">
+                      {selectedConversation.customer_name || 'Khách hàng'}
+                    </h3>
+                    <span className="font-mono text-[var(--text-secondary)] text-xs">
+                      {selectedConversation.customer_code}
                     </span>
                   </div>
 
-                  <div className="flex justify-between py-1">
-                    <span className="text-[var(--text-secondary)]">Giai đoạn:</span>
-                    <span className="font-semibold text-blue-700">
-                      {(selectedConversation.customer_stage && CUSTOMER_STAGE_LABELS[selectedConversation.customer_stage]) || selectedConversation.customer_stage || 'Khách mới'}
-                    </span>
+                  <Link
+                    href={`/customers/${selectedConversation.customer_id}`}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-medium transition text-xs"
+                  >
+                    <span>Xem Hồ Sơ 360</span>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </Link>
+                </div>
+
+                {/* Details List */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle">
+                  <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px]">
+                    Thông tin liên hệ
+                  </h4>
+
+                  <div className="space-y-2 text-[var(--text-primary)]">
+                    <div className="flex justify-between items-center py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
+                      {selectedConversation.metadata?.is_group ? (
+                        <span className="font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[11px]">Hội thoại Nhóm</span>
+                      ) : selectedConversation.customer_phone ? (
+                        <SecurePhoneRow
+                          customerId={selectedConversation.customer_id}
+                          maskedPhone={selectedConversation.customer_phone}
+                        />
+                      ) : (
+                        <span className="font-mono font-medium text-slate-400">Chưa có</span>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)]">Kênh hội thoại:</span>
+                      <span className="capitalize font-medium text-[var(--text-primary)]">
+                        {selectedConversation.channel === 'zalo'
+                          ? selectedConversation.metadata?.is_group
+                            ? 'Nhóm Zalo'
+                            : 'Zalo'
+                          : 'Facebook Messenger'}
+                      </span>
+                    </div>
+
+                    {selectedConversation.channel === 'facebook' && (
+                      <div className="flex justify-between gap-3 py-1 border-b border-[var(--border-subtle)]">
+                        <span className="text-[var(--text-secondary)] shrink-0">Khách nhắn vào Page:</span>
+                        <span
+                          className="font-medium text-blue-700 text-right break-words"
+                          title={selectedConversation.channel_page_id || undefined}
+                        >
+                          {selectedConversation.channel_page_name ||
+                            selectedConversation.channel_page_id ||
+                            'Chưa xác định'}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)]">Nguồn ban đầu:</span>
+                      <span className="font-medium text-[var(--text-primary)]">
+                        {selectedConversation.customer_source || 'MANUAL'}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between py-1">
+                      <span className="text-[var(--text-secondary)]">Giai đoạn:</span>
+                      <span className="font-semibold text-blue-700">
+                        {(selectedConversation.customer_stage && CUSTOMER_STAGE_LABELS[selectedConversation.customer_stage]) || selectedConversation.customer_stage || 'Khách mới'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Quick Business Note */}
-              <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-2 shadow-subtle">
-                <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold text-[11px]">
-                  <svg className="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>Quy trình nghiệp vụ</span>
+                {/* Quick Business Note */}
+                <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-2 shadow-subtle">
+                  <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold text-[11px]">
+                    <svg className="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Quy trình nghiệp vụ</span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                    Khi khách hỏi giá hoặc lịch khảo sát, AI sẽ ghi nhận thông số. Khảo sát đo đạc thực tế do Kỹ thuật viên phụ trách, giá được tính tự động từ bảng giá chính sách.
+                  </p>
                 </div>
-                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                  Khi khách hỏi giá hoặc lịch khảo sát, AI sẽ ghi nhận thông số. Khảo sát đo đạc thực tế do Kỹ thuật viên phụ trách, giá được tính tự động từ bảng giá chính sách.
-                </p>
-              </div>
-            </>
+              </>
+            )
           ) : (
             <div className="space-y-4 text-xs">
               <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl text-center space-y-2 shadow-subtle">
