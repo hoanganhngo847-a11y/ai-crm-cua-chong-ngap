@@ -31,16 +31,21 @@ export interface ZcaJsInboundMessage {
   externalRef: string;
   senderName?: string;
   senderDisplayName?: string;
+  senderId?: string;
   senderNameSource?: 'profile_resolved' | 'message_dname' | 'group_info';
   content: string;
   direction: 'inbound' | 'outbound';
   isSelf: boolean;
   isGroup: boolean;
+  recovered?: boolean;
+  providerTimestamp?: string;
   groupId?: string;
   groupName?: string;
   totalMember?: number;
   groupAvatar?: string;
   groupMembers?: ZcaJsGroupMember[];
+  membersComplete?: boolean;
+  groupFetchedAt?: string;
 }
 
 export type ZcaJsInboundParseResult =
@@ -109,8 +114,11 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
   const direction: 'inbound' | 'outbound' = requestedDirection === 'outbound' ? 'outbound' : 'inbound';
   const isSelf = direction === 'outbound';
 
+  const senderId = isGroup && typeof raw.senderId === 'string' && /^[0-9]{1,40}$/.test(raw.senderId)
+    ? raw.senderId : undefined;
   const senderDisplayName = sanitizeZaloDisplayName(raw.senderDisplayName) ||
-    sanitizeZaloDisplayName(raw.senderName);
+    sanitizeZaloDisplayName(raw.senderName) ||
+    (isGroup && !isSelf && senderId ? `Thành viên ${senderId}` : undefined);
   const groupName = isGroup ? sanitizeZaloDisplayName(raw.groupName) : undefined;
   const rawSenderName = sanitizeZaloDisplayName(raw.senderName);
   const senderName = isGroup
@@ -135,10 +143,10 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
     ? formatGroupMessageContent(rawContent, senderDisplayName, isSelf)
     : rawContent;
 
-  const totalMember = typeof raw.totalMember === 'number' && raw.totalMember > 0 ? raw.totalMember : undefined;
+  const totalMember = typeof raw.totalMember === 'number' && Number.isInteger(raw.totalMember) && raw.totalMember >= 0 ? raw.totalMember : undefined;
   const groupAvatar = typeof raw.groupAvatar === 'string' && raw.groupAvatar.trim() ? raw.groupAvatar.trim() : undefined;
   const groupMembers = Array.isArray(raw.groupMembers)
-    ? (raw.groupMembers as Array<Record<string, unknown>>)
+    ? (raw.groupMembers.filter((m) => m && typeof m === 'object') as Array<Record<string, unknown>>)
         .map((m) => ({
           id: String(m.id || '').trim(),
           name: String(m.name || '').trim(),
@@ -146,7 +154,7 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
           isAdmin: Boolean(m.isAdmin),
           isCreator: Boolean(m.isCreator),
         }))
-        .filter((m) => Boolean(m.id && m.name))
+        .filter((m) => Boolean(m.id))
     : undefined;
 
   return {
@@ -158,16 +166,21 @@ export function parseZcaJsInboundPayload(body: unknown): ZcaJsInboundParseResult
       externalRef,
       ...(senderName ? { senderName } : {}),
       ...(senderDisplayName ? { senderDisplayName } : {}),
+      ...(senderId ? { senderId } : {}),
       senderNameSource,
       content,
       direction,
       isSelf,
       isGroup,
+      recovered: raw.recovered === true,
+      ...(typeof raw.timestamp === 'string' && Number.isFinite(Date.parse(raw.timestamp)) ? { providerTimestamp: new Date(raw.timestamp).toISOString() } : {}),
       ...(groupId ? { groupId } : {}),
       ...(groupName ? { groupName } : {}),
-      ...(totalMember ? { totalMember } : {}),
+      ...(totalMember !== undefined ? { totalMember } : {}),
       ...(groupAvatar ? { groupAvatar } : {}),
-      ...(groupMembers && groupMembers.length > 0 ? { groupMembers } : {}),
+      ...(groupMembers ? { groupMembers } : {}),
+      ...(typeof raw.membersComplete === 'boolean' ? { membersComplete: raw.membersComplete } : {}),
+      ...(typeof raw.groupFetchedAt === 'string' && Number.isFinite(Date.parse(raw.groupFetchedAt)) ? { groupFetchedAt: raw.groupFetchedAt } : {}),
     },
   };
 }
@@ -179,12 +192,17 @@ export function buildZcaJsSourceMetadata(message: ZcaJsInboundMessage): Record<s
     direction: message.direction,
     observed_self_message: message.direction === 'outbound',
     is_group: message.isGroup,
+    recovered: message.recovered === true,
+    ...(message.providerTimestamp ? { provider_timestamp: message.providerTimestamp } : {}),
     ...(message.groupId ? { group_id: message.groupId } : {}),
     ...(message.groupName ? { group_name: message.groupName } : {}),
-    ...(message.totalMember ? { member_count: message.totalMember } : {}),
+    ...(message.totalMember !== undefined ? { member_count: message.totalMember } : {}),
     ...(message.groupAvatar ? { group_avatar: message.groupAvatar } : {}),
     ...(message.groupMembers ? { members: message.groupMembers } : {}),
     ...(message.senderDisplayName ? { zalo_sender_name: message.senderDisplayName } : {}),
+    ...(message.senderId ? { zalo_sender_id: message.senderId } : {}),
+    ...(message.membersComplete !== undefined ? { members_complete: message.membersComplete } : {}),
+    ...(message.groupFetchedAt ? { group_fetched_at: message.groupFetchedAt } : {}),
     ...(message.senderName
       ? {
           // The Inbox header prefers this display name for Zalo conversations.

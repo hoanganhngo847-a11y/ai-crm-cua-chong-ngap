@@ -18,6 +18,7 @@ import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
 import { maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
 import { cleanCustomerReply, hasInternalLeak } from '../../ai-brain/validation';
+import { presentGroupMessage } from '../utils/group-message';
 
 const LEGACY_AI_LEAK_NOTICE = '[Nội dung AI cũ chứa suy nghĩ nội bộ đã bị ẩn]';
 
@@ -648,6 +649,8 @@ export async function getConversationById(
 export interface GetMessagesOptions {
   userId?: string;
   actorId?: string;
+  pageSize?: number;
+  before?: { createdAt: string; id: string };
 }
 
 /**
@@ -768,7 +771,7 @@ export async function getMessagesByConversationId(
   // Resource Authorization: Kiểm tra cuộc hội thoại có đúng thuộc companyId của caller hay không
   const { data: conv, error: convError } = await adminClient
     .from('conversations')
-    .select('id, company_id, customer_id, channel, unread_count')
+    .select('id, company_id, customer_id, channel, unread_count, metadata, external_conversation_id')
     .eq('id', conversationId)
     .eq('company_id', companyId)
     .maybeSingle();
@@ -793,15 +796,33 @@ export async function getMessagesByConversationId(
   // - Với vai trò SALE: Chỉ query/trả về dữ liệu từ public.interactions.sanitized_content.
   //   Tuyệt đối KHÔNG join hay select từ private schema interaction raw contents.
   // - Chỉ có BOSS_ADMIN mới được tiếp cận nguyên văn nội dung tin nhắn gốc (từ private schema).
-  const { data: interactions, error: msgError } = await adminClient
+  let messageQuery = adminClient
     .from('interactions')
     .select('id, company_id, customer_id, conversation_id, channel, type, direction, sanitized_content, sanitization_status, actor_type, actor_user_id, created_at')
     .eq('conversation_id', conversationId)
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: true });
-
-  if (msgError || !interactions) {
-    return [];
+    .eq('company_id', companyId);
+  const paginated = options?.pageSize !== undefined;
+  if (options?.before) {
+    const { createdAt, id } = options.before;
+    if (!UUID_REGEX.test(id) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(createdAt) || !Number.isFinite(Date.parse(createdAt))) throw new Error('INVALID_MESSAGE_CURSOR');
+    // Preserve PostgreSQL microseconds: Date.toISOString() truncates them and
+    // would skip messages within the cursor's millisecond.
+    const time = createdAt;
+    messageQuery = messageQuery.or(`created_at.lt.${time},and(created_at.eq.${time},id.lt.${id})`);
+  }
+  messageQuery = messageQuery.order('created_at', { ascending: !paginated });
+  if (paginated) messageQuery = messageQuery.order('id', { ascending: false }).limit(Math.max(1, Math.min(200, options!.pageSize!)));
+  const { data: rows, error: msgError } = await messageQuery;
+  if (msgError || !rows) throw new Error('Không thể tải tin nhắn. Vui lòng thử lại.');
+  const interactions = paginated ? [...rows].reverse() : rows;
+  const isGroup = conv.channel === 'ZALO' && (conv.metadata?.is_group === true || String(conv.external_conversation_id || '').startsWith('group:'));
+  const authors = new Map<string, { sender_id?: string; sender_name?: string }>();
+  if (isGroup && interactions.length && typeof adminClient.rpc === 'function') {
+    const { data } = await adminClient.rpc('get_zalo_group_message_authors', {
+      p_company_id: companyId,
+      p_interaction_ids: interactions.map((m) => m.id),
+    });
+    for (const author of data || []) authors.set(author.interaction_id, author);
   }
 
   // Batch query outbound delivery status for outbound interactions (Requirement 2: No N+1)
@@ -933,19 +954,12 @@ export async function getMessagesByConversationId(
         m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
       const isOutbound = (m.direction || '').toUpperCase() === 'OUTBOUND';
 
-      let senderName: string | undefined = undefined;
-      let displayRaw = raw;
-      let displaySanitized = sanitized;
-
-      if (!isOutbound && senderType === 'customer') {
-        const prefixMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(sanitized);
-        if (prefixMatch) {
-          senderName = prefixMatch[1].trim();
-          displaySanitized = prefixMatch[2];
-          const rawMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(raw);
-          displayRaw = rawMatch ? rawMatch[2] : raw;
-        }
-      }
+      const author = authors.get(m.id);
+      const presentation = presentGroupMessage(sanitized, isGroup, author?.sender_name ? sanitizePhoneInText(author.sender_name) : undefined);
+      const rawPresentation = presentGroupMessage(raw, isGroup, author?.sender_name);
+      const senderName = presentation.senderName;
+      const displayRaw = rawPresentation.content;
+      const displaySanitized = presentation.content;
 
       return {
         id: m.id,
@@ -955,6 +969,7 @@ export async function getMessagesByConversationId(
         channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
         sender_type: senderType,
         sender_name: senderName,
+        sender_external_id: author?.sender_id,
         content: sanitizeAiMessageForDisplay(displayRaw, m.actor_type), // BOSS_ADMIN nhận nguyên văn bản gốc
         sanitized_content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type),
         sanitization_status: canonicalStatus,
@@ -973,16 +988,10 @@ export async function getMessagesByConversationId(
       m.actor_type === 'CUSTOMER' ? 'customer' : m.actor_type === 'AI' ? 'ai' : 'sale';
     const isOutbound = (m.direction || '').toUpperCase() === 'OUTBOUND';
 
-    let senderName: string | undefined = undefined;
-    let displaySanitized = sanitized;
-
-    if (!isOutbound && senderType === 'customer') {
-      const prefixMatch = /^([^\r\n:]{1,80}):(?:\s+|\r?\n)([\s\S]*)$/.exec(sanitized);
-      if (prefixMatch) {
-        senderName = prefixMatch[1].trim();
-        displaySanitized = prefixMatch[2];
-      }
-    }
+    const author = authors.get(m.id);
+    const presentation = presentGroupMessage(sanitized, isGroup, author?.sender_name ? sanitizePhoneInText(author.sender_name) : undefined);
+    const senderName = presentation.senderName;
+    const displaySanitized = presentation.content;
 
     return {
       id: m.id,
@@ -992,6 +1001,7 @@ export async function getMessagesByConversationId(
       channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
       sender_type: senderType,
       sender_name: senderName,
+      sender_external_id: author?.sender_id,
       content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type), // Mặc định hiển thị sanitized_content
       sanitized_content: sanitizeAiMessageForDisplay(displaySanitized, m.actor_type),
       sanitization_status: (() => { const s = m.sanitization_status || 'SUCCEEDED'; return (s === 'CLEAN' || s === 'SANITIZED') ? 'SUCCEEDED' : s; })() as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
@@ -1755,7 +1765,7 @@ export async function addInboundMessage(params: {
 }
 
   const { data: rpcData, error: rpcError } = await adminClient.rpc(
-    'ingest_provider_message_atomic',
+    sourceMetadata.transport === 'ZCAJS' ? 'ingest_zcajs_message_atomic' : 'ingest_provider_message_atomic',
     {
       p_company_id: companyId,
       p_channel: channel,

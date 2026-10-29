@@ -42,14 +42,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - run: npm ci
       - run: node --check zalo-zcajs-worker/src/index.mjs
       - run: node --check zalo-zcajs-worker/src/dispatch-loop.mjs
       - run: node --check zalo-zcajs-worker/src/message-normalizer.mjs
       - run: node --check zalo-zcajs-worker/src/inbound-delivery.mjs
       - run: node --check zalo-zcajs-worker/src/contact-directory.mjs
-      - run: node --test zalo-zcajs-worker/test/message-normalizer.test.mjs
-      - run: node --test zalo-zcajs-worker/test/inbound-delivery.test.mjs
-      - run: node --test zalo-zcajs-worker/tests/recent-rest-recovery.test.mjs
-      - run: node --test zalo-zcajs-worker/test/contact-directory.test.mjs
-      - run: node --test zalo-zcajs-worker/test/docker-patches.test.mjs
+      - run: npm run test:zalo-zcajs-worker
       - run: docker build -f zalo-zcajs-worker/Dockerfile zalo-zcajs-worker

@@ -226,6 +226,7 @@ export interface InboxMessage {
   channel: InboxChannel;
   sender_type: SenderType;
   sender_name?: string;
+  sender_external_id?: string;
   sender_id?: string;
   content: string; // Mặc định hiển thị sanitized_content (an toàn cho DTO công khai)
   sanitized_content?: string; // Bản làm sạch che số điện thoại (Zero-Phone Security Zone)
