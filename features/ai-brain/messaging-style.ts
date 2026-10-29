@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { cleanCustomerReply, hasInternalLeak } from './validation';
+
 /**
  * Shared messaging-style policy for Facebook Page / Messenger sales turns.
  *
@@ -426,4 +428,24 @@ export function applyContactRequestPolicy(
   }
 
   return stripPhoneRequest(draft) || buildMessengerFallbackReply(profile);
+}
+
+/**
+ * Single customer-facing gate used by every AI outbound path: remove reasoning
+ * and playbook text, reject anything still suspicious, then apply the contact
+ * policy when a messaging profile is available. Returns '' when the draft must
+ * not be shown or sent.
+ */
+export function sanitizeCustomerFacingReply(
+  rawDraft: string,
+  profile?: CustomerMessagingProfile | null,
+): string {
+  const cleaned = cleanCustomerReply(rawDraft);
+  if (!cleaned || hasInternalLeak(cleaned)) return '';
+
+  if (!profile) return cleaned;
+
+  const guarded = applyContactRequestPolicy(cleaned, profile);
+  if (!guarded || hasInternalLeak(guarded)) return '';
+  return guarded;
 }

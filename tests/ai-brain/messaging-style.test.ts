@@ -10,6 +10,7 @@ import {
   formatMessagingPolicy,
   messageContainsCustomerPhone,
   messageIsOnlyContactInfo,
+  sanitizeCustomerFacingReply,
   stripPhoneRequest,
 } from '../../features/ai-brain/messaging-style';
 
@@ -161,6 +162,30 @@ test('Messaging Style: applies the contact policy to drafts', () => {
       profile,
     ),
     buildMessengerFallbackReply(profile),
+  );
+});
+
+test('Messaging Style: customer-facing gate strips reasoning from an AI draft', () => {
+  const raw = `Dựa trên yêu cầu của khách hàng Lan Pham và quy tắc tư vấn từ playbook, tôi xin đưa ra quyết định xử lý như sau.
+
+- Khách hàng mới gửi yêu cầu tư vấn chung chung.
+- Theo quy định, yêu cầu tư vấn chung không phải là chuyển giao cho người thật ngay.
+
+Bạn có thể gửi phản hồi mẫu cho khách hàng:
+Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé. Anh/chị cho em xin số điện thoại liên hệ để chuyên viên bên em hỗ trợ chi tiết hơn cho mình ạ.`;
+
+  const profile = analyzeCustomerMessaging({ latestText: 'Tư vấn du học Đức giúp mình' });
+  assert.equal(
+    sanitizeCustomerFacingReply(raw, profile),
+    'Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé.',
+  );
+
+  // A draft that is pure internal reasoning is blocked entirely.
+  assert.equal(
+    sanitizeCustomerFacingReply(
+      'Theo playbook, tôi xin đưa ra quyết định xử lý như sau: khách hàng mới gửi yêu cầu tư vấn chung.',
+    ),
+    '',
   );
 });
 
