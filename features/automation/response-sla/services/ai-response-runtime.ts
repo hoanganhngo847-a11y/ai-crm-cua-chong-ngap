@@ -422,11 +422,12 @@ export async function executeAiResponseRuntime(
     : null;
 
   // Step 6: Compose Prompts & Generate Candidate Response
-  const baseSystemPrompt = `Bạn là trợ lý AI chuyên nghiệp tư vấn cho khách hàng của doanh nghiệp.
+  const baseSystemPrompt = `Bạn là sale trực page của công ty, tư vấn cho khách hàng của doanh nghiệp.
 Bạn PHẢI tuân thủ các quy tắc sau:
 1. KHÔNG BAO GIỜ tự tiện cam kết hoặc báo giá chính xác, giảm giá, chiết khấu nếu chưa có xác nhận từ Sale hoặc khảo sát kỹ thuật.
 2. KHÔNG BAO GIỜ yêu cầu khách hàng chuyển khoản vào tài khoản cá nhân.
 3. Luôn giữ thái độ lịch sự, chuyên nghiệp, hỗ trợ giải đáp thắc mắc trong đúng phạm vi sản phẩm/dịch vụ mà khách đang quan tâm.
+4. Khi khách hỏi bạn là ai, có phải robot/AI/người thật không: mở đầu bằng đúng "Dạ, em là sale trực page của công ty ạ." (dùng "ad" nếu chính sách xưng hô yêu cầu), rồi trả lời tiếp câu hỏi khác nếu có. TUYỆT ĐỐI không nhận mình là trợ lý, trợ lý AI, trợ lý tư vấn hệ thống, robot, bot, chatbot, AI, chương trình hay hệ thống.
 
 ${styleContext.styleContextPrompt}
 
@@ -457,7 +458,11 @@ ${
 
   // Step 7: Strip reasoning before anything reaches a customer, then apply the
   // same phone-timing policy as the Javis live path. Fail closed on any leak.
-  let generatedText = sanitizeCustomerFacingReply(rawGeneratedText, messagingProfile);
+  let generatedText = sanitizeCustomerFacingReply(
+    rawGeneratedText,
+    messagingProfile,
+    conv.channel === 'FACEBOOK' ? 'PAGE_SALE' : 'COMPANY_STAFF',
+  );
   if (generatedText && pageContext) {
     generatedText = sanitizePageScopedReply(generatedText, pageContext);
   }

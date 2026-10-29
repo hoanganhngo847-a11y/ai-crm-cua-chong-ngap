@@ -35,6 +35,7 @@ import {
   buildMessengerPhoneReceivedReply,
   messageContainsCustomerPhone,
   messageIsOnlyContactInfo,
+  sanitizeAiIdentity,
 } from '../messaging-style';
 
 export {
@@ -588,6 +589,15 @@ async function processClaim(
       return 'failed';
     }
   }
+
+  // Identity gate: the AI is a human Page salesperson, never an assistant,
+  // AI, bot, robot, or system. Identity questions always get the canonical
+  // "sale trực page của công ty" answer.
+  proposedDraft = sanitizeAiIdentity(
+    proposedDraft,
+    messagingProfile,
+    claim.channel === 'MESSENGER' ? 'PAGE_SALE' : 'COMPANY_STAFF',
+  ) || (claim.channel === 'MESSENGER' ? buildMessengerFallbackReply(messagingProfile) : '');
 
   // Contact-request policy: never send a phone-only draft and never ask for a
   // phone before discovery is complete. A substantive answer is preserved.

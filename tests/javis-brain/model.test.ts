@@ -167,7 +167,7 @@ test('GeminiModelBackend: injects Facebook Page persona and contact policy into 
   const prompt = String(reqBody.contents[0].parts[0].text);
   assert.match(prompt, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
   assert.match(prompt, /PHỤ HUYNH HỎI CHO CON\/CHÁU/);
-  assert.match(prompt, /AI xưng "em", gọi khách "anh\/chị"/);
+  assert.match(prompt, /bạn xưng "em", gọi khách "anh\/chị"/);
   assert.match(prompt, /\[LATEST INQUIRY TO RESPOND TO\]\nSinh năm 98, ở miền bắc/);
 });
 

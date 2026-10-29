@@ -14,7 +14,7 @@ import {
   OpenAiResponseModel,
   validateAiResponsePolicyFirewall,
 } from '../automation/response-sla/services/ai-response-runtime';
-import { sanitizeCustomerFacingReply } from '../ai-brain/messaging-style';
+import { analyzeCustomerMessaging, sanitizeCustomerFacingReply } from '../ai-brain/messaging-style';
 import { extractMessengerPageId } from '../ai-brain/page-id';
 import {
   formatPageTopicPolicy,
@@ -77,6 +77,7 @@ export async function generateAiDraftSuggestionAction(params: {
       .maybeSingle();
 
     const customerMessage = latestInbound?.sanitized_content || 'Chào công ty, tôi cần tư vấn';
+    const messagingProfile = analyzeCustomerMessaging({ latestText: customerMessage });
 
     // 3. Phân tích khách hàng (xử lý gracefully)
     let analysisSummary: string | null = null;
@@ -110,12 +111,13 @@ export async function generateAiDraftSuggestionAction(params: {
 
     // 5. Sinh phản hồi gợi ý
     const systemPrompt = [
-      `Bạn là trợ lý AI hỗ trợ chuyên viên Sale soạn thảo câu trả lời cho khách hàng.`,
+      `Bạn là sale trực page của công ty, đang soạn câu trả lời cho khách hàng.`,
       pageContext ? formatPageTopicPolicy(pageContext) : '',
       styleContext.styleContextPrompt,
       analysisSummary ? `[GHI CHÚ HÀNH TRÌNH KHÁCH HÀNG]: ${analysisSummary}` : '',
       `[YÊU CẦU]:`,
       `- Viết một câu trả lời hoàn chỉnh, súc tích, chuyên nghiệp.`,
+      `- Nếu khách hỏi bạn là ai hoặc có phải robot/AI/người thật không, câu trả lời phải xác nhận bạn là "sale trực page của công ty"; tuyệt đối không nhận mình là trợ lý, trợ lý AI, trợ lý tư vấn hệ thống, robot, bot, chatbot, AI, chương trình hay hệ thống.`,
       `- TUYỆT ĐỐI KHÔNG TỰ BÁO GIÁ CỤ THỂ, KHÔNG HỨA HẸN CHIẾT KHẤU, KHÔNG ĐÒI CHUYỂN KHOẢN.`,
       `- Đề xuất bước tiếp theo phù hợp với nhu cầu (gửi thông tin, đặt lịch tư vấn/khảo sát nếu phù hợp).`,
     ].filter(Boolean).join('\n\n');
@@ -128,7 +130,11 @@ export async function generateAiDraftSuggestionAction(params: {
 
     // 6. Bóc suy nghĩ nội bộ trước khi hiển thị cho Sale. Nếu vẫn còn dấu hiệu
     // reasoning/playbook thì chặn hẳn, không để Sale vô tình gửi cho khách.
-    let suggestion = sanitizeCustomerFacingReply(rawSuggestion);
+    let suggestion = sanitizeCustomerFacingReply(
+      rawSuggestion,
+      messagingProfile,
+      pageContext ? 'PAGE_SALE' : 'COMPANY_STAFF',
+    );
     if (suggestion && pageContext) {
       suggestion = sanitizePageScopedReply(suggestion, pageContext);
     }
