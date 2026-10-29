@@ -5,6 +5,7 @@ import { parseZaloCredentials, encryptZaloCredentials, decryptZaloCredentials, c
 import { assertZaloAccountAdmin, listZaloAccounts, saveZaloAccount, toggleZaloAccount } from '../../features/omnichannel/zalo/accounts/service';
 import { scopeZaloThread, splitZaloThread } from '../../features/omnichannel/zalo/accounts/scope';
 import type { ActorContext } from '../../shared/contracts/auth';
+import { isZaloAccountOriginAllowed } from '../../features/omnichannel/zalo/accounts/origin';
 
 const company = '10000000-0000-4000-8000-000000000001';
 const other = '10000000-0000-4000-8000-000000000002';
@@ -13,6 +14,11 @@ const raw = (value = 'test-session') => ({ label: 'Zalo tư vấn 02', cookie: J
 const actor: ActorContext = { userId: boss, companyId: company, memberId: boss, fullName: 'Boss', email: 'boss@test.local', role: 'BOSS_ADMIN', profileStatus: 'ACTIVE', membershipStatus: 'ACTIVE', aal: 'aal2', isMfaEnrolled: true };
 
 async function main() {
+  process.env.ZALO_ACCOUNT_CRM_ORIGIN = 'https://crm.example.com';
+  assert.equal(isZaloAccountOriginAllowed(new Request('http://localhost:10000/api/accounts', { headers: { origin: 'https://crm.example.com' } })), true, 'public HTTPS origin works behind internal HTTP proxy');
+  assert.equal(isZaloAccountOriginAllowed(new Request('http://localhost:10000/api/accounts', { headers: { origin: 'https://evil.example.com' } })), false);
+  assert.equal(isZaloAccountOriginAllowed(new Request('http://localhost:10000/api/accounts', { headers: { origin: 'http://crm.example.com' } })), false);
+  assert.equal(isZaloAccountOriginAllowed(new Request('http://localhost:10000/api/accounts')), false);
   process.env.DEMO_MODE = 'false';
   process.env.ZALO_ACCOUNT_ENCRYPTION_KEY = randomBytes(32).toString('base64');
   const credentials = parseZaloCredentials(raw());

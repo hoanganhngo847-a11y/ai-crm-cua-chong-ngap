@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getActorContext } from '@/lib/auth/context';
 import { assertZaloAccountAdmin, listZaloAccounts, saveZaloAccount, toggleZaloAccount } from '@/features/omnichannel/zalo/accounts/service';
 import { ZaloAccountInputError } from '@/features/omnichannel/zalo/accounts/credentials';
+import { isZaloAccountOriginAllowed } from '@/features/omnichannel/zalo/accounts/origin';
 
 export const runtime = 'nodejs';
 const headers = { 'cache-control': 'no-store' };
@@ -26,8 +27,7 @@ export async function GET() {
 async function mutate(request: NextRequest) {
   try {
     const actor = await getActorContext(); assertZaloAccountAdmin(actor);
-    const origin = request.headers.get('origin');
-    if (origin && origin !== new URL(request.url).origin) return NextResponse.json({ success: false, message: 'Nguồn yêu cầu không hợp lệ.' }, { status: 403, headers });
+    if (!isZaloAccountOriginAllowed(request)) return NextResponse.json({ success: false, message: 'Nguồn yêu cầu không hợp lệ.' }, { status: 403, headers });
     if (Number(request.headers.get('content-length') || '0') > 192 * 1024) return NextResponse.json({ success: false, message: 'File quá lớn.' }, { status: 413, headers });
     const text = await request.text();
     if (Buffer.byteLength(text) > 192 * 1024) throw new ZaloAccountInputError('File quá lớn. Hãy dùng JSON cookie dưới 128 KB.');
