@@ -28,7 +28,7 @@ export default async function CrmPipelinePage() {
     <div className="space-y-6">
       <PageHeader
         title="Phễu khách hàng"
-        description="Kanban và Funnel chia sẻ cùng một nguồn dữ liệu. Chọn giai đoạn để cập nhật, kèm bằng chứng khi cần."
+        description="Chọn giai đoạn để cập nhật, kèm bằng chứng khi cần."
         secondaryActions={
           <Link href="/crm">
             <Button variant="outline" size="sm" leftIcon={<ArrowLeft className="w-3.5 h-3.5" />}>
