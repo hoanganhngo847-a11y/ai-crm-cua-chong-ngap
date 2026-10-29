@@ -1382,6 +1382,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         <span className="font-medium text-[var(--text-primary)] text-xs truncate max-w-[120px]">
                           {conv.customer_name || 'Khách hàng'}
                         </span>
+                        {isZalo && typeof conv.metadata?.zalo_account_name === 'string' && <span title={conv.metadata.zalo_account_name} className="max-w-[110px] truncate rounded bg-cyan-50 px-1.5 py-0.5 text-[10px] text-cyan-800">{conv.metadata.zalo_account_name}</span>}
                         {Boolean(conv.metadata?.is_group) && (
                           <span
                             className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 flex items-center gap-0.5"
@@ -1480,8 +1481,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                       >
                         {selectedConversation.channel === 'zalo'
                           ? selectedConversation.metadata?.is_group
-                            ? 'Nhóm Zalo'
-                            : 'Zalo OA'
+                            ? `Nhóm Zalo · ${String(selectedConversation.metadata?.zalo_account_name || 'Tài khoản hiện tại')}`
+                            : `Zalo · ${String(selectedConversation.metadata?.zalo_account_name || 'Tài khoản hiện tại')}`
                           : `Facebook · ${selectedConversation.channel_page_name || 'Messenger'}`}
                       </span>
                     </div>

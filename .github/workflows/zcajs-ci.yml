@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'app/api/inbox/zalo-zcajs/**'
+      - 'app/(dashboard)/admin/zalo/**'
+      - 'tests/zalo/zalo_accounts.test.ts'
       - 'features/omnichannel/zalo/**'
       - 'features/inbox/components/message-content.tsx'
       - 'features/inbox/components/zalo-composer.tsx'
@@ -34,6 +36,7 @@ jobs:
       - run: npx tsx tests/zalo/zalo_composer_media_wiring.test.ts
       - run: npx tsx --conditions=react-server --test tests/zalo/zalo_zcajs_groups.test.ts tests/zalo/zalo_ai_auto_reply_switch.test.ts
       - run: npx tsx --conditions=react-server tests/zalo/zalo_zcajs_groups_db.test.ts
+      - run: npx tsx --conditions=react-server tests/zalo/zalo_accounts.test.ts
 
   zcajs-worker:
     runs-on: ubuntu-latest
