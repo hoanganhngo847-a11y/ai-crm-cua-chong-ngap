@@ -14,6 +14,7 @@ import {
   OpenAiResponseModel,
   validateAiResponsePolicyFirewall,
 } from '../automation/response-sla/services/ai-response-runtime';
+import { sanitizeCustomerFacingReply } from '../ai-brain/messaging-style';
 
 export interface GenerateAiDraftSuggestionResult {
   success: boolean;
@@ -111,8 +112,18 @@ export async function generateAiDraftSuggestionAction(params: {
       userPrompt: `Tin nhắn khách hàng: "${customerMessage}"`,
     });
 
-    // 6. Kiểm tra Policy Firewall
-    const check = validateAiResponsePolicyFirewall(rawSuggestion);
+    // 6. Bóc suy nghĩ nội bộ trước khi hiển thị cho Sale. Nếu vẫn còn dấu hiệu
+    // reasoning/playbook thì chặn hẳn, không để Sale vô tình gửi cho khách.
+    const suggestion = sanitizeCustomerFacingReply(rawSuggestion);
+    if (!suggestion) {
+      return {
+        success: false,
+        error: 'Gợi ý AI chứa nội dung nội bộ nên đã bị chặn. Vui lòng thử lại.',
+      };
+    }
+
+    // 7. Kiểm tra Policy Firewall
+    const check = validateAiResponsePolicyFirewall(suggestion);
     if (!check.valid) {
       return {
         success: false,
@@ -122,7 +133,7 @@ export async function generateAiDraftSuggestionAction(params: {
 
     return {
       success: true,
-      suggestion: rawSuggestion,
+      suggestion,
       isNeutralDefault: styleContext.isNeutralDefault,
       styleProfileId: styleContext.activeProfileId,
       analysisSummary,

@@ -17,6 +17,20 @@ import type {
 import { sanitizePhoneInText } from '../../crm/utils/phone-sanitizer';
 import { maskPhone } from '../../crm/services/customer.service';
 import { APPLICATION_ROLES } from '../../../shared/constants/roles';
+import { cleanCustomerReply, hasInternalLeak } from '../../ai-brain/validation';
+
+const LEGACY_AI_LEAK_NOTICE = '[Nội dung AI cũ chứa suy nghĩ nội bộ đã bị ẩn]';
+
+/**
+ * Legacy AI messages were stored before the customer-facing guard existed.
+ * Hide their reasoning in the inbox without touching the audit raw content.
+ */
+function sanitizeAiMessageForDisplay(content: string, actorType: string): string {
+  if (actorType !== 'AI' || !content) return content;
+  const cleaned = cleanCustomerReply(content);
+  if (!cleaned || hasInternalLeak(cleaned)) return LEGACY_AI_LEAK_NOTICE;
+  return cleaned;
+}
 
 interface ServiceError extends Error {
   status?: number;
@@ -696,8 +710,8 @@ export async function getMessagesByConversationId(
         }
         return {
           ...m,
-          content: raw,
-          sanitized_content: sanitized,
+          content: sanitizeAiMessageForDisplay(raw, m.sender_type === 'ai' ? 'AI' : m.sender_type),
+          sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.sender_type === 'ai' ? 'AI' : m.sender_type),
           sanitization_status: status,
           raw_content: raw,
           delivery_status: isOutbound ? deliveryStatus : undefined,
@@ -730,8 +744,8 @@ export async function getMessagesByConversationId(
       }
       return {
         ...rest,
-        content: sanitized,
-        sanitized_content: sanitized,
+        content: sanitizeAiMessageForDisplay(sanitized, m.sender_type === 'ai' ? 'AI' : m.sender_type),
+        sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.sender_type === 'ai' ? 'AI' : m.sender_type),
         sanitization_status: status,
         delivery_status: isOutbound ? deliveryStatus : undefined,
       };
@@ -916,8 +930,8 @@ export async function getMessagesByConversationId(
         customer_id: m.customer_id,
         channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
         sender_type: senderType,
-        content: raw, // BOSS_ADMIN nhận nguyên văn bản gốc
-        sanitized_content: sanitized,
+        content: sanitizeAiMessageForDisplay(raw, m.actor_type), // BOSS_ADMIN nhận nguyên văn bản gốc
+        sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.actor_type),
         sanitization_status: canonicalStatus,
         raw_content: raw,
         created_at: m.created_at,
@@ -941,8 +955,8 @@ export async function getMessagesByConversationId(
       customer_id: m.customer_id,
       channel: (m.channel || 'facebook').toLowerCase() as InboxChannel,
       sender_type: senderType,
-      content: sanitized, // Mặc định hiển thị sanitized_content
-      sanitized_content: sanitized,
+      content: sanitizeAiMessageForDisplay(sanitized, m.actor_type), // Mặc định hiển thị sanitized_content
+      sanitized_content: sanitizeAiMessageForDisplay(sanitized, m.actor_type),
       sanitization_status: (() => { const s = m.sanitization_status || 'SUCCEEDED'; return (s === 'CLEAN' || s === 'SANITIZED') ? 'SUCCEEDED' : s; })() as 'CLEAN' | 'SANITIZED' | 'PENDING' | 'FAILED' | 'SUCCEEDED',
       created_at: m.created_at,
       direction: (m.direction || 'INBOUND').toLowerCase() as 'inbound' | 'outbound',
@@ -1381,9 +1395,10 @@ export async function getCustomerTimeline(
     }
 
     const isBoss = callerRole === APPLICATION_ROLES.BOSS_ADMIN;
-    const desc = isBoss
-      ? (rawMap.get(m.id) || m.sanitized_content || '')
-      : (m.sanitized_content || '');
+    const desc = sanitizeAiMessageForDisplay(
+      isBoss ? (rawMap.get(m.id) || m.sanitized_content || '') : (m.sanitized_content || ''),
+      m.actor_type,
+    );
 
     return {
       id: m.id,

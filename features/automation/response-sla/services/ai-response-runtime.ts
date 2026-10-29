@@ -15,6 +15,11 @@ import {
 import { dispatchMessage } from '@/features/omnichannel/facebook/transport';
 import { binding } from '@/features/omnichannel/facebook/binding';
 import {
+  analyzeCustomerMessaging,
+  formatMessagingPolicy,
+  sanitizeCustomerFacingReply,
+} from '@/features/ai-brain/messaging-style';
+import {
   ZaloInboxService,
   type ZaloSystemPrincipal,
   type ZaloInboxServiceOptions,
@@ -383,12 +388,29 @@ export async function executeAiResponseRuntime(
     .order('created_at', { ascending: true })
     .limit(10);
 
-  const conversationHistoryText = (recentInteractions || [])
+  const history = recentInteractions || [];
+  const conversationHistoryText = history
     .map((i) => `[${i.direction} - ${i.actor_type}]: ${i.sanitized_content}`)
     .join('\n');
 
+  // Facebook Page turns use the same persona/contact policy as the Javis live
+  // path so this SLA runtime cannot send phone-first or reasoning-heavy replies.
+  const latestInbound = [...history]
+    .reverse()
+    .find((i) => i.direction === 'INBOUND' && i.actor_type === 'CUSTOMER');
+  const messagingProfile = conv.channel === 'FACEBOOK'
+    ? analyzeCustomerMessaging({
+        latestText: latestInbound?.sanitized_content ?? undefined,
+        recentMessages: history.map((i) => ({
+          direction: i.direction === 'INBOUND' ? 'INBOUND' as const : 'OUTBOUND' as const,
+          actorType: i.actor_type,
+          content: i.sanitized_content,
+        })),
+      })
+    : null;
+
   // Step 6: Compose Prompts & Generate Candidate Response
-  const systemPrompt = `Bạn là trợ lý AI chuyên nghiệp tư vấn sản phẩm cửa chống ngập cho khách hàng.
+  const baseSystemPrompt = `Bạn là trợ lý AI chuyên nghiệp tư vấn sản phẩm cửa chống ngập cho khách hàng.
 Bạn PHẢI tuân thủ các quy tắc sau:
 1. KHÔNG BAO GIỜ tự tiện cam kết hoặc báo giá chính xác, giảm giá, chiết khấu nếu chưa có xác nhận từ Sale hoặc khảo sát kỹ thuật.
 2. KHÔNG BAO GIỜ yêu cầu khách hàng chuyển khoản vào tài khoản cá nhân.
@@ -406,6 +428,10 @@ ${
     : 'Chưa có dữ liệu phân tích khách hàng trước đó. Hãy phản hồi chu đáo.'
 }`;
 
+  const systemPrompt = messagingProfile
+    ? `${baseSystemPrompt}\n\n${formatMessagingPolicy(messagingProfile)}\n- Trả lời trực tiếp câu hỏi của khách trước; không chỉ xin số điện thoại.`
+    : baseSystemPrompt;
+
   const userPrompt = `Lịch sử hội thoại gần đây:\n${conversationHistoryText}\n\nHãy tạo phản hồi hỗ trợ khách hàng tiếp theo một cách phù hợp.`;
 
   const rawGeneratedText = await model.generateResponse({
@@ -413,8 +439,15 @@ ${
     userPrompt,
   });
 
-  // Step 7: Business Policy Firewall Check (Fail-Closed)
-  const firewallCheck = validateAiResponsePolicyFirewall(rawGeneratedText);
+  // Step 7: Strip reasoning before anything reaches a customer, then apply the
+  // same phone-timing policy as the Javis live path. Fail closed on any leak.
+  const generatedText = sanitizeCustomerFacingReply(rawGeneratedText, messagingProfile);
+  if (!generatedText) {
+    throw new PolicyFirewallViolationError('Model generated response contains internal reasoning');
+  }
+
+  // Step 7b: Business Policy Firewall Check (Fail-Closed)
+  const firewallCheck = validateAiResponsePolicyFirewall(generatedText);
   if (!firewallCheck.valid) {
     throw new PolicyFirewallViolationError(
       firewallCheck.violationReason || 'Model generated response violates commercial policy firewall'
@@ -438,7 +471,7 @@ ${
       customerId,
       windowId,
       channel: conv.channel,
-      content: rawGeneratedText,
+      content: generatedText,
       claimId,
       decision,
       provenance,
@@ -454,7 +487,7 @@ ${
       conversationId,
       customerId,
       windowId,
-      content: rawGeneratedText,
+      content: generatedText,
       claimId,
       decision,
       provenance,
@@ -468,7 +501,7 @@ ${
       conversationId,
       customerId,
       windowId,
-      content: rawGeneratedText,
+      content: generatedText,
       claimId,
       decision,
       provenance,
