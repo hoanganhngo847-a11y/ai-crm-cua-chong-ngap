@@ -76,8 +76,8 @@ export function formatGroundingContext(grounding?: BrainTurnGrounding, inputText
   }
 
   // The persona/contact policy is scoped to Facebook Page sales turns. It is
-  // added only when the turn is Messenger or carries a Page playbook so Zalo
-  // conversations keep their existing channel-specific behavior.
+  // added only when the turn is Messenger or carries a Page playbook so other
+  // channels keep their existing channel-specific behavior.
   const isFacebookPageTurn = grounding.conversation?.channel === 'MESSENGER'
     || grounding.conversation?.channel === 'FACEBOOK'
     || (grounding.knowledge ?? []).some((item) => item.category === 'SALES_PLAYBOOK');
