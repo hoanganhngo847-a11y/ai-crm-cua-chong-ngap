@@ -10,6 +10,7 @@ import type {
   MessageDeliveryStatus,
 } from '../types/inbox.types';
 import { isPendingDelivery, mergeDeliveryStatus } from '../types/inbox.types';
+import { presentGroupMessage } from '../utils/group-message';
 import { generateAiDraftSuggestionAction } from '../actions';
 import { createClient } from '@/lib/supabase/client';
 import MessageContent from './message-content';
@@ -110,8 +111,15 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
   // Group details & members state
-  const [syncingGroup, setSyncingGroup] = useState<boolean>(false);
+  const [syncingGroupId, setSyncingGroupId] = useState<string | null>(null);
+  const syncingGroup = syncingGroupId === selectedConversationId;
   const [groupMemberSearch, setGroupMemberSearch] = useState<string>('');
+  const [groupSyncNotice, setGroupSyncNotice] = useState('');
+  const groupAutoSyncRef = useRef<Record<string, number>>({});
+  const [historyCursor, setHistoryCursor] = useState<Record<string, string | null>>({});
+  const [loadingOlderFor, setLoadingOlderFor] = useState<string | null>(null);
+  const prependingHistoryRef = useRef<string | null>(null);
+  const [messageLoadError, setMessageLoadError] = useState('');
 
   // P0-A: Store messages strictly keyed by conversationId
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, InboxMessage[]>>({});
@@ -172,7 +180,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
 
   const handleSyncGroup = useCallback(async () => {
     if (!selectedConversation?.id) return;
-    setSyncingGroup(true);
+    setSyncingGroupId(selectedConversation.id);
+    setGroupSyncNotice('');
     try {
       const res = await fetch('/api/inbox/zalo-zcajs/group-sync', {
         method: 'POST',
@@ -192,6 +201,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     ...(c.metadata || {}),
                     is_group: true,
                     group_name: data.group.groupName,
+                    zalo_display_name: data.group.groupName,
+                    members_complete: data.group.membersComplete,
+                    group_fetched_at: data.group.fetchedAt,
                     member_count: data.group.totalMember,
                     members: data.group.members,
                     group_avatar: data.group.avatar,
@@ -200,11 +212,15 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
               : c
           )
         );
+        if (activeConversationRef.current === selectedConversation.id && data.stale) setGroupSyncNotice('Chưa kết nối được Zalo. Đang hiển thị thông tin đã lưu.');
+      } else if (activeConversationRef.current === selectedConversation.id) {
+        setGroupSyncNotice('Chưa tải được thông tin nhóm. Vui lòng thử lại.');
       }
     } catch (err) {
+      if (activeConversationRef.current === selectedConversation.id) setGroupSyncNotice('Chưa tải được thông tin nhóm. Vui lòng thử lại.');
       console.warn('Sync group error:', err);
     } finally {
-      setSyncingGroup(false);
+      setSyncingGroupId((current) => current === selectedConversation.id ? null : current);
     }
   }, [selectedConversation]);
 
@@ -232,7 +248,15 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
     : '';
   const selectedMemberCount = typeof selectedConversation?.metadata?.member_count === 'number'
     ? selectedConversation.metadata.member_count
-    : groupMembersList.length || 7;
+    : undefined;
+
+  useEffect(() => {
+    if (!selectedConversationId || !isSelectedGroup) return;
+    const last = groupAutoSyncRef.current[selectedConversationId] || 0;
+    if (Date.now() - last < 5 * 60_000) return;
+    groupAutoSyncRef.current[selectedConversationId] = Date.now();
+    void handleSyncGroup();
+  }, [selectedConversationId, isSelectedGroup, handleSyncGroup]);
 
   // AI Suggestion states (scoped & isolated)
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -369,8 +393,11 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         if (currentGeneration !== foregroundGenerationRef.current) return;
       }
 
+      if (!res.ok || !json.success) throw new Error(json.message || 'Không thể tải tin nhắn.');
       if (json.success && json.data) {
         const serverMessages: InboxMessage[] = json.data.messages || [];
+        setMessageLoadError('');
+        if (!isSilent) setHistoryCursor((prev) => ({ ...prev, [convId]: json.data.nextCursor || null }));
 
         // P0-A: Reconcile ONLY within the SAME conversation!
         setMessagesByConversation((prev) => {
@@ -460,6 +487,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
         // Request aborted due to conversation switch or newer fetch - expected
         return;
       }
+      if (convId === activeConversationRef.current) setMessageLoadError('Không thể tải tin nhắn. Vui lòng thử lại.');
       console.error('Lỗi khi tải tin nhắn:', err);
     } finally {
       if (!isSilent) {
@@ -470,12 +498,46 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
     }
   }, []);
 
+  const loadOlderMessages = async () => {
+    const convId = selectedConversationId;
+    const cursor = convId ? historyCursor[convId] : null;
+    if (!convId || !cursor || loadingOlderFor === convId) return;
+    setLoadingOlderFor(convId);
+    const container = scrollContainerRef.current;
+    const previousHeight = container?.scrollHeight || 0;
+    const previousTop = container?.scrollTop || 0;
+    try {
+      const response = await fetch(`/api/inbox?conversation_id=${encodeURIComponent(convId)}&before=${encodeURIComponent(cursor)}`);
+      const json = await response.json();
+      if (convId !== activeConversationRef.current) return;
+      if (!response.ok || !json.success) throw new Error('LOAD_FAILED');
+      prependingHistoryRef.current = convId;
+      setMessagesByConversation((prev) => {
+        const byId = new Map((prev[convId] || []).map((m) => [m.id, m]));
+        for (const message of json.data.messages || []) if (!byId.has(message.id)) byId.set(message.id, message);
+        return { ...prev, [convId]: [...byId.values()] };
+      });
+      setHistoryCursor((prev) => ({ ...prev, [convId]: json.data.nextCursor || null }));
+      setMessageLoadError('');
+      requestAnimationFrame(() => {
+        if (container && activeConversationRef.current === convId) container.scrollTop = previousTop + container.scrollHeight - previousHeight;
+      });
+    } catch {
+      if (convId === activeConversationRef.current) setMessageLoadError('Không thể tải tin nhắn cũ. Vui lòng thử lại.');
+    } finally {
+      setLoadingOlderFor((current) => current === convId ? null : current);
+    }
+  };
+
   // Handle switching conversation
   const handleSelectConversation = (convId: string) => {
     if (convId === selectedConversationId) return;
 
     activeConversationRef.current = convId;
     setSelectedConversationId(convId);
+    setMessageLoadError('');
+    setGroupSyncNotice('');
+    setGroupMemberSearch('');
 
     // Clear syncing skeleton
     if (syncingDelayRef.current) {
@@ -554,7 +616,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
 
   // Derive visible messages for active conversation
   const visibleMessages = useMemo(() => {
-    return selectedConversationId ? (messagesByConversation[selectedConversationId] || []) : [];
+    return selectedConversationId ? [...(messagesByConversation[selectedConversationId] || [])].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id)) : [];
   }, [selectedConversationId, messagesByConversation]);
 
   // Section 9: Auto-scroll behavior
@@ -573,6 +635,11 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
       return;
     }
 
+    if (prependingHistoryRef.current === selectedConversationId) {
+      prependingHistoryRef.current = null;
+      prevMessageCountRef.current = currentCount;
+      return;
+    }
     if (currentCount > prevMessageCountRef.current) {
       if (isNearBottomRef.current) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -676,6 +743,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 senderName = 'AI Trợ lý';
               }
 
+              const presentation = presentGroupMessage(newInteraction.sanitized_content!, Boolean(activeConv?.metadata?.is_group));
+              if (presentation.senderName) senderName = presentation.senderName;
               const safeMessage: InboxMessage = {
                 id: newInteraction.id!,
                 company_id: newInteraction.company_id || activeConv?.company_id,
@@ -684,8 +753,8 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 channel: (newInteraction.channel || activeConv?.channel || 'facebook').toLowerCase() as InboxChannel,
                 sender_type: senderType,
                 sender_name: senderName,
-                content: newInteraction.sanitized_content!,
-                sanitized_content: newInteraction.sanitized_content!,
+                content: presentation.content,
+                sanitized_content: presentation.content,
                 created_at: newInteraction.created_at!,
                 direction: isOutbound ? 'outbound' : 'inbound',
                 delivery_status: isOutbound ? (newInteraction.delivery_status as MessageDeliveryStatus) : undefined,
@@ -1418,7 +1487,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     </div>
                     {isSelectedGroup ? (
                       <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                        <span>👥 {selectedMemberCount} thành viên</span>
+                        <span>👥 {selectedMemberCount === undefined ? 'Chưa rõ số' : selectedMemberCount} thành viên</span>
                         <span>•</span>
                         <span className="text-[var(--text-tertiary)] font-mono text-[10px]">{selectedConversation.customer_code}</span>
                       </div>
@@ -1465,6 +1534,12 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   onScroll={handleScroll}
                   className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5"
                 >
+                {messageLoadError && <p role="alert" className="text-xs text-rose-600">{messageLoadError}</p>}
+                {selectedConversationId && historyCursor[selectedConversationId] && (
+                  <button type="button" onClick={loadOlderMessages} disabled={loadingOlderFor === selectedConversationId} className="block mx-auto text-xs text-blue-600 disabled:opacity-50">
+                    {loadingOlderFor === selectedConversationId ? 'Đang tải...' : 'Tải tin nhắn cũ hơn'}
+                  </button>
+                )}
                 {loadingMessages ? (
                   <div className="space-y-3">
                     {[...Array(4)].map((_, i) => (
@@ -1503,7 +1578,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                             <span className="text-blue-600 font-semibold">Bạn (Sale)</span>
                           )}
                           {!isSaleMsg && !isAiMsg && (
-                            <span className={`font-semibold ${isGroup ? 'text-emerald-700 dark:text-emerald-400' : 'text-[var(--text-primary)]'}`}>
+                            <span title={msg.sender_external_id ? `Zalo ID: ${msg.sender_external_id}` : undefined} className={`font-semibold ${isGroup ? 'text-emerald-700 dark:text-emerald-400' : 'text-[var(--text-primary)]'}`}>
                               {displayName}
                             </span>
                           )}
@@ -1784,7 +1859,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                     <div className="flex items-center justify-center gap-1.5 mt-1">
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        {selectedMemberCount} thành viên
+                        {selectedMemberCount === undefined ? 'Chưa rõ số' : selectedMemberCount} thành viên
                       </span>
                     </div>
                     {selectedGroupId ? (
@@ -1807,13 +1882,17 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   </button>
                 </div>
 
+                {groupSyncNotice && <p role="status" className="text-xs text-amber-700">{groupSyncNotice}</p>}
+                {selectedConversation.metadata?.members_complete !== true && groupMembersList.length > 0 && (
+                  <p className="text-xs text-[var(--text-secondary)]">Đang hiển thị {groupMembersList.length} thành viên đã tải. Danh sách có thể chưa đầy đủ.</p>
+                )}
                 {/* Group Members List */}
                 <div className="p-4 bg-[var(--surface-primary)] border border-[var(--border-subtle)] rounded-xl space-y-3 shadow-subtle flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between">
                     <h4 className="font-semibold text-[var(--text-secondary)] uppercase tracking-wider text-[10px] flex items-center gap-1.5">
                       <span>Thành viên nhóm</span>
                       <span className="px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px]">
-                        {groupMembersList.length || selectedMemberCount}
+                        {groupMembersList.length}{selectedMemberCount !== undefined ? ` / ${selectedMemberCount}` : ''}
                       </span>
                     </h4>
                   </div>
@@ -1844,7 +1923,7 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1 text-xs">
                     {groupMembersList.length === 0 ? (
                       <div className="text-center py-4 text-[var(--text-tertiary)] space-y-2">
-                        <p>Chưa có danh sách thành viên chi tiết trong cache.</p>
+                        <p>Chưa tải được danh sách thành viên từ Zalo.</p>
                         <button
                           type="button"
                           onClick={handleSyncGroup}
@@ -1870,8 +1949,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                             </div>
                             <div className="min-w-0">
                               <p className="font-medium text-[var(--text-primary)] truncate text-[11px]" title={member.name}>
-                                {member.name}
+                                {member.name || `Thành viên ${member.id}`}
                               </p>
+                              <p className="text-[9px] text-[var(--text-tertiary)] truncate" title={member.id}>ID: {member.id}</p>
                               <div className="flex items-center gap-1">
                                 {member.isCreator ? (
                                   <span className="text-[9px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">

@@ -65,14 +65,14 @@ Set the cookie/IMEI/user-agent directly in the deployment provider. Do not commi
 
 Health endpoints:
 
-- `GET /health` — process health; returns login/listener state and `pendingInbound` queue depth without credentials.
-- `GET /ready` — 200 only after the Zalo session has logged in.
+- `GET /health` — process health; returns login/listener state, `pendingInbound` queue depth and `queueDurable` (local queue write status) without credentials. A persistent mount still needs to be verified in the deployment provider.
+- `GET /ready` — 200 only while logged in, the listener is connected, and the local queue has no known persistence failure.
 
 Inbound durability:
 
-- Every normalized message is written to `ZCAJS_INBOX_QUEUE_FILE` before the first CRM HTTP attempt.
-- Messages are removed only after the CRM returns success; transient failures keep retrying with capped exponential backoff.
-- On worker boot the queue is replayed before/during listener startup, so a CRM deploy or worker restart no longer drops the customer messages that were waiting.
+- Every normalized message is written to `ZCAJS_INBOX_QUEUE_FILE` before metadata enrichment or the first CRM HTTP attempt; writes are flushed to disk before atomic rename.
+- Messages are removed only after the CRM returns JSON `success: true`; the queue warning threshold never deletes pending messages; transient failures keep retrying with capped exponential backoff.
+- On worker boot the queue is replayed before listener startup, so a CRM deploy or worker restart no longer drops the customer messages that were waiting.
 - The queue is a JSONL file owned by the worker process (mode 0600). Mount a persistent disk if the deployment provider restarts containers onto fresh filesystems.
 
 ## Current supported message scope
@@ -86,7 +86,13 @@ Inbound durability:
 - group messages sent manually from the connected Zalo account -> mirrored into CRM as outbound history
 - group conversations are stored under the `group:<groupId>` namespace; individual messages are prefixed with the sender's Zalo display name
 - group discovery is message-driven: the pinned ZCAJS fork has no group directory, so a group appears in CRM after its first inbound or observed outbound message
-- group history cannot be replayed after worker downtime because the pinned fork exposes no group-history endpoint (the reconnect rescan covers 1:1 chats only)
+- the pinned fork is patched to request both direct (`510`) and group (`511`) WebSocket history on reconnect and every 60 seconds, with cursor pagination bounded to 100 pages per scan and a seven-day window; the existing direct REST scan remains independent of WebSocket connectivity
+- history recovery depends on what Zalo still returns for the authenticated account; it cannot guarantee restoration of deleted, expired, inaccessible, or older messages
+- recovered messages keep their provider timestamps and do not enqueue new AI replies, including when the AI channel is later enabled
+- group names and rosters are read from group info plus separate member-profile lookups; manual refresh bypasses the five-minute cache, and group events invalidate cached details
+- rosters include unresolved member IDs and explicitly mark partial results; unknown member counts stay unknown
+- group sender IDs/names are stored privately; the server reads only the author projection for inbox display, with legacy prefix fallback and a repair path when history re-fetch resolves an old author
+- inbox history reads the latest 100 messages first and uses a `(created_at, id)` cursor for older pages, avoiding PostgREST's default row cap hiding new messages
 - unsupported non-text attachment types are represented with a safe placeholder/link when possible
 - outbound CRM success requires the stable `msgId` returned by ZCAJS; missing IDs are marked `UNCERTAIN`, never synthesized
 
@@ -120,3 +126,14 @@ Because ZCAJS is an unofficial API that simulates Zalo Web, the selected reposit
 - Native self messages use a dedicated non-dispatch persistence RPC to prevent send loops.
 - CRM-originated self echoes are suppressed in the worker and also deduped at the database by provider message id.
 - Network/5xx ambiguity is classified `UNCERTAIN` so the CRM does not automatically resend and create duplicate customer messages.
+
+## Group identity and message reliability rollout (2026-10-29)
+
+1. Apply `20261029154354_zalo_group_message_authors.sql` and `20261029154410_zcajs_history_ingest.sql` before deploying the CRM. They add server-only author/metadata RPCs and a recovery-safe ZCAJS ingest wrapper; they do not enable AI or send messages.
+2. Deploy the CRM and rebuild the worker Dockerfile so the pinned dependency receives both new patches. The exact pinned ZCAJS source must compile; a CRM-only deployment does not change the running listener.
+3. Mount a persistent disk at `/app/data` (or set `ZCAJS_INBOX_QUEUE_FILE` to an existing persistent mount). Run exactly one worker process for each queue file and Zalo session. An ephemeral container filesystem cannot protect a queue across container replacement.
+4. Verify `/health` and `/ready`, queue depth returning to zero, and no queue write or repeated history errors. A successful health response does not prove the provider returned complete history.
+5. Compare naturally arriving messages in at least two Zalo PC groups with the CRM: exact group title, per-message sender, member total, and roster completeness. Refresh after a rename/member change. Include a busy conversation with more than 1,000 messages and check the older-message button.
+6. In a controlled environment, interrupt CRM availability while receiving messages, restart the worker using the same disk, and verify every queued message arrives exactly once after recovery. Confirm history imports do not add AI delivery rows.
+
+Local regression commands: `npm run test:zalo`, `npm run test:inbox`, `npm run typecheck`. The history protocol tests execute the patched listener against the exact pinned upstream source fixture with a simulated socket. These checks do not substitute for a live provider acceptance check.

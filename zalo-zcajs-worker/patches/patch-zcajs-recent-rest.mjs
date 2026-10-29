@@ -121,6 +121,7 @@ const recentSyncBlock = `
                     // Zalo account. The worker's normalizer preserves isSelf/direction, and
                     // the CRM endpoint deduplicates CRM-originated sends by provider message ID.
                     recentSeen.set(id, now);
+                    (message as any).__zaloRecovered = true;
                     this.listener.emit("message", message);
                     if (message.isSelf) emittedOutbound += 1;
                     else emittedInbound += 1;

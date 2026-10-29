@@ -10,6 +10,8 @@
  */
 import assert from 'node:assert/strict';
 import { createPgliteSupabase } from './helpers/pglite-supabase';
+import { syncZaloGroup } from '../../features/omnichannel/zalo/group-sync';
+import { getMessagesByConversationId } from '../../features/inbox/services/inbox.service';
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111';
 const GROUP_THREAD = 'group:123456789012345678';
@@ -18,6 +20,7 @@ const OTHER_GROUP_THREAD = 'group:987654321098765432';
 const OTHER_GROUP_ID = '987654321098765432';
 
 async function main() {
+  process.env.DEMO_MODE = 'false';
   const pg = await createPgliteSupabase();
   const { db, client } = pg;
   try {
@@ -169,7 +172,87 @@ async function main() {
     ).rows[0];
     assert.equal(observedIdentity.external_id, OTHER_GROUP_THREAD);
 
-    console.log('ZCAJS group DB contract: PASS');
+    const refreshed = await syncZaloGroup({
+      client, companyId: COMPANY_ID, conversationId: conversation.id,
+      workerUrl: 'https://worker.test', workerSecret: 'test-secret',
+      fetchImpl: async (url) => {
+        assert.match(String(url), /refresh=1/);
+        return new Response(JSON.stringify({ success: true, group: {
+          groupId: GROUP_ID, groupName: 'Tên nhóm trên Zalo PC', totalMember: 3,
+          members: [{ id: '11111', name: 'Anh Nam' }, { id: '22222', name: 'Chị Lan' }, { id: '33333', name: '' }],
+          membersComplete: false, fetchedAt: '2026-10-29T10:00:00.000Z',
+        } }), { status: 200 });
+      },
+    });
+    assert.equal(refreshed.success, true);
+    assert.equal(refreshed.stale, false);
+    assert.equal(refreshed.group?.totalMember, 3);
+    assert.equal(refreshed.group?.members.length, 3, 'unresolved members must remain visible');
+    assert.equal((await db.query<{ name: string }>('SELECT name FROM customers WHERE id=$1', [conversation.customer_id])).rows[0].name, 'Tên nhóm trên Zalo PC');
+    await client.rpc('sync_zalo_group_metadata', { p_company_id: COMPANY_ID, p_conversation_id: conversation.id, p_group: {
+      group_name: 'Thông tin quá cũ', group_fetched_at: '2026-10-29T09:00:00.000Z', members: [],
+    } });
+    const cached = await syncZaloGroup({ client, companyId: COMPANY_ID, conversationId: conversation.id, workerUrl: '', workerSecret: '' });
+    assert.equal(cached.stale, true);
+    assert.equal(cached.group?.groupName, 'Tên nhóm trên Zalo PC');
+    assert.equal(cached.group?.members.length, 3);
+    const denied = await syncZaloGroup({ client, companyId: '22222222-2222-4222-8222-222222222222', conversationId: conversation.id, workerUrl: '', workerSecret: '' });
+    assert.equal(denied.success, false);
+
+    const recoveredAt = new Date(Date.now() - 3 * 86400000).toISOString();
+    const recovered = await client.rpc('ingest_zcajs_message_atomic', {
+      p_company_id: COMPANY_ID, p_channel: 'ZALO', p_external_user_id: '900001',
+      p_external_conversation_id: '900001', p_external_ref: 'history-dm-1',
+      p_sanitized_content: 'Tin nhắn đã có từ trước', p_raw_content: 'Tin nhắn đã có từ trước',
+      p_source_metadata: { transport: 'ZCAJS', recovered: true, provider_timestamp: recoveredAt },
+    });
+    assert.equal(recovered.error, null, JSON.stringify(recovered.error));
+    const recoveryRows = (await db.query<{ created_at: Date; ai_count: number }>(`SELECT i.created_at,
+      (SELECT count(*)::int FROM ai_brain_live_deliveries d WHERE d.source_interaction_id=i.id) AS ai_count
+      FROM interactions i WHERE external_ref='history-dm-1'`)).rows;
+    assert.equal(new Date(recoveryRows[0].created_at).toISOString(), recoveredAt);
+    assert.equal(recoveryRows[0].ai_count, 0, 'history recovery must never enqueue a reply');
+
+    const authorMessage = await client.rpc('ingest_zcajs_message_atomic', {
+      p_company_id: COMPANY_ID, p_channel: 'ZALO', p_external_user_id: GROUP_THREAD,
+      p_external_conversation_id: GROUP_THREAD, p_external_ref: 'zcajs:group:author-message',
+      p_sanitized_content: 'Nam: Kỹ thuật: chào nhóm', p_raw_content: 'Nam: Kỹ thuật: chào nhóm',
+      p_source_metadata: { transport: 'ZCAJS', is_group: true, zalo_sender_name: 'Nam: Kỹ thuật', zalo_sender_id: '123456789012345678' },
+    });
+    assert.equal(authorMessage.error, null, JSON.stringify(authorMessage.error));
+    const groupMessages = await getMessagesByConversationId(COMPANY_ID, conversation.id, 'SALE', client);
+    const authored = groupMessages.find((m) => m.content === 'chào nhóm');
+    assert.equal(authored?.sender_name, 'Nam: Kỹ thuật');
+    assert.equal(authored?.sender_external_id, '123456789012345678');
+    assert.equal(authored?.raw_content, undefined);
+    const repaired = await client.rpc('repair_zalo_group_message_author', {
+      p_company_id: COMPANY_ID, p_conversation_id: conversation.id, p_external_ref: 'zcajs:group:g-in-1',
+      p_author: { group_id: GROUP_ID, zalo_sender_id: '44444', zalo_sender_name: 'Anh Nam mới' },
+    });
+    assert.equal(repaired.error, null, JSON.stringify(repaired.error));
+    const repairedMessages = await getMessagesByConversationId(COMPANY_ID, conversation.id, 'SALE', client);
+    assert.equal(repairedMessages.find((m) => m.sender_external_id === '44444')?.content, 'Còn hàng không shop?');
+    const otherTenantAuthors = await client.rpc('get_zalo_group_message_authors', { p_company_id: '22222222-2222-4222-8222-222222222222', p_interaction_ids: [authored!.id] });
+    assert.deepEqual(otherTenantAuthors.data, []);
+    const acl = (await db.query<{ allowed: boolean }>(`SELECT has_function_privilege('authenticated', 'public.get_zalo_group_message_authors(uuid,uuid[])', 'execute') AS allowed`)).rows[0];
+    assert.equal(acl.allowed, false);
+
+    // A conversation with >1000 messages must expose its newest messages and
+    // paginate through timestamp ties without skipping or duplicating any ID.
+    await db.query(`INSERT INTO interactions (company_id, customer_id, conversation_id, channel, type, direction, actor_type,
+      sanitized_content, sanitization_status, created_at)
+      SELECT $1, $2, $3, 'ZALO', 'MESSAGE', 'INBOUND', 'CUSTOMER', 'Anh Nam: lịch sử ' || n, 'SUCCEEDED', '2026-10-29T12:00:00Z'
+      FROM generate_series(1, 1100) n`, [COMPANY_ID, conversation.customer_id, conversation.id]);
+    let before: { id: string; createdAt: string } | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < 20; page++) {
+      const messages = await getMessagesByConversationId(COMPANY_ID, conversation.id, 'SALE', client, { pageSize: 100, before });
+      for (const message of messages) { assert.ok(!seen.has(message.id)); seen.add(message.id); }
+      if (messages.length < 100) break;
+      before = { id: messages[0].id, createdAt: messages[0].created_at };
+    }
+    assert.equal(seen.size, 1102);
+    console.log('ZCAJS group metadata, authors, recovery safety, and history pagination: PASS');
   } finally {
     await pg.close();
   }

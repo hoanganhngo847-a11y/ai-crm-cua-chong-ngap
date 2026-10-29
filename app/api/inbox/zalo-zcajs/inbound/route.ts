@@ -95,69 +95,23 @@ async function persistZaloGroupMetadata(
   supabase: ReturnType<typeof createAdminClient>,
   companyId: string,
   conversationId: string | undefined,
-  customerId: string | undefined,
-  externalUserId: string,
-  event: import('@/features/omnichannel/zalo/zcajs-inbound').ZcaJsInboundMessage,
-  observedAt: string
+  event: import('@/features/omnichannel/zalo/zcajs-inbound').ZcaJsInboundMessage
 ): Promise<void> {
   if (!conversationId) return;
 
-  const { data: conversation, error: readError } = await supabase
-    .from('conversations')
-    .select('metadata, customer_id')
-    .eq('id', conversationId)
-    .eq('company_id', companyId)
-    .eq('channel', 'ZALO')
-    .maybeSingle();
-
-  if (readError || !conversation) return;
-
-  const currentMetadata =
-    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
-      ? (conversation.metadata as Record<string, unknown>)
-      : {};
-
-  const existingGroupName = typeof currentMetadata.group_name === 'string' ? currentMetadata.group_name.trim() : '';
-  const newGroupName = event.groupName ? normalizeZaloDisplayName(event.groupName) : undefined;
-  const finalGroupName = newGroupName || existingGroupName || event.senderName || `Nhóm Zalo ${event.groupId?.slice(-4) || ''}`;
-
-  const nextMetadata: Record<string, unknown> = {
-    ...currentMetadata,
-    is_group: true,
-    group_id: event.groupId || currentMetadata.group_id,
-    group_name: finalGroupName,
-    zalo_display_name: finalGroupName,
-    zalo_display_name_source: newGroupName ? 'group_info' : (currentMetadata.zalo_display_name_source || 'message_dname'),
-    zalo_display_name_updated_at: observedAt,
-    ...(event.totalMember ? { member_count: event.totalMember } : {}),
-    ...(event.groupAvatar ? { group_avatar: event.groupAvatar } : {}),
-    ...(event.groupMembers && event.groupMembers.length > 0 ? { members: event.groupMembers } : {}),
-  };
-
-  await supabase
-    .from('conversations')
-    .update({ metadata: nextMetadata })
-    .eq('id', conversationId)
-    .eq('company_id', companyId)
-    .eq('channel', 'ZALO');
-
-  const targetCustomerId = customerId || conversation.customer_id;
-  if (targetCustomerId && finalGroupName) {
-    await supabase
-      .from('customers')
-      .update({ name: finalGroupName })
-      .eq('id', targetCustomerId)
-      .eq('company_id', companyId);
-  }
-
-  if (finalGroupName && externalUserId) {
-    await supabase
-      .from('identities')
-      .update({ display_name: finalGroupName, updated_at: observedAt })
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .eq('external_id', externalUserId);
-  }
+  const { error } = await supabase.rpc('sync_zalo_group_metadata', {
+    p_company_id: companyId,
+    p_conversation_id: conversationId,
+    p_group: {
+      ...(event.groupName ? { group_name: event.groupName } : {}),
+      ...(event.totalMember !== undefined ? { member_count: event.totalMember } : {}),
+      ...(event.groupAvatar ? { group_avatar: event.groupAvatar } : {}),
+      ...(event.groupMembers ? { members: event.groupMembers } : {}),
+      ...(event.membersComplete !== undefined ? { members_complete: event.membersComplete } : {}),
+      ...(event.groupFetchedAt ? { group_fetched_at: event.groupFetchedAt } : {}),
+    },
+  });
+  if (error) console.warn('[ZCAJS inbound] group metadata sync failed:', error.message);
 }
 
 async function applyZaloDisplayName(
@@ -293,10 +247,7 @@ export async function POST(request: NextRequest) {
           supabase,
           companyId,
           conversationId,
-          typeof result.customer_id === 'string' ? result.customer_id : undefined,
-          event.externalConversationId,
-          event,
-          normalizedObservedAt
+          event
         );
       }
 
@@ -339,14 +290,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (event.isGroup) {
+      if (result.duplicate && result.conversation_id && event.senderId) {
+        const { error: repairError } = await supabase.rpc('repair_zalo_group_message_author', {
+          p_company_id: companyId,
+          p_conversation_id: result.conversation_id,
+          p_external_ref: event.externalRef,
+          p_author: { group_id: event.groupId, zalo_sender_id: event.senderId, zalo_sender_name: event.senderDisplayName },
+        });
+        if (repairError) throw new Error('GROUP_AUTHOR_REPAIR_FAILED');
+      }
       await persistZaloGroupMetadata(
         supabase,
         companyId,
         result.conversation_id,
-        result.customer_id,
-        event.externalUserId,
-        event,
-        normalizedObservedAt
+        event
       );
       // Groups are observational in the CRM: never let AI answer a whole group.
       await pauseZaloGroupAi(supabase, companyId, result.conversation_id);
