@@ -159,6 +159,8 @@ test('Grounding System Instruction: enforces answer-first, persona, and contact-
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /student\/pupil asking for themselves/i);
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /born in 2000 or earlier/i);
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /phone permission is YES/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /PAGE SCOPE POLICY/);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Never mention unrelated products, other Pages/i);
 });
 
 test('Grounding Formatter: adds Facebook Page persona and contact policy block', () => {
@@ -196,6 +198,23 @@ test('Grounding Formatter: adds Facebook Page persona and contact policy block',
   assert.match(formatted, /AI xưng "em", gọi khách "anh\/chị"/);
   assert.match(formatted, /Được phép xin số điện thoại ở lượt này: KHÔNG/);
   assert.match(formatted, /Thông tin còn thiếu: không còn/);
+});
+
+test('Grounding Formatter: adds page scope for a named Facebook Page', () => {
+  const base = validGrounding();
+  const formatted = formatGroundingContext({
+    ...base,
+    conversation: {
+      ...base.conversation!,
+      channel: 'MESSENGER',
+      pageName: 'Du học Đức và Học tiếng Đức CHD',
+    },
+  });
+
+  assert.match(formatted, /\[PAGE SCOPE\]/);
+  assert.match(formatted, /Du học Đức và Học tiếng Đức CHD/);
+  assert.match(formatted, /Only discuss products\/services that belong to this Page/);
+  assert.match(formatted, /Never mention unrelated products, other Pages, or other business lines/);
 });
 
 test('Grounding Formatter: does not add the Facebook Page policy to Zalo turns', () => {

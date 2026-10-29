@@ -1,7 +1,13 @@
 import 'server-only';
 
 import type { BrainChannel } from '../contracts';
+import {
+  CUA_CHONG_NGAP_PAGE_ID,
+  DU_HOC_PAGE_ID,
+} from '../page-topic-policy';
 import type { GroundingKnowledgeItem } from './contracts';
+
+export { CUA_CHONG_NGAP_PAGE_ID, DU_HOC_PAGE_ID };
 
 /**
  * Page-scoped sales playbooks are injected as verified knowledge because the
@@ -12,9 +18,6 @@ export interface PagePlaybook extends GroundingKnowledgeItem {
   readonly pageId: string;
   readonly channel: BrainChannel;
 }
-
-export const DU_HOC_PAGE_ID = '1343097708890171';
-export const CUA_CHONG_NGAP_PAGE_ID = '1026991374010112';
 
 const DU_HOC_PLAYBOOK_CONTENT = `Mục tiêu: tư vấn đúng nhu cầu trước, thu thập thông tin từ từ và chỉ xin số điện thoại khi đã đủ thông tin.
 
@@ -44,6 +47,31 @@ QUY TẮC NỘI DUNG:
 - TUYỆT ĐỐI KHÔNG giải thích suy nghĩ, KHÔNG phân tích kịch bản/playbook, KHÔNG viết lời dẫn như: "Dựa trên yêu cầu...", "Tôi xin đưa ra...", "Bạn có thể gửi phản hồi mẫu...", "Theo quy định...".
 - Ngắn gọn, tự nhiên, không hỏi dồn.`;
 
+const CUA_CHONG_NGAP_PLAYBOOK_CONTENT = `Mục tiêu: tư vấn đúng nhu cầu trước, thu thập thông tin từ từ và chỉ xin số điện thoại khi đã đủ thông tin.
+
+THỨ TỰ BẮT BUỘC:
+1. Trả lời trực tiếp câu hỏi/thắc mắc của khách trước bằng 1-2 câu (dùng thông tin đã xác minh; nếu chưa có thì nói ngắn gọn và hướng dẫn bước tiếp theo).
+2. Xác định người cần tư vấn là bản thân khách hay người khác (nếu là người khác, hỏi rõ quan hệ).
+3. Hỏi nhu cầu cụ thể: khu vực/vị trí cần xử lý và tình trạng hiện tại.
+4. Hỏi thông tin cần thiết để tư vấn kỹ thuật (kích thước/khẩu độ hoặc điều kiện thực tế).
+5. Sau khi đã trả lời/tư vấn sơ bộ cho khách qua ít nhất 2-3 lượt, mới xin số điện thoại liên hệ ở một tin nhắn riêng.
+
+QUY TẮC XƯNG HÔ:
+- AI xưng "em", gọi khách "anh/chị".
+- Không trộn lẫn cách xưng hô trong cùng một tin nhắn.
+
+QUY TẮC HỎI THÔNG TIN:
+- Mỗi tin nhắn chỉ hỏi tối đa 1-2 thông tin còn thiếu; không hỏi dồn nhiều thông tin.
+- KHÔNG BAO GIỜ chỉ nhắn xin số điện thoại. Luôn trả lời hoặc định hướng nội dung trước.
+- KHÔNG xin số điện thoại ở tin nhắn đầu tiên; KHÔNG xin số điện thoại cùng lúc với thông tin khác.
+- Khi khách hỏi thông tin chưa có trong tài liệu: trả lời ngắn gọn rằng bên em sẽ kiểm tra/hướng dẫn, rồi hỏi tối đa 1 thông tin cần làm rõ.
+- Khi khách đã cung cấp số điện thoại: chỉ xác nhận đã nhận, nhắc mở chặn Zalo/để ý điện thoại, không hỏi thêm thông tin và không xin lại số điện thoại.
+
+QUY TẮC NỘI DUNG:
+- CHỈ XUẤT DUY NHẤT 1 TIN NHẮN TRỰC TIẾP GỬI CHO KHÁCH HÀNG.
+- TUYỆT ĐỐI KHÔNG giải thích suy nghĩ, KHÔNG phân tích kịch bản/playbook, KHÔNG viết lời dẫn như: "Dựa trên yêu cầu...", "Tôi xin đưa ra...", "Bạn có thể gửi phản hồi mẫu...", "Theo quy định...".
+- Ngắn gọn, tự nhiên, không hỏi dồn.`;
+
 const PAGE_PLAYBOOKS: readonly PagePlaybook[] = Object.freeze([
   Object.freeze({
     pageId: DU_HOC_PAGE_ID,
@@ -57,7 +85,7 @@ const PAGE_PLAYBOOKS: readonly PagePlaybook[] = Object.freeze([
     channel: 'MESSENGER' as const,
     category: 'SALES_PLAYBOOK',
     title: 'Playbook tư vấn Fanpage Cửa chống ngập',
-    content: DU_HOC_PLAYBOOK_CONTENT,
+    content: CUA_CHONG_NGAP_PLAYBOOK_CONTENT,
   }),
 ]);
 

@@ -15,6 +15,12 @@ import {
   validateAiResponsePolicyFirewall,
 } from '../automation/response-sla/services/ai-response-runtime';
 import { sanitizeCustomerFacingReply } from '../ai-brain/messaging-style';
+import { extractMessengerPageId } from '../ai-brain/page-id';
+import {
+  formatPageTopicPolicy,
+  pageTopicContext,
+  sanitizePageScopedReply,
+} from '../ai-brain/page-topic-policy';
 
 export interface GenerateAiDraftSuggestionResult {
   success: boolean;
@@ -50,7 +56,7 @@ export async function generateAiDraftSuggestionAction(params: {
     // 1. Lấy thông tin cuộc hội thoại
     const { data: conv, error: convErr } = await admin
       .from('conversations')
-      .select('id, customer_id, channel, assigned_to')
+      .select('id, customer_id, channel, assigned_to, external_conversation_id, metadata')
       .eq('company_id', actor.companyId)
       .eq('id', params.conversationId)
       .single();
@@ -70,7 +76,7 @@ export async function generateAiDraftSuggestionAction(params: {
       .limit(1)
       .maybeSingle();
 
-    const customerMessage = latestInbound?.sanitized_content || 'Chào công ty, tôi quan tâm cửa chống ngập';
+    const customerMessage = latestInbound?.sanitized_content || 'Chào công ty, tôi cần tư vấn';
 
     // 3. Phân tích khách hàng (xử lý gracefully)
     let analysisSummary: string | null = null;
@@ -95,15 +101,23 @@ export async function generateAiDraftSuggestionAction(params: {
       client: admin,
     });
 
+    const pageContext = conv.channel === 'FACEBOOK'
+      ? pageTopicContext(extractMessengerPageId(
+          (conv as { external_conversation_id?: string | null }).external_conversation_id,
+          (conv as { metadata?: unknown }).metadata,
+        ))
+      : null;
+
     // 5. Sinh phản hồi gợi ý
     const systemPrompt = [
-      `Bạn là trợ lý AI hỗ trợ chuyên viên Sale soạn thảo câu trả lời cho khách hàng quan tâm cửa chống ngập.`,
+      `Bạn là trợ lý AI hỗ trợ chuyên viên Sale soạn thảo câu trả lời cho khách hàng.`,
+      pageContext ? formatPageTopicPolicy(pageContext) : '',
       styleContext.styleContextPrompt,
       analysisSummary ? `[GHI CHÚ HÀNH TRÌNH KHÁCH HÀNG]: ${analysisSummary}` : '',
       `[YÊU CẦU]:`,
       `- Viết một câu trả lời hoàn chỉnh, súc tích, chuyên nghiệp.`,
       `- TUYỆT ĐỐI KHÔNG TỰ BÁO GIÁ CỤ THỂ, KHÔNG HỨA HẸN CHIẾT KHẤU, KHÔNG ĐÒI CHUYỂN KHOẢN.`,
-      `- Đề xuất gửi hình ảnh hiện trường hoặc đặt lịch khảo sát đo đạc miễn phí tận nơi.`,
+      `- Đề xuất bước tiếp theo phù hợp với nhu cầu (gửi thông tin, đặt lịch tư vấn/khảo sát nếu phù hợp).`,
     ].filter(Boolean).join('\n\n');
 
     const model = new OpenAiResponseModel();
@@ -114,11 +128,14 @@ export async function generateAiDraftSuggestionAction(params: {
 
     // 6. Bóc suy nghĩ nội bộ trước khi hiển thị cho Sale. Nếu vẫn còn dấu hiệu
     // reasoning/playbook thì chặn hẳn, không để Sale vô tình gửi cho khách.
-    const suggestion = sanitizeCustomerFacingReply(rawSuggestion);
+    let suggestion = sanitizeCustomerFacingReply(rawSuggestion);
+    if (suggestion && pageContext) {
+      suggestion = sanitizePageScopedReply(suggestion, pageContext);
+    }
     if (!suggestion) {
       return {
         success: false,
-        error: 'Gợi ý AI chứa nội dung nội bộ nên đã bị chặn. Vui lòng thử lại.',
+        error: 'Gợi ý AI chứa nội dung nội bộ hoặc ngoài phạm vi trang nên đã bị chặn. Vui lòng thử lại.',
       };
     }
 

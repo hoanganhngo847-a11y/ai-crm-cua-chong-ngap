@@ -27,6 +27,7 @@ import { LIVE_DELIVERY_WORKLOAD_ACTOR_ID } from './contracts';
 import { ZaloDeliveryTransport } from './transports/zalo-transport';
 import { MessengerDeliveryTransport } from './transports/messenger-transport';
 import { cleanCustomerReply, hasInternalLeak } from '../validation';
+import { pageTopicContext, sanitizePageScopedReply } from '../page-topic-policy';
 import {
   analyzeCustomerMessaging,
   applyContactRequestPolicy,
@@ -354,6 +355,9 @@ async function processClaim(
     latestText: eligible.text,
     recentMessages: eligible.context.grounding?.recentMessages,
   });
+  const pageContext = claim.channel === 'MESSENGER'
+    ? pageTopicContext(eligible.context.grounding?.conversation?.pageId ?? null)
+    : null;
 
   // LEAD FORM SILENCE: A Messenger lead form is pre-filled by the customer.
   // Never answer it with a greeting, confirmation, or guidance; the data is
@@ -589,6 +593,13 @@ async function processClaim(
   // phone before discovery is complete. A substantive answer is preserved.
   if (claim.channel === 'MESSENGER') {
     proposedDraft = applyContactRequestPolicy(proposedDraft, messagingProfile);
+    // A Page must never answer with another Page's business. On the
+    // study-abroad Page this rejects any flood-barrier draft; the generic
+    // fallback keeps the conversation moving without the wrong topic.
+    if (pageContext) {
+      proposedDraft = sanitizePageScopedReply(proposedDraft, pageContext)
+        || buildMessengerFallbackReply(messagingProfile);
+    }
   }
 
   const guard = await checkPreSendGuards(client, claim);

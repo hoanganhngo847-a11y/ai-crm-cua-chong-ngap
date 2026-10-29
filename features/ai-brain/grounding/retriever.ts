@@ -3,6 +3,7 @@ import 'server-only';
 import type { BrainContextDataSource, BrainContextScope } from '../context-contracts';
 import { sanitizeCustomerMemory } from '../memory/sanitizer';
 import { builtInPagePlaybook } from './page-playbook';
+import { pageTopicContext } from '../page-topic-policy';
 import type {
   BrainTurnGrounding,
   GroundingBusinessFacts,
@@ -73,12 +74,15 @@ export async function resolveGroundingContext(options: {
 
   // 1. Conversation state
   const currentConversation = (conversations || []).find((c) => c.id === scope.conversationId);
+  const pageContext = pageTopicContext(currentConversation?.pageId ?? null);
   const conversationGrounding = {
     id: scope.conversationId,
     channel: scope.channel,
     status: currentConversation?.status || 'OPEN',
     aiMode: currentConversation?.aiMode || 'ACTIVE',
     assignedTo: currentConversation?.assignedTo || null,
+    pageId: pageContext.pageId,
+    pageName: pageContext.topic === 'GENERIC' ? null : pageContext.pageName,
   };
 
   // 2. Customer profile

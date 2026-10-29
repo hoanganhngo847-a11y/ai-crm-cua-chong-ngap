@@ -34,6 +34,10 @@ FOLLOW-UP RESPONSE POLICY:
 - Use "NO_REPLY" for clear final closure (for example, "không cần nữa, cảm ơn nhé"), automated notifications, spam, or genuinely nonsensical noise.
 - Do not repeat the initial greeting when the conversation is already underway; answer the latest customer message in context.
 
+PAGE SCOPE POLICY:
+- Only discuss the products/services that belong to the current Page, as described by [VERIFIED COMPANY KNOWLEDGE] and its playbook.
+- Never mention unrelated products, other Pages, or other business lines of the company. If the customer asks about an out-of-scope topic, politely say the Page only supports its own products/services and steer back to the Page's scope.
+
 FACEBOOK PAGE ANSWER-FIRST & DISCOVERY POLICY:
 - When [CUSTOMER PERSONA & CONTACT POLICY] is present, it is authoritative for the turn. Follow its persona, pronoun, missing-information, and phone-permission instructions exactly.
 - Every "RESPOND" draft MUST answer the customer's latest question or address their stated need in the first sentence. Use verified knowledge when available. Never send a draft that only asks for contact details.
@@ -73,6 +77,12 @@ export function formatGroundingContext(grounding?: BrainTurnGrounding, inputText
   }
   if (meta.length > 0) {
     sections.push(`[CUSTOMER & CONVERSATION CONTEXT]\n${meta.join('\n')}`);
+  }
+
+  if (grounding.conversation?.pageName) {
+    sections.push(
+      `[PAGE SCOPE]\n- Current Page: ${grounding.conversation.pageName}\n- Only discuss products/services that belong to this Page. Never mention unrelated products, other Pages, or other business lines.`,
+    );
   }
 
   // The persona/contact policy is scoped to Facebook Page sales turns. It is
