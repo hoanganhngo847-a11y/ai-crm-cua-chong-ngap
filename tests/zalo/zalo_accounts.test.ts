@@ -86,6 +86,12 @@ async function main() {
     const claimed = await client.rpc('zalo_claim_canonical_delivery', { p_delivery_id: outbound.data.delivery_id, p_worker_id: 'account-test', p_override_oa_id: 'zcajs-test' });
     assert.equal(claimed.error, null, JSON.stringify(claimed.error));
     assert.equal(claimed.data[0].recipient_zalo_uid, directThread, 'outbox preserves sender account namespace');
+    await db.exec('GRANT SELECT,UPDATE ON public.conversations TO service_role');
+    await db.exec('BEGIN; SET LOCAL ROLE service_role;');
+    try {
+      await db.query("UPDATE public.conversations SET metadata=metadata||'{\"zalo_display_name\":\"Refreshed by service role\"}'::jsonb WHERE external_conversation_id=$1", [directThread]);
+      await db.exec('COMMIT');
+    } catch (error) { await db.exec('ROLLBACK'); throw error; }
     await assert.rejects(db.query("UPDATE public.conversations SET metadata=jsonb_build_object('zalo_account_id',$1::text) WHERE external_conversation_id=$2", [id2, directThread]), /SCOPE_MISMATCH/);
     for (const fn of ['get_zalo_runtime_accounts(uuid)', 'list_zalo_accounts(uuid)']) {
       assert.equal((await db.query<{ allowed: boolean }>('SELECT has_function_privilege(\'authenticated\',$1,\'EXECUTE\') AS allowed', [fn])).rows[0].allowed, false);

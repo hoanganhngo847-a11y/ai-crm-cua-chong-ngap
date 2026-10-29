@@ -7,7 +7,8 @@ Instructions and the official extension link are included on the page.
 
 ## Runtime and storage
 
-- Apply `20261029164514_zalo_account_onboarding.sql` before the CRM release.
+- Apply `20261029164514_zalo_account_onboarding.sql` and
+  `20261029170648_zalo_account_guard_privileges.sql` before the CRM release.
 - Set the CRM-only `ZALO_ACCOUNT_ENCRYPTION_KEY` to 32 random bytes in base64.
   Keep this key stable and preserve it with the deployment's secret backups.
 - Credentials use AES-256-GCM with company/account authenticated data. Private
