@@ -5,6 +5,7 @@ import {
   GeminiModelBackend,
   JAVIS_BRAIN_SYSTEM_INSTRUCTION,
 } from '../../services/javis-brain/model';
+import type { BrainTurnGrounding } from '../../features/ai-brain/contracts';
 
 const TEST_API_KEY = 'AIzaSyFakeTestGeminiApiKey_1234567890';
 const TEST_AUTH_TOKEN = 'test_token_12345678901234567890123456789012';
@@ -117,6 +118,57 @@ test('GeminiModelBackend: sends ONLY sanitized input text and verifies model con
 
   // Verify tools are NOT present in request
   assert.equal(reqBody.tools, undefined);
+});
+
+test('GeminiModelBackend: injects Facebook Page persona and contact policy into the prompt', async () => {
+  const proposalPayload = {
+    decision: 'RESPOND',
+    draft: 'Dạ em đã ghi nhận câu hỏi của anh/chị về du học Đức ạ.',
+    confidence: 0.92,
+  };
+  const { fetchImpl, capturedRequests } = mockGeminiFetch(proposalPayload);
+
+  const backend = new GeminiModelBackend({
+    apiKey: TEST_API_KEY,
+    model: 'gemini-2.5-flash',
+    customFetch: fetchImpl,
+  });
+
+  const grounding: BrainTurnGrounding = {
+    conversation: {
+      id: '00000000-0000-4000-8000-000000000002',
+      channel: 'MESSENGER',
+      status: 'OPEN',
+    },
+    recentMessages: [
+      {
+        direction: 'INBOUND',
+        actorType: 'CUSTOMER',
+        content: 'Tìm hiểu cho con',
+        createdAt: '2026-10-29T01:00:00.000Z',
+      },
+      {
+        direction: 'INBOUND',
+        actorType: 'CUSTOMER',
+        content: 'Sinh năm 98, ở miền bắc',
+        createdAt: '2026-10-29T01:02:00.000Z',
+      },
+    ],
+    knowledge: [],
+    memories: [],
+  };
+
+  await backend.generate('Sinh năm 98, ở miền bắc', {
+    signal: new AbortController().signal,
+    grounding,
+  });
+
+  const reqBody = JSON.parse(String(capturedRequests[0].init?.body ?? '{}'));
+  const prompt = String(reqBody.contents[0].parts[0].text);
+  assert.match(prompt, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
+  assert.match(prompt, /PHỤ HUYNH HỎI CHO CON\/CHÁU/);
+  assert.match(prompt, /AI xưng "em", gọi khách "anh\/chị"/);
+  assert.match(prompt, /\[LATEST INQUIRY TO RESPOND TO\]\nSinh năm 98, ở miền bắc/);
 });
 
 test('GeminiModelBackend: handles valid HANDOVER proposal with uppercase reason', async () => {

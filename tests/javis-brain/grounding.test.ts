@@ -152,6 +152,57 @@ test('Grounding System Instruction: enforces anti-hallucination and pricing auth
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /PRICE_QUOTATION_REQUIRED/);
 });
 
+test('Grounding System Instruction: enforces answer-first, persona, and contact-request policy', () => {
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /FACEBOOK PAGE ANSWER-FIRST & DISCOVERY POLICY/);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Never send a draft that only asks for contact details/);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /parent asking for a child/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /student\/pupil asking for themselves/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /born in 2000 or earlier/i);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /phone permission is YES/i);
+});
+
+test('Grounding Formatter: adds Facebook Page persona and contact policy block', () => {
+  const base = validGrounding();
+  const formatted = formatGroundingContext({
+    ...base,
+    conversation: {
+      ...base.conversation!,
+      channel: 'MESSENGER',
+    },
+    recentMessages: [
+      {
+        direction: 'INBOUND',
+        actorType: 'CUSTOMER',
+        content: 'Tìm hiểu cho con',
+        createdAt: '2026-10-29T01:00:00.000Z',
+      },
+      {
+        direction: 'OUTBOUND',
+        actorType: 'AI',
+        content: 'Dạ em hỏi thêm năm sinh và nơi ở của bé ạ.',
+        createdAt: '2026-10-29T01:01:00.000Z',
+      },
+      {
+        direction: 'INBOUND',
+        actorType: 'CUSTOMER',
+        content: 'Sinh năm 98, ở miền bắc',
+        createdAt: '2026-10-29T01:02:00.000Z',
+      },
+    ],
+  }, 'Sinh năm 98, ở miền bắc');
+
+  assert.match(formatted, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
+  assert.match(formatted, /PHỤ HUYNH HỎI CHO CON\/CHÁU/);
+  assert.match(formatted, /AI xưng "em", gọi khách "anh\/chị"/);
+  assert.match(formatted, /Được phép xin số điện thoại ở lượt này: KHÔNG/);
+  assert.match(formatted, /Thông tin còn thiếu: không còn/);
+});
+
+test('Grounding Formatter: does not add the Facebook Page policy to Zalo turns', () => {
+  const formatted = formatGroundingContext(validGrounding(), 'Cửa hàng có giao hàng tận nơi không?');
+  assert.doesNotMatch(formatted, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
+});
+
 test('E2E: JavisBrainServer receives turn with grounding and passes it to model backend', async () => {
   let capturedGrounding: BrainTurnGrounding | undefined;
 

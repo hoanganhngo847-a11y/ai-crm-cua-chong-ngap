@@ -27,40 +27,20 @@ import { LIVE_DELIVERY_WORKLOAD_ACTOR_ID } from './contracts';
 import { ZaloDeliveryTransport } from './transports/zalo-transport';
 import { MessengerDeliveryTransport } from './transports/messenger-transport';
 import { cleanCustomerReply, hasInternalLeak } from '../validation';
+import {
+  analyzeCustomerMessaging,
+  applyContactRequestPolicy,
+  buildMessengerFallbackReply,
+  buildMessengerPhoneReceivedReply,
+  messageContainsCustomerPhone,
+  messageIsOnlyContactInfo,
+} from '../messaging-style';
 
-export const MESSENGER_FALLBACK_REPLY =
-  'Anh/chị cho em xin sđt liên hệ, để nhân viên bên em tư vấn chi tiết hơn cho nhé.';
-
-export const MESSENGER_PHONE_RECEIVED_REPLY =
-  'Bên em đã nhận thông tin và sớm liên hệ lại. Anh chị nhớ mở chặn người lạ ở zalo và để ý điện thoại giúp em ạ.';
-
-export function messageContainsCustomerPhone(text: string): boolean {
-  if (!text || typeof text !== 'string') return false;
-
-  // 1. Check for CRM phone intake redaction tag or status
-  if (
-    /\[(?:số\s*điện\s*thoại\s*đã\s*ẩn|phone\s*number\s*hidden)\]/i.test(text) ||
-    /số\s*điện\s*thoại\s*đã\s*ẩn/i.test(text) ||
-    /đã\s*ghi\s*nhận\s*một\s*số\s*hợp\s*lệ/i.test(text)
-  ) {
-    return true;
-  }
-
-  // 2. Check for Vietnamese phone numbers (mobile or landline, optional +84 or 0084 or 0)
-  // Mobile prefixes: 3[2-9], 5[25689], 7[06789], 8[1-9], 9[0-46-9]
-  const vnPhoneRegex = /(?:(?:\+|00)84|0)\s*(?:3[2-9]|5[25689]|7[06789]|8[1-9]|9[0-46-9])(?:[\s()./_,:\-]*\d){7}\b/;
-  if (vnPhoneRegex.test(text)) {
-    return true;
-  }
-
-  // 3. Check for general phone intent with digits (e.g. "sđt: 091...", "zalo 09...")
-  const phoneIntentWithDigits = /(?:sđt|sdt|số\s*(?:điện\s*thoại|dt)|phone|zalo)[\s:]*(?:(?:\+|00)84|0)?\s*[1-9](?:[\s()./_,:\-]*\d){7,9}\b/i;
-  if (phoneIntentWithDigits.test(text)) {
-    return true;
-  }
-
-  return false;
-}
+export {
+  MESSENGER_FALLBACK_REPLY,
+  MESSENGER_PHONE_RECEIVED_REPLY,
+  messageContainsCustomerPhone,
+} from '../messaging-style';
 
 interface EligibleLiveInput {
   text: string;
@@ -370,6 +350,11 @@ async function processClaim(
     return 'skipped';
   }
 
+  const messagingProfile = analyzeCustomerMessaging({
+    latestText: eligible.text,
+    recentMessages: eligible.context.grounding?.recentMessages,
+  });
+
   // LEAD FORM SILENCE: A Messenger lead form is pre-filled by the customer.
   // Never answer it with a greeting, confirmation, or guidance; the data is
   // stored by intake and summarised as a Customer 360 note instead.
@@ -381,8 +366,12 @@ async function processClaim(
     return 'skipped';
   }
 
-  // FAST PATH FOR MESSENGER: Customer provided a phone number
-  if (claim.channel === 'MESSENGER' && messageContainsCustomerPhone(eligible.text)) {
+  // FAST PATH FOR MESSENGER: Customer sent only a phone number. If the message
+  // also contains a question, fall through to the model so the question is
+  // answered instead of replying with a bare acknowledgement.
+  if (claim.channel === 'MESSENGER'
+    && messageContainsCustomerPhone(eligible.text)
+    && messageIsOnlyContactInfo(eligible.text)) {
     const guard = await checkPreSendGuards(client, claim);
     if (!guard.allowed) {
       await finish(client, claim, lockToken, 'SKIPPED', {
@@ -407,7 +396,7 @@ async function processClaim(
     const commandId = `ai-live:${claim.source_interaction_id}`;
     const sendOutcome = await transport.sendReply({
       claim,
-      draft: MESSENGER_PHONE_RECEIVED_REPLY,
+      draft: buildMessengerPhoneReceivedReply(messagingProfile),
       commandId,
       minConfidence: eligible.minConfidence,
       turnConfidence: 1.0,
@@ -561,7 +550,7 @@ async function processClaim(
   }
 
   let proposedDraft = (claim.channel === 'MESSENGER' && result.decision === 'HANDOVER')
-    ? (result.draft?.trim() || MESSENGER_FALLBACK_REPLY)
+    ? (result.draft?.trim() || buildMessengerFallbackReply(messagingProfile))
     : result.draft?.trim();
 
   if (!proposedDraft) {
@@ -576,13 +565,14 @@ async function processClaim(
   }
 
   // Clean preamble / chain-of-thought from proposed draft
-  proposedDraft = cleanCustomerReply(proposedDraft) || (claim.channel === 'MESSENGER' ? MESSENGER_FALLBACK_REPLY : '');
+  proposedDraft = cleanCustomerReply(proposedDraft)
+    || (claim.channel === 'MESSENGER' ? buildMessengerFallbackReply(messagingProfile) : '');
 
   // Guard against any remaining internal thought or meta leaks
   if (hasInternalLeak(proposedDraft)) {
     if (claim.channel === 'MESSENGER') {
       console.warn(`[ai-brain-live-delivery] Internal leak detected in proposed draft, substituted fallback reply.`);
-      proposedDraft = MESSENGER_FALLBACK_REPLY;
+      proposedDraft = buildMessengerFallbackReply(messagingProfile);
     } else {
       await finish(client, claim, lockToken, 'FAILED', {
         decision: 'RESPOND',
@@ -593,6 +583,12 @@ async function processClaim(
       });
       return 'failed';
     }
+  }
+
+  // Contact-request policy: never send a phone-only draft and never ask for a
+  // phone before discovery is complete. A substantive answer is preserved.
+  if (claim.channel === 'MESSENGER') {
+    proposedDraft = applyContactRequestPolicy(proposedDraft, messagingProfile);
   }
 
   const guard = await checkPreSendGuards(client, claim);
