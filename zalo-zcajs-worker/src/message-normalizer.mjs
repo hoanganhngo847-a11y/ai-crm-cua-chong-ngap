@@ -1,5 +1,10 @@
 const DIRECT_MESSAGE_TYPE = 0;
+const GROUP_MESSAGE_TYPE = 1;
 export const ZALO_IMAGE_MARKER = '[[ZALO_IMAGE]]';
+// Group threads use a separate namespace so a group id can never collide with a
+// customer UID in CRM identities/conversations.
+export const ZALO_GROUP_THREAD_PREFIX = 'group:';
+export const ZALO_GROUP_EXTERNAL_REF_PREFIX = 'zcajs:group:';
 
 function safeHttpUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -123,40 +128,88 @@ export function normalizeMessageContent(data) {
   return '[Tin nhắn đính kèm]';
 }
 
-export function normalizeDirectMessage(message) {
-  if (!message) return null;
-  if (message.type !== undefined && message.type !== null && Number(message.type) !== DIRECT_MESSAGE_TYPE) {
-    return null;
-  }
+function normalizeThreadId(value) {
+  return String(value ?? '').trim().replace(/_0$/, '');
+}
 
-  const data = message.data || {};
-  const messageId = String(data.msgId || data.realMsgId || data.cliMsgId || '').trim();
-  const externalUserId = String(message.threadId || (message.isSelf ? data.idTo : data.uidFrom) || '').trim();
-  const content = normalizeMessageContent(data);
+function normalizeMessageId(data) {
+  return String(data?.msgId || data?.realMsgId || data?.cliMsgId || '').trim();
+}
 
-  if (!messageId || !externalUserId || !content) return null;
-
-  const numericTs = Number(data.ts);
-  let timestamp = new Date().toISOString();
+function normalizeTimestamp(data) {
+  const numericTs = Number(data?.ts);
   if (Number.isFinite(numericTs) && numericTs > 0) {
     const milliseconds = numericTs < 1_000_000_000_000 ? numericTs * 1000 : numericTs;
     const parsed = new Date(milliseconds);
-    if (!Number.isNaN(parsed.getTime())) timestamp = parsed.toISOString();
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
   }
+  return new Date().toISOString();
+}
 
+function buildNormalizedMessage(message, { isGroup }) {
+  if (!message) return null;
+
+  const data = message.data || {};
+  const messageId = normalizeMessageId(data);
+  const rawThreadId = isGroup
+    ? (message.threadId || data.idTo)
+    : (message.threadId || (message.isSelf ? data.idTo : data.uidFrom));
+  const threadId = normalizeThreadId(rawThreadId);
+  const content = normalizeMessageContent(data);
+
+  if (!messageId || !threadId || !content) return null;
+
+  const externalUserId = isGroup ? `${ZALO_GROUP_THREAD_PREFIX}${threadId}` : threadId;
   const senderName = message.isSelf ? undefined : (String(data.dName || '').trim() || undefined);
   const senderNameSource = message.isSelf
     ? undefined
     : (String(data.__zaloNameSource || '').trim() || (senderName ? 'message_dname' : undefined));
+  const explicitGroupName = isGroup
+    ? String(message.groupName || message.__zaloGroupName || data.groupName || '').trim() || undefined
+    : undefined;
 
   return {
     messageId,
+    // Group threads live in their own namespace; direct messages keep using the
+    // Zalo UID unchanged so historical dedupe/idempotency remains valid.
     externalUserId,
+    externalConversationId: externalUserId,
+    // Group provider msgIds are globally unique, but namespacing the CRM
+    // external_ref guarantees a group message can never collide with a DM.
+    externalRef: isGroup ? `${ZALO_GROUP_EXTERNAL_REF_PREFIX}${messageId}` : messageId,
     senderName,
     senderNameSource,
+    senderDisplayName: isGroup ? senderName : undefined,
+    isGroup,
+    groupId: isGroup ? threadId : undefined,
+    groupName: explicitGroupName,
     content,
-    timestamp,
+    timestamp: normalizeTimestamp(data),
     direction: message.isSelf ? 'outbound' : 'inbound',
     isSelf: Boolean(message.isSelf),
   };
+}
+
+export function normalizeDirectMessage(message) {
+  if (message?.type !== undefined && message?.type !== null && Number(message.type) !== DIRECT_MESSAGE_TYPE) {
+    return null;
+  }
+  return buildNormalizedMessage(message, { isGroup: false });
+}
+
+/**
+ * Normalize any Zalo personal message, including group messages.
+ * Direct messages keep the exact legacy contract (`normalizeDirectMessage`).
+ */
+export function normalizeZaloMessage(message) {
+  if (!message) return null;
+  const numericType = message.type === undefined || message.type === null ? null : Number(message.type);
+
+  if (numericType === GROUP_MESSAGE_TYPE) {
+    return buildNormalizedMessage(message, { isGroup: true });
+  }
+  if (numericType === null || numericType === DIRECT_MESSAGE_TYPE) {
+    return buildNormalizedMessage(message, { isGroup: false });
+  }
+  return null;
 }

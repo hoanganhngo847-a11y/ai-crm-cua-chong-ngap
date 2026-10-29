@@ -1216,6 +1216,14 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         <span className="font-medium text-[var(--text-primary)] text-xs truncate max-w-[120px]">
                           {conv.customer_name || 'Khách hàng'}
                         </span>
+                        {Boolean(conv.metadata?.is_group) && (
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 flex items-center gap-0.5"
+                            title="Nhóm Zalo"
+                          >
+                            Nhóm
+                          </span>
+                        )}
                         {conv.metadata?.provider === 'facebook_browser' && (
                           <span
                             className="px-1 py-0.2 rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0"
@@ -1287,7 +1295,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                       <span
                         className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border max-w-[240px] truncate ${
                           selectedConversation.channel === 'zalo'
-                            ? 'bg-cyan-50 text-cyan-800 border-cyan-200'
+                            ? selectedConversation.metadata?.is_group
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-cyan-50 text-cyan-800 border-cyan-200'
                             : 'bg-blue-50 text-blue-800 border-blue-200'
                         }`}
                         title={
@@ -1297,7 +1307,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                         }
                       >
                         {selectedConversation.channel === 'zalo'
-                          ? 'Zalo OA'
+                          ? selectedConversation.metadata?.is_group
+                            ? 'Nhóm Zalo'
+                            : 'Zalo OA'
                           : `Facebook · ${selectedConversation.channel_page_name || 'Messenger'}`}
                       </span>
                     </div>
@@ -1647,7 +1659,9 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                 <div className="space-y-2 text-[var(--text-primary)]">
                   <div className="flex justify-between items-center py-1 border-b border-[var(--border-subtle)]">
                     <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
-                    {selectedConversation.customer_phone ? (
+                    {selectedConversation.metadata?.is_group ? (
+                      <span className="font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[11px]">Hội thoại Nhóm</span>
+                    ) : selectedConversation.customer_phone ? (
                       <SecurePhoneRow
                         customerId={selectedConversation.customer_id}
                         maskedPhone={selectedConversation.customer_phone}
@@ -1660,7 +1674,11 @@ export default function InboxView({ initialCustomerId, userFullName, userRole }:
                   <div className="flex justify-between py-1 border-b border-[var(--border-subtle)]">
                     <span className="text-[var(--text-secondary)]">Kênh hội thoại:</span>
                     <span className="capitalize font-medium text-[var(--text-primary)]">
-                      {selectedConversation.channel === 'zalo' ? 'Zalo OA' : 'Facebook Messenger'}
+                      {selectedConversation.channel === 'zalo'
+                        ? selectedConversation.metadata?.is_group
+                          ? 'Nhóm Zalo'
+                          : 'Zalo'
+                        : 'Facebook Messenger'}
                     </span>
                   </div>
 

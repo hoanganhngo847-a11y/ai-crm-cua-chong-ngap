@@ -29,6 +29,7 @@ FROM node:20-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=10000
+ENV ZCAJS_INBOX_QUEUE_FILE=/app/data/zcajs-inbound-queue.jsonl
 WORKDIR /app
 
 COPY package.json ./package.json

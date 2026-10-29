@@ -56,6 +56,8 @@ export interface LiveDeliveryEngineOptions {
   dataSource?: BrainContextDataSource;
   transports?: Partial<Record<LiveDeliveryChannel, LiveDeliveryTransport>>;
   channel?: LiveDeliveryChannel;
+  /** When set, due claims are closed as SKIPPED without calling the model or provider. */
+  skipReason?: string;
 }
 
 function productionProvider(): BrainProvider | undefined {
@@ -103,6 +105,15 @@ async function loadEligibleInput(
   if (conversationError || !conversation) throw new Error('LIVE_SCOPE_INVALID');
   if (conversation.channel !== expectedConvChannel) {
     throw new Error('LIVE_SCOPE_INVALID');
+  }
+
+  // Zalo group chats are observational in CRM. Never let the AI answer a group.
+  const conversationMetadata =
+    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+  if (claim.channel === 'ZALO' && String(conversationMetadata.is_group || '').toLowerCase() === 'true') {
+    return null;
   }
 
   // Conversation closed, human-owned, or AI paused -> AI silent
@@ -463,7 +474,7 @@ async function processClaim(
     },
   });
 
-  let result = await service.handleBrainTurn({
+  const result = await service.handleBrainTurn({
     customerId: claim.customer_id,
     conversationId: claim.conversation_id,
     channel: expectedBrainChannel,
@@ -741,6 +752,18 @@ export async function processDueLiveDeliveries(
 
   const claims = (Array.isArray(data) ? data : []) as LiveDeliveryClaim[];
   const summary: LiveDeliveryWorkerResult = { claimed: claims.length, sent: 0, skipped: 0, failed: 0 };
+
+  if (options.skipReason) {
+    for (const claim of claims) {
+      try {
+        await finish(client, claim, lockToken, 'SKIPPED', { errorCode: options.skipReason });
+        summary.skipped += 1;
+      } catch {
+        summary.failed += 1;
+      }
+    }
+    return summary;
+  }
 
   for (const claim of claims) {
     try {

@@ -32,6 +32,8 @@ jobs:
       - run: npx tsx tests/zalo/zalo_zcajs_dispatch_loop_wiring.test.ts
       - run: npx tsx tests/zalo/zalo_zcajs_media_self_sync_wiring.test.ts
       - run: npx tsx tests/zalo/zalo_composer_media_wiring.test.ts
+      - run: npx tsx --conditions=react-server --test tests/zalo/zalo_zcajs_groups.test.ts tests/zalo/zalo_ai_auto_reply_switch.test.ts
+      - run: npx tsx --conditions=react-server tests/zalo/zalo_zcajs_groups_db.test.ts
 
   zcajs-worker:
     runs-on: ubuntu-latest
@@ -49,4 +51,5 @@ jobs:
       - run: node --test zalo-zcajs-worker/test/inbound-delivery.test.mjs
       - run: node --test zalo-zcajs-worker/tests/recent-rest-recovery.test.mjs
       - run: node --test zalo-zcajs-worker/test/contact-directory.test.mjs
+      - run: node --test zalo-zcajs-worker/test/docker-patches.test.mjs
       - run: docker build -f zalo-zcajs-worker/Dockerfile zalo-zcajs-worker

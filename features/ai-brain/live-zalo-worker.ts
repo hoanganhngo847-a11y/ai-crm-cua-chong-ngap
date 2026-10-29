@@ -11,6 +11,10 @@ import {
   type LiveDeliveryClaim,
   type LiveDeliveryWorkerResult,
 } from './live-delivery';
+import {
+  isZaloAiAutoReplyEnabled,
+  ZALO_AI_AUTO_REPLY_DISABLED,
+} from './zalo-auto-reply';
 
 export type LiveZaloClaim = LiveDeliveryClaim & { channel: 'ZALO' };
 
@@ -39,5 +43,6 @@ export async function processDueAiBrainLiveZaloDeliveries(
     dataSource: options.dataSource,
     transports,
     channel: 'ZALO',
+    ...(isZaloAiAutoReplyEnabled() ? {} : { skipReason: ZALO_AI_AUTO_REPLY_DISABLED }),
   });
 }

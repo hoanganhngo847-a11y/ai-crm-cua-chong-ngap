@@ -3,7 +3,7 @@ import fs from 'node:fs';
 const file = 'src/index.mjs';
 let source = fs.readFileSync(file, 'utf8');
 
-const importAnchor = "import { normalizeDirectMessage } from './message-normalizer.mjs';";
+const importAnchor = "import { normalizeZaloMessage } from './message-normalizer.mjs';";
 const importLine = "import { resolveExactZaloPhone } from './phone-resolver.mjs';";
 if (!source.includes(importAnchor)) throw new Error('worker phone resolver import anchor missing');
 if (!source.includes(importLine)) {

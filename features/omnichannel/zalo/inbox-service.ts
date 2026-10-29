@@ -9,6 +9,10 @@ import {
   getZaloTransportClient,
   type ZaloTransportClient,
 } from './zcajs-client';
+import {
+  isZaloAiAutoReplyEnabled,
+  ZALO_AI_AUTO_REPLY_DISABLED,
+} from '../../ai-brain/zalo-auto-reply';
 import { sanitizeMessageContent } from './sanitizer';
 import {
   SendZaloReplyParams,
@@ -224,6 +228,17 @@ export class ZaloInboxService {
     }
     if (principal.actorType !== 'AI' && principal.actorType !== 'SYSTEM') {
       throw new ServerAuthError('Invalid system actor type', 403, 'ROLE_FORBIDDEN');
+    }
+
+    // Last-mile brake: no automated AI message may leave for Zalo while the
+    // operator switch is engaged, even if a queued job or another worker path
+    // still calls this entry point.
+    if (principal.actorType === 'AI' && !isZaloAiAutoReplyEnabled()) {
+      return {
+        success: false,
+        status: 'FAILED',
+        error: ZALO_AI_AUTO_REPLY_DISABLED,
+      };
     }
 
     return this.executeSend(params, principal.companyId, principal.actorType, null);

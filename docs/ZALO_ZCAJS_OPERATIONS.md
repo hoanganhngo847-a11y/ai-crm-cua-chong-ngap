@@ -57,14 +57,23 @@ ZCAJS_COOKIE=<Zalo Web cookie/session value>
 ZCAJS_IMEI=<Zalo Web z_uuid/sh_z_uuid value>
 ZCAJS_USER_AGENT=<user agent from the same browser/session>
 PORT=10000
+# Optional; defaults to data/zcajs-inbound-queue.jsonl inside the worker container.
+ZCAJS_INBOX_QUEUE_FILE=/app/data/zcajs-inbound-queue.jsonl
 ```
 
 Set the cookie/IMEI/user-agent directly in the deployment provider. Do not commit or paste these values into source control, tickets or chat.
 
 Health endpoints:
 
-- `GET /health` — process health; returns login/listener state without credentials.
+- `GET /health` — process health; returns login/listener state and `pendingInbound` queue depth without credentials.
 - `GET /ready` — 200 only after the Zalo session has logged in.
+
+Inbound durability:
+
+- Every normalized message is written to `ZCAJS_INBOX_QUEUE_FILE` before the first CRM HTTP attempt.
+- Messages are removed only after the CRM returns success; transient failures keep retrying with capped exponential backoff.
+- On worker boot the queue is replayed before/during listener startup, so a CRM deploy or worker restart no longer drops the customer messages that were waiting.
+- The queue is a JSONL file owned by the worker process (mode 0600). Mount a persistent disk if the deployment provider restarts containers onto fresh filesystems.
 
 ## Current supported message scope
 
@@ -72,11 +81,28 @@ Health endpoints:
 - direct inbound Zalo photo/image attachment -> CRM inbox image preview
 - direct outbound text from CRM -> Zalo
 - direct messages sent manually from the connected Zalo account -> mirrored into CRM as outbound history
-- group messages are ignored
+- **group inbound messages -> CRM inbox** (one conversation per Zalo group)
+- **group outbound text/media from CRM -> Zalo group**
+- group messages sent manually from the connected Zalo account -> mirrored into CRM as outbound history
+- group conversations are stored under the `group:<groupId>` namespace; individual messages are prefixed with the sender's Zalo display name
+- group discovery is message-driven: the pinned ZCAJS fork has no group directory, so a group appears in CRM after its first inbound or observed outbound message
+- group history cannot be replayed after worker downtime because the pinned fork exposes no group-history endpoint (the reconnect rescan covers 1:1 chats only)
 - unsupported non-text attachment types are represented with a safe placeholder/link when possible
 - outbound CRM success requires the stable `msgId` returned by ZCAJS; missing IDs are marked `UNCERTAIN`, never synthesized
 
 Provider-hosted image URLs are rendered with `referrerPolicy=no-referrer` and an external-link fallback. They can expire according to Zalo/CDN behavior; permanent media archiving is not part of this bridge.
+
+## Temporarily disabling AI auto-replies on Zalo
+
+The durable switch is `ai_brain_live_settings.enabled` for channel `ZALO` in AI Control Center (`/admin/ai`). The repository migration `20261029120000_zcajs_groups_and_zalo_ai_pause.sql` disables it and closes pending Zalo AI deliveries so a later re-enable cannot send stale replies.
+
+There is also an immediate environment brake on the CRM web service:
+
+```env
+ZALO_AI_AUTO_REPLY_ENABLED=false
+```
+
+`false` stops every automated AI Zalo send (AI Brain live worker and the Response SLA runtime) while manual Sale replies continue to work. AI is never allowed to answer a Zalo group even after re-enabling the channel. To restore AI, set the channel back to enabled in AI Control Center and remove/true the env flag; see `docs/sql/zalo-ai-auto-reply-toggle.sql`.
 
 ## Important ZCAJS constraint
 
