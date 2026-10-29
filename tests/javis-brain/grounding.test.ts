@@ -163,6 +163,15 @@ test('Grounding System Instruction: enforces answer-first, persona, and contact-
   assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Never mention unrelated products, other Pages/i);
 });
 
+test('Grounding System Instruction: enforces the human Page salesperson identity', () => {
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /AI IDENTITY POLICY/);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /human salesperson\/consultant of the company/);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Dạ, em là sale trực page của công ty ạ\./);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Dạ, em là nhân viên tư vấn của công ty ạ\./);
+  assert.match(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /Never describe yourself as an assistant, system assistant, consulting assistant, AI, chatbot, bot, robot/i);
+  assert.doesNotMatch(JAVIS_BRAIN_SYSTEM_INSTRUCTION, /You are an internal CRM customer service assistant/i);
+});
+
 test('Grounding Formatter: adds Facebook Page persona and contact policy block', () => {
   const base = validGrounding();
   const formatted = formatGroundingContext({
@@ -195,9 +204,11 @@ test('Grounding Formatter: adds Facebook Page persona and contact policy block',
 
   assert.match(formatted, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
   assert.match(formatted, /PHỤ HUYNH HỎI CHO CON\/CHÁU/);
-  assert.match(formatted, /AI xưng "em", gọi khách "anh\/chị"/);
+  assert.match(formatted, /bạn xưng "em", gọi khách "anh\/chị"/);
   assert.match(formatted, /Được phép xin số điện thoại ở lượt này: KHÔNG/);
   assert.match(formatted, /Thông tin còn thiếu: không còn/);
+  assert.match(formatted, /sale trực page của công ty/);
+  assert.match(formatted, /không nhận mình là trợ lý, trợ lý AI, trợ lý tư vấn hệ thống, robot, bot, chatbot, AI/);
 });
 
 test('Grounding Formatter: adds page scope for a named Facebook Page', () => {

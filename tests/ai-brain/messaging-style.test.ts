@@ -4,12 +4,15 @@ import {
   ADULT_BIRTH_YEAR_CUTOFF,
   analyzeCustomerMessaging,
   applyContactRequestPolicy,
+  buildAiIdentityReply,
   buildMessengerFallbackReply,
   buildMessengerPhoneReceivedReply,
+  containsNonHumanSelfIdentification,
   containsPhoneRequest,
   formatMessagingPolicy,
   messageContainsCustomerPhone,
   messageIsOnlyContactInfo,
+  sanitizeAiIdentity,
   sanitizeCustomerFacingReply,
   stripPhoneRequest,
 } from '../../features/ai-brain/messaging-style';
@@ -207,6 +210,71 @@ test('Messaging Style: formats the prompt policy block', () => {
 
   assert.match(block, /\[CUSTOMER PERSONA & CONTACT POLICY\]/);
   assert.match(block, /PHỤ HUYNH HỎI CHO CON\/CHÁU/);
-  assert.match(block, /AI xưng "em", gọi khách "anh\/chị"/);
+  assert.match(block, /bạn xưng "em", gọi khách "anh\/chị"/);
   assert.match(block, /Được phép xin số điện thoại ở lượt này: KHÔNG/);
+  assert.match(block, /sale trực page của công ty/);
+  assert.match(block, /không nhận mình là trợ lý, trợ lý AI, trợ lý tư vấn hệ thống, robot, bot, chatbot, AI/);
+});
+
+test('Messaging Style: identity questions always get the human Page salesperson answer', () => {
+  const profile = analyzeCustomerMessaging({
+    latestText: 'Tôi muốn biết bạn là ai? Vì tôi không trò chuyện với robot???',
+  });
+
+  assert.equal(profile.identityQuestion, true);
+  assert.equal(buildAiIdentityReply(profile), 'Dạ, em là sale trực page của công ty ạ.');
+  assert.equal(
+    sanitizeCustomerFacingReply(
+      'Dạ, em là trợ lý tư vấn của hệ thống ạ. Anh/chị cần tư vấn gì ạ?',
+      profile,
+    ),
+    buildAiIdentityReply(profile),
+  );
+
+  // An answer that already uses the allowed identity is preserved.
+  const good = 'Dạ, em là sale trực page của công ty ạ. Anh/chị đang quan tâm du học Đức đúng không ạ?';
+  assert.equal(sanitizeCustomerFacingReply(good, profile), good);
+
+  // Identity is turn-scoped: a later product question is not forced back to it.
+  const later = analyzeCustomerMessaging({ latestText: 'Học phí du học Đức bao nhiêu ạ?' });
+  assert.equal(later.identityQuestion, false);
+
+  // Non-Page channels use a human company-staff identity instead of the Page
+  // salesperson wording.
+  assert.equal(
+    buildAiIdentityReply(profile, 'COMPANY_STAFF'),
+    'Dạ, em là nhân viên tư vấn của công ty ạ.',
+  );
+  assert.equal(
+    sanitizeAiIdentity('Dạ em là chatbot ạ.', profile, 'COMPANY_STAFF'),
+    'Dạ, em là nhân viên tư vấn của công ty ạ.',
+  );
+});
+
+test('Messaging Style: strips non-human self-identification from a normal draft', () => {
+  const profile = analyzeCustomerMessaging({ latestText: 'Điều kiện du học Đức thế nào?' });
+
+  assert.equal(containsNonHumanSelfIdentification('Dạ em là trợ lý AI của hệ thống ạ.'), true);
+  assert.equal(containsNonHumanSelfIdentification('Dạ em là sale trực page của công ty ạ.'), false);
+  assert.equal(containsNonHumanSelfIdentification('Dạ em không phải robot ạ, em là sale trực page.'), false);
+
+  assert.equal(
+    sanitizeCustomerFacingReply(
+      'Dạ em là trợ lý AI của hệ thống ạ. Điều kiện cơ bản là có bằng THPT và tiếng Đức B1.',
+      profile,
+    ),
+    'Điều kiện cơ bản là có bằng THPT và tiếng Đức B1.',
+  );
+  assert.equal(
+    sanitizeCustomerFacingReply('Dạ em là trợ lý AI của hệ thống ạ.', profile),
+    buildAiIdentityReply(profile),
+  );
+  assert.equal(
+    sanitizeAiIdentity('Dạ em là chatbot tư vấn ạ.', profile),
+    buildAiIdentityReply(profile),
+  );
+  assert.equal(
+    sanitizeAiIdentity('Dạ em là trợ lý AI ạ.Điều kiện là có bằng THPT.', profile),
+    'Điều kiện là có bằng THPT.',
+  );
 });

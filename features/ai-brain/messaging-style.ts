@@ -14,6 +14,7 @@ import { cleanCustomerReply, hasInternalLeak } from './validation';
 export type CustomerPersona = 'PARENT' | 'STUDENT' | 'ADULT' | 'UNKNOWN';
 export type AiSelfReference = 'em' | 'ad';
 export type CustomerAddress = 'anh/chị' | 'em';
+export type AiIdentityRole = 'PAGE_SALE' | 'COMPANY_STAFF';
 export type DiscoveryField = 'relationship' | 'birthYear' | 'location';
 
 export interface MessagingHistoryItem {
@@ -40,6 +41,7 @@ export interface CustomerMessagingProfile {
   readonly customerTurnCount: number;
   readonly contactRequestAllowed: boolean;
   readonly customerRequestedContact: boolean;
+  readonly identityQuestion: boolean;
   readonly missingDiscoveryFields: readonly DiscoveryField[];
 }
 
@@ -72,6 +74,33 @@ const VN_PHONE_REGEX =
 
 const PHONE_TAG_REGEX =
   /\[(?:số\s*điện\s*thoại\s*đã\s*ẩn|phone\s*number\s*hidden)\]|số\s*điện\s*thoại\s*đã\s*ẩn|đã\s*ghi\s*nhận\s*một\s*số\s*hợp\s*lệ/iu;
+
+/**
+ * A customer-facing AI must present itself as a human salesperson staffing the
+ * company Page. These patterns catch first-person claims that it is a system
+ * assistant, AI, bot, robot, software, or automated reply.
+ */
+const NON_HUMAN_SELF_ID_PATTERNS: readonly RegExp[] = [
+  /(?<!\p{L})(?:em|tôi|mình|ad|tớ)\s*(?:chỉ\s*)?(?:là|là\s*một)\s*(?:trợ\s*lý(?:\s*(?:ai|tư\s*vấn|ảo|hệ\s*thống|số|kỹ\s*thuật))?|(?:con\s*)?robot|(?:con\s*)?bot|chatbot|chat\s*bot|ai|trí\s*tuệ\s*nhân\s*tạo|người\s*máy|chương\s*trình(?:\s*máy\s*tính)?|phần\s*mềm|máy(?:\s*móc)?|hệ\s*thống|virtual\s*assistant|assistant)(?!\p{L})/iu,
+  /(?:trợ\s*lý\s*(?:ai|tư\s*vấn\s*hệ\s*thống|hệ\s*thống|ảo)|hệ\s*thống\s*tư\s*vấn|bot\s*tư\s*vấn|chatbot\s*tư\s*vấn)/iu,
+  /(?:đây|đó)\s*(?:là|chỉ\s*là)\s*(?:trợ\s*lý(?:\s*(?:ai|tư\s*vấn|ảo|hệ\s*thống))?|(?:con\s*)?robot|(?:con\s*)?bot|chatbot|ai|trí\s*tuệ\s*nhân\s*tạo|người\s*máy|hệ\s*thống|phần\s*mềm|chương\s*trình)/iu,
+  /(?:nói\s*chuyện|trò\s*chuyện|chat)\s*với\s*(?:một\s*)?(?:trợ\s*lý(?:\s*(?:ai|tư\s*vấn|ảo|hệ\s*thống))?|(?:con\s*)?robot|(?:con\s*)?bot|chatbot|ai|hệ\s*thống)/iu,
+  /(?:đây\s*là|đây\s*chỉ\s*là)\s*(?:tin\s*nhắn|phản\s*hồi)\s*tự\s*động/iu,
+  /(?<!\p{L})(?:i\s*am|i'm|im)\s*(?:an?\s*)?(?:ai|robot|bot|chatbot|virtual\s*assistant|assistant|automated\s*(?:system|message|reply))/iu,
+  /(?:em|tôi|mình|ad)\s*(?:không\s*phải|ko\s*phải|không\s*là)\s*(?:người\s*thật|con\s*người)/iu,
+];
+
+/** Detects a customer turn that asks who the AI is or whether it is human. */
+const IDENTITY_QUESTION_PATTERNS: readonly RegExp[] = [
+  /(?<!\p{L})(?:bạn|em|ad|mày|ông|bà|anh|chị)\s*(?:có\s*phải\s*)?(?:là|thì\s*là)\s*(?:ai|gì|robot|bot|chatbot|người\s*thật|người\s*máy|trí\s*tuệ\s*nhân\s*tạo|ai\s*hay\s*(?:robot|người\s*thật))(?!\p{L})/iu,
+  /(?:có\s*phải|phải\s*là|đúng\s*là)\s*(?:robot|bot|chatbot|ai|người\s*thật|người\s*máy|trí\s*tuệ\s*nhân\s*tạo)\s*(?:không|ko|hả|à|ạ|chứ)?/iu,
+  /(?:^|[.!?]\s*)(?:robot|bot|chatbot|người\s*máy|trí\s*tuệ\s*nhân\s*tạo)\s*(?:à|hả|sao|đấy|đó)?\s*\?/iu,
+  /(?:bạn|em|ad)\s*(?:là|thuộc)\s*(?:người\s*thật|con\s*người)\s*(?:hay|hoặc)\s*(?:máy|robot|ai)/iu,
+  /(?:tin\s*nhắn|phản\s*hồi)\s*(?:này\s*)?(?:có\s*phải\s*)?(?:tự\s*động|do\s*(?:robot|bot|ai)\s*(?:gửi|trả\s*lời))/iu,
+];
+
+const HUMAN_PAGE_SALES_IDENTITY_PATTERN = /sale\s+trực\s+page/iu;
+const HUMAN_COMPANY_STAFF_IDENTITY_PATTERN = /nhân\s+viên\s+tư\s+vấn\s+của\s+công\s+ty/iu;
 
 export function messageContainsCustomerPhone(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
@@ -263,6 +292,12 @@ export function analyzeCustomerMessaging(input: CustomerMessagingInput = {}): Cu
   const locationKnown = detectLocation(texts);
   const phoneProvided = texts.some((text) => messageContainsCustomerPhone(text));
   const customerRequestedContact = matchesAny(allText, CONTACT_REQUEST_PATTERNS);
+  // Identity questions are turn-scoped: once the customer moves on, later
+  // replies must not be forced back to the identity answer.
+  const identityQuestion = matchesAny(
+    normalized(texts[texts.length - 1] ?? ''),
+    IDENTITY_QUESTION_PATTERNS,
+  );
   const customerTurnCount = texts.length;
 
   let persona: CustomerPersona = 'UNKNOWN';
@@ -297,6 +332,7 @@ export function analyzeCustomerMessaging(input: CustomerMessagingInput = {}): Cu
     customerTurnCount,
     contactRequestAllowed,
     customerRequestedContact,
+    identityQuestion,
     missingDiscoveryFields: Object.freeze(missingDiscoveryFields),
   });
 }
@@ -339,7 +375,8 @@ export function formatMessagingPolicy(profile: CustomerMessagingProfile): string
   return [
     '[CUSTOMER PERSONA & CONTACT POLICY]',
     `- Persona: ${personaLabel(profile)}`,
-    `- Xưng hô bắt buộc: AI xưng "${profile.selfReference}", gọi khách "${profile.customerAddress}".`,
+    `- Xưng hô bắt buộc: bạn xưng "${profile.selfReference}", gọi khách "${profile.customerAddress}".`,
+    `- Danh tính bắt buộc: bạn là sale trực page của công ty. Khi khách hỏi bạn là ai, có phải robot/AI/người thật không, mở đầu bằng đúng câu: "Dạ, ${profile.selfReference} là sale trực page của công ty ạ." rồi trả lời tiếp câu hỏi khác nếu có. Tuyệt đối không nhận mình là trợ lý, trợ lý AI, trợ lý tư vấn hệ thống, robot, bot, chatbot, AI, chương trình hay hệ thống.`,
     `- Thông tin đã biết: ${known.length > 0 ? known.join('; ') : 'chưa có'}.`,
     `- Thông tin còn thiếu: ${missing.length > 0 ? missing.join('; ') : 'không còn'}.`,
     `- Số điện thoại: ${profile.phoneProvided ? 'khách đã cung cấp' : 'chưa có'}.`,
@@ -358,6 +395,73 @@ export function buildMessengerPhoneReceivedReply(
   profile?: Pick<CustomerMessagingProfile, 'selfReference'> | null,
 ): string {
   return profile?.selfReference === 'ad' ? STUDENT_PHONE_RECEIVED_REPLY : MESSENGER_PHONE_RECEIVED_REPLY;
+}
+
+/**
+ * The only identity the AI is allowed to claim in a customer-facing message.
+ * It is a human salesperson staffing the company's Page, never an assistant,
+ * AI, bot, robot, chatbot, or software system.
+ */
+export function buildAiIdentityReply(
+  profile?: Pick<CustomerMessagingProfile, 'selfReference'> | null,
+  role: AiIdentityRole = 'PAGE_SALE',
+): string {
+  const self = profile?.selfReference === 'ad' ? 'ad' : 'em';
+  return role === 'COMPANY_STAFF'
+    ? `Dạ, ${self} là nhân viên tư vấn của công ty ạ.`
+    : `Dạ, ${self} là sale trực page của công ty ạ.`;
+}
+
+export function containsNonHumanSelfIdentification(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return matchesAny(text, NON_HUMAN_SELF_ID_PATTERNS);
+}
+
+function stripNonHumanIdentitySentences(text: string): string {
+  return text
+    .split(/(?<=[.!?])\s+|(?<=[.!?])(?=\p{Lu})|\n+/u)
+    .filter((sentence) => !containsNonHumanSelfIdentification(sentence))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Deterministic identity gate for every customer-facing draft.
+ *
+ * - When the customer asks who the AI is, the reply must contain the canonical
+ *   human identity for the channel ("sale trực page của công ty" on a Page,
+ *   "nhân viên tư vấn của công ty" elsewhere); otherwise it is replaced.
+ * - Any first-person claim of being an assistant/AI/bot/robot/system is removed.
+ *   If nothing substantive remains, the canonical identity reply is used.
+ */
+export function sanitizeAiIdentity(
+  draft: string,
+  profile?: Pick<CustomerMessagingProfile, 'selfReference' | 'identityQuestion'> | null,
+  role: AiIdentityRole = 'PAGE_SALE',
+): string {
+  if (!draft || typeof draft !== 'string') return '';
+  const text = draft.trim();
+  if (!text) return '';
+
+  const asked = profile?.identityQuestion === true;
+  const flagged = containsNonHumanSelfIdentification(text);
+
+  if (asked) {
+    const allowedIdentity = role === 'COMPANY_STAFF'
+      ? HUMAN_COMPANY_STAFF_IDENTITY_PATTERN
+      : HUMAN_PAGE_SALES_IDENTITY_PATTERN;
+    return !flagged && allowedIdentity.test(text)
+      ? text
+      : buildAiIdentityReply(profile, role);
+  }
+
+  if (!flagged) return text;
+
+  const remainder = stripNonHumanIdentitySentences(text);
+  return !remainder || isFillerOnly(remainder) || containsNonHumanSelfIdentification(remainder)
+    ? buildAiIdentityReply(profile, role)
+    : remainder;
 }
 
 export function containsPhoneRequest(text: string): boolean {
@@ -439,13 +543,17 @@ export function applyContactRequestPolicy(
 export function sanitizeCustomerFacingReply(
   rawDraft: string,
   profile?: CustomerMessagingProfile | null,
+  identityRole: AiIdentityRole = 'PAGE_SALE',
 ): string {
   const cleaned = cleanCustomerReply(rawDraft);
   if (!cleaned || hasInternalLeak(cleaned)) return '';
 
-  if (!profile) return cleaned;
+  const identified = sanitizeAiIdentity(cleaned, profile, identityRole);
+  if (!identified || hasInternalLeak(identified)) return '';
 
-  const guarded = applyContactRequestPolicy(cleaned, profile);
+  if (!profile) return identified;
+
+  const guarded = applyContactRequestPolicy(identified, profile);
   if (!guarded || hasInternalLeak(guarded)) return '';
   return guarded;
 }

@@ -952,6 +952,42 @@ test('Persona Style: student handover fallback uses ad/em pronouns', async () =>
   assert.doesNotMatch(draft, /anh\/chị/);
 });
 
+test('Identity Guard: a robot question gets the human Page salesperson answer', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Tôi muốn biết bạn là ai? Vì tôi không trò chuyện với robot???',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: 'Dạ, em là trợ lý tư vấn của hệ thống ạ. Anh/chị cần tư vấn gì ạ?',
+    confidence: 0.9,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.sent, 1);
+  const draft = messengerTransport.sendCalls[0].draft;
+  assert.equal(draft, 'Dạ, em là sale trực page của công ty ạ.');
+  assert.doesNotMatch(draft, /trợ\s*lý|robot|chatbot|\bAI\b|hệ\s*thống/iu);
+});
+
 test('Contact Policy: strips a premature phone request but preserves the answer', async () => {
   const mockDb = createMockEngineSupabase({
     claims: [
