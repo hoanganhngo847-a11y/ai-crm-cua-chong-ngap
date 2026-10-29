@@ -278,10 +278,14 @@ test('Grounding Retriever: injects the built-in Du học playbook ahead of page 
 
   assert.equal(grounding.knowledge[0].category, 'SALES_PLAYBOOK');
   assert.equal(grounding.knowledge[0].title, 'Playbook tư vấn du học');
-  assert.match(grounding.knowledge[0].content, /Số điện thoại liên hệ/);
-  assert.match(grounding.knowledge[0].content, /Năm sinh của người đi học/);
+  assert.match(grounding.knowledge[0].content, /số điện thoại liên hệ/i);
+  assert.match(grounding.knowledge[0].content, /năm sinh của người đi học/i);
   assert.match(grounding.knowledge[0].content, /bản thân khách hay người khác/);
-  assert.match(grounding.knowledge[0].content, /Nơi ở\/đang sinh sống hiện tại/);
+  assert.match(grounding.knowledge[0].content, /nơi ở\/đang sinh sống hiện tại/i);
+  assert.match(grounding.knowledge[0].content, /trả lời trực tiếp câu hỏi/i);
+  assert.match(grounding.knowledge[0].content, /KHÔNG BAO GIỜ chỉ nhắn xin số điện thoại/i);
+  assert.match(grounding.knowledge[0].content, /xưng "ad"/i);
+  assert.match(grounding.knowledge[0].content, /năm sinh từ 2000 trở về trước/i);
 });
 
 test('Grounding Retriever: verified page playbook overrides the built-in fallback', async () => {

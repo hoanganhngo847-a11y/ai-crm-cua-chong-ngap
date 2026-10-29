@@ -817,13 +817,15 @@ Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé. Anh/chị cho e
   assert.equal(result.claimed, 1);
   assert.equal(result.sent, 1);
 
-  // Transport received ONLY the cleaned customer-facing message
+  // Transport received ONLY the cleaned customer-facing message. The premature
+  // phone request is removed because discovery has not started yet.
   assert.equal(messengerTransport.sendCalls.length, 1);
   assert.equal(
     messengerTransport.sendCalls[0].draft,
-    'Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé. Anh/chị cho em xin số điện thoại liên hệ để chuyên viên bên em hỗ trợ chi tiết hơn cho mình ạ.'
+    'Dạ em chào anh/chị, em hỗ trợ tư vấn cho mình nhé.'
   );
   assert.equal(hasInternalLeak(messengerTransport.sendCalls[0].draft), false);
+  assert.equal(/số\s*điện\s*thoại|sđt|sdt/iu.test(messengerTransport.sendCalls[0].draft), false);
 });
 
 test('Persistent Internal Leak: provider proposal with thought leak fails closed and never calls transport', async () => {
@@ -876,6 +878,195 @@ test('Persistent Internal Leak: provider proposal with thought leak fails closed
   assert.ok(finishCall);
   assert.equal(finishCall.params.p_send_status, 'FAILED');
   assert.equal(finishCall.params.p_error_code, 'BRAIN_PROVIDER_ERROR');
+});
+
+test('Persona Style: parent handover fallback keeps em/anh-chị pronouns', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Tìm hiểu cho con',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'HANDOVER',
+    handoverReason: 'CUSTOMER_REQUESTED_HUMAN',
+    confidence: 0.9,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.sent, 1);
+  assert.equal(messengerTransport.sendCalls[0].draft, MESSENGER_FALLBACK_REPLY);
+  assert.match(messengerTransport.sendCalls[0].draft, /anh\/chị/);
+});
+
+test('Persona Style: student handover fallback uses ad/em pronouns', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Em là sinh viên, tư vấn cho em ạ',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'HANDOVER',
+    handoverReason: 'CUSTOMER_REQUESTED_HUMAN',
+    confidence: 0.9,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.sent, 1);
+  const draft = messengerTransport.sendCalls[0].draft;
+  assert.match(draft, /^Dạ ad/);
+  assert.match(draft, /câu hỏi của em/);
+  assert.doesNotMatch(draft, /anh\/chị/);
+});
+
+test('Contact Policy: strips a premature phone request but preserves the answer', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Điều kiện du học Đức thế nào ạ?',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: 'Điều kiện cơ bản là có bằng THPT và tiếng Đức B1. Anh/chị cho em xin sđt nhé.',
+    confidence: 0.95,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.sent, 1);
+  assert.equal(
+    messengerTransport.sendCalls[0].draft,
+    'Điều kiện cơ bản là có bằng THPT và tiếng Đức B1.',
+  );
+});
+
+test('Contact Policy: replaces a phone-only draft with a non-phone fallback', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'Tư vấn du học Đức giúp mình',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  const mockProvider = createMockProvider({
+    decision: 'RESPOND',
+    draft: 'Dạ, để em hỗ trợ tư vấn chi tiết về điều kiện, anh/chị cho em xin số điện thoại liên hệ nhé ạ!',
+    confidence: 0.95,
+  });
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(result.sent, 1);
+  assert.equal(messengerTransport.sendCalls[0].draft, MESSENGER_FALLBACK_REPLY);
+  assert.equal(/số\s*điện\s*thoại|sđt|sdt/iu.test(messengerTransport.sendCalls[0].draft), false);
+});
+
+test('Phone Fast Path: a phone message with a question goes to the model so the question is answered', async () => {
+  const mockDb = createMockEngineSupabase({
+    claims: [
+      {
+        id: CLAIM_ID_FB,
+        company_id: COMPANY_ID,
+        customer_id: CUSTOMER_ID,
+        conversation_id: CONVERSATION_ID_FB,
+        source_interaction_id: INTERACTION_ID_FB,
+        channel: 'MESSENGER',
+        attempts: 1,
+      },
+    ],
+    inboundFbContent: 'SĐT 0912345678, cho mình hỏi học phí bao nhiêu ạ?',
+  });
+
+  const messengerTransport = new MockTransport('MESSENGER');
+  let providerCalls = 0;
+  const mockProvider: BrainProvider = {
+    descriptor: { id: 'test-provider', model: 'test-model' },
+    async runTurn() {
+      providerCalls++;
+      return {
+        decision: 'RESPOND',
+        draft: 'Học phí phụ thuộc vào trường và ngành, anh/chị đang quan tâm ngành nào ạ?',
+        confidence: 0.95,
+      };
+    },
+  };
+
+  const result = await processDueLiveDeliveries(5, {
+    supabase: mockDb,
+    provider: mockProvider,
+    transports: { MESSENGER: messengerTransport },
+    channel: 'MESSENGER',
+  });
+
+  assert.equal(providerCalls, 1);
+  assert.equal(result.sent, 1);
+  assert.equal(
+    messengerTransport.sendCalls[0].draft,
+    'Học phí phụ thuộc vào trường và ngành, anh/chị đang quan tâm ngành nào ạ?',
+  );
 });
 
 test('Helper functions: messageContainsCustomerPhone and cleanCustomerReply', () => {

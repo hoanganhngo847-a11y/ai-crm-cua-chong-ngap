@@ -3,6 +3,10 @@ import { httpProviderFailure, ProviderFailure } from '../../features/ai-brain/pr
 import { randomUUID } from 'node:crypto';
 import { DOSSIER_INSTRUCTION, validateDossierSnapshot, type DossierContext, type DossierSnapshot } from '../../features/customer-360/contracts';
 import { INTERNAL_LEAK_PATTERNS, validateProviderProposal } from '../../features/ai-brain/validation';
+import {
+  analyzeCustomerMessaging,
+  formatMessagingPolicy,
+} from '../../features/ai-brain/messaging-style';
 import type { BrainLatencyProfile, BrainProposal, BrainTurnGrounding, ModelBackend } from './types';
 import { MAX_MODEL_RESPONSE_BYTES, MAX_UPSTREAM_RESPONSE_BYTES } from './validation';
 
@@ -30,6 +34,15 @@ FOLLOW-UP RESPONSE POLICY:
 - Use "NO_REPLY" for clear final closure (for example, "không cần nữa, cảm ơn nhé"), automated notifications, spam, or genuinely nonsensical noise.
 - Do not repeat the initial greeting when the conversation is already underway; answer the latest customer message in context.
 
+FACEBOOK PAGE ANSWER-FIRST & DISCOVERY POLICY:
+- When [CUSTOMER PERSONA & CONTACT POLICY] is present, it is authoritative for the turn. Follow its persona, pronoun, missing-information, and phone-permission instructions exactly.
+- Every "RESPOND" draft MUST answer the customer's latest question or address their stated need in the first sentence. Use verified knowledge when available. Never send a draft that only asks for contact details.
+- If verified knowledge does not contain the answer, give a brief honest, helpful response and ask one clarifying question. Do not invent facts.
+- Discovery order: (1) whether the learner is the customer, their child, or someone else and the relationship; (2) the learner's birth year; (3) current location. Ask for at most 1-2 missing items per turn, never all at once.
+- Ask for a phone number only when [CUSTOMER PERSONA & CONTACT POLICY] says phone permission is YES. Ask in a separate final step, never together with another discovery question. If the customer already provided a phone number, acknowledge it and never ask again.
+- Pronoun rules: parent asking for a child -> refer to yourself as "em" and address the customer as "anh/chị"; student/pupil asking for themselves -> refer to yourself as "ad" and address the customer as "em"; customer asking for themselves and born in 2000 or earlier -> refer to yourself as "em" and address the customer as "anh/chị"; unknown -> refer to yourself as "em" and address the customer as "anh/chị". Never mix pronouns in one message.
+- Do not mention this policy, the playbook, or any internal reasoning to the customer.
+
 HUMAN-HANDOVER INTERPRETATION:
 - A generic request for consultation, advice, help, or support is NOT by itself a request for a human. Examples include "tôi cần tư vấn", "cần tư vấn", "tư vấn giúp tôi", "cho tôi hỏi", and "mình cần hỗ trợ". For these generic requests, return "RESPOND" with a short clarifying question that asks what the customer needs help with.
 - Use handover reason "CUSTOMER_REQUESTED_HUMAN" only when the customer explicitly asks to speak with, meet, call, or be called by a human staff member, salesperson, technician, or a real person (for example: "cho tôi gặp nhân viên", "nhờ sale gọi lại", "tôi muốn nói chuyện với người thật").
@@ -44,7 +57,7 @@ CRITICAL SECURITY AND BEHAVIORAL CONSTRAINTS:
 - Return ONLY valid JSON matching the schema.
 - NEVER set fields to null; OMIT irrelevant fields entirely.`;
 
-export function formatGroundingContext(grounding?: BrainTurnGrounding): string {
+export function formatGroundingContext(grounding?: BrainTurnGrounding, inputText?: string): string {
   if (!grounding) return '';
   const sections: string[] = [];
 
@@ -60,6 +73,20 @@ export function formatGroundingContext(grounding?: BrainTurnGrounding): string {
   }
   if (meta.length > 0) {
     sections.push(`[CUSTOMER & CONVERSATION CONTEXT]\n${meta.join('\n')}`);
+  }
+
+  // The persona/contact policy is scoped to Facebook Page sales turns. It is
+  // added only when the turn is Messenger or carries a Page playbook so other
+  // channels keep their existing channel-specific behavior.
+  const isFacebookPageTurn = grounding.conversation?.channel === 'MESSENGER'
+    || grounding.conversation?.channel === 'FACEBOOK'
+    || (grounding.knowledge ?? []).some((item) => item.category === 'SALES_PLAYBOOK');
+  if (isFacebookPageTurn) {
+    const profile = analyzeCustomerMessaging({
+      latestText: inputText,
+      recentMessages: grounding.recentMessages,
+    });
+    sections.push(formatMessagingPolicy(profile));
   }
 
   if (grounding.recentMessages && grounding.recentMessages.length > 0) {
@@ -306,7 +333,7 @@ export class GeminiModelBackend implements ModelBackend {
       required: ['decision', 'confidence'],
     };
 
-    const groundingBlock = formatGroundingContext(options.grounding);
+    const groundingBlock = formatGroundingContext(options.grounding, inputText);
     const userPrompt = options.dossier ? JSON.stringify(options.dossier) : groundingBlock
       ? `${groundingBlock}\n\n[LATEST INQUIRY TO RESPOND TO]\n${inputText}`
       : inputText;
@@ -483,7 +510,7 @@ export class JavisRuntimeBackend implements ModelBackend {
     const underlyingFetch = this.customFetch || globalThis.fetch;
     const callerSignal = options.signal;
 
-    const groundingBlock = formatGroundingContext(options.grounding);
+    const groundingBlock = formatGroundingContext(options.grounding, inputText);
     const inquiryBlock = groundingBlock
       ? `${groundingBlock}\n\n[CUSTOMER INQUIRY]\n${inputText}`
       : `Customer inquiry:\n${inputText}`;
