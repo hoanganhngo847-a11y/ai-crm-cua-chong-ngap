@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { parseZcaJsInboundPayload } from './zcajs-inbound';
+import { splitZaloThread } from './accounts/scope';
 
 export async function syncZaloGroup(options: {
   client: SupabaseClient;
@@ -15,14 +16,15 @@ export async function syncZaloGroup(options: {
     .eq('id', conversationId).eq('company_id', companyId).eq('channel', 'ZALO').maybeSingle();
   if (error) throw new Error('GROUP_READ_FAILED');
   if (!conversation) return { success: false, error: 'CONVERSATION_NOT_FOUND', status: 404 };
-  const match = /^group:([0-9]{5,40})$/.exec(conversation.external_conversation_id || '');
+  const scoped = splitZaloThread(conversation.external_conversation_id || '');
+  const match = /^group:([0-9]{5,40})$/.exec(scoped.peer);
   if (!match) return { success: false, error: 'NOT_A_GROUP', status: 400 };
   const groupId = match[1];
   let metadata = (conversation.metadata || {}) as Record<string, unknown>;
   let stale = true;
   if (workerUrl && workerSecret) {
     try {
-      const response = await fetchImpl(`${workerUrl.replace(/\/$/, '')}/v1/group-details?groupId=${groupId}&companyId=${encodeURIComponent(companyId)}&refresh=1`, {
+      const response = await fetchImpl(`${workerUrl.replace(/\/$/, '')}/v1/group-details?groupId=${groupId}&companyId=${encodeURIComponent(companyId)}&refresh=1${scoped.accountId ? `&accountId=${scoped.accountId}` : ''}`, {
         headers: { 'x-worker-secret': workerSecret },
         signal: AbortSignal.timeout(25000),
         cache: 'no-store',

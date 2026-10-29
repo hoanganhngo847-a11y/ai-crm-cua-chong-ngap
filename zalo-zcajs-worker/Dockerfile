@@ -50,4 +50,4 @@ RUN node /tmp/patch-worker-contact-endpoint.mjs \
   && rm -f /tmp/patch-worker-contact-endpoint.mjs /tmp/patch-worker-phone-resolver.mjs
 
 EXPOSE 10000
-CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/index.mjs"]
+CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/supervisor.mjs"]

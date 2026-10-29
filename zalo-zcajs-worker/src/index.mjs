@@ -9,6 +9,10 @@ import { createInboundDelivery } from './inbound-delivery.mjs';
 import { createGroupDirectory } from './group-directory.mjs';
 
 const PORT = Number(process.env.PORT || 10000);
+const ACCOUNT_ID = (process.env.ZCAJS_ACCOUNT_ID || '').trim();
+const ACCOUNT_REVISION = Number(process.env.ZCAJS_ACCOUNT_REVISION || 0);
+let accountVerified = !ACCOUNT_ID;
+const pendingVerification = [];
 const COMPANY_ID = (process.env.ZCAJS_COMPANY_ID || '').trim();
 const CRM_BASE_URL = (process.env.ZCAJS_CRM_BASE_URL || '').trim().replace(/\/$/, '');
 const WORKER_SECRET = process.env.ZCAJS_WORKER_SECRET || '';
@@ -140,7 +144,19 @@ function shouldSuppressCrmSelfEcho(message) {
   return false;
 }
 
+async function reportAccountState(status, providerUid, errorCode) {
+  if (!ACCOUNT_ID) return;
+  const response = await fetch(`${CRM_BASE_URL}/api/inbox/zalo-zcajs/accounts/runtime`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${WORKER_SECRET}` },
+    body: JSON.stringify({ accountId: ACCOUNT_ID, revision: ACCOUNT_REVISION, status, providerUid, errorCode }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const result = await response.json();
+  if (!response.ok || result.success !== true) throw new Error(result.error || 'ACCOUNT_VERIFICATION_FAILED');
+}
+
 async function postInbound(payload) {
+  if (ACCOUNT_ID) payload = { ...payload, accountId: ACCOUNT_ID };
   if (!inboundDelivery) {
     inboundDelivery = createInboundDelivery({
       crmBaseUrl: CRM_BASE_URL,
@@ -189,11 +205,13 @@ function attachListener(currentApi) {
     listenerConnected = true;
     listenerRestartAttempt = 0;
     console.log('[ZCAJS] listener connected');
+    void reportAccountState('CONNECTED', String(currentApi.getOwnId())).catch(() => {});
   });
 
   currentApi.listener.on('closed', () => {
     listenerConnected = false;
     console.warn('[ZCAJS] listener closed; scheduling reconnect');
+    void reportAccountState('ERROR', undefined, 'LISTENER_DISCONNECTED').catch(() => {});
     scheduleListenerRestart();
   });
 
@@ -210,6 +228,7 @@ function attachListener(currentApi) {
     const normalized = normalizeZaloMessage(message);
     if (!normalized) return;
     if (shouldSuppressCrmSelfEcho(normalized)) return;
+    if (!accountVerified) { pendingVerification.push(normalized); return; }
     void postInbound(normalized).catch((error) => {
       console.error(
         '[ZCAJS] inbound post failed:',
@@ -241,10 +260,21 @@ async function loginLoop() {
       api = currentApi;
       loggedIn = true;
       attachListener(currentApi);
+      // Verify the real Zalo UID before opening another WebSocket. This stops
+      // duplicate credentials from kicking the existing account's listener.
+      await reportAccountState('CONNECTING', String(currentApi.getOwnId()));
+      accountVerified = true;
+      for (const buffered of pendingVerification.splice(0)) void postInbound(buffered);
       currentApi.listener.start();
       console.log('[ZCAJS] login succeeded; listener starting');
       break;
     } catch (error) {
+      if (ACCOUNT_ID) {
+        const allowed = ['DUPLICATE_ZALO_ACCOUNT','ZALO_ACCOUNT_IDENTITY_CHANGED','ZALO_LEGACY_NOT_READY'];
+        const code = allowed.includes(error?.message) ? error.message : 'LOGIN_FAILED';
+        await reportAccountState('ERROR', undefined, code).catch(() => {});
+        process.exit(1);
+      }
       loggedIn = false;
       api = null;
       const delayMs = Math.min(60_000, 2000 * 2 ** Math.min(attempt, 5));
@@ -534,6 +564,7 @@ function requestHandler(req, res) {
       ok: queueDurable,
       queueDurable,
       loggedIn,
+      providerUid: api && loggedIn ? String(api.getOwnId()) : null,
       listenerConnected,
       pendingInbound: inboundDelivery?.pendingCount?.() ?? 0,
     });
@@ -580,7 +611,7 @@ const recoveryReady = inboundDelivery.resume().catch((error) => {
 });
 
 const server = http.createServer(requestHandler);
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, process.env.ZCAJS_BIND_HOST || '0.0.0.0', () => {
   console.log(`[ZCAJS] worker listening on port ${PORT}`);
   void recoveryReady.then(() => loginLoop());
 });

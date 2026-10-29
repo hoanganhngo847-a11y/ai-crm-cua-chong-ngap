@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { listZaloAccounts } from '@/features/omnichannel/zalo/accounts/service';
+import { ACCOUNT_UUID, scopeZaloThread, scopedZaloMessageId } from '@/features/omnichannel/zalo/accounts/scope';
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedEvent } from '@/features/inbox/services/inbox-ingress.service';
@@ -213,8 +215,23 @@ export async function POST(request: NextRequest) {
         : '';
     const normalizedObservedAt = normalizeTimestamp(timestamp);
     const sourceMetadata = buildZcaJsSourceMetadata(event);
-
     const supabase = createAdminClient();
+    const rawAccountId = body && typeof body === 'object' ? (body as { accountId?: unknown }).accountId : undefined;
+    let providerReference = event.messageId;
+    if (rawAccountId !== undefined) {
+      if (typeof rawAccountId !== 'string' || !ACCOUNT_UUID.test(rawAccountId)) return NextResponse.json({ success: false, error: 'INVALID_ACCOUNT_ID' }, { status: 400 });
+      const accounts = await listZaloAccounts(companyId, supabase);
+      const account = accounts.find((item) => item.id === rawAccountId && item.enabled && item.provider_uid);
+      if (!account) return NextResponse.json({ success: false, error: 'ZALO_ACCOUNT_NOT_ACTIVE' }, { status: 409 });
+      sourceMetadata.zalo_account_id = account.id;
+      sourceMetadata.zalo_account_name = account.label;
+      sourceMetadata.zalo_peer_id = event.externalConversationId;
+      event.externalUserId = scopeZaloThread(account.id, event.externalUserId);
+      event.externalConversationId = event.externalUserId;
+      event.externalRef = scopedZaloMessageId(account.id, event.externalRef);
+      providerReference = scopedZaloMessageId(account.id, event.messageId);
+    }
+
     await ensureZcaJsRoutingConfig(supabase, companyId);
 
     // Self-listener messages are observations of messages already sent from the native Zalo account.
@@ -223,7 +240,7 @@ export async function POST(request: NextRequest) {
       const { data, error } = await supabase.rpc('record_observed_zcajs_outbound_atomic', {
         p_company_id: companyId,
         p_external_conversation_id: event.externalConversationId,
-        p_provider_msg_id: event.messageId,
+        p_provider_msg_id: providerReference,
         p_sanitized_content: sanitizePhoneInText(event.content),
         p_raw_content: event.content,
         p_source_metadata: sourceMetadata,
