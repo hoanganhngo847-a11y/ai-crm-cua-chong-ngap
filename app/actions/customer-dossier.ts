@@ -92,6 +92,47 @@ export async function updateCustomerDossierField(input: {
   }
 }
 
+export async function setCustomerOutreachChannel(input: {
+  customerId: string;
+  channel: 'FACEBOOK' | 'ZALO';
+  contacted: boolean;
+}): Promise<{ ok: boolean; message?: string; value?: string | null }> {
+  try {
+    const actor = await recordingActor();
+    const customerId = uuid.parse(input.customerId);
+    if (input.channel !== 'FACEBOOK' && input.channel !== 'ZALO') {
+      return { ok: false, message: 'Kênh tiếp cận không hợp lệ.' };
+    }
+
+    const db = createAdminClient();
+    await customerForActor(db, actor, customerId);
+
+    const value = input.contacted ? new Date().toISOString() : null;
+    const field = input.channel === 'FACEBOOK' ? 'facebook_outreach_at' : 'zalo_outreach_at';
+    const { error } = await db
+      .from('customer_dossier_profiles')
+      .upsert(
+        {
+          company_id: actor.companyId,
+          customer_id: customerId,
+          [field]: value,
+          updated_by: actor.userId,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'company_id,customer_id' }
+      );
+
+    if (error) throw new Error('OUTREACH_UPDATE_FAILED');
+
+    revalidatePath(`/customers/${customerId}/dossier`);
+    revalidatePath('/customers/dossier');
+    return { ok: true, value };
+  } catch (err) {
+    console.error('[setCustomerOutreachChannel]', err);
+    return { ok: false, message: 'Không thể cập nhật kênh tiếp cận. Vui lòng thử lại.' };
+  }
+}
+
 export async function saveDossierProfile(_state: DossierActionState, form: FormData): Promise<DossierActionState> {
   try {
     const actor = await recordingActor(true);

@@ -23,6 +23,15 @@ Additive migration: `20261023200000_customer_360_ai_dossier.sql`. Created with t
 
 RPCs: `c360_bind_identity`, `c360_request_refresh`, `c360_claim_refresh`, `c360_finish_refresh`, `c360_list`, `c360_emails`, `c360_contacts`, `c360_timeline`; trigger helper `c360_mark_dirty`.
 
+## Channel outreach (Facebook / Zalo)
+
+Additive migration: `20261029100000_c360_channel_outreach.sql`. It adds `customer_dossier_profiles.facebook_outreach_at` and `zalo_outreach_at` (manual confirmations) and resolves a reached/not-reached state per channel in `c360_list` and `c360_contacts`.
+
+- Evidence order: the first outbound interaction on that channel (`MESSAGE` or `CALL_EVENT`, plus outbound `zalo_personal_calls` for Zalo) wins, then the manual mark. Automatic evidence cannot be removed from the UI, so a sale cannot hide a real outbound message; a manual mark can be toggled off.
+- Manual marks cover off-system steps such as sending a Zalo friend request to a phone number the customer shared on Facebook. The server action authorizes through the existing customer access check and writes only the two outreach columns.
+- Outreach toggles do not enqueue an AI dossier refresh: `c360_mark_dirty` ignores updates that only change those timestamps (and `updated_at`/`updated_by`).
+- The list shows two dedicated columns, "Đã tiếp cận qua Facebook" and "Đã tiếp cận qua Zalo", each rendering the customer's channel display name, state and first-reach date. The dossier right rail repeats both channels with the same toggles.
+
 ## Grounding and freshness
 
 Context contains the customer name/stage, a previous snapshot as compressed AI-derived memory, special notes, 20 recent sanitized interactions and up to three recent linked completed transcripts. Individual sources and the full request are bounded (30 KiB); previous memory points to an immutable snapshot whose evidence retains raw provenance.
@@ -67,6 +76,7 @@ The production Next.js build also required moving existing cron dependency-injec
 - Snapshot history UI shows the latest ten versions; older rows remain stored.
 - Transcript context is bounded and sanitized; a long transcript may require a later targeted analysis to cover omitted portions.
 - Source evidence references are retained; the current UI links to the timeline/call section rather than implementing a dedicated citation inspector.
+- Outreach evidence is any outbound interaction on the channel, including automatic/AI replies; the cell labels those as "Tự động" and does not attribute them to a specific staff member. The date is the first outbound event stored for that channel, so incomplete historical sync can make it later than the real first contact.
 - List search is database-side with tenant/time/identity indexes; large-tenant query plans still need workload-specific measurement.
 - Provider metadata identifies the existing CRM adapter (`javis-router-v1`); the companion service's configured backend model remains in its audit logs.
 - No production migration, deployment, real customer contact, Meta/Zalo setting change or billing change is part of implementation acceptance.

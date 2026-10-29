@@ -23,6 +23,8 @@ export type DossierActor = Awaited<ReturnType<typeof recordingActor>>;
 export interface CustomerRow {
   id: string; name: string; customer_code: string; stage: string; source: string; updated_at: string;
   zalo_name: string | null; facebook_name: string | null; phone: string | null; email: string | null;
+  facebook_outreach_at: string | null; facebook_outreach_source: 'AUTO' | 'MANUAL' | null;
+  zalo_outreach_at: string | null; zalo_outreach_source: 'AUTO' | 'MANUAL' | null;
   assigned_sale: string | null; assigned_sale_id: string | null; current_situation: string | null;
   last_interaction: string | null; lead_score: number | null; follow_up_at: string | null; ai_updated_at: string | null;
   assigned_sale_name?: string | null;
@@ -71,7 +73,7 @@ export async function getDossier(customerId: string, page = 1, filter = 'ALL') {
   const customer = await customerForActor(db, actor, customerId);
   const boss = actor.role === 'BOSS_ADMIN';
   const responses = await Promise.all([
-    db.from('customer_dossier_profiles').select('address,birth_year,special_notes,assigned_sale_id,assigned_sale_name,sale_notes,marketing_notes,ai_notes,updated_at').eq('company_id', actor.companyId).eq('customer_id', customerId).maybeSingle(),
+    db.from('customer_dossier_profiles').select('address,birth_year,special_notes,assigned_sale_id,assigned_sale_name,sale_notes,marketing_notes,ai_notes,facebook_outreach_at,zalo_outreach_at,updated_at').eq('company_id', actor.companyId).eq('customer_id', customerId).maybeSingle(),
     db.from('identities').select('channel,display_name,legacy_name:metadata->>display_name,verified').eq('company_id', actor.companyId).eq('customer_id', customerId).order('created_at').limit(30),
     db.rpc('c360_emails', { p_company_id: actor.companyId, p_customer_id: customerId }),
     db.rpc('c360_timeline', { p_company_id: actor.companyId, p_customer_id: customerId, p_page: page, p_filter: filter,
@@ -87,12 +89,12 @@ export async function getDossier(customerId: string, page = 1, filter = 'ALL') {
   // Stored data still crosses a validation boundary. No silently fabricated empty snapshot.
   for (const entry of history) dossierSnapshotSchema.parse(entry.snapshot);
   const owners = await dossierOwners(db, actor.companyId);
-  return { customer, profile: profile.data as { address: string | null; birth_year: number | null; special_notes: string | null; assigned_sale_id: string | null; assigned_sale_name?: string | null; sale_notes?: string | null; marketing_notes?: string | null; ai_notes?: string | null } | null,
+  return { customer, profile: profile.data as { address: string | null; birth_year: number | null; special_notes: string | null; assigned_sale_id: string | null; assigned_sale_name?: string | null; sale_notes?: string | null; marketing_notes?: string | null; ai_notes?: string | null; facebook_outreach_at?: string | null; zalo_outreach_at?: string | null } | null,
     identities: (identities.data || []) as { channel: string; display_name: string | null; legacy_name: string | null; verified: boolean }[],
     emails: (emails.data || []) as string[], timeline: timeline.data as Page<TimelineEvent>, history,
     queue: queue.data as { requested_version: number; completed_version: number; lock_token: string | null; lease_until: string | null; error_code: string | null; attempts: number } | null,
     conflicts: (conflicts.data || []) as { id: string; status: string; created_at: string }[], owners, boss,
-    contacts: contacts.data as { phone: string | null; assignedSaleId: string | null; lastInteraction: string | null },
+    contacts: contacts.data as { phone: string | null; assignedSaleId: string | null; lastInteraction: string | null; facebookOutreachAt: string | null; zaloOutreachAt: string | null },
     observedAt: new Date().toISOString() };
 }
 export async function dossierOwners(db: SupabaseClient, companyId: string) {
