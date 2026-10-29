@@ -122,10 +122,14 @@ async function runUiUxRegressionTests() {
     'crm/page.tsx must NOT use wonOrdersCount for pipeline calculation'
   );
 
-  // Verify "Tổng đơn hàng" metric label
+  // Verify the study-abroad enrolled-student metric replaced the order metric
   assert(
-    crmPageCode.includes('label="Tổng đơn hàng"'),
-    'crm/page.tsx must explicitly label order metric as "Tổng đơn hàng"'
+    crmPageCode.includes('label="Học viên đã đăng ký"'),
+    'crm/page.tsx must explicitly label the enrolled-student metric'
+  );
+  assert(
+    !crmPageCode.includes('label="Tổng đơn hàng"'),
+    'crm/page.tsx must not keep the legacy order metric'
   );
 
   // Verify fail-closed handling (value "—" and "Không tải được")

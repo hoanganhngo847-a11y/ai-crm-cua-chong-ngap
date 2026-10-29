@@ -662,7 +662,6 @@ export async function calculatePriceFromSurveyAction(
 
     try {
       const { revalidatePath } = await import('next/cache');
-      revalidatePath('/quotations');
       revalidatePath('/surveys');
       revalidatePath(`/customers/${calcResult.customer_id}`);
     } catch {

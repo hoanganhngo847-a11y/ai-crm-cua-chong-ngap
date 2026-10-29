@@ -791,7 +791,7 @@ async function runTests() {
   // ----------------------------------------------------
   {
     const fallback = '/crm';
-    const validPaths = ['/admin', '/crm', '/field', '/account', '/crm/inbox', '/admin/settings'];
+    const validPaths = ['/admin', '/crm', '/account', '/crm/inbox', '/admin/settings'];
     let allValidPreserved = true;
     for (const valid of validPaths) {
       const sanitized = sanitizeRedirectPath(valid, fallback);

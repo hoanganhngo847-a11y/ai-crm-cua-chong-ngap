@@ -13,7 +13,6 @@
 export const ALLOWED_REDIRECT_PREFIXES = [
   '/admin',
   '/crm',
-  '/field',
   '/account',
 ] as const;
 

@@ -23,10 +23,10 @@ export default async function CustomersDashboardPage() {
       <EmptyState
         type="permission"
         title="Truy Cập Bị Từ Chối"
-        description="Tài khoản của bạn mang vai trò KỸ THUẬT VIÊN. Bạn chỉ có quyền xem các lịch hẹn và khảo sát được phân công trực tiếp tại mục Hiện trường & Khảo sát."
+        description="Tài khoản của bạn mang vai trò KỸ THUẬT VIÊN. Khu vực Hiện trường & Khảo sát đã được gỡ khỏi hệ thống; vui lòng liên hệ quản trị viên nếu cần hỗ trợ."
         action={{
-          label: 'Xem Hiện trường & Khảo sát',
-          href: '/field',
+          label: 'Về trang Tài khoản',
+          href: '/account',
         }}
       />
     );

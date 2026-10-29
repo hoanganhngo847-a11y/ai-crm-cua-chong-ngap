@@ -38,8 +38,8 @@ export default async function CustomerCallsPage({ params }: Props) {
         title="Truy Cập Bị Từ Chối"
         description="Kỹ thuật viên không có quyền xem lịch sử cuộc gọi."
         action={{
-          label: 'Về trang Hiện trường',
-          href: '/field',
+          label: 'Về trang Tài khoản',
+          href: '/account',
         }}
       />
     );

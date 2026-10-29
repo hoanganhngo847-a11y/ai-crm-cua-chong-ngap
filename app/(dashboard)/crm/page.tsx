@@ -21,6 +21,7 @@ import {
   ChevronRight,
   TrendingUp,
   CheckCircle2,
+  GraduationCap,
   KanbanSquare,
 } from 'lucide-react';
 import { PageHeader } from '../../../components/ui/page-header';
@@ -55,8 +56,8 @@ export default async function CrmDashboardPage() {
         title="Truy cập bị từ chối"
         description="Khu vực CRM bán hàng chỉ dành cho Chuyên viên Kinh doanh và Quản trị viên."
         action={{
-          label: 'Về trang Hiện trường',
-          href: '/field',
+          label: 'Về trang Tài khoản',
+          href: '/account',
         }}
       />
     );
@@ -93,7 +94,6 @@ export default async function CrmDashboardPage() {
     lowPotentialRes,
     highPotentialRes,
     contractSignedRes,
-    ordersRes,
   ] = await Promise.allSettled([
     CustomerService.getUrgentClosingCustomers(companyId, 6, actor.role),
     db.from('customers').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -127,7 +127,6 @@ export default async function CrmDashboardPage() {
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .in('stage', [...PIPELINE_STAGE_GROUPS.CONTRACT_SIGNED]),
-    db.from('orders').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
   ]);
 
   let urgentCustomersResult: MetricResult<
@@ -141,7 +140,6 @@ export default async function CrmDashboardPage() {
   }
 
   const totalCustomers = parseCountResult(totalRes, 'totalCustomers');
-  const totalOrders = parseCountResult(ordersRes, 'totalOrders');
   const stageCountResults: Record<CanonicalCustomerStage, MetricResult<number | null>> = {
     awareness: parseCountResult(awarenessRes, 'awarenessCount'),
     interested: parseCountResult(interestedRes, 'interestedCount'),
@@ -151,6 +149,7 @@ export default async function CrmDashboardPage() {
     contract_signed: parseCountResult(contractSignedRes, 'contractSignedCount'),
   };
   const highPotentialCount = stageCountResults.high_potential;
+  const enrolledStudents = stageCountResults.contract_signed;
 
   const STAGE_COLORS: Record<CanonicalCustomerStage, string> = {
     awareness: 'bg-sky-500',
@@ -252,12 +251,12 @@ export default async function CrmDashboardPage() {
           }
         />
         <Metric
-          label="Tổng đơn hàng"
-          value={totalOrders.status === 'success' ? totalOrders.value : '—'}
-          icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+          label="Học viên đã đăng ký"
+          value={enrolledStudents.status === 'success' ? enrolledStudents.value : '—'}
+          icon={<GraduationCap className="w-4 h-4 text-emerald-600" />}
           subtitle={
-            totalOrders.status === 'success' ? (
-              'Đơn hàng đã phát sinh'
+            enrolledStudents.status === 'success' ? (
+              'Hồ sơ đã chốt hợp đồng du học'
             ) : (
               <span className="text-amber-600 font-normal">Không tải được</span>
             )

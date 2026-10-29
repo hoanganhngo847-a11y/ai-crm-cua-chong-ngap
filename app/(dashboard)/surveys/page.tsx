@@ -17,10 +17,10 @@ export default async function SurveysPage() {
   }
 
   if (!actor.companyId || actor.membershipStatus !== 'ACTIVE') {
-    redirect('/field');
+    redirect('/account');
   }
 
-  if (actor.role !== 'TECHNICIAN' && actor.role !== 'BOSS_ADMIN') redirect('/field');
+  if (actor.role !== 'TECHNICIAN' && actor.role !== 'BOSS_ADMIN') redirect('/account');
 
   const items = await fetchSurveyListPageData({
     userId: actor.userId,

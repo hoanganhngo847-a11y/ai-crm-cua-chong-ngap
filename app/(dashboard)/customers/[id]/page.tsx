@@ -52,10 +52,10 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       <EmptyState
         type="permission"
         title="Truy Cập Bị Từ Chối"
-        description="Kỹ thuật viên không có quyền truy cập trang Hồ sơ khách hàng 360. Vui lòng chuyển sang Hiện trường & Khảo sát."
+        description="Kỹ thuật viên không có quyền truy cập trang Hồ sơ khách hàng 360. Khu vực Hiện trường & Khảo sát đã được gỡ khỏi hệ thống."
         action={{
-          label: 'Xem Hiện trường & Khảo sát',
-          href: '/field',
+          label: 'Về trang Tài khoản',
+          href: '/account',
         }}
       />
     );

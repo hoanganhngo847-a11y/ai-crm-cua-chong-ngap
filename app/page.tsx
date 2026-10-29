@@ -17,7 +17,7 @@ export default async function HomePage() {
   }
 
   if (actor.role === APPLICATION_ROLES.TECHNICIAN) {
-    redirect('/field');
+    redirect('/account');
   }
 
   redirect('/crm');

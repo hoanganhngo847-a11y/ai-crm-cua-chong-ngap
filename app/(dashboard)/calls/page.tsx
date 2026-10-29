@@ -31,8 +31,8 @@ export default async function CallsPage() {
         title="Truy Cập Bị Từ Chối"
         description="Kỹ thuật viên không có quyền xem lịch sử cuộc gọi trong hệ thống."
         action={{
-          label: 'Về trang Hiện trường',
-          href: '/field',
+          label: 'Về trang Tài khoản',
+          href: '/account',
         }}
       />
     );

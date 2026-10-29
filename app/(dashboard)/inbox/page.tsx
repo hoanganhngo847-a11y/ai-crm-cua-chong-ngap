@@ -43,9 +43,9 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
           </strong>. Hộp thư tích hợp đa kênh dành riêng cho Chuyên viên Sale và Ban quản trị để tư vấn khách hàng.
           {actor.role === APPLICATION_ROLES.TECHNICIAN && (
             <span>
-              {' '}Vui lòng truy cập{' '}
-              <a href="/field" className="text-blue-400 underline hover:text-blue-300">
-                Hiện trường &amp; Khảo sát
+              {' '}Khu vực Hiện trường đã được gỡ khỏi hệ thống; vui lòng truy cập{' '}
+              <a href="/account" className="text-blue-400 underline hover:text-blue-300">
+                trang Tài khoản
               </a>.
             </span>
           )}
