@@ -174,24 +174,9 @@ export function createSupabaseBrainContextDataSource(): BrainContextDataSource {
       })));
     },
 
-    async getUpcomingAppointments(scope: BrainContextScope): Promise<readonly BrainAppointmentContext[]> {
-      const admin = createAdminClient();
-      const { data, error } = await admin
-        .from('appointments')
-        .select('id,type,start_time,assignee_id,status')
-        .eq('company_id', scope.companyId)
-        .eq('customer_id', scope.customerId)
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true })
-        .limit(8);
-      if (error) failClosed(error);
-      return Object.freeze((data || []).map((row) => Object.freeze({
-        id: String(row.id),
-        type: text(row.type, 128),
-        startTime: String(row.start_time),
-        assigneeId: nullableText(row.assignee_id, 64),
-        status: text(row.status, 64),
-      })));
+    async getUpcomingAppointments(_scope: BrainContextScope): Promise<readonly BrainAppointmentContext[]> {
+      // Field-survey appointments were removed with the flood-barrier modules.
+      return Object.freeze([]);
     },
 
     async getCallHistory(scope: BrainContextScope): Promise<BrainCallHistoryContext> {

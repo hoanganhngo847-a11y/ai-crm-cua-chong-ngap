@@ -141,13 +141,6 @@ const GATES: GateStep[] = [
     description: 'Verify composable Sales Style runtime prompt context builder, policy firewall, and safe neutral default fallback',
   },
   {
-    id: 'GATE_08_ANALYTICS_DATA_LAYER',
-    name: '8. Analytics Data Layer Gate',
-    command: 'npm',
-    args: ['run', 'test:analytics'],
-    description: 'Verify company-wide overview, daily series, financial snapshot separation, and RLS barriers',
-  },
-  {
     id: 'GATE_09_ANALYTICS_UI',
     name: '9. Analytics UI & Static Security Gate',
     command: 'npm',
@@ -167,20 +160,6 @@ const GATES: GateStep[] = [
     command: 'npx',
     args: ['tsx', '--conditions=react-server', 'tests/e2e/security-boundaries.test.ts'],
     description: 'Tenant isolation matrix, authorization matrix, static service-role scan, secret scan, and diff guards',
-  },
-  {
-    id: 'GATE_11A_P0_SECURITY',
-    name: '11a. P0 Security Authorization Regression Gate',
-    command: 'npm',
-    args: ['run', 'test:p0-security'],
-    description: 'Verify P0-001 Facebook trusted-RPC ACL and P0-002 contract signing forgery prevention regressions',
-  },
-  {
-    id: 'GATE_11A2_P1_BACKEND',
-    name: '11a2. P1 Backend Security & Workflow Regression Gate',
-    command: 'npm',
-    args: ['run', 'test:p1-backend'],
-    description: 'Verify P1-001 voice legacy overload removal, P1-002 canonical production specs & materials, and P1-003 atomic audited warranty creation',
   },
   {
     id: 'GATE_11B_INBOX_DB',
@@ -209,27 +188,6 @@ const GATES: GateStep[] = [
     command: 'npm',
     args: ['run', 'test:zalo:db'],
     description: 'Verify Zalo DB concurrency, RLS isolation, token rotation, and TV2 outbox dispatch on real Supabase stack',
-  },
-  {
-    id: 'GATE_11F_COMMERCIAL_UNIT',
-    name: '11f. TV7 Commercial Pricing, Payment & Contract Unit Gate',
-    command: 'npm',
-    args: ['run', 'test:commercial'],
-    description: 'Verify pure pricing calculation, webhook signature verification, and contract rendering',
-  },
-  {
-    id: 'GATE_11G_COMMERCIAL_DB',
-    name: '11g. TV7 Commercial Real DB Integration & TV8 Production Handoff Gate',
-    command: 'npm',
-    args: ['run', 'test:commercial:db'],
-    description: 'Verify pricing snapshot, order creation, payment webhook, manual deposit, contract generation & signing with AAL2, contracts bucket RLS, and TV8 production handoff',
-  },
-  {
-    id: 'GATE_11H_ROUND3_PRODUCT_WIRING',
-    name: '11h. Round 3 Product Wiring & AI Runtime Gate',
-    command: 'npm',
-    args: ['run', 'test:round3-product-runtime'],
-    description: 'Verify P1-004 Commercial UI, P1-005 Operations UI, and P1-006 AI Runtime Wiring',
   },
   {
     id: 'GATE_12_TYPECHECK',

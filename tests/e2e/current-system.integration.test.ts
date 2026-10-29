@@ -1028,70 +1028,20 @@ async function runAllScenarios() {
   }
 
   // ============================================================================
-  // SCENARIO M: Analytics Semantics & Financial Snapshot Separation
+  // SCENARIO M: Legacy commerce analytics are retired
   // ============================================================================
-  console.log('\n--- Scenario M: Analytics Semantics & Financial Snapshot ---');
+  console.log('\n--- Scenario M: Legacy commerce analytics are retired ---');
   {
-    const policyId = 'e8000000-0000-0000-0000-000000000001';
-    const calc1Id = 'e8100000-0000-0000-0000-000000000001';
-    const orderId = 'e4000000-0000-0000-0000-000000000001';
-
-    executeRawSql(`
-      DELETE FROM public.operations_outbox WHERE company_id = '${COMPANY_A_ID}';
-      DELETE FROM public.warranty_tickets WHERE company_id = '${COMPANY_A_ID}';
-      DELETE FROM public.installations WHERE company_id = '${COMPANY_A_ID}';
-      DELETE FROM public.contracts WHERE company_id = '${COMPANY_A_ID}';
-      DELETE FROM public.finance_summaries WHERE company_id = '${COMPANY_A_ID}';
-      DELETE FROM public.orders WHERE company_id = '${COMPANY_A_ID}';
-      ALTER TABLE public.price_calculations DISABLE TRIGGER trg_price_calculations_immutability;
-      DELETE FROM public.price_calculations WHERE company_id = '${COMPANY_A_ID}';
-      ALTER TABLE public.price_calculations ENABLE TRIGGER trg_price_calculations_immutability;
-      DELETE FROM public.pricing_policies WHERE company_id = '${COMPANY_A_ID}';
-
-      INSERT INTO public.pricing_policies (id, company_id, version, conditions, price_rules, effective_at, status)
-      VALUES ('${policyId}', '${COMPANY_A_ID}', 'V2026.E2E', '{}'::jsonb, '{}'::jsonb, '2026-01-01T00:00:00Z', 'ACTIVE');
-
-      INSERT INTO public.price_calculations (id, company_id, customer_id, pricing_policy_id, policy_version, input_data, amount, status)
-      VALUES ('${calc1Id}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', '${policyId}', 'V2026.E2E', '{}'::jsonb, 35000000.00, 'CALCULATED');
-
-      INSERT INTO public.orders (id, company_id, customer_id, order_code, payment_reference, price_calculation_id, deposit_status, order_status, final_amount, created_at)
-      VALUES ('${orderId}', '${COMPANY_A_ID}', '${CUSTOMER_A_ID}', 'ORD-E2E-001', 'PAY-REF-E2E', '${calc1Id}', 'CONFIRMED', 'DEPOSIT_CONFIRMED', 35000000.00, '2026-09-10T10:00:00.000Z');
-
-      INSERT INTO public.finance_summaries (order_id, company_id, contract_value, collected_amount, receivable_amount, completed_revenue)
-      VALUES ('${orderId}', '${COMPANY_A_ID}', 35000000.00, 10000000.00, 25000000.00, 0.00);
-    `);
-
-    // In Period: 2026-09-01 to 2026-09-15
-    const overviewPeriod1 = await fetchCompanyAnalyticsOverview(bossAClient, {
+    const overview = await fetchCompanyAnalyticsOverview(bossAClient, {
       companyId: COMPANY_A_ID,
       from: '2026-09-01T00:00:00.000Z',
       to: '2026-09-15T23:59:59.999Z',
     });
 
-    assert(overviewPeriod1.orders.created >= 1, 'Scenario M: Period 1 includes created order');
-    assert(overviewPeriod1.financeSnapshot !== null, 'Scenario M: Finance snapshot is present');
-
-    // In Period 2: 2026-08-01 to 2026-08-15 (Order was NOT created in August)
-    const overviewPeriod2 = await fetchCompanyAnalyticsOverview(bossAClient, {
-      companyId: COMPANY_A_ID,
-      from: '2026-08-01T00:00:00.000Z',
-      to: '2026-08-15T23:59:59.999Z',
-    });
-
-    // Period metrics must differ appropriately
-    assert(overviewPeriod2.orders.created === 0, 'Scenario M: Period 2 orders.created is 0 (period metrics changed)');
-
-    // Finance snapshot must remain current company snapshot
-    assert(
-      overviewPeriod1.financeSnapshot.contractValue === overviewPeriod2.financeSnapshot.contractValue,
-      'Scenario M: Finance snapshot remains company snapshot regardless of selected time window'
-    );
-
-    // Invariant: SUM(order.final_amount) is NOT treated as revenue (revenue comes from COMPLETED payments)
-    assert(
-      overviewPeriod1.financeSnapshot.completedRevenue !== overviewPeriod1.financeSnapshot.contractValue,
-      'Scenario M: order.final_amount is strictly NOT treated as revenue'
-    );
+    assert(overview.orders.created === 0, 'Scenario M: order analytics are retired');
+    assert(overview.orders.byStatus.length === 0, 'Scenario M: no order status groups');
+    assert(overview.surveys.completedSurveys === 0, 'Scenario M: survey analytics are retired');
+    assert(overview.financeSnapshot.contractValue === '0.00', 'Scenario M: finance snapshot is retired');
   }
 
   // ============================================================================
