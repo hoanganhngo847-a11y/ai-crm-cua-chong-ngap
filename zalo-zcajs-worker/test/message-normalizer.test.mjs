@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeDirectMessage, ZALO_IMAGE_MARKER } from '../src/message-normalizer.mjs';
+import {
+  normalizeDirectMessage,
+  normalizeZaloMessage,
+  ZALO_GROUP_EXTERNAL_REF_PREFIX,
+  ZALO_GROUP_THREAD_PREFIX,
+  ZALO_IMAGE_MARKER,
+} from '../src/message-normalizer.mjs';
 
 test('normalizes inbound text message', () => {
   const result = normalizeDirectMessage({
@@ -88,9 +94,54 @@ test('normalizes a manual self message as outbound to the peer thread', () => {
   assert.equal(result?.content, 'tin nhắn gửi trực tiếp trên Zalo');
 });
 
-test('ignores group messages', () => {
+test('ignores group messages on the direct-message API', () => {
   const result = normalizeDirectMessage({ type: 1, isSelf: false, threadId: 'group', data: {} });
   assert.equal(result, null);
+});
+
+test('normalizes an inbound group message into the CRM group namespace', () => {
+  const result = normalizeZaloMessage({
+    type: 1,
+    isSelf: false,
+    threadId: '123456789012345678',
+    data: {
+      msgId: 'g-msg-1',
+      uidFrom: '987654321098765432',
+      idTo: '123456789012345678',
+      dName: 'Anh Khách',
+      ts: '1792335600000',
+      content: 'Nhóm còn cửa 2m không shop?',
+    },
+  });
+
+  assert.equal(result?.isGroup, true);
+  assert.equal(result?.groupId, '123456789012345678');
+  assert.equal(result?.externalUserId, `${ZALO_GROUP_THREAD_PREFIX}123456789012345678`);
+  assert.equal(result?.externalConversationId, result?.externalUserId);
+  assert.equal(result?.externalRef, `${ZALO_GROUP_EXTERNAL_REF_PREFIX}g-msg-1`);
+  assert.equal(result?.senderName, 'Anh Khách');
+  assert.equal(result?.senderDisplayName, 'Anh Khách');
+  assert.equal(result?.direction, 'inbound');
+});
+
+test('keeps group self messages as outbound observations', () => {
+  const result = normalizeZaloMessage({
+    type: 1,
+    isSelf: true,
+    threadId: '123456789012345678',
+    data: {
+      msgId: 'g-msg-2',
+      uidFrom: '0',
+      idTo: '123456789012345678',
+      ts: '1792335600000',
+      content: 'Dạ em báo giá rồi ạ',
+    },
+  });
+
+  assert.equal(result?.isGroup, true);
+  assert.equal(result?.direction, 'outbound');
+  assert.equal(result?.externalRef, `${ZALO_GROUP_EXTERNAL_REF_PREFIX}g-msg-2`);
+  assert.equal(result?.externalUserId, `${ZALO_GROUP_THREAD_PREFIX}123456789012345678`);
 });
 
 test('accepts direct messages when the listener omits the numeric type', () => {

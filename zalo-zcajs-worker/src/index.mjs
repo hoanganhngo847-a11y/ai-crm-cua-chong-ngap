@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { Zalo, MessageType } from 'zca-js';
-import { normalizeDirectMessage } from './message-normalizer.mjs';
+import { normalizeZaloMessage } from './message-normalizer.mjs';
 import { createInboundDelivery } from './inbound-delivery.mjs';
 
 const PORT = Number(process.env.PORT || 10000);
@@ -21,6 +21,9 @@ const MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_MEDIA_TOTAL_BYTES = 20 * 1024 * 1024;
 const CRM_ECHO_WINDOW_MS = 30_000;
 const RECENT_PROVIDER_ID_TTL_MS = 10 * 60_000;
+const GROUP_NAME_TTL_MS = 6 * 60 * 60_000;
+const GROUP_NAME_NEGATIVE_TTL_MS = 5 * 60_000;
+const GROUP_NAME_LOOKUP_TIMEOUT_MS = 1_500;
 
 let api = null;
 let loggedIn = false;
@@ -29,6 +32,9 @@ let listenerRestartAttempt = 0;
 let listenerRestartTimer = null;
 let loginLoopRunning = false;
 let inboundDelivery = null;
+
+const groupNameCache = new Map();
+const groupNameLookups = new Map();
 
 // Used only to suppress the self-listener echo created by a CRM-originated send.
 // Manual messages sent directly in Zalo are not placed in these maps and are forwarded to CRM.
@@ -116,10 +122,19 @@ function shouldSuppressCrmSelfEcho(message) {
 
   if (recentCrmProviderMsgIds.has(message.messageId)) return true;
 
+  // Group messages are rendered with a "Bạn:" author prefix; strip it so a
+  // CRM-originated group send is still recognized before its msgId is recorded.
+  const contentWithoutGroupPrefix = message.isGroup && message.content.startsWith('Bạn:')
+    ? message.content.slice('Bạn:'.length).replace(/^\r?\n/, '').trim()
+    : message.content;
+
   for (const pending of pendingCrmSends.values()) {
+    const sameText =
+      pending.text === message.content ||
+      (message.isGroup && pending.text === contentWithoutGroupPrefix);
     if (
       pending.recipientZaloId === message.externalUserId &&
-      pending.text === message.content &&
+      sameText &&
       now - pending.startedAt <= CRM_ECHO_WINDOW_MS
     ) {
       return true;
@@ -154,6 +169,61 @@ function scheduleListenerRestart() {
   }, delayMs);
 }
 
+function groupNameCacheKey(groupId) {
+  return String(groupId || '').trim();
+}
+
+async function lookupGroupName(currentApi, groupId) {
+  if (!currentApi || typeof currentApi.getGroupInfo !== 'function') return undefined;
+  const key = groupNameCacheKey(groupId);
+  if (!key) return undefined;
+
+  const cached = groupNameCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.name;
+
+  const existing = groupNameLookups.get(key);
+  if (existing) return existing;
+
+  const lookup = (async () => {
+    try {
+      const result = await Promise.race([
+        currentApi.getGroupInfo([key]),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('GROUP_NAME_TIMEOUT')), GROUP_NAME_LOOKUP_TIMEOUT_MS).unref?.();
+        }),
+      ]);
+      const raw = result?.gridInfoMap?.[key] || result?.gridInfoMap?.[Number(key)];
+      const name = String(raw?.name || raw?.groupName || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      if (name) {
+        groupNameCache.set(key, { name, expiresAt: Date.now() + GROUP_NAME_TTL_MS });
+        return name;
+      }
+      groupNameCache.set(key, { name: undefined, expiresAt: Date.now() + GROUP_NAME_NEGATIVE_TTL_MS });
+      return undefined;
+    } catch (error) {
+      groupNameCache.set(key, { name: undefined, expiresAt: Date.now() + GROUP_NAME_NEGATIVE_TTL_MS });
+      console.warn(
+        '[ZCAJS] group name lookup failed:',
+        error instanceof Error ? error.message : 'unknown'
+      );
+      return undefined;
+    } finally {
+      groupNameLookups.delete(key);
+    }
+  })();
+
+  groupNameLookups.set(key, lookup);
+  return lookup;
+}
+
+async function postNormalizedInbound(currentApi, normalized) {
+  if (normalized.isGroup && !normalized.groupName && normalized.groupId) {
+    const groupName = await lookupGroupName(currentApi, normalized.groupId);
+    if (groupName) normalized.groupName = groupName;
+  }
+  await postInbound(normalized);
+}
+
 function attachListener(currentApi) {
   currentApi.listener.on('connected', () => {
     listenerConnected = true;
@@ -172,10 +242,15 @@ function attachListener(currentApi) {
   });
 
   currentApi.listener.on('message', (message) => {
-    const normalized = normalizeDirectMessage(message);
+    const normalized = normalizeZaloMessage(message);
     if (!normalized) return;
     if (shouldSuppressCrmSelfEcho(normalized)) return;
-    void postInbound(normalized);
+    void postNormalizedInbound(currentApi, normalized).catch((error) => {
+      console.error(
+        '[ZCAJS] inbound post failed:',
+        error instanceof Error ? error.message : 'unknown'
+      );
+    });
   });
 }
 
@@ -215,6 +290,15 @@ async function loginLoop() {
   }
 
   loginLoopRunning = false;
+}
+
+function resolveZaloThread(recipient) {
+  const raw = String(recipient || '').trim();
+  const groupMatch = /^group:([0-9]{5,40})$/.exec(raw);
+  if (groupMatch) {
+    return { threadId: groupMatch[1], messageType: MessageType.GroupMessage };
+  }
+  return { threadId: raw, messageType: MessageType.DirectMessage };
 }
 
 async function handleSend(req, res) {
@@ -271,7 +355,8 @@ async function handleSend(req, res) {
   });
 
   try {
-    const result = await api.sendMessage({ msg: text }, recipientZaloId, MessageType.DirectMessage);
+    const { threadId, messageType } = resolveZaloThread(recipientZaloId);
+    const result = await api.sendMessage({ msg: text }, threadId, messageType);
     const providerMessageId = String(result?.message?.msgId ?? '').trim();
     if (!providerMessageId) {
       return json(res, 502, {
@@ -414,10 +499,11 @@ async function handleSendMedia(req, res) {
     // Deliberately do not register this send in the text echo-suppression maps.
     // The self-listener event contains Zalo's canonical CDN/attachment payload, which
     // the CRM needs in order to render the sent media in the unified timeline.
+    const { threadId, messageType } = resolveZaloThread(recipientZaloId);
     const result = await api.sendMessage(
       { msg: text || '', attachments: localPaths },
-      recipientZaloId,
-      MessageType.DirectMessage
+      threadId,
+      messageType
     );
 
     const providerMessageIds = [
@@ -460,6 +546,7 @@ function requestHandler(req, res) {
       ok: true,
       loggedIn,
       listenerConnected,
+      pendingInbound: inboundDelivery?.pendingCount?.() ?? 0,
     });
   }
 
@@ -484,6 +571,17 @@ function requestHandler(req, res) {
 }
 
 requireConfig();
+
+inboundDelivery = createInboundDelivery({
+  crmBaseUrl: CRM_BASE_URL,
+  workerSecret: WORKER_SECRET,
+});
+void inboundDelivery.resume().catch((error) => {
+  console.error(
+    '[ZCAJS] inbound queue recovery failed:',
+    error instanceof Error ? error.message : 'unknown'
+  );
+});
 
 const server = http.createServer(requestHandler);
 server.listen(PORT, '0.0.0.0', () => {

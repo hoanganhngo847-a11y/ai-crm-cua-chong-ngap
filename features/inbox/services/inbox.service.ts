@@ -97,13 +97,13 @@ function isDemoMode(): boolean {
 /**
  * Kiểm tra xem tên khách hàng có phải là tên generic / mặc định hệ thống hay không.
  * Các tên generic: "Khách hàng", "Khách hàng Facebook", "Khách Zalo 1234",
- * "Khách hàng Zalo OA", "Facebook User", "Unknown", "Ẩn danh".
+ * "Khách hàng Zalo OA", "Nhóm Zalo 1234", "Facebook User", "Unknown", "Ẩn danh".
  */
 export function isGenericCustomerName(name?: string | null): boolean {
   if (!name || typeof name !== 'string') return true;
   const trimmed = name.trim();
   if (trimmed.length < 2) return true;
-  return /^(Khách hàng|Khách Zalo|Khách hàng Zalo|Khách Zalo OA|Khách hàng Zalo OA|Facebook User|Unknown|Ẩn danh)($|\s)/i.test(
+  return /^(Khách hàng|Khách Zalo|Khách hàng Zalo|Khách Zalo OA|Khách hàng Zalo OA|Nhóm Zalo|Facebook User|Unknown|Ẩn danh)($|\s)/i.test(
     trimmed
   );
 }

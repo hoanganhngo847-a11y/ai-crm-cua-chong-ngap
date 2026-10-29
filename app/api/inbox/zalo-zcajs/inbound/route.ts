@@ -7,6 +7,10 @@ import {
   ensureZcaJsRoutingConfig,
   getZaloTransportMode,
 } from '@/features/omnichannel/zalo/zcajs-client';
+import {
+  buildZcaJsSourceMetadata,
+  parseZcaJsInboundPayload,
+} from '@/features/omnichannel/zalo/zcajs-inbound';
 
 export const runtime = 'nodejs';
 
@@ -111,6 +115,25 @@ async function applyZaloDisplayName(
   }
 }
 
+async function pauseZaloGroupAi(
+  supabase: ReturnType<typeof createAdminClient>,
+  companyId: string,
+  conversationId: string | undefined
+): Promise<void> {
+  if (!conversationId) return;
+  const { error } = await supabase
+    .from('conversations')
+    .update({ ai_mode: 'PAUSED', updated_at: new Date().toISOString() })
+    .eq('id', conversationId)
+    .eq('company_id', companyId)
+    .eq('channel', 'ZALO');
+  if (error) {
+    // Group conversations must never become an automatic AI target. The AI live
+    // enqueue trigger also refuses metadata.is_group, so this is defense in depth.
+    console.warn('[ZCAJS inbound] could not pause AI for Zalo group:', error.message);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (getZaloTransportMode() !== 'ZCAJS') {
@@ -151,66 +174,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json().catch(() => null) as
-      | {
-          messageId?: unknown;
-          externalUserId?: unknown;
-          senderName?: unknown;
-          senderNameSource?: unknown;
-          content?: unknown;
-          timestamp?: unknown;
-          direction?: unknown;
-          isSelf?: unknown;
-        }
-      | null;
-
-    if (!body || typeof body !== 'object') {
-      return NextResponse.json({ success: false, error: 'INVALID_PAYLOAD' }, { status: 400 });
-    }
-
-    const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : '';
-    const externalUserId = typeof body.externalUserId === 'string' ? body.externalUserId.trim() : '';
-    const senderName = normalizeZaloDisplayName(
-      typeof body.senderName === 'string' ? body.senderName : undefined
-    );
-    const rawSenderNameSource =
-      typeof body.senderNameSource === 'string' ? body.senderNameSource.trim() : '';
-    const senderNameSource =
-      rawSenderNameSource === 'profile_resolved' ? 'profile_resolved' : 'message_dname';
-    const content = typeof body.content === 'string' ? body.content.trim() : '';
-    const timestamp = typeof body.timestamp === 'string' ? body.timestamp.trim() : '';
-    const normalizedObservedAt = normalizeTimestamp(timestamp);
-    const requestedDirection = typeof body.direction === 'string' ? body.direction.trim().toLowerCase() : 'inbound';
-    const direction = requestedDirection === 'outbound' ? 'outbound' : 'inbound';
-
-    if (!messageId || !externalUserId || !content) {
+    const body = await request.json().catch(() => null);
+    const parsed = parseZcaJsInboundPayload(body);
+    if (!parsed.ok) {
       return NextResponse.json(
-        { success: false, error: 'MISSING_REQUIRED_FIELDS' },
+        { success: false, error: parsed.error },
         { status: 400 }
       );
     }
 
+    const event = parsed.data;
+    const timestamp =
+      body && typeof body === 'object' && typeof (body as { timestamp?: unknown }).timestamp === 'string'
+        ? ((body as { timestamp: string }).timestamp).trim()
+        : '';
+    const normalizedObservedAt = normalizeTimestamp(timestamp);
+    const sourceMetadata = buildZcaJsSourceMetadata(event);
+
     const supabase = createAdminClient();
     await ensureZcaJsRoutingConfig(supabase, companyId);
 
-    const sourceMetadata = {
-      transport: 'ZCAJS',
-      source: 'ngogiaphat/ZCAJS',
-      direction,
-      observed_self_message: direction === 'outbound',
-      ...(senderName ? { zalo_display_name: senderName } : {}),
-      ...(senderName ? { zalo_display_name_source: senderNameSource } : {}),
-    };
-
     // Self-listener messages are observations of messages already sent from the native Zalo account.
     // Persist them as SENT/OUTBOUND interactions only. Never enqueue them for provider dispatch again.
-    if (direction === 'outbound') {
+    if (event.direction === 'outbound') {
       const { data, error } = await supabase.rpc('record_observed_zcajs_outbound_atomic', {
         p_company_id: companyId,
-        p_external_conversation_id: externalUserId,
-        p_provider_msg_id: messageId,
-        p_sanitized_content: sanitizePhoneInText(content),
-        p_raw_content: content,
+        p_external_conversation_id: event.externalConversationId,
+        p_provider_msg_id: event.messageId,
+        p_sanitized_content: sanitizePhoneInText(event.content),
+        p_raw_content: event.content,
         p_source_metadata: sourceMetadata,
         p_timestamp: normalizedObservedAt,
       });
@@ -224,13 +216,20 @@ export async function POST(request: NextRequest) {
       }
 
       const result = (data || {}) as Record<string, unknown>;
+      const conversationId =
+        typeof result.conversation_id === 'string' ? result.conversation_id : undefined;
+      if (event.isGroup) {
+        await pauseZaloGroupAi(supabase, companyId, conversationId);
+      }
+
       return NextResponse.json({
         success: true,
         duplicate: result.is_duplicate === true,
-        conversationId: typeof result.conversation_id === 'string' ? result.conversation_id : undefined,
+        conversationId,
         interactionId: typeof result.interaction_id === 'string' ? result.interaction_id : undefined,
         customerId: typeof result.customer_id === 'string' ? result.customer_id : undefined,
         direction: 'outbound',
+        isGroup: event.isGroup,
       });
     }
 
@@ -238,12 +237,18 @@ export async function POST(request: NextRequest) {
       {
         provider: 'ZALO',
         company_id: companyId,
-        external_user_id: externalUserId,
-        sender_name: senderName || `Khách Zalo ${externalUserId.slice(-4)}`,
-        message_id: messageId,
-        content,
+        external_user_id: event.externalUserId,
+        external_conversation_id: event.externalConversationId,
+        sender_name: event.senderName || `Khách Zalo ${event.externalUserId.slice(-4)}`,
+        message_id: event.externalRef,
+        content: event.content,
         timestamp: normalizedObservedAt,
-        metadata: sourceMetadata,
+        metadata: {
+          channel: 'zalo',
+          // The raw Zalo msgId is kept for diagnostics; external_ref owns dedupe.
+          provider_message_id: event.messageId,
+          ...sourceMetadata,
+        },
       },
       { client: supabase }
     );
@@ -259,18 +264,23 @@ export async function POST(request: NextRequest) {
       supabase,
       companyId,
       result.conversation_id,
-      senderName,
-      senderNameSource,
+      event.senderName,
+      event.senderNameSource,
       normalizedObservedAt
     );
 
-    await applyZaloDisplayName(
-      supabase,
-      companyId,
-      externalUserId,
-      senderName,
-      senderNameSource
-    );
+    if (event.isGroup) {
+      // Groups are observational in the CRM: never let AI answer a whole group.
+      await pauseZaloGroupAi(supabase, companyId, result.conversation_id);
+    } else {
+      await applyZaloDisplayName(
+        supabase,
+        companyId,
+        event.externalUserId,
+        event.senderName,
+        event.senderNameSource
+      );
+    }
 
     return NextResponse.json({
       success: true,
@@ -279,6 +289,7 @@ export async function POST(request: NextRequest) {
       interactionId: result.message_id,
       customerId: result.customer_id,
       direction: 'inbound',
+      isGroup: event.isGroup,
     });
   } catch (error: unknown) {
     console.error(

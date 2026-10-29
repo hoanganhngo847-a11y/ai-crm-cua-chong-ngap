@@ -46,6 +46,10 @@ yarn-error.log*
 next-env.d.ts
 /.javis-brain/
 
+# zalo-zcajs-worker
+zalo-zcajs-worker/data/
+zalo-zcajs-worker/*.log
+
 # fb-inbox-worker
 fb-inbox-worker/user_data/
 fb-inbox-worker/node_modules/

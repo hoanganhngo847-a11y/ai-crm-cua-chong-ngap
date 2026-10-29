@@ -31,6 +31,10 @@ import {
   type ZaloInboxServiceOptions,
 } from '@/features/omnichannel/zalo/inbox-service';
 import type { SendZaloReplyResult } from '@/features/omnichannel/zalo/types';
+import {
+  isZaloAiAutoReplyEnabled,
+  ZALO_AI_AUTO_REPLY_DISABLED,
+} from '@/features/ai-brain/zalo-auto-reply';
 
 // ==============================================================================
 // 1. POLICY FIREWALL VALIDATION & ERROR
@@ -360,6 +364,44 @@ export async function executeAiResponseRuntime(
       conversationId,
       error: `Failed to fetch conversation: ${convErr?.message || 'Not found'}`,
     };
+  }
+
+  // Zalo AI kill switch + no AI into group chats. Checked before customer
+  // analysis/model generation so a paused channel costs nothing and cannot send.
+  if (conv.channel === 'ZALO') {
+    const metadata =
+      conv.metadata && typeof conv.metadata === 'object' && !Array.isArray(conv.metadata)
+        ? (conv.metadata as Record<string, unknown>)
+        : {};
+    const isGroup = String(metadata.is_group || '').toLowerCase() === 'true';
+    if (isGroup || !isZaloAiAutoReplyEnabled()) {
+      return {
+        success: false,
+        claimed: true,
+        decision,
+        windowId,
+        conversationId,
+        error: isGroup ? 'AI_ZALO_GROUP_NOT_REPLIED' : ZALO_AI_AUTO_REPLY_DISABLED,
+      };
+    }
+
+    const { data: liveSetting, error: liveSettingError } = await client
+      .from('ai_brain_live_settings')
+      .select('enabled')
+      .eq('company_id', companyId)
+      .eq('channel', 'ZALO')
+      .maybeSingle();
+
+    if (liveSettingError || !liveSetting?.enabled) {
+      return {
+        success: false,
+        claimed: true,
+        decision,
+        windowId,
+        conversationId,
+        error: ZALO_AI_AUTO_REPLY_DISABLED,
+      };
+    }
   }
 
   // Step 3: Run AI Customer Analysis
