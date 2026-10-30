@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { createAdminClient } from '@/lib/supabase/admin';
-import { syncCompanyMetaAds } from '@/features/omnichannel/facebook/marketing-sync';
+import { syncCompanyMetaAttribution } from '@/features/omnichannel/facebook/marketing-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,7 +52,7 @@ async function handleCronSync(request: NextRequest): Promise<NextResponse> {
 
     for (const companyId of companyIds) {
         try {
-            const res = await syncCompanyMetaAds(companyId);
+            const res = await syncCompanyMetaAttribution(companyId);
             results[companyId] = res;
         } catch (err: unknown) {
             results[companyId] = { success: false, error: err instanceof Error ? err.message : 'META_SYNC_FAILED' };

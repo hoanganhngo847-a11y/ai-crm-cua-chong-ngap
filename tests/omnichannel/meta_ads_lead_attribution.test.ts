@@ -25,7 +25,7 @@ import {
     validateAdAccountAccess,
 } from '../../features/omnichannel/facebook/marketing-sync';
 import { POST as webhookPost } from '../../app/api/webhooks/meta/route';
-import { POST as syncPost } from '../../app/api/admin/meta-ads/sync/route';
+import { POST as syncPost } from '../../app/api/admin/facebook/attribution-sync/route';
 import { requireBossAdmin, AuthError } from '../../lib/auth/context';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 
@@ -471,7 +471,7 @@ test('Scenario 6: Ad accounts of other companies are strictly isolated via RLS',
 // -----------------------------------------------------------------------------
 // SCENARIO 7: Lead có ad ID được ánh xạ chính xác đến campaign/ad set/ad
 // -----------------------------------------------------------------------------
-test('Scenario 7: Lead with ad ID correctly maps to campaign/adset/ad metadata and updates snapshots', async () => {
+test('Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and updates snapshots', async () => {
     const supabase = await createPgliteSupabase();
     const { db } = supabase;
 
@@ -493,9 +493,6 @@ test('Scenario 7: Lead with ad ID correctly maps to campaign/adset/ad metadata a
 
             INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status)
             VALUES ('${compId}', 'act_100', 'camp_berlin_01', 'Tuyển sinh Du học Đức Berlin 2026', 'ACTIVE');
-
-            INSERT INTO public.meta_ad_sets (company_id, ad_account_id, meta_campaign_id, meta_ad_set_id, name, status)
-            VALUES ('${compId}', 'act_100', 'camp_berlin_01', 'adset_berlin_01', 'Nhóm Học sinh Tốt nghiệp THPT', 'ACTIVE');
 
             INSERT INTO public.meta_ads (company_id, ad_account_id, meta_campaign_id, meta_ad_set_id, meta_ad_id, name, status)
             VALUES ('${compId}', 'act_100', 'camp_berlin_01', 'adset_berlin_01', 'ad_berlin_01', 'Video Review Trường ĐH Berlin', 'ACTIVE');
@@ -527,7 +524,7 @@ test('Scenario 7: Lead with ad ID correctly maps to campaign/adset/ad metadata a
         assert.equal(tp.meta_campaign_id, 'camp_berlin_01');
         assert.equal(tp.campaign_name_snapshot, 'Tuyển sinh Du học Đức Berlin 2026');
         assert.equal(tp.meta_ad_set_id, 'adset_berlin_01');
-        assert.equal(tp.ad_set_name_snapshot, 'Nhóm Học sinh Tốt nghiệp THPT');
+        assert.equal(tp.ad_set_name_snapshot, null);
         assert.equal(tp.meta_ad_id, 'ad_berlin_01');
         assert.equal(tp.ad_name_snapshot, 'Video Review Trường ĐH Berlin');
         assert.equal(tp.attribution_status, 'ATTRIBUTED');
@@ -852,8 +849,8 @@ test('Scenario 12: Sensitive tokens are encrypted at rest (AES-256-GCM) and phon
 // SCENARIO 13: Role không đủ quyền (SALE / TECHNICIAN) không thể kích hoạt sync
 // -----------------------------------------------------------------------------
 test('Scenario 13: Unauthorized roles (SALE, TECHNICIAN) are rejected from admin sync', async () => {
-    // 13A: Unauthenticated request to /api/admin/meta-ads/sync returns 401
-    const req = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/admin/meta-ads/sync', {
+    // 13A: Unauthenticated request to /api/admin/facebook/attribution-sync returns 401
+    const req = new Request('https://ai-crm-cua-chong-ngap.onrender.com/api/admin/facebook/attribution-sync', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
@@ -970,125 +967,6 @@ test('Scenario 14: Database migration, foreign keys, and unique constraints are 
                 return true;
             }
         );
-    } finally {
-        await supabase.close();
-    }
-});
-
-// -----------------------------------------------------------------------------
-// SCENARIO 15: Chỉ số báo cáo (Spend, Impressions, Clicks, CTR, CPL, Cost per Qualified Lead) tính toán chính xác, xử lý an toàn phép chia cho 0
-// -----------------------------------------------------------------------------
-test('Scenario 15: Performance report calculations (Spend, CTR, CPL, Cost per Qualified Lead) and divide-by-zero safety', async () => {
-    const supabase = await createPgliteSupabase();
-    const { db } = supabase;
-
-    try {
-        const companyId = '21111111-1111-4111-8111-111111111111';
-
-        await db.exec(`
-            INSERT INTO public.companies (id, name, status)
-            VALUES ('${companyId}', 'CHD Analytics Company', 'ACTIVE')
-            ON CONFLICT (id) DO NOTHING;
-
-            INSERT INTO public.meta_ad_accounts (company_id, ad_account_id, name, account_status)
-            VALUES ('${companyId}', 'act_calc_01', 'Tài khoản Tính toán', 1);
-
-            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status)
-            VALUES ('${companyId}', 'act_calc_01', 'camp_calc_01', 'Chiến dịch Test Báo cáo', 'ACTIVE');
-        `);
-
-        // Case 15A: Zero spend, zero leads -> Must return 0 without divide by zero crash
-        const resZero = await db.query(`
-            SELECT get_meta_ads_performance_report(
-                '${companyId}'::uuid,
-                '2026-01-01T00:00:00Z'::timestamptz,
-                '2026-12-31T23:59:59Z'::timestamptz
-            );
-        `);
-        const reportZero = (resZero.rows[0] as any).get_meta_ads_performance_report;
-        assert.equal(reportZero.overview.spend, 0);
-        assert.equal(reportZero.overview.impressions, 0);
-        assert.equal(reportZero.overview.clicks, 0);
-        assert.equal(reportZero.overview.ctr, 0);
-        assert.equal(reportZero.overview.crm_leads, 0);
-        assert.equal(reportZero.overview.cpl, 0);
-        assert.equal(reportZero.overview.cost_per_qualified, 0);
-
-        // Case 15B: Real numbers
-        // Spend: 10,000,000 VND
-        // Impressions: 200,000
-        // Clicks: 5,000 (CTR = 5000 / 200000 * 100 = 2.50%)
-        // Meta Leads: 40
-        // Account-level daily insights (for overview)
-        await db.exec(`
-            INSERT INTO public.meta_insights_daily (
-                company_id, ad_account_id, entity_type, entity_id, date, spend, impressions, clicks, cpc, cpm, ctr, meta_leads
-            ) VALUES (
-                '${companyId}', 'act_calc_01', 'ACCOUNT', 'act_calc_01', '2026-10-25',
-                10000000, 200000, 5000, 2000, 50000, 2.5, 40
-            );
-
-            INSERT INTO public.meta_insights_daily (
-                company_id, ad_account_id, entity_type, entity_id, date, spend, impressions, clicks, cpc, cpm, ctr, meta_leads
-            ) VALUES (
-                '${companyId}', 'act_calc_01', 'CAMPAIGN', 'camp_calc_01', '2026-10-25',
-                10000000, 200000, 5000, 2000, 50000, 2.5, 40
-            );
-        `);
-
-        // 20 CRM Leads attributed to this campaign (CPL = 10,000,000 / 20 = 500,000 VND)
-        // 5 of which reached QUALIFIED stages (Cost per Qualified Lead = 10,000,000 / 5 = 2,000,000 VND)
-        for (let i = 1; i <= 20; i++) {
-            const custId = `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`;
-            const stage = i <= 5 ? 'high_potential' : 'LEAD_NEW'; // high_potential is qualified stage
-            await db.exec(`
-                INSERT INTO public.customers (
-                    id, company_id, customer_code, name, source, stage,
-                    first_campaign_name, latest_campaign_name, attribution_status, created_at
-                ) VALUES (
-                    '${custId}', '${companyId}', 'KH-CALC-${i}', 'Khách ${i}', 'FACEBOOK', '${stage}',
-                    'Chiến dịch Test Báo cáo', 'Chiến dịch Test Báo cáo', 'ATTRIBUTED', '2026-10-25T12:00:00Z'
-                );
-
-                INSERT INTO public.lead_attribution_touchpoints (
-                    company_id, customer_id, channel, touchpoint_type, meta_campaign_id, campaign_name_snapshot, attribution_status, occurred_at
-                ) VALUES (
-                    '${companyId}', '${custId}', 'FACEBOOK_LEAD_ADS', 'FIRST_TOUCH', 'camp_calc_01', 'Chiến dịch Test Báo cáo', 'ATTRIBUTED', '2026-10-25T12:00:00Z'
-                );
-            `);
-        }
-
-        const resReal = await db.query(`
-            SELECT get_meta_ads_performance_report(
-                '${companyId}'::uuid,
-                '2026-10-01T00:00:00Z'::timestamptz,
-                '2026-10-31T23:59:59Z'::timestamptz
-            );
-        `);
-        const report = (resReal.rows[0] as any).get_meta_ads_performance_report;
-
-        assert.equal(report.overview.spend, 10000000);
-        assert.equal(report.overview.impressions, 200000);
-        assert.equal(report.overview.clicks, 5000);
-        assert.equal(report.overview.ctr, 2.5);
-        assert.equal(report.overview.meta_leads, 40);
-        assert.equal(report.overview.crm_leads, 20);
-        assert.equal(report.overview.qualified_leads, 5);
-
-        // Mathematical verification
-        // CPL = 10,000,000 / 20 = 500,000
-        assert.equal(report.overview.cpl, 500000);
-        // Cost per Qualified Lead = 10,000,000 / 5 = 2,000,000
-        assert.equal(report.overview.cost_per_qualified, 2000000);
-
-        // Campaign breakdown validation
-        assert.equal(report.campaigns.length, 1);
-        const camp = report.campaigns[0];
-        assert.equal(camp.campaign_id, 'camp_calc_01');
-        assert.equal(camp.campaign_name, 'Chiến dịch Test Báo cáo');
-        assert.equal(camp.spend, 10000000);
-        assert.equal(camp.crm_leads, 20);
-        assert.equal(camp.cpl, 500000);
     } finally {
         await supabase.close();
     }
@@ -1249,23 +1127,6 @@ test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization an
                 `);
             },
             /permission denied/i
-        );
-
-        // 17C: User A calling get_meta_ads_performance_report for Company B MUST FAIL CLOSED
-        await assert.rejects(
-            async () => {
-                await db.query(`
-                    SELECT get_meta_ads_performance_report(
-                        '${compB}'::uuid,
-                        '2026-01-01'::timestamptz,
-                        '2026-12-31'::timestamptz
-                    );
-                `);
-            },
-            (err: any) => {
-                assert.match(err.message, /UNAUTHORIZED_COMPANY_ACCESS/);
-                return true;
-            }
         );
 
         // 17D: Switch to service_role (the authorized server-side path)
@@ -1514,72 +1375,6 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
         const cRow = custAfter.rows[0] as any;
         assert.equal(cRow.first_campaign_name, null, 'The first, unattributed touch remains immutable');
         assert.equal(cRow.latest_campaign_name, 'Chiến dịch Thứ Hai (Mới)');
-    } finally {
-        await supabase.close();
-    }
-});
-
-// -----------------------------------------------------------------------------
-// SCENARIO 21: Reporting Accuracy, Metric Distinction & Campaign Filtering (Priority 6)
-// -----------------------------------------------------------------------------
-test('Scenario 21: Performance report campaign filtering consistency and repeat touchpoint deduplication', async () => {
-    const supabase = await createPgliteSupabase();
-    const { db } = supabase;
-
-    try {
-        const companyId = '91111111-1111-4111-8111-111111111111';
-
-        await db.exec(`
-            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Accuracy Testing', 'ACTIVE') ON CONFLICT DO NOTHING;
-
-            INSERT INTO public.meta_ad_accounts (company_id, ad_account_id, name, account_status)
-            VALUES ('${companyId}', 'act_acc_01', 'Tài khoản Chính', 1);
-
-            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status) VALUES
-                ('${companyId}', 'act_acc_01', 'camp_acc_A', 'Chiến dịch A', 'ACTIVE'),
-                ('${companyId}', 'act_acc_01', 'camp_acc_B', 'Chiến dịch B', 'ACTIVE');
-
-            INSERT INTO public.meta_insights_daily (
-                company_id, ad_account_id, entity_type, entity_id, date, spend, impressions, clicks, meta_leads
-            ) VALUES
-                ('${companyId}', 'act_acc_01', 'ACCOUNT', 'act_acc_01', '2026-10-28', 15000000, 150000, 3000, 30),
-                ('${companyId}', 'act_acc_01', 'CAMPAIGN', 'camp_acc_A', '2026-10-28', 10000000, 100000, 2000, 20),
-                ('${companyId}', 'act_acc_01', 'CAMPAIGN', 'camp_acc_B', '2026-10-28', 5000000, 50000, 1000, 10);
-        `);
-
-        // Customer 1 has 3 repeat touchpoints for Campaign A
-        const cust1 = '92222222-2222-4222-8222-111111111111';
-        await db.exec(`
-            INSERT INTO public.customers (id, company_id, customer_code, name, source, stage, attribution_status)
-            VALUES ('${cust1}', '${companyId}', 'KH-REPEAT-01', 'Khách Trùng', 'FACEBOOK', 'high_potential', 'ATTRIBUTED');
-
-            INSERT INTO public.lead_attribution_touchpoints (company_id, customer_id, channel, touchpoint_type, ad_account_id, meta_campaign_id, attribution_status, occurred_at) VALUES
-                ('${companyId}', '${cust1}', 'FACEBOOK_LEAD_ADS', 'FIRST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T10:00:00Z'),
-                ('${companyId}', '${cust1}', 'FACEBOOK_MESSENGER', 'LATEST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T11:00:00Z'),
-                ('${companyId}', '${cust1}', 'FACEBOOK_LEAD_ADS', 'LATEST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T12:00:00Z');
-        `);
-
-        // 21A: Report with Campaign A filter -> Spend MUST be 10,000,000 (not 15,000,000)
-        const resFilterA = await db.query(`
-            SELECT get_meta_ads_performance_report(
-                '${companyId}'::uuid,
-                '2026-10-01'::timestamptz,
-                '2026-10-31'::timestamptz,
-                'act_acc_01',
-                'camp_acc_A'
-            );
-        `);
-        const reportA = (resFilterA.rows[0] as any).get_meta_ads_performance_report;
-        assert.equal(reportA.overview.spend, 10000000, 'Spend must match Campaign A spend when filtered');
-        assert.equal(reportA.overview.meta_leads, 20);
-
-        // 21B: Repeat touchpoints for same customer MUST NOT inflate crm_leads or unique_customers
-        assert.equal(reportA.overview.crm_leads, 1, 'Repeat touchpoints must deduplicate to 1 unique lead');
-        assert.equal(reportA.overview.unique_customers, 1, 'Must count exactly 1 unique customer');
-        assert.equal(reportA.overview.total_touchpoints, 3, 'Total touchpoints must report all 3 events');
-
-        // CPL = 10,000,000 / 1 = 10,000,000 VND
-        assert.equal(reportA.overview.cpl, 10000000);
     } finally {
         await supabase.close();
     }

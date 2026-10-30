@@ -7,10 +7,22 @@ import { randomBytes } from 'node:crypto';
 
 test('all canonical source bytes have a reviewable transaction envelope and preserve the 21-entry mapping',()=>{
   const files=readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')).map(file=>({file,sql:readFileSync('supabase/migrations/'+file,'utf8')}));
-  // pull_request CI also includes base-branch migrations. Pin the historical
-  // audit assertions to its exact manifest, then inspect the complete checkout.
-  const manifest: {file:string;sha256:string}[]=JSON.parse(readFileSync('docs/evidence/meta-ads-pre-destructive/ledger-readiness-plan.json','utf8')).allSources;
-  assert.equal(manifest.length,116);
+  // Preserve the historical audit; the final-scope manifest records only the
+  // explicitly reviewed, never-deployed Meta changes and merged main sources.
+  const historicalSource=readFileSync('docs/evidence/meta-ads-pre-destructive/ledger-readiness-plan.json','utf8');
+  const historical: {file:string;sha256:string}[]=JSON.parse(historicalSource).allSources;
+  const current=JSON.parse(readFileSync('docs/evidence/meta-ads-final-scope/migration-manifest.json','utf8'));
+  assert.equal(sqlSha256(historicalSource),current.historicalManifestSha256);
+  assert.equal(historical.length,116);
+  const manifest: {file:string;sha256:string;statementCount:number;transactionMode:string}[]=current.allSources;
+  for(const old of historical) {
+    const replacement=current.changedUnreleasedSources.find((s:{file:string})=>s.file===old.file);
+    if(replacement) {
+      assert.match(old.file,/^20261030\d{6}_meta_ads_/);
+      assert.equal(replacement.previousSha256,old.sha256);
+    }
+    assert.equal(manifest.find(m=>m.file===old.file)?.sha256,replacement?.sha256||old.sha256);
+  }
   const audited=manifest.map(m=>{
     const source=files.find(f=>f.file===m.file);
     assert.ok(source,`audited source missing: ${m.file}`);
@@ -19,12 +31,11 @@ test('all canonical source bytes have a reviewable transaction envelope and pres
   });
   const history=JSON.parse(readFileSync('docs/evidence/meta-ads-staging/staging-history.json','utf8')).migrations;
   const before=JSON.stringify(history),plan=buildLedgerReadinessPlan(audited,history);
-  assert.deepEqual(plan.errors,[]);assert.equal(plan.prefixCandidates.length,21);assert.equal(plan.pending.length,95);
+  assert.deepEqual(plan.errors,[]);assert.equal(plan.prefixCandidates.length,21);assert.equal(plan.pending.length,manifest.length-21);
   assert.equal(plan.executionAuthorized,false);assert.equal(JSON.stringify(history),before);
   assert.ok(plan.prefixCandidates.every(p=>p.requiresSchemaVerification&&!p.sourceHashIsHistoricalAttestation));
   const profiles=audited.map(f=>inspectTransactionEnvelope(f.sql));
-  assert.equal(profiles.reduce((n,p)=>n+p.statements.length,0),2277);
-  assert.equal(profiles.filter(p=>p.mode==='OUTER').length,24);assert.equal(profiles.filter(p=>p.mode==='NONE').length,92);
+  assert.deepEqual(profiles.map(p=>({statementCount:p.statements.length,transactionMode:p.mode})),manifest.map(m=>({statementCount:m.statementCount,transactionMode:m.transactionMode})));
   assert.ok(profiles.every(p=>p.mode!=='REJECT'));
   const checkoutPlan=buildLedgerReadinessPlan(files,history);
   assert.deepEqual(checkoutPlan.errors,[]);

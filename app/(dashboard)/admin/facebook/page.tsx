@@ -11,7 +11,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, AlertCircle, MessageSquare, RefreshCw, BarChart3, Megaphone } from 'lucide-react';
+import { CheckCircle2, AlertCircle, MessageSquare, RefreshCw, Megaphone } from 'lucide-react';
 
 const ERROR_MESSAGES: Record<string, string> = {
   NO_COMPANY: 'Không xác định được doanh nghiệp hiện tại.',
@@ -48,6 +48,7 @@ export default async function FacebookConnectionPage({
   const connectedCount = Number(textParam(params.count) || 0);
   const connectedAdsCount = Number(textParam(params.ad_accounts_count) || 0);
   const leadAdsStatus = textParam(params.lead_ads_status);
+  const attributionSync = textParam(params.attribution_sync);
   const connectionSummary =
     connectedCount > 0
       ? leadAdsStatus === 'ALL_CONNECTED'
@@ -95,6 +96,14 @@ export default async function FacebookConnectionPage({
           </Link>
         }
       />
+
+      {attributionSync && (
+        <div role="status" className="rounded-xl border border-border-subtle bg-surface-secondary p-4 text-sm text-text-primary">
+          {attributionSync === 'success'
+            ? 'Đã đồng bộ nguồn khách hàng và cập nhật các lượt đăng ký đang chờ xác định chiến dịch.'
+            : 'Đồng bộ nguồn khách hàng chưa hoàn tất. Kiểm tra kết nối tài khoản quảng cáo rồi thử lại.'}
+        </div>
+      )}
 
       {errorCode && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 flex items-start gap-3">
@@ -217,20 +226,13 @@ export default async function FacebookConnectionPage({
               <h2 className="text-base font-semibold text-text-primary">Tài khoản Quảng cáo Meta Ads</h2>
             </div>
             <p className="mt-1 text-xs text-text-secondary">
-              Đồng bộ dữ liệu read-only từ Meta Marketing API (Campaign, Ad Set, Ad, Lead Form và Insights).
+              Đồng bộ tên chiến dịch và liên kết quảng cáo để ghi nhận nguồn từng lượt đăng ký của khách hàng.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Link
-              href="/admin/analytics/meta-ads"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-subtle bg-surface-primary hover:bg-surface-hover text-text-primary text-xs font-medium transition"
-            >
-              <BarChart3 className="w-3.5 h-3.5 text-accent" />
-              <span>Xem Báo cáo Meta Ads</span>
-            </Link>
-            <form action="/api/admin/meta-ads/sync" method="post">
+            <form action="/api/admin/facebook/attribution-sync" method="post">
               <Button type="submit" variant="outline" size="sm" leftIcon={<RefreshCw className="w-3.5 h-3.5" />}>
-                Đồng bộ ngay
+                Đồng bộ nguồn khách hàng
               </Button>
             </form>
           </div>

@@ -141,17 +141,11 @@ export default async function AdminDashboardPage() {
                 <Badge variant="success">Active</Badge>
               </div>
               <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
-                Quản lý kết nối Facebook Pages và Ad Accounts, theo dõi chiến dịch quảng cáo, Instant Forms, Click-to-Messenger và đối soát chỉ số CPL.
+                Kết nối Facebook Pages và tài khoản quảng cáo để xác định chiến dịch tạo ra từng lượt đăng ký của khách hàng.
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 self-start md:self-auto">
-            <Link
-              href="/admin/analytics/meta-ads"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-secondary text-text-primary hover:bg-surface-hover border border-border-subtle text-xs font-medium transition"
-            >
-              <span>Báo cáo Ads</span>
-            </Link>
             <Link
               href="/admin/facebook"
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover text-xs font-medium transition"

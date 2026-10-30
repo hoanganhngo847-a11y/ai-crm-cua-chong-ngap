@@ -217,17 +217,27 @@ test('TEST 3: three campaigns on one phone: one customer, three events, all thre
     try {
         const company = 'b3333333-1111-4111-8111-111111111111';
         await db.exec(insertCompany(company, 'CHD Lead Ads'));
+        await db.exec(`
+            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status) VALUES
+                ('${company}', 'act_abc', 'camp_a_2026', 'Campaign A', 'ACTIVE'),
+                ('${company}', 'act_abc', 'camp_b_2026', 'Campaign B', 'ACTIVE'),
+                ('${company}', 'act_abc', 'camp_c_2026', 'Campaign C', 'ACTIVE');
+            INSERT INTO public.meta_ads (company_id, ad_account_id, meta_campaign_id, meta_ad_id, name, status) VALUES
+                ('${company}', 'act_abc', 'camp_a_2026', 'ad_a', 'Ad A', 'ACTIVE'),
+                ('${company}', 'act_abc', 'camp_b_2026', 'ad_b', 'Ad B', 'ACTIVE'),
+                ('${company}', 'act_abc', 'camp_c_2026', 'ad_c', 'Ad C', 'ACTIVE');
+        `);
         await submitLeadgen(db, {
             company, leadgenId: '3303001', occurred: '2026-10-15T02:00:00Z',
-            phone: '+843000000011', content: 'Lead A', campaignId: 'camp_a_2026',
+            phone: '+843000000011', content: 'Lead A', campaignId: 'camp_a_2026', adId: 'ad_a',
         });
         await submitLeadgen(db, {
             company, leadgenId: '3303002', occurred: '2026-10-30T02:00:00Z',
-            phone: '+843000000011', content: 'Lead B', campaignId: 'camp_b_2026',
+            phone: '+843000000011', content: 'Lead B', campaignId: 'camp_b_2026', adId: 'ad_b',
         });
         await submitLeadgen(db, {
-            company, leadgenId: '3303003', occurred: '2026-11-05T02:00:00Z',
-            phone: '+843000000011', content: 'Lead C', campaignId: 'camp_c_2026',
+            company, leadgenId: '3303003', occurred: '2026-10-30T03:00:00Z',
+            phone: '+843000000011', content: 'Lead C', campaignId: 'camp_c_2026', adId: 'ad_c',
         });
 
         const c = await one(db, `
@@ -245,6 +255,14 @@ test('TEST 3: three campaigns on one phone: one customer, three events, all thre
         assert.deepEqual(live.map((t) => t.is_duplicate_phone), [false, true, true]);
         assert.equal(live[0].touchpoint_type, 'FIRST_TOUCH');
         assert.equal(live[2].touchpoint_type, 'LATEST_TOUCH');
+        assert.deepEqual(live.map(t=>t.campaign_name_snapshot), ['Campaign A', 'Campaign B', 'Campaign C']);
+        assert.equal(new Set(live.map(t=>t.meta_campaign_id)).size, 3);
+        assert.deepEqual(live.map(t=>new Date(t.occurred_at).toISOString()), ['2026-10-15T02:00:00.000Z','2026-10-30T02:00:00.000Z','2026-10-30T03:00:00.000Z']);
+        const profile = await one(db, `SELECT first_campaign_name,latest_campaign_name FROM public.customers WHERE company_id='${company}'`);
+        assert.equal(profile.first_campaign_name, 'Campaign A');
+        assert.equal(profile.latest_campaign_name, 'Campaign C');
+        const pageNames = await db.query(`SELECT page_name FROM public.lead_attribution_touchpoints WHERE company_id='${company}' ORDER BY occurred_at`);
+        assert.deepEqual(pageNames.rows.map(row=>(row as {page_name:string}).page_name), ['Du học CHD','Du học CHD','Du học CHD']);
     } finally {
         await supabase.close();
     }

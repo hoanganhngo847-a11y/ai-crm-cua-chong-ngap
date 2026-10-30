@@ -58,6 +58,8 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         const stubs = PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '');
         const migrations = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
         sql(stubs + migrations.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        assert.equal(sql("SELECT to_regclass('public.meta_insights_daily') IS NULL AND to_regclass('public.meta_ad_sets') IS NULL AND to_regprocedure('public.get_meta_ads_performance_report(uuid,timestamptz,timestamptz,text,text)') IS NULL;"), 't', 'the released schema contains no advertising reporting API or reporting-only tables');
+        assert.equal(sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('meta_campaigns','meta_ads') AND column_name IN ('daily_budget','lifetime_budget','objective','creative_id','creative_title','creative_body');"), '0');
         sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Meta native test','ACTIVE'),(${q(other)},'Other tenant','ACTIVE');
              INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'First touch customer','FACEBOOK','LEAD_NEW');
              INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_1','campaign','Verified campaign','ACTIVE'),(${q(other)},'act_2','foreign','Foreign campaign','ACTIVE');
@@ -277,8 +279,6 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         // Simulated asset sync evidence (same records the marketing sync writes).
         sql(`INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
              VALUES (${q(company)},'act_1','300_campaign','Chiến dịch Du học 300','ACTIVE');
-             INSERT INTO public.meta_ad_sets(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,name,status)
-             VALUES (${q(company)},'act_1','300_campaign','300_adset','Nhóm 300','ACTIVE');
              INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status)
              VALUES (${q(company)},'act_1','300_campaign','300_adset','300_ad','Quảng cáo Meta 300','ACTIVE');`);
         const retryAfterSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
@@ -288,7 +288,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(resolvedOne.attribution_status, 'ATTRIBUTED');
         assert.equal(resolvedOne.campaign_name_snapshot, 'Chiến dịch Du học 300');
         assert.equal(resolvedOne.ad_name_snapshot, 'Quảng cáo Meta 300');
-        assert.equal(resolvedOne.ad_set_name_snapshot, 'Nhóm 300');
+        assert.equal(resolvedOne.ad_set_name_snapshot, null);
         assert.equal(resolvedOne.ads_context_data.raw_meta.campaign_name, 'Fabricated', 'the webhook assertion stays recorded for audit');
         const phoneCustomer = sql(`SELECT customer_id FROM private.customer_private_contacts WHERE company_id=${q(company)} AND normalized_phone='+843000000001';`);
         const phoneSnapshots = JSON.parse(sql(`SELECT row_to_json(c) FROM public.customers c WHERE id=${q(phoneCustomer)};`));

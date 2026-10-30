@@ -30,11 +30,6 @@ CREATE TABLE IF NOT EXISTS public.meta_campaigns (
     meta_campaign_id text NOT NULL,
     name text NOT NULL,
     status text NOT NULL, -- 'ACTIVE', 'PAUSED', 'ARCHIVED', 'DELETED'
-    objective text,
-    daily_budget numeric,
-    lifetime_budget numeric,
-    start_time timestamptz,
-    stop_time timestamptz,
     synced_at timestamptz DEFAULT now() NOT NULL,
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL,
@@ -43,38 +38,16 @@ CREATE TABLE IF NOT EXISTS public.meta_campaigns (
 
 CREATE INDEX IF NOT EXISTS idx_meta_campaigns_company_account ON public.meta_campaigns(company_id, ad_account_id);
 
--- 3. META AD SETS
-CREATE TABLE IF NOT EXISTS public.meta_ad_sets (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
-    ad_account_id text NOT NULL,
-    meta_campaign_id text NOT NULL,
-    meta_ad_set_id text NOT NULL,
-    name text NOT NULL,
-    status text NOT NULL,
-    daily_budget numeric,
-    lifetime_budget numeric,
-    synced_at timestamptz DEFAULT now() NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL,
-    CONSTRAINT uq_meta_ad_sets_company_ad_set UNIQUE (company_id, meta_ad_set_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_meta_ad_sets_company_campaign ON public.meta_ad_sets(company_id, meta_campaign_id);
-
 -- 4. META ADS
 CREATE TABLE IF NOT EXISTS public.meta_ads (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
     ad_account_id text NOT NULL,
     meta_campaign_id text NOT NULL,
-    meta_ad_set_id text NOT NULL,
+    meta_ad_set_id text,
     meta_ad_id text NOT NULL,
     name text NOT NULL,
     status text NOT NULL,
-    creative_id text,
-    creative_title text,
-    creative_body text,
     synced_at timestamptz DEFAULT now() NOT NULL,
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL,
@@ -92,7 +65,6 @@ CREATE TABLE IF NOT EXISTS public.meta_lead_forms (
     meta_form_id text NOT NULL,
     name text NOT NULL,
     status text,
-    questions jsonb DEFAULT '[]'::jsonb,
     synced_at timestamptz DEFAULT now() NOT NULL,
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL,
@@ -100,30 +72,6 @@ CREATE TABLE IF NOT EXISTS public.meta_lead_forms (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meta_lead_forms_company_page ON public.meta_lead_forms(company_id, page_id);
-
--- 6. META INSIGHTS DAILY (Aggregated performance from Insights API)
-CREATE TABLE IF NOT EXISTS public.meta_insights_daily (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
-    ad_account_id text NOT NULL,
-    entity_type text NOT NULL CHECK (entity_type IN ('ACCOUNT', 'CAMPAIGN', 'ADSET', 'AD')),
-    entity_id text NOT NULL,
-    date date NOT NULL,
-    spend numeric DEFAULT 0 NOT NULL,
-    impressions bigint DEFAULT 0 NOT NULL,
-    clicks bigint DEFAULT 0 NOT NULL,
-    ctr numeric DEFAULT 0 NOT NULL,
-    cpc numeric DEFAULT 0,
-    cpm numeric DEFAULT 0,
-    meta_leads integer DEFAULT 0 NOT NULL,
-    cpl numeric DEFAULT 0,
-    synced_at timestamptz DEFAULT now() NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL,
-    CONSTRAINT uq_meta_insights_daily_entity_date UNIQUE (company_id, entity_type, entity_id, date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_meta_insights_daily_query ON public.meta_insights_daily(company_id, entity_type, entity_id, date);
 
 -- 7. LEAD ATTRIBUTION TOUCHPOINTS
 CREATE TABLE IF NOT EXISTS public.lead_attribution_touchpoints (
@@ -250,10 +198,10 @@ BEGIN
 
     -- Look up snapshots from synced Meta Ads metadata if names are not provided
     IF p_meta_ad_id IS NOT NULL AND (v_resolved_ad IS NULL OR v_resolved_campaign_id IS NULL) THEN
-        SELECT a.name, s.name, c.name, a.meta_campaign_id, a.meta_ad_set_id
+        SELECT a.name, NULL::text, c.name, a.meta_campaign_id, a.meta_ad_set_id
         INTO v_resolved_ad, v_resolved_ad_set, v_resolved_campaign, v_resolved_campaign_id, v_resolved_ad_set_id
         FROM public.meta_ads a
-        LEFT JOIN public.meta_ad_sets s ON s.company_id = p_company AND s.meta_ad_set_id = a.meta_ad_set_id
+
         LEFT JOIN public.meta_campaigns c ON c.company_id = p_company AND c.meta_campaign_id = a.meta_campaign_id
         WHERE a.company_id = p_company AND a.meta_ad_id = p_meta_ad_id;
 
@@ -389,188 +337,11 @@ REVOKE ALL ON FUNCTION public.record_lead_attribution_touchpoint FROM anon;
 GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO authenticated;
 
--- 10. RPC: get_meta_ads_performance_report
-CREATE OR REPLACE FUNCTION public.get_meta_ads_performance_report(
-    p_company uuid,
-    p_from timestamptz,
-    p_to timestamptz,
-    p_ad_account_id text DEFAULT NULL,
-    p_campaign_id text DEFAULT NULL
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-    v_total_spend numeric := 0;
-    v_total_impressions bigint := 0;
-    v_total_clicks bigint := 0;
-    v_total_meta_leads integer := 0;
-    v_total_crm_leads bigint := 0;
-    v_total_attributed_leads bigint := 0;
-    v_total_qualified_leads bigint := 0;
-    v_ctr numeric := 0;
-    v_cpl numeric := 0;
-    v_cost_per_qualified numeric := 0;
-    v_campaign_rows jsonb := '[]'::jsonb;
-BEGIN
-    -- Aggregate Meta daily insights
-    SELECT
-        COALESCE(SUM(spend), 0),
-        COALESCE(SUM(impressions), 0),
-        COALESCE(SUM(clicks), 0),
-        COALESCE(SUM(meta_leads), 0)
-    INTO
-        v_total_spend,
-        v_total_impressions,
-        v_total_clicks,
-        v_total_meta_leads
-    FROM public.meta_insights_daily
-    WHERE company_id = p_company
-      AND date >= p_from::date
-      AND date <= p_to::date
-      AND entity_type = 'ACCOUNT'
-      AND (p_ad_account_id IS NULL OR ad_account_id = p_ad_account_id);
-
-    -- Calculate CTR
-    IF v_total_impressions > 0 THEN
-        v_ctr := ROUND((v_total_clicks::numeric / v_total_impressions::numeric) * 100, 2);
-    ELSE
-        v_ctr := 0;
-    END IF;
-
-    -- Aggregate CRM actual received leads in period
-    SELECT COUNT(DISTINCT t.id)
-    INTO v_total_crm_leads
-    FROM public.lead_attribution_touchpoints t
-    WHERE t.company_id = p_company
-      AND t.occurred_at >= p_from
-      AND t.occurred_at <= p_to
-      AND (p_ad_account_id IS NULL OR t.ad_account_id = p_ad_account_id)
-      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
-
-    -- Aggregate CRM attributed leads in period
-    SELECT COUNT(DISTINCT t.id)
-    INTO v_total_attributed_leads
-    FROM public.lead_attribution_touchpoints t
-    WHERE t.company_id = p_company
-      AND t.occurred_at >= p_from
-      AND t.occurred_at <= p_to
-      AND t.attribution_status = 'ATTRIBUTED'
-      AND (p_ad_account_id IS NULL OR t.ad_account_id = p_ad_account_id)
-      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
-
-    -- Calculate CRM CPL (safe division)
-    IF v_total_attributed_leads > 0 THEN
-        v_cpl := ROUND(v_total_spend / v_total_attributed_leads, 0);
-    ELSE
-        v_cpl := 0;
-    END IF;
-
-    -- Aggregate Qualified Leads
-    SELECT COUNT(DISTINCT c.id)
-    INTO v_total_qualified_leads
-    FROM public.lead_attribution_touchpoints t
-    JOIN public.customers c ON c.id = t.customer_id AND c.company_id = p_company
-    WHERE t.company_id = p_company
-      AND t.occurred_at >= p_from
-      AND t.occurred_at <= p_to
-      AND t.attribution_status = 'ATTRIBUTED'
-      AND c.stage IN ('INTERESTED', 'HIGH_POTENTIAL', 'DEPOSIT_PENDING', 'DEPOSIT_CONFIRMED', 'CONTRACT_SIGNED', 'interested', 'deep_research', 'high_potential', 'contract_signed')
-      AND (p_ad_account_id IS NULL OR t.ad_account_id = p_ad_account_id)
-      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
-
-    IF v_total_qualified_leads > 0 THEN
-        v_cost_per_qualified := ROUND(v_total_spend / v_total_qualified_leads, 0);
-    ELSE
-        v_cost_per_qualified := 0;
-    END IF;
-
-    -- Campaign breakdown
-    SELECT COALESCE(jsonb_agg(sub), '[]'::jsonb)
-    INTO v_campaign_rows
-    FROM (
-        SELECT
-            c.meta_campaign_id AS campaign_id,
-            c.name AS campaign_name,
-            c.status AS campaign_status,
-            COALESCE(ins.spend, 0) AS spend,
-            COALESCE(ins.impressions, 0) AS impressions,
-            COALESCE(ins.clicks, 0) AS clicks,
-            CASE
-                WHEN COALESCE(ins.impressions, 0) > 0 THEN ROUND((COALESCE(ins.clicks, 0)::numeric / ins.impressions::numeric) * 100, 2)
-                ELSE 0
-            END AS ctr,
-            COALESCE(ins.meta_leads, 0) AS meta_leads,
-            COALESCE(crm.crm_leads, 0) AS crm_leads,
-            COALESCE(crm.attributed_leads, 0) AS attributed_leads,
-            CASE
-                WHEN COALESCE(crm.attributed_leads, 0) > 0 THEN ROUND(COALESCE(ins.spend, 0) / crm.attributed_leads, 0)
-                ELSE 0
-            END AS cpl
-        FROM public.meta_campaigns c
-        LEFT JOIN (
-            SELECT
-                entity_id,
-                SUM(spend) AS spend,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                SUM(meta_leads) AS meta_leads
-            FROM public.meta_insights_daily
-            WHERE company_id = p_company
-              AND date >= p_from::date
-              AND date <= p_to::date
-              AND entity_type = 'CAMPAIGN'
-            GROUP BY entity_id
-        ) ins ON ins.entity_id = c.meta_campaign_id
-        LEFT JOIN (
-            SELECT
-                meta_campaign_id,
-                COUNT(id) AS crm_leads,
-                COUNT(id) FILTER (WHERE attribution_status = 'ATTRIBUTED') AS attributed_leads
-            FROM public.lead_attribution_touchpoints
-            WHERE company_id = p_company
-              AND occurred_at >= p_from
-              AND occurred_at <= p_to
-            GROUP BY meta_campaign_id
-        ) crm ON crm.meta_campaign_id = c.meta_campaign_id
-        WHERE c.company_id = p_company
-          AND (p_ad_account_id IS NULL OR c.ad_account_id = p_ad_account_id)
-          AND (p_campaign_id IS NULL OR c.meta_campaign_id = p_campaign_id)
-        ORDER BY spend DESC, crm_leads DESC
-    ) sub;
-
-    RETURN jsonb_build_object(
-        'overview', jsonb_build_object(
-            'spend', v_total_spend,
-            'impressions', v_total_impressions,
-            'clicks', v_total_clicks,
-            'ctr', v_ctr,
-            'meta_leads', v_total_meta_leads,
-            'crm_leads', v_total_crm_leads,
-            'attributed_leads', v_total_attributed_leads,
-            'qualified_leads', v_total_qualified_leads,
-            'cpl', v_cpl,
-            'cost_per_qualified', v_cost_per_qualified
-        ),
-        'campaigns', v_campaign_rows
-    );
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.get_meta_ads_performance_report FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_meta_ads_performance_report FROM anon;
-GRANT EXECUTE ON FUNCTION public.get_meta_ads_performance_report TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_meta_ads_performance_report TO authenticated;
-
 -- 11. ENABLE ROW LEVEL SECURITY
 ALTER TABLE public.meta_ad_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.meta_campaigns ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.meta_ad_sets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.meta_ads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.meta_lead_forms ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.meta_insights_daily ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.lead_attribution_touchpoints ENABLE ROW LEVEL SECURITY;
 
 -- Helper RLS policies for tenant isolation
@@ -585,16 +356,6 @@ CREATE POLICY rls_meta_ad_accounts_tenant ON public.meta_ad_accounts
     );
 
 CREATE POLICY rls_meta_campaigns_tenant ON public.meta_campaigns
-    FOR ALL
-    TO authenticated
-    USING (
-        company_id IN (
-            SELECT m.company_id FROM public.company_members m
-            WHERE m.user_id = (SELECT auth.uid()) AND m.status = 'ACTIVE'
-        )
-    );
-
-CREATE POLICY rls_meta_ad_sets_tenant ON public.meta_ad_sets
     FOR ALL
     TO authenticated
     USING (
@@ -624,16 +385,6 @@ CREATE POLICY rls_meta_lead_forms_tenant ON public.meta_lead_forms
         )
     );
 
-CREATE POLICY rls_meta_insights_daily_tenant ON public.meta_insights_daily
-    FOR ALL
-    TO authenticated
-    USING (
-        company_id IN (
-            SELECT m.company_id FROM public.company_members m
-            WHERE m.user_id = (SELECT auth.uid()) AND m.status = 'ACTIVE'
-        )
-    );
-
 CREATE POLICY rls_lead_attribution_touchpoints_tenant ON public.lead_attribution_touchpoints
     FOR ALL
     TO authenticated
@@ -647,8 +398,6 @@ CREATE POLICY rls_lead_attribution_touchpoints_tenant ON public.lead_attribution
 -- 12. TABLE GRANTS
 GRANT ALL ON TABLE public.meta_ad_accounts TO authenticated, service_role;
 GRANT ALL ON TABLE public.meta_campaigns TO authenticated, service_role;
-GRANT ALL ON TABLE public.meta_ad_sets TO authenticated, service_role;
 GRANT ALL ON TABLE public.meta_ads TO authenticated, service_role;
 GRANT ALL ON TABLE public.meta_lead_forms TO authenticated, service_role;
-GRANT ALL ON TABLE public.meta_insights_daily TO authenticated, service_role;
 GRANT ALL ON TABLE public.lead_attribution_touchpoints TO authenticated, service_role;

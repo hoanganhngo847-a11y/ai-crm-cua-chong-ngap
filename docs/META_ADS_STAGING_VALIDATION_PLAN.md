@@ -1,5 +1,7 @@
 # Meta Ads: discovered assets and isolated validation proposal
 
+> Scope update, 2026-10-30: [Meta Ads Lead Attribution Final Scope](META_ADS_LEAD_ATTRIBUTION_FINAL_SCOPE.md) supersedes reporting/dashboard, Insights, ad-set sync and deployment instructions below. This document is retained as historical implementation/review context; use the final-scope metadata fields, route names and migration manifest for release.
+
 Prepared 2026-10-30. **Planning and offline verification only. Live validation has not succeeded and has not been attempted for these assets.** No secrets were generated/read from Render, no production settings or migrations were changed, and no lead or campaign was created. The only source for the asset inventory below is the user's browser-based discovery; code tests use mocked HTTP responses.
 
 ## 1. Verified inventory and unverified relationships

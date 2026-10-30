@@ -534,12 +534,10 @@ BEGIN
     -- Names/status in a webhook are assertions, never evidence. Resolve all snapshots
     -- exclusively from server-synced records in this company and the same ad account.
     IF p_meta_ad_id IS NOT NULL THEN
-        SELECT c.meta_campaign_id,c.name,a.meta_ad_set_id,s.name,a.name,c.ad_account_id
+        SELECT c.meta_campaign_id,c.name,a.meta_ad_set_id,NULL::text,a.name,c.ad_account_id
         INTO v_resolved_campaign_id,v_resolved_campaign,v_resolved_ad_set_id,v_resolved_ad_set,v_resolved_ad,v_account_id
         FROM public.meta_ads a
         JOIN public.meta_campaigns c ON c.company_id=a.company_id AND c.meta_campaign_id=a.meta_campaign_id AND c.ad_account_id=a.ad_account_id
-        LEFT JOIN public.meta_ad_sets s ON s.company_id=a.company_id AND s.meta_ad_set_id=a.meta_ad_set_id
-            AND s.meta_campaign_id=c.meta_campaign_id AND s.ad_account_id=c.ad_account_id
         WHERE a.company_id=p_company AND a.meta_ad_id=p_meta_ad_id;
     ELSIF p_meta_campaign_id IS NOT NULL THEN
         SELECT c.meta_campaign_id,c.name,c.ad_account_id
@@ -563,7 +561,7 @@ BEGIN
                 AND (p_page_id IS NULL OR f.page_id=p_page_id);
     END IF;
     -- Keep unverified identifiers separately for reconciliation; never put them in
-    -- campaign report keys or snapshots when mapping failed.
+    -- verified campaign keys or snapshots when mapping failed.
     v_raw := COALESCE(p_ads_context_data,'{}'::jsonb)||jsonb_build_object('raw_meta',jsonb_build_object(
         'campaign_id',p_meta_campaign_id,'campaign_name',p_campaign_name,'ad_account_id',p_ad_account_id,
         'adset_id',p_meta_ad_set_id,'adset_name',p_ad_set_name,'ad_id',p_meta_ad_id,'ad_name',p_ad_name,
@@ -801,18 +799,13 @@ BEGIN
 
         -- Primary evidence: the ad identifier mapped through server-synced records.
         IF v_row.meta_ad_id IS NOT NULL THEN
-            SELECT c.meta_campaign_id, c.name, a.meta_ad_set_id, s.name, a.name, c.ad_account_id
+            SELECT c.meta_campaign_id, c.name, a.meta_ad_set_id, NULL::text, a.name, c.ad_account_id
             INTO v_campaign_id, v_campaign_name, v_ad_set_id, v_ad_set_name, v_ad_name, v_account_id
             FROM public.meta_ads a
             JOIN public.meta_campaigns c
               ON c.company_id = a.company_id
              AND c.meta_campaign_id = a.meta_campaign_id
              AND c.ad_account_id = a.ad_account_id
-            LEFT JOIN public.meta_ad_sets s
-              ON s.company_id = a.company_id
-             AND s.meta_ad_set_id = a.meta_ad_set_id
-             AND s.meta_campaign_id = c.meta_campaign_id
-             AND s.ad_account_id = c.ad_account_id
             WHERE a.company_id = p_company
               AND a.meta_ad_id = v_row.meta_ad_id;
             v_via_ad := v_campaign_id IS NOT NULL;

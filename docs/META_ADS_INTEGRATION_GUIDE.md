@@ -1,5 +1,7 @@
 # Hướng Dẫn Vận Hành & Tích Hợp Meta Ads & Lead Attribution
 
+> Scope update, 2026-10-30: [Meta Ads Lead Attribution Final Scope](META_ADS_LEAD_ATTRIBUTION_FINAL_SCOPE.md) supersedes reporting/dashboard, Insights, ad-set sync and deployment instructions below. This document is retained as historical implementation/review context; use the final-scope metadata fields, route names and migration manifest for release.
+
 Tài liệu này hướng dẫn chi tiết quy trình cấu hình, kết nối, đồng bộ Marketing API, tiếp nhận Lead Ads / Click-to-Messenger và giám sát hiệu quả quảng cáo trong AI CRM (`hoanganhngo847-a11y/ai-crm-cua-chong-ngap`).
 
 ---

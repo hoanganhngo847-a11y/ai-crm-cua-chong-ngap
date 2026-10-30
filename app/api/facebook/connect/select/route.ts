@@ -9,7 +9,7 @@ import {
   subscribeManagedPage,
 } from '@/features/omnichannel/facebook/connect';
 import { encryptToken } from '@/features/omnichannel/facebook/token-vault';
-import { syncCompanyMetaAds } from '@/features/omnichannel/facebook/marketing-sync';
+import { syncCompanyMetaAttribution } from '@/features/omnichannel/facebook/marketing-sync';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
@@ -168,7 +168,7 @@ export async function POST(request: Request) {
         connectedAdAccountsCount = accountRows.length;
 
         // Trigger background initial sync
-        syncCompanyMetaAds(actor.companyId, { token: session.userAccessToken }).then(result => {
+        syncCompanyMetaAttribution(actor.companyId, { token: session.userAccessToken }).then(result => {
           if (!result.success) console.warn('[meta-connect] initial_ad_sync_incomplete');
         }).catch(() => {
           console.warn('[meta-connect] initial_ad_sync_background_error');

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
+import { NextRequest } from 'next/server';
 import { fetchMetaPages, graphVersion, marketingVersion, redactMetaError } from '../../features/omnichannel/facebook/graph-api';
 import { listManagedAdAccounts, listManagedFacebookPages, parseTokenExpiration, exchangeCodeForUserAccessToken, exchangeLongLivedUserAccessToken, subscribeManagedPage, readPageSubscribedFields, isExplicitlyUnsupportedExchangeError } from '../../features/omnichannel/facebook/connect';
 import { decryptToken, encryptToken, rotateToken } from '../../features/omnichannel/facebook/token-vault';
 import { fetchMetaLeadDetails } from '../../features/omnichannel/facebook/lead-ads';
-import { fetchUserAdAccounts, syncCompanyMetaAds, syncCampaignsForAccount, syncAdsForAccount, syncAdSetsForAccount, syncDailyInsightsForAccount, syncLeadFormsForPage, validateAdAccountAccess } from '../../features/omnichannel/facebook/marketing-sync';
+import { fetchUserAdAccounts, syncCompanyMetaAttribution, syncCampaignsForAccount, syncAdsForAccount, syncLeadFormsForPage, validateAdAccountAccess } from '../../features/omnichannel/facebook/marketing-sync';
+import { GET as syncAttributionCron } from '../../app/api/cron/meta-ads-sync/route';
 
 const secret = 'EAA_dummy_sensitive_token+/=?';
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
@@ -32,7 +34,7 @@ test('migration versions are unique; applied funnel migration is unchanged; fina
     assert.ok(files.indexOf('20261030120000_meta_ads_attribution_rpc_security.sql') > files.indexOf('20261030110000_meta_ads_final_remediation.sql'));
 });
 
-test('all reporting and lead endpoints use independent supported versions and Bearer headers', async () => {
+test('all attribution and lead endpoints use independent supported versions and Bearer headers', async () => {
     process.env.META_GRAPH_VERSION = 'v25.0';
     process.env.META_MARKETING_VERSION = 'v26.0';
     assert.equal(graphVersion(), 'v25.0');
@@ -49,9 +51,7 @@ test('all reporting and lead endpoints use independent supported versions and Be
     try {
         await fetchUserAdAccounts(secret, graphFetch);
         await syncCampaignsForAccount('company', '123', secret, graphFetch);
-        await syncAdSetsForAccount('company', '123', secret, graphFetch);
         await syncAdsForAccount('company', '123', secret, graphFetch);
-        await syncDailyInsightsForAccount('company', '123', secret, graphFetch);
         await syncLeadFormsForPage('company', '123', secret, graphFetch);
         await validateAdAccountAccess('123', secret, graphFetch);
         await fetchMetaLeadDetails('999', secret, graphFetch);
@@ -63,7 +63,9 @@ test('all reporting and lead endpoints use independent supported versions and Be
             assert.equal(url.pathname.split('/')[1], graphOnly ? 'v25.0' : 'v26.0', url.pathname);
             assert.ok(url.searchParams.has('fields'));
         }
-        assert.equal(requests.filter(u => u.pathname.endsWith('/insights')).length, 2);
+        assert.ok(requests.every(u => !/\/(insights|adsets)$/.test(u.pathname)));
+        assert.equal(requests.find(u => u.pathname.endsWith('/campaigns'))?.searchParams.get('fields'), 'id,name,status');
+        assert.equal(requests.find(u => u.pathname.endsWith('/ads'))?.searchParams.get('fields'), 'id,name,campaign_id,status');
         const scopeSource = readFileSync('app/api/facebook/connect/start/route.ts', 'utf8');
         assert.doesNotMatch(scopeSource, /ads_management|pages_manage_ads/);
         assert.match(scopeSource, /ads_read,leads_retrieval/);
@@ -91,7 +93,7 @@ test('pagination completes beyond ten pages; truncation, malformed pages, hostil
     await assert.rejects(fetchMetaPages(url, secret, async () => Response.json({ data: [], paging: { next: String(url) } })), /PAGINATION_CYCLE/);
     await assert.rejects(fetchMetaPages(url, secret, async () => Response.json({ data: [], paging: { next: 'https://attacker.invalid/steal' } })), /INVALID_META_PAGINATION_URL/);
     await assert.rejects(fetchMetaPages(url, secret, async () => Response.json({ error: { message: secret } })), /INVALID_PAGE/);
-    for (const sync of [syncCampaignsForAccount, syncAdsForAccount, syncAdSetsForAccount, syncDailyInsightsForAccount]) {
+    for (const sync of [syncCampaignsForAccount, syncAdsForAccount]) {
         await assert.rejects(sync('company', '123', secret, async input => {
             const url = new URL(String(input));
             const page = Number(url.searchParams.get('after') || '0') + 1;
@@ -106,6 +108,89 @@ test('pagination completes beyond ten pages; truncation, malformed pages, hostil
             return Response.json({ data: [], paging: { next: `${url.origin}${url.pathname}?after=${++page}` } });
         };
         try { await assert.rejects(list(secret), /PAGINATION_LIMIT/); } finally { globalThis.fetch = original; }
+    }
+});
+
+test('metadata sync stores only attribution fields even when Graph returns budgets, creative and performance data', async () => {
+    const original = globalThis.fetch;
+    const writes: Array<{ table: string; rows: Record<string, unknown>[] }> = [];
+    globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input));
+        assert.equal(init?.method, 'POST');
+        assert.equal(url.hostname, '127.0.0.1');
+        writes.push({ table: url.pathname.split('/').at(-1)!, rows: JSON.parse(String(init?.body)) });
+        return new Response(null, { status: 201 });
+    };
+    const graph: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        assert.equal(init?.method || 'GET', 'GET');
+        assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${secret}`);
+        assert.ok(!/\/(insights|adsets)$/.test(url.pathname));
+        return Response.json({ data: [{ id: '123', name: 'Campaign A', campaign_id: '456', status: 'ACTIVE',
+            daily_budget: '10000', creative: { body: 'Unused' }, spend: '99', impressions: '1000', clicks: '5' }] });
+    };
+    try {
+        await syncCampaignsForAccount('tenant-a', '123', secret, graph);
+        await syncAdsForAccount('tenant-a', '123', secret, graph);
+        await syncLeadFormsForPage('tenant-a', 'page-a', secret, graph);
+        assert.deepEqual(writes.map(w => w.table), ['meta_campaigns', 'meta_ads', 'meta_lead_forms']);
+        for (const { rows } of writes) {
+            assert.equal(rows[0].company_id, 'tenant-a');
+            for (const key of ['spend','impressions','clicks','ctr','cpm','cpl','daily_budget','lifetime_budget','creative','creative_body','questions']) {
+                assert.equal(key in rows[0], false, key);
+            }
+        }
+        assert.equal(writes[1].rows[0].meta_campaign_id, '456');
+        assert.equal(writes[2].rows[0].page_id, 'page-a');
+    } finally { globalThis.fetch = original; }
+});
+
+test('scheduled metadata sync retries each tenant once, without insights or ad-set requests', async () => {
+    const original = globalThis.fetch;
+    const oldSecret = process.env.CRON_SECRET;
+    const oldSystem = process.env.META_SYSTEM_USER_TOKEN;
+    process.env.CRON_SECRET = 'dummy-final-scope-cron-secret';
+    process.env.META_SYSTEM_USER_TOKEN = secret;
+    const retries: string[] = [];
+    const paths: string[] = [];
+    globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input));
+        paths.push(url.pathname);
+        if (url.hostname === 'graph.facebook.com') {
+            assert.equal(init?.method || 'GET', 'GET');
+            assert.ok(!/\/(insights|adsets)$/.test(url.pathname));
+            return Response.json(/\/(campaigns|ads)$/.test(url.pathname) ? { data: [] } : { id: 'act_123' });
+        }
+        if (url.pathname.endsWith('/meta_ad_accounts')) {
+            if (url.searchParams.get('select') === 'company_id') return Response.json([{company_id:'tenant-a'},{company_id:'tenant-a'},{company_id:'tenant-b'}]);
+            assert.ok(['eq.tenant-a','eq.tenant-b'].includes(url.searchParams.get('company_id') || ''));
+            return Response.json([{ ad_account_id: 'act_123', account_status: 1 }]);
+        }
+        const args = JSON.parse(String(init?.body || '{}'));
+        if (url.pathname.endsWith('/acquire_meta_ad_account_sync_lease')) return Response.json('dummy-lease');
+        if (url.pathname.endsWith('/get_meta_ad_account_token')) return Response.json([]);
+        if (url.pathname.endsWith('/release_meta_ad_account_sync_lease')) return Response.json(true);
+        if (url.pathname.endsWith('/retry_pending_lead_attribution')) {
+            retries.push(args.p_company);
+            return Response.json({ resolved: 1, remaining: 0 });
+        }
+        throw new Error(`Unexpected test request ${url.pathname}`);
+    };
+    try {
+        const denied = await syncAttributionCron(new NextRequest('http://localhost/api/cron/meta-ads-sync'));
+        assert.equal(denied.status, 401);
+        assert.equal(paths.length, 0);
+        const response = await syncAttributionCron(new NextRequest('http://localhost/api/cron/meta-ads-sync', { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } }));
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.deepEqual(retries, ['tenant-a','tenant-b']);
+        assert.deepEqual(body.attribution_retries, { 'tenant-a': { resolved: 1, remaining: 0 }, 'tenant-b': { resolved: 1, remaining: 0 } });
+        assert.equal(paths.filter(p=>p.endsWith('/campaigns')).length, 2);
+        assert.equal(paths.filter(p=>p.endsWith('/ads')).length, 2);
+    } finally {
+        globalThis.fetch = original;
+        if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret;
+        if (oldSystem === undefined) delete process.env.META_SYSTEM_USER_TOKEN; else process.env.META_SYSTEM_USER_TOKEN = oldSystem;
     }
 });
 
@@ -128,7 +213,7 @@ test('URL, upstream response, transport, and database errors never leak access t
             if (url.includes('graph.facebook.com')) return Response.json(url.includes('/campaigns') ? { data: [{ id: 'campaign', name: secret }] } : { id: 'act_123' });
             throw new Error('unexpected');
         };
-        const result = await syncCompanyMetaAds('company', { token: secret });
+        const result = await syncCompanyMetaAttribution('company', { token: secret });
         assert.equal(result.success, false);
         assert.equal(result.accountsFailed, 1);
         const all = JSON.stringify([logs.entries, result]);
@@ -159,12 +244,12 @@ test('account result counts reflect success, failures, missing credentials, leas
         if (url.pathname.endsWith('release_meta_ad_account_sync_lease')) return Response.json(id !== 'releasefail');
         if (url.hostname === 'graph.facebook.com') {
             if (url.pathname.endsWith('/act_expired')) return Response.json({ error: { code: 190 } }, { status: 400 });
-            return Response.json(/\/(campaigns|adsets|ads|insights)$/.test(url.pathname) ? { data: [] } : { id: 'act_good' });
+            return Response.json(/\/(campaigns|ads)$/.test(url.pathname) ? { data: [] } : { id: 'act_good' });
         }
         throw new Error(`Unexpected test fetch ${url.pathname}`);
     };
     try {
-        const result = await syncCompanyMetaAds('company');
+        const result = await syncCompanyMetaAttribution('company');
         assert.equal(result.success, false);
         assert.equal(result.accountsSynced, 1);
         assert.equal(result.accountsFailed, 6);
@@ -174,9 +259,9 @@ test('account result counts reflect success, failures, missing credentials, leas
         assert.equal(result.accountResults.find(a => a.adAccountId === 'leaserpc')?.error, 'SYNC_LEASE_ACQUISITION_FAILED');
         assert.match(result.accountResults.find(a => a.adAccountId === 'releasefail')?.error || '', /FINALIZATION_FAILED/);
         selected = ['good'];
-        assert.equal((await syncCompanyMetaAds('company')).success, true);
+        assert.equal((await syncCompanyMetaAttribution('company')).success, true);
         selected = [];
-        const empty = await syncCompanyMetaAds('company');
+        const empty = await syncCompanyMetaAttribution('company');
         assert.equal(empty.success, false);
         assert.equal(empty.accountsSynced, 0);
         assert.equal(empty.error, 'NO_AD_ACCOUNTS');

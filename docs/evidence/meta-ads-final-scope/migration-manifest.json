@@ -1,0 +1,779 @@
+{
+  "sourceCommit": "0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f",
+  "executionAuthorized": false,
+  "historicalManifest": "docs/evidence/meta-ads-pre-destructive/ledger-readiness-plan.json",
+  "historicalManifestSha256": "4c67724d9ad0e19d95c492fe79a5ee3a6ed8bd43dddbbecfd75d64e991cb250f",
+  "deploymentHistoryEvidence": "docs/evidence/meta-ads-final-scope/deployment-history-check.json",
+  "changedUnreleasedSources": [
+    {
+      "file": "20261030090000_meta_ads_lead_attribution.sql",
+      "previousSha256": "420512ade71d9f1c48dd3876a80d54108e5b2024b09d2f38522aa653441cdfa6",
+      "sha256": "f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a"
+    },
+    {
+      "file": "20261030100000_meta_ads_hardening.sql",
+      "previousSha256": "467a791a8b910d31ff19d4b3b3af5a9490d4865ba5b6ef1d0178b45c00424830",
+      "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d"
+    },
+    {
+      "file": "20261030110000_meta_ads_final_remediation.sql",
+      "previousSha256": "f554d787789a15515bf0b80403d45ec4a3c100ac8365450ecb54d14cb150dbe6",
+      "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a"
+    },
+    {
+      "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+      "previousSha256": "70b999c50492aecc8c443a6cc92a64e8bc9099c0bc2998447e60510ede7b289a",
+      "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153"
+    }
+  ],
+  "allSources": [
+    {
+      "file": "20260914000001_initial_schema.sql",
+      "sha256": "a877e0e3fdf3b127c093b498fcc866b3df5ef37c4972dc778650e6a2d248c920",
+      "statementCount": 159,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260915000001_rls_foundation.sql",
+      "sha256": "447cee608bdcad83c3deac07f967ae2116c2ae39cba9dd557c00ea1119632794",
+      "statementCount": 165,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260915000002_trusted_server_private_rpc.sql",
+      "sha256": "e432723499a195d8e552826782e702799739ad0f60b64c94b3ddce9a6f752712",
+      "statementCount": 12,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260916000001_private_call_transcripts.sql",
+      "sha256": "1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1",
+      "statementCount": 12,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260916000002_crm_atomic_transactions.sql",
+      "sha256": "064d30a05af075e1dbd44d140f54fbb8382926ec06bce0c57717068096844709",
+      "statementCount": 12,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260916000003_inbox_atomic_persistence.sql",
+      "sha256": "5e3b6a36625641670372e2eb2d148af920e5949a4d48bbf455246d98fa5392c3",
+      "statementCount": 12,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260917000001_0005_survey_atomic_completion.sql",
+      "sha256": "86109760fe7073b6965e1e3f7f4a4d0450209db36b111c9b22c2d449d324367d",
+      "statementCount": 8,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260920000002_operations_atomic_rpcs.sql",
+      "sha256": "ae698b8da10c116fdc7907bb709d2921cd5917c5480e09a629c2296c514180f7",
+      "statementCount": 14,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260920000005_han_facebook_website.sql",
+      "sha256": "f085ffb0b87f10a27401dafac30603339db2f47888acc113dacde1bdff068841",
+      "statementCount": 27,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20260921000001_voice_media_pipeline.sql",
+      "sha256": "1931ef7d8c695ee3c9a6baa9bf37acd0476409e72883fbd1425661a91830be3c",
+      "statementCount": 20,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260921000002_openai_realtime.sql",
+      "sha256": "b2c52102111284f96200dbf229ddcb50ae159fd0dabec55e985cd8a6c88d78c9",
+      "statementCount": 9,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260922000001_response_sla_windows.sql",
+      "sha256": "a7c28bbe0f7dec02af5ee2e55c75d936fafc42ed7d5201ef1ba2e36a6aef975f",
+      "statementCount": 29,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260922000002_ai_analysis_worker.sql",
+      "sha256": "07574fc776948c4c9c4bfaa4d43e7e722c93ee764e9d1ad5470445587c07ac16",
+      "statementCount": 15,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260922000003_voice_security_hardening.sql",
+      "sha256": "2accd05b59e7b6724646cca20085be49982e1215e952fb7a6a48202e5350ae7a",
+      "statementCount": 42,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260923000001_sales_style_learning.sql",
+      "sha256": "00f1cfaba26f53b7bc2e0c4fd54f8044fc7703ef6524b5621368ee6b34d20fca",
+      "statementCount": 16,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260923000002_sales_style_activation.sql",
+      "sha256": "3b31a8860d1e23a6619300dae95657977d38ef8845cc53b11d9f4c75df4e045c",
+      "statementCount": 19,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260923000003_analytics_dashboard.sql",
+      "sha256": "4b53ad99e047c74addd9b29607fb5bbf6876c9f5ac5ea01bf3b43e96bce0ea76",
+      "statementCount": 21,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260924000001_survey_integrity_hardening.sql",
+      "sha256": "95d43784ebe31b59035513208f7ebbbbcd24561e465610c8742d41b98865efb6",
+      "statementCount": 27,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20260925000001_voice_p0_hardening.sql",
+      "sha256": "19faacd37a58ce59445e356c36036220726e45160150bbf67ee24cac3968125f",
+      "statementCount": 47,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260927000001_inbox_outbox_and_inbound_atomic.sql",
+      "sha256": "331c98824fe60db077d680ffc28a10dce4b1bcfe5d152ff00abb8362579acf00",
+      "statementCount": 34,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260928000001_operations_p0_hardening.sql",
+      "sha256": "edab37eda7f26ce4a398348232014a113a90a2075579e22cfbf750f053cdfa70",
+      "statementCount": 20,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260928000002_tv9_post_merge_hardening.sql",
+      "sha256": "1a1d1b2e1b1446a4d4bac4339acd0c2684e702ab57a2e9415b7938aca6233fe5",
+      "statementCount": 44,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929120001_zalo_ingress_and_care.sql",
+      "sha256": "11dde63a28976695d23a8d6ee64d6cdd6c4c1e11f6624d3ff99562f8f5c57307",
+      "statementCount": 17,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929120002_zalo_hardening_remediation.sql",
+      "sha256": "c7221c58fc6d9140f0afde2f4d6f68dd9e940cb07fa9f54836ebe04b9a33ab73",
+      "statementCount": 26,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929120003_zalo_round3_remediation.sql",
+      "sha256": "c0a5418a9e7b7eaf106d88d058985afe56df18409b9ff26f7bc52bb3165fe1f4",
+      "statementCount": 59,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929220001_pricing_payment_contract_base.sql",
+      "sha256": "eb0d3f9863de3a25182e40993138f940226a40b3fc966cfc1ad47796ec718517",
+      "statementCount": 8,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929220002_commercial_atomic_rpcs.sql",
+      "sha256": "6baf932f3152fb8235c5d2f110e3c903a8bfd9e1aa4499dfadb504ba08bc27d6",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929220003_commercial_security_hardening.sql",
+      "sha256": "f077183bc60c0355f5aba4f557bd4626ab3afdbfe1dfc51309dfa136b268ebc9",
+      "statementCount": 15,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260929220004_contract_storage_hardening.sql",
+      "sha256": "7347666e02e2714e375062733f39b1d8a101724fa70cf6e03a4f6d9faa7b5707",
+      "statementCount": 9,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260930000001_p0_security_acl_hardening.sql",
+      "sha256": "7e25ceb675ae8ee0a16ff611166668efb94bbab4cfaf0e9efd285929485a89ab",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20260930120001_p1_backend_remediation.sql",
+      "sha256": "a05f7bb2a7f62af0022c0b3e18139fb7e7bf707d73b2b2e89a94b73c56bf8177",
+      "statementCount": 10,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001100001_ai_interaction_raw_content_rpc.sql",
+      "sha256": "d00b1c74694c0d3bc9a98697d9bd6782c4ab2b0588117364a01f570748a36f67",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001140001_ai_outbound_delivery_atomic.sql",
+      "sha256": "5d817307a9e5cc852eeb8ea0918ea179e610cf6636de7e00c4ab4e72537b10bd",
+      "statementCount": 21,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001150001_ai_durable_dispatch_hardening.sql",
+      "sha256": "45509184847e2ca21a41eb4d8c9bbe95ec0dac2bb093d2053d22c4d82bca7319",
+      "statementCount": 25,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001160001_ai_sale_fencing_linearization.sql",
+      "sha256": "3726836f2bfd48f41ddce5237dd68703069ee91c59cf760005939b3ac2792272",
+      "statementCount": 31,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001170001_cross_actor_dispatch_linearization.sql",
+      "sha256": "dfbcef1a89b428030caa274357f0bcdd1196890df5e3ea21ac3c980255acb0ad",
+      "statementCount": 49,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001180001_sale_same_actor_dispatch_concurrency.sql",
+      "sha256": "96cd5b94790c1c521a2b261d512bcf0afa7ce3b09ace72113804c7e423b360c9",
+      "statementCount": 29,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001190001_provider_accepted_irreversibility_and_dispatch_recovery.sql",
+      "sha256": "6b04dba5dc958a2b598fce216838c41b432a5ad3d9dac5eba3b82f0c76890e1b",
+      "statementCount": 20,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261001200001_zalo_uncertain_reconciliation_authority_and_care_unknown.sql",
+      "sha256": "f357d321fedfb44addbd65f2dfa0642d6ddcbfbd49268d2918fcaeaa10a57f3e",
+      "statementCount": 15,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261002100001_han_finish_send_read_receipt_schema_fix.sql",
+      "sha256": "76e0eb376411752f6611bbedb5c5e51342d8f659af5cbc53a4d1282febf7ef59",
+      "statementCount": 5,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+      "sha256": "dfb4dd29bfb840cc7a67cf8a620ef1610ee56cff94810943f123004814cf4923",
+      "statementCount": 7,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261004180001_installation_product_journey.sql",
+      "sha256": "8df54245de76fd04532a95131ac8c1cf8ade5cc94b0f4866670de42d0b80619f",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+      "sha256": "907e8752aca9d81dfe144fe6ae0ed92f1bbb969ba561effaba6005e7944f2f57",
+      "statementCount": 13,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261005100001_staging_storage_bucket_provisioning.sql",
+      "sha256": "79484c80a80501dadd3c9ecc3c55485dcace6ce61656dd24c0f47c2e93e9a958",
+      "statementCount": 18,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261006143500_service_role_core_acl_restore.sql",
+      "sha256": "c4db2112b772ea7bdee2aff6f0bf480d10f3e8c94055be2162c3ed3ebf8cadf2",
+      "statementCount": 2,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261006210001_auth_runtime_select_acl.sql",
+      "sha256": "5b717a01ade890ff604622d0c5ecc9e06a3b89b70ad584d9337bf9ca189a53b0",
+      "statementCount": 2,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261007172000_inbox_audit_actor_compatibility.sql",
+      "sha256": "c4ecb27d275d12a14ba19115d9b802bf9632f59665604649d7d2e48368f43e5c",
+      "statementCount": 4,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261012100001_facebook_browser_inbox_sync.sql",
+      "sha256": "de5576f22489484d4c58e3581bba29d8284c66595e39dd60ea53bedd98650463",
+      "statementCount": 5,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261012110001_facebook_browser_outbox_queue.sql",
+      "sha256": "0a517eccb650d0b62153f96f099f941fe8a1caf17d2aeed4a5bd06e4703ce1d6",
+      "statementCount": 30,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261012113001_facebook_browser_outbox_hardening.sql",
+      "sha256": "f5734161275a0c224d60b50ec1a283ed355ad5c80832b6331c739f9018ddd989",
+      "statementCount": 11,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261013100001_update_facebook_customer_display_name.sql",
+      "sha256": "c0ed3671b5ddc8f8987902d06a806b55ccb48013815d498f2956e5e3874fb2bc",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261013180001_inbox_realtime_publication.sql",
+      "sha256": "7d7b6ebcf0559ccd32bb31553e568481d57bb713b443682248fa9e0e97268e23",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261013230001_dual_fingerprint_idempotency.sql",
+      "sha256": "0407860cb48a8a08bb69d9c972fe49b3ae5be606681a53e36a55589867ebf91d",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261016180001_meta_user_data_deletion.sql",
+      "sha256": "ba083a8c8915b2ab6b5984d036573a7c0567fe09b03b296b6c1a985d304f6231",
+      "statementCount": 39,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261018221000_zcajs_observed_outbound.sql",
+      "sha256": "fbbee8aad4e9e7430c3aaf750a1d1fde2cc97087c473389b76e32523fdca4139",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261019073443_voice_business_app_calls.sql",
+      "sha256": "cfb17864e1945ef0611f0dadd2d62bec6c183619a8d003705c4cc9672d2d4aeb",
+      "statementCount": 22,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020073819_zalo_personal_recordings.sql",
+      "sha256": "66d875f52bd40868673e30a509a4c95204bf892a1b0643eae38739fe01f06daf",
+      "statementCount": 32,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020203000_zalo_outbound_call_requests.sql",
+      "sha256": "ce6d365c7619717c929c6fe19059ffd5dc70b9f0e40b76170910e62bbb074096",
+      "statementCount": 19,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020220000_zalo_agent_heartbeat.sql",
+      "sha256": "514e609ec78f5f3451e674a52201a117f1b7bb12caceb563de2d6f0d248c43e5",
+      "statementCount": 8,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020220001_fix_outbound_customer_metadata.sql",
+      "sha256": "50ce1aa46a086df6a037af78b692d9e66b7cb5d4c6a5530367dc0b752b2af08c",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020220003_restore_outbound_delivery_status_contract.sql",
+      "sha256": "e1dd8da38a96bcbf4bf8b1c20cb8a1b1a5ea3355aff8dc666128f6ac23d6493c",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020220004_restore_rpc_only_domain_acls.sql",
+      "sha256": "addbdae17a01186cf5b1d9758160834059db37304b7cbe545114c50624ab66b2",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261020220005_zalo_outbound_recording_hardening.sql",
+      "sha256": "163fa55a022d00b4dfd9a4c2601cc0ad00baf06315c2de699c39a1e4c19aa45c",
+      "statementCount": 21,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021120000_zalo_call_transcription.sql",
+      "sha256": "440f92007fb803f79aceecbed0a31b3336c89921ee461690441788efeb61b2dd",
+      "statementCount": 40,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021150000_zalo_transcription_provider_model.sql",
+      "sha256": "61a570d59fca43a3944c50cb0f593ab7f9833d164700daf7f5d16a04e3d33095",
+      "statementCount": 5,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021160000_zalo_targeted_transcription_claim.sql",
+      "sha256": "b069be0310755c1c3bb1904838331540987b573af03c2939c5b2055339a05468",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021160001_zalo_bulk_transcription_lease_recovery.sql",
+      "sha256": "5463a7e93e1d615adb04ff27b86c6fd5430fb8e24f6dbd679876478430e91376",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021200000_zalo_call_ai_summaries.sql",
+      "sha256": "387a7a9dfa21f18d70d27aac18170f046ba996eb293fa55761ff16543adda9f6",
+      "statementCount": 34,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261021200001_zalo_summary_failure_parent_sync.sql",
+      "sha256": "e8fdca995dab906dd22a176a0658a06396e9232fc5e8ac9c01024f4de2da49f7",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261022090000_gemini_api_key_pool.sql",
+      "sha256": "2f572f563c37df842478aefbcd627ff840f238194707be7063a1a726f60a056e",
+      "statementCount": 11,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261022130000_zalo_transcription_channel_checkpoints.sql",
+      "sha256": "d61e8e8fe58112e2a1ab24b180e0b9fc1ae4e3c0b6236b3bf1e6b18b229715d8",
+      "statementCount": 10,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261022170000_ai_brain_memory_foundation.sql",
+      "sha256": "06035321688855a33d72f975999902641d8791a0f469f9b88b21511df27caf8b",
+      "statementCount": 20,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261022173000_ai_brain_shadow_foundation.sql",
+      "sha256": "da81673756d38e3385a792ad92fa92c6a9a57b5c263d6902a4d8bed315713840",
+      "statementCount": 26,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261022180000_ai_brain_zalo_live_delivery.sql",
+      "sha256": "eacb41571e7daae21c5e29609a9135afd8ae185722731df73ecfd7395929d9c1",
+      "statementCount": 23,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023010000_ai_brain_live_zalo_scheduler.sql",
+      "sha256": "6ba94ba6ed0651d0fcc1ffc828a048d93a7cc8f90ba23d093168238b5b1c88a2",
+      "statementCount": 1,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023100000_ai_handover_workflow.sql",
+      "sha256": "90f3a848091691d06aa93c744121f10de6e44bef79f834f42c7c51bd9b466845",
+      "statementCount": 23,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023140000_ai_control_center_foundation.sql",
+      "sha256": "af6977c568db9671c1daefa8b9ca47be74ccadc90482df769bad82d98fbb7741",
+      "statementCount": 22,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023150000_ai_monitoring_alerting.sql",
+      "sha256": "38370d338e5856e8762e24f3547fc824f1a62b002b4a449f28e29d5c61cf97f5",
+      "statementCount": 23,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023160000_ai_brain_messenger_live_delivery.sql",
+      "sha256": "d9a9760714caa8297f585e72d9f56a1eef16f291495131b1049c2699f1644fda",
+      "statementCount": 9,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023170000_ai_brain_messenger_live_canary_and_scheduler.sql",
+      "sha256": "14a7d10522275f8525829572e257c8717b804e5318c8ed8fe523f74d145eff8a",
+      "statementCount": 35,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023180000_ai_channel_scheduler_health_rpc.sql",
+      "sha256": "0d5f1c555face83421a9d6b9ad48deb36f353dbfde0fdad9bdf0366c3e0e0ef4",
+      "statementCount": 5,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023190000_ai_brain_tenant_isolation_hardening.sql",
+      "sha256": "fe59e14900b25c93c2723522c3a0f34dcc85530b5533b32a686265665d28d0f3",
+      "statementCount": 24,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261023200000_customer_360_ai_dossier.sql",
+      "sha256": "1fad07811c7eead28fc4c65eb2166c071455eb2e1ac4879529066f3adf47efb6",
+      "statementCount": 40,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261024041037_bulk_messaging_campaigns.sql",
+      "sha256": "275c8b83bcefdfa69b81b96399cc4d79e5100cb5103d970f8b92384bec3bc76b",
+      "statementCount": 36,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261024233000_campaign_authoring_without_delivery.sql",
+      "sha256": "c8871a246f99748db0b9a1e17a1db2f848b8c421805b5fbd5990a47cc2cf04d8",
+      "statementCount": 13,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025021000_zalo_personal_contact_linking.sql",
+      "sha256": "88de59b35e9cb35d1ab3db80954e50f42e0aef05ed7d9b4ca56a462c26c5b191",
+      "statementCount": 15,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025022000_zalo_personal_campaign_5min.sql",
+      "sha256": "8bd90ad5ee1cb87360e4c5db13335c123c8f002c7a3050f2c360767296143dab",
+      "statementCount": 31,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025022500_zalo_personal_strict_sender_spacing.sql",
+      "sha256": "747cf3c1e3192ee060eb1305325a79df92db143ba5698e4ff06c1897a15f8c58",
+      "statementCount": 6,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025023000_zalo_personal_conversation_identity.sql",
+      "sha256": "a18cb57a9dae01fdfba84d06a5cadafdf62568b2df94aaf61a39e5037e9a6e0f",
+      "statementCount": 8,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025051000_zalo_personal_zero_touch_customer_sync.sql",
+      "sha256": "78710749dd0bd900390b19eb6462f88d7bfc6d0b6658f051800f0e506249a1ca",
+      "statementCount": 10,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025062000_zalo_personal_legacy_identity_upgrade.sql",
+      "sha256": "d74628bee2a43d9aac8eb82cb2aafa4e11def08edb45c78d265d61d0e9ab3eec",
+      "statementCount": 7,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261025124107_zalo_brain_sla_and_terminal_failures.sql",
+      "sha256": "fcb754511d24a70ecfa0ba406b0fc01b931f980b286ee3f29c96c0ffdbdc917c",
+      "statementCount": 12,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261025160000_zalo_brain_one_minute_sla.sql",
+      "sha256": "cd6d6beae494fd3b32340b3adb49d310c353bbd9a33fca5503c18a9a8da8abf5",
+      "statementCount": 11,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261026075500_zalo_auto_link_unique_customer.sql",
+      "sha256": "fdf72b3443507bed6597b66c8f5b9ba319a8b34707df6de09789a4cf9ab8dd87",
+      "statementCount": 4,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261026083543_zalo_personal_live_voice_bridge.sql",
+      "sha256": "6a45f3aefdf87b452dcf45be488b7a9e05bf50335d3d57806220a98905c704dd",
+      "statementCount": 13,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261026092307_zalo_personal_inbound_live_voice.sql",
+      "sha256": "47ae3f71512856d2b90b097e5273f2a1baeba46ae204ebf96df5d51518259236",
+      "statementCount": 7,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261026111500_zalo_personal_inbound_live_voice_hardening.sql",
+      "sha256": "888fe930c822f60deb3aaf320ad78d3204b9a6ecc8e0413024f495373f5ec3d5",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261027130000_zalo_display_name_repair.sql",
+      "sha256": "7faa5693fe813633199b4d7e2480acf355fdb23f50fce41dde123e652b123c52",
+      "statementCount": 16,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261027140000_botcake_messenger_page_and_du_hoc_ai.sql",
+      "sha256": "c2c759b1c6b40bb4aabe52b3b754aceea23e7790fa1f81d8998a4ef02e53ba7c",
+      "statementCount": 16,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261027183000_han_ingest_outbound.sql",
+      "sha256": "ec1832174424b4b74e6b4ebd3e7dd69810c7c945651b3977e7168941d3110918",
+      "statementCount": 6,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261027184500_facebook_sync_checkpoints.sql",
+      "sha256": "ca296a49adbafd7e81a252a5fdac3fcdf5be454c33fec3aa14d63e2392b8059e",
+      "statementCount": 10,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261027210000_study_abroad_stages.sql",
+      "sha256": "56d8831dd92fbde6031dcc451926512788aae3183f5274e20e07c2790ee760e8",
+      "statementCount": 2,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261028120000_canary_allowlist_foundation_backfill.sql",
+      "sha256": "3266f4934062bee1acd65b4b8de911c49b29a2c3a5a8cc3acf11ce7d01d79a04",
+      "statementCount": 15,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261028130000_customer_funnel_six_stages.sql",
+      "sha256": "44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0",
+      "statementCount": 64,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql",
+      "sha256": "98bd13f4c058bcc8e40992a2eb0b9bacd633a76af7ba2eac9e3a095912506ba8",
+      "statementCount": 19,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261028140000_fix_messenger_confidence_and_sla_resolution.sql",
+      "sha256": "684efe87b6170086cb0158eb6c47c116fc43bed5d081e6e1e1431351e9ee880e",
+      "statementCount": 6,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261028150000_always_reply_messenger_fallback_and_no_pause.sql",
+      "sha256": "d46e8361c1d14f5dd3da5a4bde54424d6a645a29bd4d36c1be487e2d9f482b83",
+      "statementCount": 4,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261028160000_c360_editable_notes_and_sale_name.sql",
+      "sha256": "ffc33cb11b597d9f2b810018e583879a0b19feb3d7ebc2052a1e891db5802084",
+      "statementCount": 8,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261029100000_c360_channel_outreach.sql",
+      "sha256": "16f4d3b12c7dff99ebbbf4d279268d8fdcc2fff788586ac7f14a6ba97004c767",
+      "statementCount": 14,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261029120000_zcajs_groups_and_zalo_ai_pause.sql",
+      "sha256": "4ae0402a7303104dd4bc0539028ab25ce8740f63c4911c0af4e1a8137a53b8e3",
+      "statementCount": 11,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261029154354_zalo_group_message_authors.sql",
+      "sha256": "6a2fabb52faf11bfdcdfd3c7302e8db1bf949404dae6fe5a77db8882b8396170",
+      "statementCount": 13,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261029154410_zcajs_history_ingest.sql",
+      "sha256": "83d9bf69f46106b29f42f234b5234573122d959525378b5e8fae9385a42afd70",
+      "statementCount": 5,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+      "sha256": "f9e135d22b21e9a1812a275759eadba0fbdfe5c2af16d28c3508abd2b6627dd4",
+      "statementCount": 17,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261029164514_zalo_account_onboarding.sql",
+      "sha256": "d14a1d49512296e4ce74a132fcd84951c1a227ac4233ddde4ed3980005ae2ae6",
+      "statementCount": 25,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261029170648_zalo_account_guard_privileges.sql",
+      "sha256": "ec57b60e2538c89f47ff337f0259f51666874d4ae23be817f735ee6bd7fac4bc",
+      "statementCount": 2,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261030090000_meta_ads_lead_attribution.sql",
+      "sha256": "f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a",
+      "statementCount": 35,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261030100000_meta_ads_hardening.sql",
+      "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d",
+      "statementCount": 47,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261030110000_meta_ads_final_remediation.sql",
+      "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
+      "statementCount": 40,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261030120000_meta_ads_attribution_rpc_security.sql",
+      "sha256": "a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1",
+      "statementCount": 4,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261030120001_staging_function_security_hardening.sql",
+      "sha256": "cace68d93fa4f681b9895c9fd2172d13b58985703e4f678ae10fce6dc9e356ef",
+      "statementCount": 3,
+      "transactionMode": "NONE"
+    },
+    {
+      "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+      "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153",
+      "statementCount": 28,
+      "transactionMode": "OUTER"
+    }
+  ],
+  "originalMetaSources": [
+    {
+      "file": "20261030090000_meta_ads_lead_attribution.sql",
+      "sha256": "420512ade71d9f1c48dd3876a80d54108e5b2024b09d2f38522aa653441cdfa6"
+    },
+    {
+      "file": "20261030100000_meta_ads_hardening.sql",
+      "sha256": "467a791a8b910d31ff19d4b3b3af5a9490d4865ba5b6ef1d0178b45c00424830"
+    },
+    {
+      "file": "20261030110000_meta_ads_final_remediation.sql",
+      "sha256": "f554d787789a15515bf0b80403d45ec4a3c100ac8365450ecb54d14cb150dbe6"
+    },
+    {
+      "file": "20261030120000_meta_ads_attribution_rpc_security.sql",
+      "sha256": "a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1"
+    },
+    {
+      "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+      "sha256": "70b999c50492aecc8c443a6cc92a64e8bc9099c0bc2998447e60510ede7b289a"
+    }
+  ]
+}

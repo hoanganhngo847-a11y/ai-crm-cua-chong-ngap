@@ -1,5 +1,7 @@
 # PR #139 final remediation — release remains blocked
 
+> Scope update, 2026-10-30: [Meta Ads Lead Attribution Final Scope](META_ADS_LEAD_ATTRIBUTION_FINAL_SCOPE.md) supersedes reporting/dashboard, Insights, ad-set sync and deployment instructions below. This document is retained as historical implementation/review context; use the final-scope metadata fields, route names and migration manifest for release.
+
 No merge, Render deployment, production migration, or production secret mutation is authorized. An independent final review is required. Local and mocked endpoint checks are not live Meta acceptance.
 
 ## Migration history
