@@ -1,0 +1,3606 @@
+{
+  "note": "All migration contents read; lexical review candidates include function bodies and conditional operations, not an execution allowlist. Clean sequential PostgreSQL replay validates actual object dependencies.",
+  "migration_count": 116,
+  "duplicate_versions": [],
+  "migrations": [
+    {
+      "file": "20260914000001_initial_schema.sql",
+      "sha256": "a877e0e3fdf3b127c093b498fcc866b3df5ef37c4972dc778650e6a2d248c920",
+      "lines": 1327,
+      "review_candidates": []
+    },
+    {
+      "file": "20260915000001_rls_foundation.sql",
+      "sha256": "447cee608bdcad83c3deac07f967ae2116c2ae39cba9dd557c00ea1119632794",
+      "lines": 883,
+      "review_candidates": [
+        {
+          "line": 161,
+          "sql": "DROP TRIGGER IF EXISTS trg_user_profiles_status_mutation ON public.user_profiles;"
+        }
+      ]
+    },
+    {
+      "file": "20260915000002_trusted_server_private_rpc.sql",
+      "sha256": "e432723499a195d8e552826782e702799739ad0f60b64c94b3ddce9a6f752712",
+      "lines": 72,
+      "review_candidates": []
+    },
+    {
+      "file": "20260916000001_private_call_transcripts.sql",
+      "sha256": "1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1",
+      "lines": 62,
+      "review_candidates": [
+        {
+          "line": 6,
+          "sql": "DROP POLICY IF EXISTS call_transcripts_select_boss_admin ON public.call_transcripts;"
+        }
+      ]
+    },
+    {
+      "file": "20260916000002_crm_atomic_transactions.sql",
+      "sha256": "064d30a05af075e1dbd44d140f54fbb8382926ec06bce0c57717068096844709",
+      "lines": 312,
+      "review_candidates": [
+        {
+          "line": 265,
+          "sql": "UPDATE public.customers"
+        }
+      ]
+    },
+    {
+      "file": "20260916000003_inbox_atomic_persistence.sql",
+      "sha256": "5e3b6a36625641670372e2eb2d148af920e5949a4d48bbf455246d98fa5392c3",
+      "lines": 339,
+      "review_candidates": [
+        {
+          "line": 95,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 267,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20260917000001_0005_survey_atomic_completion.sql",
+      "sha256": "86109760fe7073b6965e1e3f7f4a4d0450209db36b111c9b22c2d449d324367d",
+      "lines": 159,
+      "review_candidates": [
+        {
+          "line": 19,
+          "sql": "DROP FUNCTION IF EXISTS public.complete_survey_atomic(uuid, jsonb);"
+        },
+        {
+          "line": 111,
+          "sql": "UPDATE public.appointments"
+        }
+      ]
+    },
+    {
+      "file": "20260920000002_operations_atomic_rpcs.sql",
+      "sha256": "ae698b8da10c116fdc7907bb709d2921cd5917c5480e09a629c2296c514180f7",
+      "lines": 250,
+      "review_candidates": [
+        {
+          "line": 6,
+          "sql": "ALTER TABLE public.warranty_tickets DROP CONSTRAINT IF EXISTS warranty_tickets_status_check;"
+        },
+        {
+          "line": 73,
+          "sql": "UPDATE public.installations"
+        },
+        {
+          "line": 82,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 186,
+          "sql": "UPDATE public.production_orders"
+        },
+        {
+          "line": 204,
+          "sql": "UPDATE public.orders"
+        }
+      ]
+    },
+    {
+      "file": "20260920000005_han_facebook_website.sql",
+      "sha256": "f085ffb0b87f10a27401dafac30603339db2f47888acc113dacde1bdff068841",
+      "lines": 898,
+      "review_candidates": [
+        {
+          "line": 133,
+          "sql": "DELETE FROM private.han_rate_buckets"
+        },
+        {
+          "line": 268,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 377,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 390,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 636,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 642,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 648,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 654,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 667,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 678,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 734,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 867,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20260921000001_voice_media_pipeline.sql",
+      "sha256": "1931ef7d8c695ee3c9a6baa9bf37acd0476409e72883fbd1425661a91830be3c",
+      "lines": 146,
+      "review_candidates": []
+    },
+    {
+      "file": "20260921000002_openai_realtime.sql",
+      "sha256": "b2c52102111284f96200dbf229ddcb50ae159fd0dabec55e985cd8a6c88d78c9",
+      "lines": 40,
+      "review_candidates": []
+    },
+    {
+      "file": "20260922000001_response_sla_windows.sql",
+      "sha256": "a7c28bbe0f7dec02af5ee2e55c75d936fafc42ed7d5201ef1ba2e36a6aef975f",
+      "lines": 982,
+      "review_candidates": [
+        {
+          "line": 483,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 492,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 860,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 869,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 918,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 925,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20260922000002_ai_analysis_worker.sql",
+      "sha256": "07574fc776948c4c9c4bfaa4d43e7e722c93ee764e9d1ad5470445587c07ac16",
+      "lines": 394,
+      "review_candidates": []
+    },
+    {
+      "file": "20260922000003_voice_security_hardening.sql",
+      "sha256": "2accd05b59e7b6724646cca20085be49982e1215e952fb7a6a48202e5350ae7a",
+      "lines": 496,
+      "review_candidates": [
+        {
+          "line": 101,
+          "sql": "UPDATE public.customers SET stage = 'CONTACT_CYCLE_1', updated_at = now()"
+        },
+        {
+          "line": 150,
+          "sql": "UPDATE public.call_attempts"
+        },
+        {
+          "line": 175,
+          "sql": "UPDATE public.customers SET stage = v_to_stage, updated_at = now()"
+        },
+        {
+          "line": 221,
+          "sql": "UPDATE public.call_attempts SET called_at = now() WHERE id = p_attempt_id;"
+        },
+        {
+          "line": 236,
+          "sql": "UPDATE public.call_attempts SET called_at = NULL"
+        },
+        {
+          "line": 264,
+          "sql": "UPDATE public.call_attempts SET call_id = p_call_id WHERE id = p_attempt_id;"
+        },
+        {
+          "line": 454,
+          "sql": "UPDATE public.voice_media_jobs SET status = 'PENDING', locked_at = NULL"
+        },
+        {
+          "line": 464,
+          "sql": "UPDATE public.voice_media_jobs vmj"
+        }
+      ]
+    },
+    {
+      "file": "20260923000001_sales_style_learning.sql",
+      "sha256": "00f1cfaba26f53b7bc2e0c4fd54f8044fc7703ef6524b5621368ee6b34d20fca",
+      "lines": 449,
+      "review_candidates": []
+    },
+    {
+      "file": "20260923000002_sales_style_activation.sql",
+      "sha256": "3b31a8860d1e23a6619300dae95657977d38ef8845cc53b11d9f4c75df4e045c",
+      "lines": 651,
+      "review_candidates": [
+        {
+          "line": 452,
+          "sql": "UPDATE public.sales_style_profiles ssp"
+        },
+        {
+          "line": 485,
+          "sql": "UPDATE public.sales_style_profiles ssp"
+        }
+      ]
+    },
+    {
+      "file": "20260923000003_analytics_dashboard.sql",
+      "sha256": "4b53ad99e047c74addd9b29607fb5bbf6876c9f5ac5ea01bf3b43e96bce0ea76",
+      "lines": 584,
+      "review_candidates": []
+    },
+    {
+      "file": "20260924000001_survey_integrity_hardening.sql",
+      "sha256": "95d43784ebe31b59035513208f7ebbbbcd24561e465610c8742d41b98865efb6",
+      "lines": 228,
+      "review_candidates": [
+        {
+          "line": 6,
+          "sql": "DROP POLICY IF EXISTS surveys_insert_boss_admin ON public.surveys;"
+        },
+        {
+          "line": 7,
+          "sql": "DROP POLICY IF EXISTS surveys_insert_assigned_technician ON public.surveys;"
+        },
+        {
+          "line": 8,
+          "sql": "DROP POLICY IF EXISTS surveys_update_boss_admin ON public.surveys;"
+        },
+        {
+          "line": 9,
+          "sql": "DROP POLICY IF EXISTS surveys_update_assigned_technician ON public.surveys;"
+        },
+        {
+          "line": 24,
+          "sql": "DROP FUNCTION IF EXISTS public.begin_survey_photo_operation(uuid, uuid);"
+        },
+        {
+          "line": 25,
+          "sql": "DROP FUNCTION IF EXISTS public.begin_survey_photo_operation(uuid, uuid, integer);"
+        },
+        {
+          "line": 56,
+          "sql": "UPDATE public.survey_photo_operations"
+        },
+        {
+          "line": 77,
+          "sql": "DELETE FROM public.survey_photo_operations"
+        },
+        {
+          "line": 122,
+          "sql": "DROP TRIGGER IF EXISTS guard_survey_appointment_write ON public.appointments;"
+        },
+        {
+          "line": 220,
+          "sql": "UPDATE public.appointments SET status = 'COMPLETED', updated_at = v_now"
+        }
+      ]
+    },
+    {
+      "file": "20260925000001_voice_p0_hardening.sql",
+      "sha256": "19faacd37a58ce59445e356c36036220726e45160150bbf67ee24cac3968125f",
+      "lines": 958,
+      "review_candidates": [
+        {
+          "line": 87,
+          "sql": "UPDATE storage.buckets"
+        },
+        {
+          "line": 184,
+          "sql": "UPDATE public.call_attempts"
+        },
+        {
+          "line": 244,
+          "sql": "UPDATE public.voice_dispatch_commands"
+        },
+        {
+          "line": 252,
+          "sql": "UPDATE public.calls"
+        },
+        {
+          "line": 305,
+          "sql": "UPDATE public.calls c"
+        },
+        {
+          "line": 311,
+          "sql": "UPDATE public.call_attempts ca"
+        },
+        {
+          "line": 317,
+          "sql": "UPDATE public.voice_dispatch_commands vdc"
+        },
+        {
+          "line": 356,
+          "sql": "UPDATE public.voice_dispatch_commands"
+        },
+        {
+          "line": 383,
+          "sql": "UPDATE public.voice_dispatch_commands"
+        },
+        {
+          "line": 389,
+          "sql": "UPDATE public.calls"
+        },
+        {
+          "line": 393,
+          "sql": "UPDATE public.call_attempts"
+        },
+        {
+          "line": 480,
+          "sql": "UPDATE public.calls c"
+        },
+        {
+          "line": 486,
+          "sql": "UPDATE public.voice_dispatch_commands vdc"
+        },
+        {
+          "line": 506,
+          "sql": "UPDATE public.call_attempts"
+        },
+        {
+          "line": 534,
+          "sql": "UPDATE public.customers SET stage = v_to_stage, updated_at = now()"
+        },
+        {
+          "line": 730,
+          "sql": "UPDATE public.calls"
+        },
+        {
+          "line": 771,
+          "sql": "UPDATE public.voice_media_jobs vmj"
+        },
+        {
+          "line": 793,
+          "sql": "UPDATE public.voice_media_jobs vmj"
+        },
+        {
+          "line": 833,
+          "sql": "UPDATE public.voice_media_jobs"
+        },
+        {
+          "line": 868,
+          "sql": "UPDATE public.voice_media_jobs"
+        },
+        {
+          "line": 943,
+          "sql": "UPDATE public.customers SET stage = 'CONTACT_CYCLE_1', updated_at = now()"
+        }
+      ]
+    },
+    {
+      "file": "20260927000001_inbox_outbox_and_inbound_atomic.sql",
+      "sha256": "331c98824fe60db077d680ffc28a10dce4b1bcfe5d152ff00abb8362579acf00",
+      "lines": 694,
+      "review_candidates": [
+        {
+          "line": 79,
+          "sql": "DROP FUNCTION IF EXISTS public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb);"
+        },
+        {
+          "line": 80,
+          "sql": "DROP FUNCTION IF EXISTS public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid);"
+        },
+        {
+          "line": 81,
+          "sql": "DROP FUNCTION IF EXISTS public.record_outbound_interaction_atomic(uuid, uuid, uuid, text, text, text, text, jsonb, uuid, uuid);"
+        },
+        {
+          "line": 278,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 306,
+          "sql": "DROP FUNCTION IF EXISTS public.claim_pending_outbound_deliveries(uuid, text, integer);"
+        },
+        {
+          "line": 324,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 359,
+          "sql": "DROP FUNCTION IF EXISTS public.ingest_provider_message_atomic(uuid, text, text, text, text, text, text, text, text, jsonb, text, uuid);"
+        },
+        {
+          "line": 589,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20260928000001_operations_p0_hardening.sql",
+      "sha256": "edab37eda7f26ce4a398348232014a113a90a2075579e22cfbf750f053cdfa70",
+      "lines": 195,
+      "review_candidates": [
+        {
+          "line": 57,
+          "sql": "UPDATE public.orders SET order_status='IN_PRODUCTION',updated_at=now() WHERE id=o.id;"
+        },
+        {
+          "line": 72,
+          "sql": "UPDATE public.production_orders SET status=p_status,qc_status=CASE WHEN p_status='IN_PRODUCTION' THEN 'PENDING' ELSE qc_status END,updated_at=now() WHERE id=p.id;"
+        },
+        {
+          "line": 87,
+          "sql": "UPDATE public.production_orders SET status=next_status,qc_status=p_qc_status,updated_at=now() WHERE id=p.id;"
+        },
+        {
+          "line": 124,
+          "sql": "UPDATE public.installations SET photos=CASE WHEN p_type='photo' AND NOT(photos ? p_ref) THEN photos || jsonb_build_array(p_ref) ELSE photos END,"
+        },
+        {
+          "line": 128,
+          "sql": "UPDATE public.installations SET status=p_status,updated_at=now() WHERE id=i.id;"
+        },
+        {
+          "line": 133,
+          "sql": "DROP FUNCTION public.complete_installation_atomic(uuid,uuid,uuid,timestamptz);"
+        },
+        {
+          "line": 154,
+          "sql": "UPDATE public.installations SET status='COMPLETED',completed_at=now(),updated_at=now() WHERE id=i.id;"
+        },
+        {
+          "line": 155,
+          "sql": "UPDATE public.orders SET order_status='COMPLETED',updated_at=now() WHERE id=o.id;"
+        },
+        {
+          "line": 183,
+          "sql": "UPDATE public.warranty_tickets SET status=next_status,"
+        }
+      ]
+    },
+    {
+      "file": "20260928000002_tv9_post_merge_hardening.sql",
+      "sha256": "1a1d1b2e1b1446a4d4bac4339acd0c2684e702ab57a2e9415b7938aca6233fe5",
+      "lines": 1954,
+      "review_candidates": [
+        {
+          "line": 131,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 140,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 304,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 412,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 425,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 664,
+          "sql": "DROP FUNCTION IF EXISTS public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid);"
+        },
+        {
+          "line": 814,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 823,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 906,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 913,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 919,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 932,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 940,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 953,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 964,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 1353,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1362,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 1411,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1418,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 1859,
+          "sql": "UPDATE public.sales_style_profiles ssp"
+        },
+        {
+          "line": 1892,
+          "sql": "UPDATE public.sales_style_profiles ssp"
+        }
+      ]
+    },
+    {
+      "file": "20260929120001_zalo_ingress_and_care.sql",
+      "sha256": "11dde63a28976695d23a8d6ee64d6cdd6c4c1e11f6624d3ff99562f8f5c57307",
+      "lines": 78,
+      "review_candidates": []
+    },
+    {
+      "file": "20260929120002_zalo_hardening_remediation.sql",
+      "sha256": "c7221c58fc6d9140f0afde2f4d6f68dd9e940cb07fa9f54836ebe04b9a33ab73",
+      "lines": 432,
+      "review_candidates": [
+        {
+          "line": 38,
+          "sql": "UPDATE public.zalo_oa_configs c"
+        },
+        {
+          "line": 157,
+          "sql": "UPDATE public.zalo_ingress_events"
+        },
+        {
+          "line": 248,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 295,
+          "sql": "UPDATE public.zalo_ingress_events"
+        },
+        {
+          "line": 368,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 375,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        }
+      ]
+    },
+    {
+      "file": "20260929120003_zalo_round3_remediation.sql",
+      "sha256": "c0a5418a9e7b7eaf106d88d058985afe56df18409b9ff26f7bc52bb3165fe1f4",
+      "lines": 2000,
+      "review_candidates": [
+        {
+          "line": 22,
+          "sql": "DROP FUNCTION IF EXISTS public.zalo_claim_ingress_event(uuid, text, text, text, text, text);"
+        },
+        {
+          "line": 23,
+          "sql": "DROP FUNCTION IF EXISTS public.zalo_process_ingress_message(uuid, text, text, text, text, text, text, text, text, boolean, text, text, jsonb, bigint);"
+        },
+        {
+          "line": 24,
+          "sql": "DROP FUNCTION IF EXISTS public.zalo_finalize_outbound_reply(uuid, uuid, uuid, uuid, text, text, text, text, text, uuid, jsonb);"
+        },
+        {
+          "line": 25,
+          "sql": "DROP FUNCTION IF EXISTS public.care_scheduler_claim_delivery(uuid, uuid, uuid, date, text);"
+        },
+        {
+          "line": 61,
+          "sql": "UPDATE public.zalo_oa_configs c"
+        },
+        {
+          "line": 163,
+          "sql": "UPDATE private.zalo_oa_secrets s"
+        },
+        {
+          "line": 205,
+          "sql": "UPDATE private.zalo_oa_secrets s"
+        },
+        {
+          "line": 244,
+          "sql": "UPDATE private.zalo_oa_secrets s"
+        },
+        {
+          "line": 385,
+          "sql": "UPDATE public.zalo_oa_configs c"
+        },
+        {
+          "line": 517,
+          "sql": "UPDATE public.zalo_ingress_events e"
+        },
+        {
+          "line": 544,
+          "sql": "UPDATE public.zalo_ingress_events e"
+        },
+        {
+          "line": 661,
+          "sql": "UPDATE public.zalo_ingress_events e"
+        },
+        {
+          "line": 705,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 762,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 783,
+          "sql": "UPDATE public.zalo_ingress_events e"
+        },
+        {
+          "line": 835,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 845,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 880,
+          "sql": "UPDATE public.zalo_ingress_events e"
+        },
+        {
+          "line": 901,
+          "sql": "ALTER TABLE public.zalo_outbound_deliveries DROP CONSTRAINT IF EXISTS zalo_outbound_deliveries_status_check;"
+        },
+        {
+          "line": 906,
+          "sql": "ALTER TABLE public.zalo_outbound_deliveries DROP CONSTRAINT IF EXISTS chk_zalo_outbound_actor_type;"
+        },
+        {
+          "line": 911,
+          "sql": "DROP INDEX IF EXISTS public.idx_zalo_outbound_command;"
+        },
+        {
+          "line": 930,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1068,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1086,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1134,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1196,
+          "sql": "UPDATE public.interactions i"
+        },
+        {
+          "line": 1227,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 1232,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1245,
+          "sql": "ALTER TABLE public.care_deliveries DROP CONSTRAINT IF EXISTS care_deliveries_status_check;"
+        },
+        {
+          "line": 1285,
+          "sql": "UPDATE public.care_schedules s SET next_send_at = v_next WHERE s.id = p_schedule_id;"
+        },
+        {
+          "line": 1429,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1439,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1447,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1550,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1561,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1576,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1624,
+          "sql": "UPDATE public.care_deliveries d"
+        },
+        {
+          "line": 1649,
+          "sql": "ALTER TABLE public.outbound_deliveries DROP CONSTRAINT IF EXISTS outbound_deliveries_delivery_status_check;"
+        },
+        {
+          "line": 1757,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 1810,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 1819,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 1824,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 1870,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 1879,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 1938,
+          "sql": "UPDATE public.care_schedules"
+        }
+      ]
+    },
+    {
+      "file": "20260929220001_pricing_payment_contract_base.sql",
+      "sha256": "eb0d3f9863de3a25182e40993138f940226a40b3fc966cfc1ad47796ec718517",
+      "lines": 36,
+      "review_candidates": [
+        {
+          "line": 18,
+          "sql": "DROP POLICY IF EXISTS \"Users can view their company bank accounts\" ON public.company_bank_accounts;"
+        }
+      ]
+    },
+    {
+      "file": "20260929220002_commercial_atomic_rpcs.sql",
+      "sha256": "6baf932f3152fb8235c5d2f110e3c903a8bfd9e1aa4499dfadb504ba08bc27d6",
+      "lines": 230,
+      "review_candidates": [
+        {
+          "line": 190,
+          "sql": "UPDATE public.customers"
+        }
+      ]
+    },
+    {
+      "file": "20260929220003_commercial_security_hardening.sql",
+      "sha256": "f077183bc60c0355f5aba4f557bd4626ab3afdbfe1dfc51309dfa136b268ebc9",
+      "lines": 665,
+      "review_candidates": [
+        {
+          "line": 134,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 149,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 160,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 299,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 314,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 325,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 417,
+          "sql": "UPDATE public.contracts"
+        },
+        {
+          "line": 500,
+          "sql": "UPDATE public.contracts"
+        },
+        {
+          "line": 605,
+          "sql": "UPDATE public.contracts"
+        },
+        {
+          "line": 614,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 628,
+          "sql": "UPDATE public.customers"
+        }
+      ]
+    },
+    {
+      "file": "20260929220004_contract_storage_hardening.sql",
+      "sha256": "7347666e02e2714e375062733f39b1d8a101724fa70cf6e03a4f6d9faa7b5707",
+      "lines": 33,
+      "review_candidates": [
+        {
+          "line": 14,
+          "sql": "DROP POLICY IF EXISTS contracts_no_client_insert ON storage.objects;"
+        },
+        {
+          "line": 19,
+          "sql": "DROP POLICY IF EXISTS contracts_no_client_update ON storage.objects;"
+        },
+        {
+          "line": 25,
+          "sql": "DROP POLICY IF EXISTS contracts_no_client_delete ON storage.objects;"
+        },
+        {
+          "line": 30,
+          "sql": "DROP POLICY IF EXISTS contracts_no_client_select ON storage.objects;"
+        }
+      ]
+    },
+    {
+      "file": "20260930000001_p0_security_acl_hardening.sql",
+      "sha256": "7e25ceb675ae8ee0a16ff611166668efb94bbab4cfaf0e9efd285929485a89ab",
+      "lines": 42,
+      "review_candidates": [
+        {
+          "line": 37,
+          "sql": "DROP POLICY IF EXISTS contracts_update_boss_admin ON public.contracts;"
+        }
+      ]
+    },
+    {
+      "file": "20260930120001_p1_backend_remediation.sql",
+      "sha256": "a05f7bb2a7f62af0022c0b3e18139fb7e7bf707d73b2b2e89a94b73c56bf8177",
+      "lines": 522,
+      "review_candidates": [
+        {
+          "line": 21,
+          "sql": "DROP FUNCTION IF EXISTS public.claim_voice_media_jobs(integer);"
+        },
+        {
+          "line": 36,
+          "sql": "DROP TRIGGER IF EXISTS trg_pricing_policies_default_materials ON public.pricing_policies;"
+        },
+        {
+          "line": 37,
+          "sql": "DROP FUNCTION IF EXISTS public.set_default_pricing_policy_materials();"
+        },
+        {
+          "line": 348,
+          "sql": "UPDATE public.orders SET order_status = 'IN_PRODUCTION', updated_at = now() WHERE id = o.id;"
+        }
+      ]
+    },
+    {
+      "file": "20261001100001_ai_interaction_raw_content_rpc.sql",
+      "sha256": "d00b1c74694c0d3bc9a98697d9bd6782c4ab2b0588117364a01f570748a36f67",
+      "lines": 66,
+      "review_candidates": []
+    },
+    {
+      "file": "20261001140001_ai_outbound_delivery_atomic.sql",
+      "sha256": "5d817307a9e5cc852eeb8ea0918ea179e610cf6636de7e00c4ab4e72537b10bd",
+      "lines": 344,
+      "review_candidates": [
+        {
+          "line": 9,
+          "sql": "ALTER TABLE public.outbound_deliveries ALTER COLUMN interaction_id DROP NOT NULL;"
+        },
+        {
+          "line": 113,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 239,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 249,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 261,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261001150001_ai_durable_dispatch_hardening.sql",
+      "sha256": "45509184847e2ca21a41eb4d8c9bbe95ec0dac2bb093d2053d22c4d82bca7319",
+      "lines": 936,
+      "review_candidates": [
+        {
+          "line": 6,
+          "sql": "ALTER TABLE public.outbound_deliveries DROP CONSTRAINT IF EXISTS outbound_deliveries_delivery_status_check;"
+        },
+        {
+          "line": 153,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 162,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 222,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 261,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 269,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 370,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 381,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 392,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 619,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 628,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 644,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 829,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 851,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 867,
+          "sql": "UPDATE private.interaction_raw_contents"
+        },
+        {
+          "line": 893,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261001160001_ai_sale_fencing_linearization.sql",
+      "sha256": "3726836f2bfd48f41ddce5237dd68703069ee91c59cf760005939b3ac2792272",
+      "lines": 1227,
+      "review_candidates": [
+        {
+          "line": 16,
+          "sql": "DROP FUNCTION IF EXISTS public.test_expire_response_sla_claim(uuid);"
+        },
+        {
+          "line": 20,
+          "sql": "DROP FUNCTION IF EXISTS public.guard_ai_pre_dispatch(uuid, uuid, uuid, uuid, uuid, text, integer);"
+        },
+        {
+          "line": 151,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 162,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 225,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 234,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 247,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 281,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 289,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 299,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 351,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 372,
+          "sql": "DROP FUNCTION IF EXISTS public.record_ai_outbound_provider_result(uuid, uuid, text, text, text);"
+        },
+        {
+          "line": 373,
+          "sql": "DROP FUNCTION IF EXISTS public.record_ai_outbound_provider_result(uuid, uuid, text, uuid, text, text);"
+        },
+        {
+          "line": 427,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 438,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 449,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 460,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 636,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 647,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 872,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 881,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 899,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 1124,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 1146,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1186,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261001170001_cross_actor_dispatch_linearization.sql",
+      "sha256": "dfbcef1a89b428030caa274357f0bcdd1196890df5e3ea21ac3c980255acb0ad",
+      "lines": 1959,
+      "review_candidates": [
+        {
+          "line": 181,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 204,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 219,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 334,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 341,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 347,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 353,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 375,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 381,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 394,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 400,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 411,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 540,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 595,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 609,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 640,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 651,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 655,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 664,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 682,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 714,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 725,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 729,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 736,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 746,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 802,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 894,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 903,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 912,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 922,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 938,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 947,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1075,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1090,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1119,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1157,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1163,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1180,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1186,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1239,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1253,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1260,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1271,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1336,
+          "sql": "UPDATE public.interactions i"
+        },
+        {
+          "line": 1367,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 1373,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 1380,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1597,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 1606,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1627,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 1852,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 1874,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1917,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261001180001_sale_same_actor_dispatch_concurrency.sql",
+      "sha256": "96cd5b94790c1c521a2b261d512bcf0afa7ce3b09ace72113804c7e423b360c9",
+      "lines": 964,
+      "review_candidates": [
+        {
+          "line": 172,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 207,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 238,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 356,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 363,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 369,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 376,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 400,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 406,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 420,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 426,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 438,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 573,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 607,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 621,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 650,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 699,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 704,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 758,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 768,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 778,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 804,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 809,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 818,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 887,
+          "sql": "UPDATE public.interactions i"
+        },
+        {
+          "line": 918,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 924,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 941,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261001190001_provider_accepted_irreversibility_and_dispatch_recovery.sql",
+      "sha256": "6b04dba5dc958a2b598fce216838c41b432a5ad3d9dac5eba3b82f0c76890e1b",
+      "lines": 969,
+      "review_candidates": [
+        {
+          "line": 167,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 199,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 229,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 363,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 370,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 376,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 383,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 403,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 409,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 422,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 428,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 440,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 601,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 611,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 659,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 683,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 700,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 720,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 731,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 758,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 852,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 862,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 872,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 885,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 895,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 909,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 935,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 940,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 951,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261001200001_zalo_uncertain_reconciliation_authority_and_care_unknown.sql",
+      "sha256": "f357d321fedfb44addbd65f2dfa0642d6ddcbfbd49268d2918fcaeaa10a57f3e",
+      "lines": 731,
+      "review_candidates": [
+        {
+          "line": 77,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 84,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 90,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 97,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 117,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 123,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 136,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 142,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 155,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 172,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 184,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 353,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 363,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 413,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 437,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 454,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 474,
+          "sql": "UPDATE public.zalo_outbound_deliveries"
+        },
+        {
+          "line": 485,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 512,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 614,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 624,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 634,
+          "sql": "UPDATE public.zalo_outbound_deliveries d"
+        },
+        {
+          "line": 647,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 657,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 671,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 697,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 702,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 713,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261002100001_han_finish_send_read_receipt_schema_fix.sql",
+      "sha256": "76e0eb376411752f6611bbedb5c5e51342d8f659af5cbc53a4d1282febf7ef59",
+      "lines": 208,
+      "review_candidates": [
+        {
+          "line": 78,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 85,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 91,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 98,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 118,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 124,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 137,
+          "sql": "UPDATE private.han_outbox"
+        },
+        {
+          "line": 143,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 156,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 173,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 185,
+          "sql": "UPDATE public.care_deliveries"
+        }
+      ]
+    },
+    {
+      "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+      "sha256": "dfb4dd29bfb840cc7a67cf8a620ef1610ee56cff94810943f123004814cf4923",
+      "lines": 419,
+      "review_candidates": [
+        {
+          "line": 31,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 201,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 368,
+          "sql": "UPDATE public.orders"
+        },
+        {
+          "line": 383,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 394,
+          "sql": "UPDATE public.orders"
+        }
+      ]
+    },
+    {
+      "file": "20261004180001_installation_product_journey.sql",
+      "sha256": "8df54245de76fd04532a95131ac8c1cf8ade5cc94b0f4866670de42d0b80619f",
+      "lines": 462,
+      "review_candidates": [
+        {
+          "line": 203,
+          "sql": "UPDATE public.appointments"
+        },
+        {
+          "line": 272,
+          "sql": "UPDATE public.appointments"
+        },
+        {
+          "line": 328,
+          "sql": "UPDATE public.installations"
+        },
+        {
+          "line": 345,
+          "sql": "UPDATE public.appointments SET status = 'IN_PROGRESS', updated_at = now() WHERE id = a.id;"
+        },
+        {
+          "line": 350,
+          "sql": "UPDATE public.orders SET order_status = 'INSTALLING', updated_at = now()"
+        },
+        {
+          "line": 354,
+          "sql": "UPDATE public.installations SET status = p_status, updated_at = now() WHERE id = i.id;"
+        },
+        {
+          "line": 404,
+          "sql": "UPDATE public.appointments SET status = 'COMPLETED', updated_at = now() WHERE id = a.id;"
+        },
+        {
+          "line": 434,
+          "sql": "UPDATE public.installations SET status = 'COMPLETED', completed_at = now(), updated_at = now() WHERE id = i.id;"
+        },
+        {
+          "line": 435,
+          "sql": "UPDATE public.orders SET order_status = 'COMPLETED', updated_at = now() WHERE id = o.id;"
+        },
+        {
+          "line": 436,
+          "sql": "UPDATE public.appointments SET status = 'COMPLETED', updated_at = now() WHERE id = a.id;"
+        }
+      ]
+    },
+    {
+      "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+      "sha256": "907e8752aca9d81dfe144fe6ae0ed92f1bbb969ba561effaba6005e7944f2f57",
+      "lines": 324,
+      "review_candidates": [
+        {
+          "line": 14,
+          "sql": "DROP POLICY IF EXISTS appointments_insert_boss_admin ON public.appointments;"
+        },
+        {
+          "line": 24,
+          "sql": "DROP POLICY IF EXISTS appointments_insert_sale ON public.appointments;"
+        },
+        {
+          "line": 34,
+          "sql": "DROP POLICY IF EXISTS appointments_update_boss_admin ON public.appointments;"
+        },
+        {
+          "line": 48,
+          "sql": "DROP POLICY IF EXISTS appointments_update_sale ON public.appointments;"
+        },
+        {
+          "line": 63,
+          "sql": "DROP FUNCTION IF EXISTS public.schedule_installation_atomic(uuid, uuid, uuid, uuid, jsonb, uuid);"
+        },
+        {
+          "line": 64,
+          "sql": "DROP FUNCTION IF EXISTS public.schedule_installation_atomic;"
+        },
+        {
+          "line": 282,
+          "sql": "UPDATE public.installations"
+        },
+        {
+          "line": 294,
+          "sql": "UPDATE public.appointments SET status = 'IN_PROGRESS', updated_at = now() WHERE id = a.id;"
+        },
+        {
+          "line": 299,
+          "sql": "UPDATE public.orders SET order_status = 'INSTALLING', updated_at = now()"
+        },
+        {
+          "line": 303,
+          "sql": "UPDATE public.installations SET status = p_status, updated_at = now() WHERE id = i.id;"
+        }
+      ]
+    },
+    {
+      "file": "20261005100001_staging_storage_bucket_provisioning.sql",
+      "sha256": "79484c80a80501dadd3c9ecc3c55485dcace6ce61656dd24c0f47c2e93e9a958",
+      "lines": 86,
+      "review_candidates": [
+        {
+          "line": 31,
+          "sql": "DROP POLICY IF EXISTS survey_photos_no_client_insert ON storage.objects;"
+        },
+        {
+          "line": 36,
+          "sql": "DROP POLICY IF EXISTS survey_photos_no_client_update ON storage.objects;"
+        },
+        {
+          "line": 42,
+          "sql": "DROP POLICY IF EXISTS survey_photos_no_client_delete ON storage.objects;"
+        },
+        {
+          "line": 47,
+          "sql": "DROP POLICY IF EXISTS survey_photos_no_client_select ON storage.objects;"
+        },
+        {
+          "line": 66,
+          "sql": "DROP POLICY IF EXISTS operations_evidence_no_client_insert ON storage.objects;"
+        },
+        {
+          "line": 71,
+          "sql": "DROP POLICY IF EXISTS operations_evidence_no_client_update ON storage.objects;"
+        },
+        {
+          "line": 77,
+          "sql": "DROP POLICY IF EXISTS operations_evidence_no_client_delete ON storage.objects;"
+        },
+        {
+          "line": 82,
+          "sql": "DROP POLICY IF EXISTS operations_evidence_no_client_select ON storage.objects;"
+        }
+      ]
+    },
+    {
+      "file": "20261006143500_service_role_core_acl_restore.sql",
+      "sha256": "c4db2112b772ea7bdee2aff6f0bf480d10f3e8c94055be2162c3ed3ebf8cadf2",
+      "lines": 58,
+      "review_candidates": []
+    },
+    {
+      "file": "20261006210001_auth_runtime_select_acl.sql",
+      "sha256": "5b717a01ade890ff604622d0c5ecc9e06a3b89b70ad584d9337bf9ca189a53b0",
+      "lines": 18,
+      "review_candidates": []
+    },
+    {
+      "file": "20261007172000_inbox_audit_actor_compatibility.sql",
+      "sha256": "c4ecb27d275d12a14ba19115d9b802bf9632f59665604649d7d2e48368f43e5c",
+      "lines": 18,
+      "review_candidates": [
+        {
+          "line": 8,
+          "sql": "update public.audit_logs"
+        }
+      ]
+    },
+    {
+      "file": "20261012100001_facebook_browser_inbox_sync.sql",
+      "sha256": "de5576f22489484d4c58e3581bba29d8284c66595e39dd60ea53bedd98650463",
+      "lines": 356,
+      "review_candidates": [
+        {
+          "line": 247,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261012110001_facebook_browser_outbox_queue.sql",
+      "sha256": "0a517eccb650d0b62153f96f099f941fe8a1caf17d2aeed4a5bd06e4703ce1d6",
+      "lines": 488,
+      "review_candidates": [
+        {
+          "line": 39,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 302,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 335,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 380,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 433,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 470,
+          "sql": "UPDATE public.outbound_deliveries"
+        }
+      ]
+    },
+    {
+      "file": "20261012113001_facebook_browser_outbox_hardening.sql",
+      "sha256": "f5734161275a0c224d60b50ec1a283ed355ad5c80832b6331c739f9018ddd989",
+      "lines": 217,
+      "review_candidates": [
+        {
+          "line": 69,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 111,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 160,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 180,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 188,
+          "sql": "UPDATE public.outbound_deliveries"
+        },
+        {
+          "line": 203,
+          "sql": "UPDATE public.outbound_deliveries"
+        }
+      ]
+    },
+    {
+      "file": "20261013100001_update_facebook_customer_display_name.sql",
+      "sha256": "c0ed3671b5ddc8f8987902d06a806b55ccb48013815d498f2956e5e3874fb2bc",
+      "lines": 363,
+      "review_candidates": [
+        {
+          "line": 227,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 254,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261013180001_inbox_realtime_publication.sql",
+      "sha256": "7d7b6ebcf0559ccd32bb31553e568481d57bb713b443682248fa9e0e97268e23",
+      "lines": 31,
+      "review_candidates": []
+    },
+    {
+      "file": "20261013230001_dual_fingerprint_idempotency.sql",
+      "sha256": "0407860cb48a8a08bb69d9c972fe49b3ae5be606681a53e36a55589867ebf91d",
+      "lines": 421,
+      "review_candidates": [
+        {
+          "line": 285,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 312,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261016180001_meta_user_data_deletion.sql",
+      "sha256": "ba083a8c8915b2ab6b5984d036573a7c0567fe09b03b296b6c1a985d304f6231",
+      "lines": 557,
+      "review_candidates": [
+        {
+          "line": 54,
+          "sql": "DROP POLICY IF EXISTS meta_data_deletion_requests_select_boss_admin ON public.meta_data_deletion_requests;"
+        },
+        {
+          "line": 75,
+          "sql": "DROP TRIGGER IF EXISTS trg_updated_at_meta_data_deletion ON public.meta_data_deletion_requests;"
+        },
+        {
+          "line": 104,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 111,
+          "sql": "DELETE FROM private.customer_private_contacts"
+        },
+        {
+          "line": 115,
+          "sql": "DELETE FROM public.identities"
+        },
+        {
+          "line": 119,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 126,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 134,
+          "sql": "DROP FUNCTION IF EXISTS public.han_record_data_deletion_request(uuid, text, text, jsonb);"
+        },
+        {
+          "line": 135,
+          "sql": "DROP FUNCTION IF EXISTS public.han_record_data_deletion_request(uuid, text, text, jsonb, text);"
+        },
+        {
+          "line": 335,
+          "sql": "DROP FUNCTION IF EXISTS public.han_resolve_data_deletion_request(uuid, text, text, uuid, text, uuid);"
+        },
+        {
+          "line": 396,
+          "sql": "UPDATE public.meta_data_deletion_requests"
+        },
+        {
+          "line": 418,
+          "sql": "UPDATE public.meta_data_deletion_requests"
+        },
+        {
+          "line": 461,
+          "sql": "UPDATE public.meta_data_deletion_requests"
+        }
+      ]
+    },
+    {
+      "file": "20261018221000_zcajs_observed_outbound.sql",
+      "sha256": "fbbee8aad4e9e7430c3aaf750a1d1fde2cc97087c473389b76e32523fdca4139",
+      "lines": 210,
+      "review_candidates": [
+        {
+          "line": 188,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261019073443_voice_business_app_calls.sql",
+      "sha256": "cfb17864e1945ef0611f0dadd2d62bec6c183619a8d003705c4cc9672d2d4aeb",
+      "lines": 308,
+      "review_candidates": [
+        {
+          "line": 97,
+          "sql": "UPDATE public.calls SET provider_call_id=p_provider_call_id WHERE id=p_call_id;"
+        },
+        {
+          "line": 98,
+          "sql": "UPDATE public.call_attempts SET provider_call_id=p_provider_call_id WHERE call_id=p_call_id AND company_id=p_company_id;"
+        },
+        {
+          "line": 183,
+          "sql": "UPDATE public.voice_webhook_events SET call_id=v_call.id,processed_at=now() WHERE id=v_event.id;"
+        },
+        {
+          "line": 193,
+          "sql": "UPDATE public.calls c"
+        },
+        {
+          "line": 199,
+          "sql": "UPDATE public.voice_dispatch_commands vdc"
+        },
+        {
+          "line": 219,
+          "sql": "UPDATE public.call_attempts"
+        },
+        {
+          "line": 247,
+          "sql": "UPDATE public.customers SET stage = v_to_stage, updated_at = now()"
+        },
+        {
+          "line": 298,
+          "sql": "UPDATE public.voice_browser_call_sessions SET provider_call_id=p_provider_call_id WHERE call_id=v_call;"
+        }
+      ]
+    },
+    {
+      "file": "20261020073819_zalo_personal_recordings.sql",
+      "sha256": "66d875f52bd40868673e30a509a4c95204bf892a1b0643eae38739fe01f06daf",
+      "lines": 266,
+      "review_candidates": [
+        {
+          "line": 127,
+          "sql": "UPDATE public.zalo_recording_devices SET active=false WHERE company_id=p_company AND id=p_device;"
+        },
+        {
+          "line": 158,
+          "sql": "UPDATE public.zalo_personal_calls SET upload_lease=v_lease,upload_lease_until=now()+interval '5 minutes' WHERE id=c.id;"
+        },
+        {
+          "line": 171,
+          "sql": "UPDATE public.zalo_recording_devices SET last_seen_at=now() WHERE id=d.id;"
+        },
+        {
+          "line": 195,
+          "sql": "UPDATE public.zalo_personal_calls SET recording_status='READY',customer_id=v_customer,identity_ambiguous=v_ambiguous,"
+        },
+        {
+          "line": 232,
+          "sql": "UPDATE public.zalo_personal_calls SET customer_id=v_customer,linked_by=p_actor,linked_at=now(),matching_status='EXACT',identity_ambiguous=identity_ambiguous OR v_conflict WHERE id=c.id;"
+        }
+      ]
+    },
+    {
+      "file": "20261020203000_zalo_outbound_call_requests.sql",
+      "sha256": "ce6d365c7619717c929c6fe19059ffd5dc70b9f0e40b76170910e62bbb074096",
+      "lines": 309,
+      "review_candidates": [
+        {
+          "line": 120,
+          "sql": "UPDATE public.zalo_outbound_call_requests SET status = 'EXPIRED' WHERE id = req.id;"
+        },
+        {
+          "line": 132,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 173,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 227,
+          "sql": "UPDATE public.zalo_personal_calls SET upload_lease=v_lease,upload_lease_until=now()+interval '5 minutes' WHERE id=c.id;"
+        },
+        {
+          "line": 240,
+          "sql": "UPDATE public.zalo_recording_devices SET last_seen_at=now() WHERE id=d.id;"
+        },
+        {
+          "line": 274,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 294,
+          "sql": "UPDATE public.zalo_personal_calls SET recording_status='READY',customer_id=v_customer,identity_ambiguous=v_ambiguous,"
+        }
+      ]
+    },
+    {
+      "file": "20261020220000_zalo_agent_heartbeat.sql",
+      "sha256": "514e609ec78f5f3451e674a52201a117f1b7bb12caceb563de2d6f0d248c43e5",
+      "lines": 126,
+      "review_candidates": [
+        {
+          "line": 50,
+          "sql": "UPDATE public.zalo_recording_devices"
+        }
+      ]
+    },
+    {
+      "file": "20261020220001_fix_outbound_customer_metadata.sql",
+      "sha256": "50ce1aa46a086df6a037af78b692d9e66b7cb5d4c6a5530367dc0b752b2af08c",
+      "lines": 272,
+      "review_candidates": [
+        {
+          "line": 247,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261020220003_restore_outbound_delivery_status_contract.sql",
+      "sha256": "e1dd8da38a96bcbf4bf8b1c20cb8a1b1a5ea3355aff8dc666128f6ac23d6493c",
+      "lines": 15,
+      "review_candidates": []
+    },
+    {
+      "file": "20261020220004_restore_rpc_only_domain_acls.sql",
+      "sha256": "addbdae17a01186cf5b1d9758160834059db37304b7cbe545114c50624ab66b2",
+      "lines": 5,
+      "review_candidates": []
+    },
+    {
+      "file": "20261020220005_zalo_outbound_recording_hardening.sql",
+      "sha256": "163fa55a022d00b4dfd9a4c2601cc0ad00baf06315c2de699c39a1e4c19aa45c",
+      "lines": 744,
+      "review_candidates": [
+        {
+          "line": 72,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 154,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 189,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 353,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 357,
+          "sql": "UPDATE public.zalo_recording_devices SET last_seen_at = now() WHERE id = d.id;"
+        },
+        {
+          "line": 386,
+          "sql": "UPDATE public.zalo_recording_devices SET last_seen_at = now() WHERE id = d.id;"
+        },
+        {
+          "line": 522,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 558,
+          "sql": "UPDATE public.zalo_personal_calls"
+        }
+      ]
+    },
+    {
+      "file": "20261021120000_zalo_call_transcription.sql",
+      "sha256": "440f92007fb803f79aceecbed0a31b3336c89921ee461690441788efeb61b2dd",
+      "lines": 882,
+      "review_candidates": [
+        {
+          "line": 158,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 200,
+          "sql": "UPDATE public.zalo_call_transcriptions zct"
+        },
+        {
+          "line": 224,
+          "sql": "UPDATE public.zalo_call_transcriptions zct"
+        },
+        {
+          "line": 236,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 356,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        },
+        {
+          "line": 372,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 431,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        },
+        {
+          "line": 443,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 447,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        },
+        {
+          "line": 460,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 527,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        },
+        {
+          "line": 541,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 695,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 731,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 839,
+          "sql": "UPDATE public.zalo_customer_identity_mappings"
+        },
+        {
+          "line": 862,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 868,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        }
+      ]
+    },
+    {
+      "file": "20261021150000_zalo_transcription_provider_model.sql",
+      "sha256": "61a570d59fca43a3944c50cb0f593ab7f9833d164700daf7f5d16a04e3d33095",
+      "lines": 66,
+      "review_candidates": [
+        {
+          "line": 53,
+          "sql": "UPDATE public.zalo_call_transcriptions"
+        }
+      ]
+    },
+    {
+      "file": "20261021160000_zalo_targeted_transcription_claim.sql",
+      "sha256": "b069be0310755c1c3bb1904838331540987b573af03c2939c5b2055339a05468",
+      "lines": 192,
+      "review_candidates": [
+        {
+          "line": 87,
+          "sql": "UPDATE public.zalo_call_transcriptions zct"
+        },
+        {
+          "line": 97,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 129,
+          "sql": "UPDATE public.zalo_call_transcriptions zct"
+        },
+        {
+          "line": 142,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 152,
+          "sql": "UPDATE public.zalo_call_transcriptions zct"
+        },
+        {
+          "line": 163,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        }
+      ]
+    },
+    {
+      "file": "20261021160001_zalo_bulk_transcription_lease_recovery.sql",
+      "sha256": "5463a7e93e1d615adb04ff27b86c6fd5430fb8e24f6dbd679876478430e91376",
+      "lines": 85,
+      "review_candidates": []
+    },
+    {
+      "file": "20261021200000_zalo_call_ai_summaries.sql",
+      "sha256": "387a7a9dfa21f18d70d27aac18170f046ba996eb293fa55761ff16543adda9f6",
+      "lines": 701,
+      "review_candidates": [
+        {
+          "line": 151,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 240,
+          "sql": "UPDATE public.zalo_call_ai_summaries zcas"
+        },
+        {
+          "line": 250,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 258,
+          "sql": "UPDATE public.zalo_call_ai_summaries zcas"
+        },
+        {
+          "line": 270,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 278,
+          "sql": "UPDATE public.zalo_call_ai_summaries zcas"
+        },
+        {
+          "line": 288,
+          "sql": "UPDATE public.zalo_personal_calls zpc"
+        },
+        {
+          "line": 450,
+          "sql": "UPDATE public.zalo_call_ai_summaries"
+        },
+        {
+          "line": 475,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 537,
+          "sql": "UPDATE public.zalo_call_ai_summaries"
+        },
+        {
+          "line": 551,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 610,
+          "sql": "UPDATE public.zalo_call_ai_summaries"
+        },
+        {
+          "line": 623,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 636,
+          "sql": "DROP FUNCTION IF EXISTS public.zalo_reconcile_missing_call_summaries(integer, text, text, integer);"
+        }
+      ]
+    },
+    {
+      "file": "20261021200001_zalo_summary_failure_parent_sync.sql",
+      "sha256": "e8fdca995dab906dd22a176a0658a06396e9232fc5e8ac9c01024f4de2da49f7",
+      "lines": 61,
+      "review_candidates": [
+        {
+          "line": 38,
+          "sql": "UPDATE public.zalo_call_ai_summaries"
+        },
+        {
+          "line": 52,
+          "sql": "UPDATE public.zalo_personal_calls"
+        }
+      ]
+    },
+    {
+      "file": "20261022090000_gemini_api_key_pool.sql",
+      "sha256": "2f572f563c37df842478aefbcd627ff840f238194707be7063a1a726f60a056e",
+      "lines": 110,
+      "review_candidates": [
+        {
+          "line": 57,
+          "sql": "UPDATE public.gemini_api_key_pool"
+        },
+        {
+          "line": 84,
+          "sql": "UPDATE public.gemini_api_key_pool"
+        }
+      ]
+    },
+    {
+      "file": "20261022130000_zalo_transcription_channel_checkpoints.sql",
+      "sha256": "d61e8e8fe58112e2a1ab24b180e0b9fc1ae4e3c0b6236b3bf1e6b18b229715d8",
+      "lines": 150,
+      "review_candidates": []
+    },
+    {
+      "file": "20261022170000_ai_brain_memory_foundation.sql",
+      "sha256": "06035321688855a33d72f975999902641d8791a0f469f9b88b21511df27caf8b",
+      "lines": 131,
+      "review_candidates": []
+    },
+    {
+      "file": "20261022173000_ai_brain_shadow_foundation.sql",
+      "sha256": "da81673756d38e3385a792ad92fa92c6a9a57b5c263d6902a4d8bed315713840",
+      "lines": 314,
+      "review_candidates": [
+        {
+          "line": 186,
+          "sql": "UPDATE public.ai_brain_shadow_runs r"
+        },
+        {
+          "line": 216,
+          "sql": "UPDATE public.ai_brain_shadow_runs r"
+        },
+        {
+          "line": 266,
+          "sql": "UPDATE public.ai_brain_shadow_runs"
+        }
+      ]
+    },
+    {
+      "file": "20261022180000_ai_brain_zalo_live_delivery.sql",
+      "sha256": "eacb41571e7daae21c5e29609a9135afd8ae185722731df73ecfd7395929d9c1",
+      "lines": 310,
+      "review_candidates": [
+        {
+          "line": 175,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 205,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 266,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 287,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        }
+      ]
+    },
+    {
+      "file": "20261023010000_ai_brain_live_zalo_scheduler.sql",
+      "sha256": "6ba94ba6ed0651d0fcc1ffc828a048d93a7cc8f90ba23d093168238b5b1c88a2",
+      "lines": 8,
+      "review_candidates": []
+    },
+    {
+      "file": "20261023100000_ai_handover_workflow.sql",
+      "sha256": "90f3a848091691d06aa93c744121f10de6e44bef79f834f42c7c51bd9b466845",
+      "lines": 443,
+      "review_candidates": [
+        {
+          "line": 236,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 307,
+          "sql": "UPDATE public.ai_handover_cases"
+        },
+        {
+          "line": 322,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 387,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 401,
+          "sql": "UPDATE public.ai_handover_cases"
+        }
+      ]
+    },
+    {
+      "file": "20261023140000_ai_control_center_foundation.sql",
+      "sha256": "af6977c568db9671c1daefa8b9ca47be74ccadc90482df769bad82d98fbb7741",
+      "lines": 135,
+      "review_candidates": [
+        {
+          "line": 31,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_settings_select_tenant ON public.ai_brain_live_settings;"
+        },
+        {
+          "line": 38,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_settings_update_tenant ON public.ai_brain_live_settings;"
+        },
+        {
+          "line": 46,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_settings_insert_tenant ON public.ai_brain_live_settings;"
+        },
+        {
+          "line": 63,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_deliveries_select_tenant ON public.ai_brain_live_deliveries;"
+        },
+        {
+          "line": 91,
+          "sql": "UPDATE public.ai_handover_cases"
+        },
+        {
+          "line": 123,
+          "sql": "UPDATE public.ai_brain_live_settings"
+        }
+      ]
+    },
+    {
+      "file": "20261023150000_ai_monitoring_alerting.sql",
+      "sha256": "38370d338e5856e8762e24f3547fc824f1a62b002b4a449f28e29d5c61cf97f5",
+      "lines": 244,
+      "review_candidates": [
+        {
+          "line": 64,
+          "sql": "DROP POLICY IF EXISTS ai_monitoring_alerts_select_tenant ON public.ai_monitoring_alerts;"
+        },
+        {
+          "line": 74,
+          "sql": "DROP POLICY IF EXISTS ai_monitoring_alerts_update_tenant ON public.ai_monitoring_alerts;"
+        },
+        {
+          "line": 82,
+          "sql": "DROP POLICY IF EXISTS ai_monitoring_alerts_insert_tenant ON public.ai_monitoring_alerts;"
+        },
+        {
+          "line": 129,
+          "sql": "UPDATE public.ai_monitoring_alerts"
+        },
+        {
+          "line": 195,
+          "sql": "UPDATE public.ai_monitoring_alerts"
+        },
+        {
+          "line": 230,
+          "sql": "UPDATE public.ai_monitoring_alerts"
+        }
+      ]
+    },
+    {
+      "file": "20261023160000_ai_brain_messenger_live_delivery.sql",
+      "sha256": "d9a9760714caa8297f585e72d9f56a1eef16f291495131b1049c2699f1644fda",
+      "lines": 286,
+      "review_candidates": [
+        {
+          "line": 79,
+          "sql": "DROP FUNCTION IF EXISTS public.claim_ai_brain_live_deliveries(integer, uuid);"
+        },
+        {
+          "line": 117,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 149,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 266,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 273,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261023170000_ai_brain_messenger_live_canary_and_scheduler.sql",
+      "sha256": "14a7d10522275f8525829572e257c8717b804e5318c8ed8fe523f74d145eff8a",
+      "lines": 1182,
+      "review_candidates": [
+        {
+          "line": 94,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_select_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 102,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_insert_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 103,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_update_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 104,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_delete_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 406,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 460,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 527,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 550,
+          "sql": "DROP FUNCTION IF EXISTS public.finish_ai_brain_live_delivery(uuid, uuid, text, text, numeric, text, text, uuid, integer);"
+        },
+        {
+          "line": 620,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 639,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 662,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 907,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 971,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 978,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 985,
+          "sql": "UPDATE public.response_sla_windows"
+        },
+        {
+          "line": 1143,
+          "sql": "DELETE FROM cron_internal.ai_brain_live_messenger_dispatch_history"
+        }
+      ]
+    },
+    {
+      "file": "20261023180000_ai_channel_scheduler_health_rpc.sql",
+      "sha256": "0d5f1c555face83421a9d6b9ad48deb36f353dbfde0fdad9bdf0366c3e0e0ef4",
+      "lines": 119,
+      "review_candidates": [
+        {
+          "line": 14,
+          "sql": "DROP FUNCTION IF EXISTS public.get_ai_scheduler_dispatch_status(text, integer);"
+        },
+        {
+          "line": 15,
+          "sql": "DROP FUNCTION IF EXISTS public.get_ai_channel_scheduler_health(text, integer);"
+        }
+      ]
+    },
+    {
+      "file": "20261023190000_ai_brain_tenant_isolation_hardening.sql",
+      "sha256": "fe59e14900b25c93c2723522c3a0f34dcc85530b5533b32a686265665d28d0f3",
+      "lines": 77,
+      "review_candidates": []
+    },
+    {
+      "file": "20261023200000_customer_360_ai_dossier.sql",
+      "sha256": "1fad07811c7eead28fc4c65eb2166c071455eb2e1ac4879529066f3adf47efb6",
+      "lines": 357,
+      "review_candidates": [
+        {
+          "line": 5,
+          "sql": "ALTER TABLE public.identities DROP CONSTRAINT identities_channel_check;"
+        },
+        {
+          "line": 213,
+          "sql": "UPDATE public.customer_dossier_refresh SET lock_token=NULL,lease_until=NULL,due_at=clock_timestamp()+interval '30 seconds'"
+        },
+        {
+          "line": 218,
+          "sql": "UPDATE public.customer_dossier_refresh SET lock_token=NULL,lease_until=NULL,error_code='AI_REFRESH_FAILED',"
+        },
+        {
+          "line": 228,
+          "sql": "UPDATE public.customer_dossier_refresh SET completed_version=p_version,lock_token=NULL,lease_until=NULL,"
+        }
+      ]
+    },
+    {
+      "file": "20261024041037_bulk_messaging_campaigns.sql",
+      "sha256": "275c8b83bcefdfa69b81b96399cc4d79e5100cb5103d970f8b92384bec3bc76b",
+      "lines": 769,
+      "review_candidates": [
+        {
+          "line": 242,
+          "sql": "UPDATE public.messaging_campaigns SET sent_count=sent, failed_count=failures,"
+        },
+        {
+          "line": 247,
+          "sql": "UPDATE public.messaging_campaigns SET status=CASE WHEN failures>0 THEN CASE WHEN sent>0 THEN 'PARTIALLY_FAILED' ELSE 'FAILED' END ELSE 'COMPLETED' END,"
+        },
+        {
+          "line": 257,
+          "sql": "UPDATE public.messaging_campaign_recipients SET eligibility_status=verdict->>'status',eligibility_reason=verdict->>'reason',"
+        },
+        {
+          "line": 261,
+          "sql": "UPDATE public.messaging_campaigns SET eligible_count=(SELECT count(*) FROM public.messaging_campaign_recipients WHERE campaign_id=p_campaign AND eligibility_status='ELIGIBLE'),status='READY',validation_version=validation_version+1 WHERE id=p_campaign;"
+        },
+        {
+          "line": 308,
+          "sql": "UPDATE public.messaging_suppressions"
+        },
+        {
+          "line": 369,
+          "sql": "UPDATE public.messaging_campaigns SET status=CASE WHEN scheduled IS NULL THEN 'RUNNING' ELSE 'SCHEDULED' END,scheduled_at=scheduled,confirmed_at=clock_timestamp(),confirmed_by=p_actor WHERE id=cid;"
+        },
+        {
+          "line": 370,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status=CASE WHEN eligibility_status='ELIGIBLE' THEN 'QUEUED' ELSE 'SKIPPED' END,"
+        },
+        {
+          "line": 378,
+          "sql": "UPDATE public.messaging_campaigns SET status='CANCELLED',finished_at=clock_timestamp() WHERE id=cid;"
+        },
+        {
+          "line": 379,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status='CANCELLED',lock_token=NULL,lease_until=NULL WHERE campaign_id=cid AND delivery_status IN ('PENDING','QUEUED','CLAIMED'); event:='campaign_cancelled';"
+        },
+        {
+          "line": 394,
+          "sql": "UPDATE public.messaging_sender_accounts SET connected=false WHERE company_id=p_company;"
+        },
+        {
+          "line": 501,
+          "sql": "UPDATE public.identities SET verified = true WHERE id = v_identity.id AND company_id = p_company;"
+        },
+        {
+          "line": 593,
+          "sql": "UPDATE public.identities"
+        },
+        {
+          "line": 665,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status='CLAIMED',lock_token=gen_random_uuid(),lease_until=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp()"
+        },
+        {
+          "line": 683,
+          "sql": "UPDATE public.messaging_campaigns SET status='PAUSED' WHERE id=c.id; RETURN NULL; END IF;"
+        },
+        {
+          "line": 687,
+          "sql": "UPDATE public.messaging_campaign_recipients SET eligibility_status=CASE WHEN verdict->>'status'='ELIGIBLE' THEN 'BLOCKED_POLICY' ELSE verdict->>'status' END,"
+        },
+        {
+          "line": 697,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status='QUEUED',next_attempt_at=date_trunc('minute',clock_timestamp())+interval '1 minute',lock_token=NULL,lease_until=NULL WHERE id=r.id; RETURN NULL; END IF;"
+        },
+        {
+          "line": 699,
+          "sql": "UPDATE private.messaging_rate_buckets SET used=used+1 WHERE company_id=p_company AND bucket_key IN ('company','channel:'||c.channel,'sender:'||c.sender_account_id::text);"
+        },
+        {
+          "line": 701,
+          "sql": "UPDATE public.messaging_campaigns SET status='RUNNING',started_at=coalesce(started_at,clock_timestamp()) WHERE id=c.id;"
+        },
+        {
+          "line": 702,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status='SENDING',attempt_count=attempt_count+1,dispatch_started_at=clock_timestamp(),"
+        },
+        {
+          "line": 721,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status=result,provider_message_id=CASE WHEN result='SENT' THEN p_message_id ELSE NULL END,"
+        },
+        {
+          "line": 746,
+          "sql": "UPDATE public.messaging_campaign_recipients SET delivery_status=CASE WHEN delivery_status='READ' THEN 'READ' ELSE p_status END,"
+        },
+        {
+          "line": 748,
+          "sql": "UPDATE public.interactions SET sanitized_content=regexp_replace(sanitized_content,'Delivery: [A-Z]+$','Delivery: '||CASE WHEN r.delivery_status='READ' THEN 'READ' ELSE p_status END)"
+        }
+      ]
+    },
+    {
+      "file": "20261024233000_campaign_authoring_without_delivery.sql",
+      "sha256": "c8871a246f99748db0b9a1e17a1db2f848b8c421805b5fbd5990a47cc2cf04d8",
+      "lines": 153,
+      "review_candidates": [
+        {
+          "line": 44,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        },
+        {
+          "line": 53,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        },
+        {
+          "line": 61,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        },
+        {
+          "line": 110,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        },
+        {
+          "line": 124,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        },
+        {
+          "line": 132,
+          "sql": "UPDATE public.messaging_campaign_settings"
+        }
+      ]
+    },
+    {
+      "file": "20261025021000_zalo_personal_contact_linking.sql",
+      "sha256": "88de59b35e9cb35d1ab3db80954e50f42e0aef05ed7d9b4ca56a462c26c5b191",
+      "lines": 266,
+      "review_candidates": [
+        {
+          "line": 193,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 223,
+          "sql": "UPDATE public.identities"
+        },
+        {
+          "line": 233,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        }
+      ]
+    },
+    {
+      "file": "20261025022000_zalo_personal_campaign_5min.sql",
+      "sha256": "8bd90ad5ee1cb87360e4c5db13335c123c8f002c7a3050f2c360767296143dab",
+      "lines": 408,
+      "review_candidates": [
+        {
+          "line": 262,
+          "sql": "UPDATE public.messaging_campaigns"
+        },
+        {
+          "line": 269,
+          "sql": "UPDATE public.messaging_campaign_recipients"
+        },
+        {
+          "line": 279,
+          "sql": "UPDATE public.messaging_campaign_recipients r"
+        },
+        {
+          "line": 329,
+          "sql": "UPDATE public.messaging_campaign_recipients"
+        },
+        {
+          "line": 355,
+          "sql": "UPDATE public.messaging_campaign_recipients"
+        },
+        {
+          "line": 386,
+          "sql": "UPDATE public.interactions"
+        }
+      ]
+    },
+    {
+      "file": "20261025022500_zalo_personal_strict_sender_spacing.sql",
+      "sha256": "747cf3c1e3192ee060eb1305325a79df92db143ba5698e4ff06c1897a15f8c58",
+      "lines": 129,
+      "review_candidates": [
+        {
+          "line": 50,
+          "sql": "UPDATE public.messaging_campaign_recipients"
+        },
+        {
+          "line": 105,
+          "sql": "UPDATE public.messaging_campaign_recipients"
+        }
+      ]
+    },
+    {
+      "file": "20261025023000_zalo_personal_conversation_identity.sql",
+      "sha256": "a18cb57a9dae01fdfba84d06a5cadafdf62568b2df94aaf61a39e5037e9a6e0f",
+      "lines": 235,
+      "review_candidates": []
+    },
+    {
+      "file": "20261025051000_zalo_personal_zero_touch_customer_sync.sql",
+      "sha256": "78710749dd0bd900390b19eb6462f88d7bfc6d0b6658f051800f0e506249a1ca",
+      "lines": 399,
+      "review_candidates": [
+        {
+          "line": 73,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 112,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 131,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 182,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        }
+      ]
+    },
+    {
+      "file": "20261025062000_zalo_personal_legacy_identity_upgrade.sql",
+      "sha256": "d74628bee2a43d9aac8eb82cb2aafa4e11def08edb45c78d265d61d0e9ab3eec",
+      "lines": 313,
+      "review_candidates": [
+        {
+          "line": 109,
+          "sql": "UPDATE public.identities i"
+        },
+        {
+          "line": 127,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 159,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 195,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 214,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        },
+        {
+          "line": 263,
+          "sql": "UPDATE public.zalo_personal_contact_candidates"
+        }
+      ]
+    },
+    {
+      "file": "20261025124107_zalo_brain_sla_and_terminal_failures.sql",
+      "sha256": "fcb754511d24a70ecfa0ba406b0fc01b931f980b286ee3f29c96c0ffdbdc917c",
+      "lines": 178,
+      "review_candidates": [
+        {
+          "line": 7,
+          "sql": "UPDATE public.ai_brain_live_deliveries SET retryable = false WHERE channel = 'ZALO' AND send_status = 'FAILED';"
+        },
+        {
+          "line": 28,
+          "sql": "DROP TRIGGER IF EXISTS ai_brain_live_retry_and_sla_guard ON public.ai_brain_live_deliveries;"
+        },
+        {
+          "line": 88,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 161,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        }
+      ]
+    },
+    {
+      "file": "20261025160000_zalo_brain_one_minute_sla.sql",
+      "sha256": "cd6d6beae494fd3b32340b3adb49d310c353bbd9a33fca5503c18a9a8da8abf5",
+      "lines": 170,
+      "review_candidates": [
+        {
+          "line": 23,
+          "sql": "DROP TRIGGER IF EXISTS ai_brain_live_retry_and_sla_guard ON public.ai_brain_live_deliveries;"
+        },
+        {
+          "line": 80,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 153,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        }
+      ]
+    },
+    {
+      "file": "20261026075500_zalo_auto_link_unique_customer.sql",
+      "sha256": "fdf72b3443507bed6597b66c8f5b9ba319a8b34707df6de09789a4cf9ab8dd87",
+      "lines": 228,
+      "review_candidates": [
+        {
+          "line": 106,
+          "sql": "UPDATE public.zalo_outbound_call_requests"
+        },
+        {
+          "line": 149,
+          "sql": "UPDATE public.zalo_personal_calls"
+        },
+        {
+          "line": 213,
+          "sql": "UPDATE public.zalo_personal_calls pc"
+        },
+        {
+          "line": 223,
+          "sql": "UPDATE public.zalo_call_transcriptions t"
+        }
+      ]
+    },
+    {
+      "file": "20261026083543_zalo_personal_live_voice_bridge.sql",
+      "sha256": "6a45f3aefdf87b452dcf45be488b7a9e05bf50335d3d57806220a98905c704dd",
+      "lines": 154,
+      "review_candidates": [
+        {
+          "line": 89,
+          "sql": "UPDATE public.zalo_personal_live_voice_sessions"
+        },
+        {
+          "line": 138,
+          "sql": "UPDATE public.zalo_personal_live_voice_sessions"
+        }
+      ]
+    },
+    {
+      "file": "20261026092307_zalo_personal_inbound_live_voice.sql",
+      "sha256": "47ae3f71512856d2b90b097e5273f2a1baeba46ae204ebf96df5d51518259236",
+      "lines": 80,
+      "review_candidates": []
+    },
+    {
+      "file": "20261026111500_zalo_personal_inbound_live_voice_hardening.sql",
+      "sha256": "888fe930c822f60deb3aaf320ad78d3204b9a6ecc8e0413024f495373f5ec3d5",
+      "lines": 71,
+      "review_candidates": [
+        {
+          "line": 40,
+          "sql": "UPDATE public.zalo_personal_live_voice_sessions"
+        }
+      ]
+    },
+    {
+      "file": "20261027130000_zalo_display_name_repair.sql",
+      "sha256": "7faa5693fe813633199b4d7e2480acf355fdb23f50fce41dde123e652b123c52",
+      "lines": 704,
+      "review_candidates": [
+        {
+          "line": 311,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 338,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 504,
+          "sql": "UPDATE public.customers c"
+        },
+        {
+          "line": 513,
+          "sql": "UPDATE public.identities i"
+        },
+        {
+          "line": 522,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 624,
+          "sql": "UPDATE public.zalo_personal_calls pc"
+        },
+        {
+          "line": 651,
+          "sql": "UPDATE public.zalo_personal_calls pc"
+        },
+        {
+          "line": 661,
+          "sql": "UPDATE public.zalo_call_transcriptions t"
+        },
+        {
+          "line": 688,
+          "sql": "UPDATE public.zalo_personal_calls pc"
+        },
+        {
+          "line": 698,
+          "sql": "UPDATE public.zalo_call_transcriptions t"
+        }
+      ]
+    },
+    {
+      "file": "20261027140000_botcake_messenger_page_and_du_hoc_ai.sql",
+      "sha256": "c2c759b1c6b40bb4aabe52b3b754aceea23e7790fa1f81d8998a4ef02e53ba7c",
+      "lines": 221,
+      "review_candidates": [
+        {
+          "line": 113,
+          "sql": "DROP TRIGGER IF EXISTS trg_repair_messenger_external_conversation_id ON public.conversations;"
+        },
+        {
+          "line": 121,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 129,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 198,
+          "sql": "DROP TRIGGER IF EXISTS trg_seed_du_hoc_messenger_canary ON public.conversations;"
+        }
+      ]
+    },
+    {
+      "file": "20261027183000_han_ingest_outbound.sql",
+      "sha256": "ec1832174424b4b74e6b4ebd3e7dd69810c7c945651b3977e7168941d3110918",
+      "lines": 193,
+      "review_candidates": [
+        {
+          "line": 78,
+          "sql": "UPDATE public.interactions"
+        },
+        {
+          "line": 167,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261027184500_facebook_sync_checkpoints.sql",
+      "sha256": "ca296a49adbafd7e81a252a5fdac3fcdf5be454c33fec3aa14d63e2392b8059e",
+      "lines": 75,
+      "review_candidates": []
+    },
+    {
+      "file": "20261027210000_study_abroad_stages.sql",
+      "sha256": "56d8831dd92fbde6031dcc451926512788aae3183f5274e20e07c2790ee760e8",
+      "lines": 37,
+      "review_candidates": [
+        {
+          "line": 4,
+          "sql": "ALTER TABLE public.customers DROP CONSTRAINT IF EXISTS customers_stage_check;"
+        }
+      ]
+    },
+    {
+      "file": "20261028120000_canary_allowlist_foundation_backfill.sql",
+      "sha256": "3266f4934062bee1acd65b4b8de911c49b29a2c3a5a8cc3acf11ce7d01d79a04",
+      "lines": 77,
+      "review_candidates": [
+        {
+          "line": 66,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_select_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 73,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_insert_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 74,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_update_tenant ON public.ai_brain_live_canary_allowlist;"
+        },
+        {
+          "line": 75,
+          "sql": "DROP POLICY IF EXISTS ai_brain_live_canary_delete_tenant ON public.ai_brain_live_canary_allowlist;"
+        }
+      ]
+    },
+    {
+      "file": "20261028130000_customer_funnel_six_stages.sql",
+      "sha256": "44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0",
+      "lines": 1315,
+      "review_candidates": [
+        {
+          "line": 88,
+          "sql": "ALTER TABLE public.customers DROP CONSTRAINT IF EXISTS customers_stage_check;"
+        },
+        {
+          "line": 244,
+          "sql": "UPDATE public.customers c"
+        },
+        {
+          "line": 298,
+          "sql": "DROP FUNCTION IF EXISTS public.get_customer_stage_counts(uuid, timestamptz, timestamptz, text, text);"
+        },
+        {
+          "line": 393,
+          "sql": "DROP FUNCTION IF EXISTS public.update_customer_stage_atomic(uuid, uuid, text, text, uuid, text, text);"
+        },
+        {
+          "line": 475,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 545,
+          "sql": "DROP FUNCTION IF EXISTS public.get_customer_call_transcript_input(uuid, uuid, integer);"
+        },
+        {
+          "line": 643,
+          "sql": "DROP FUNCTION IF EXISTS public.record_ai_analysis(uuid, uuid, jsonb, text, text, text, jsonb, text, numeric, text, text);"
+        },
+        {
+          "line": 1048,
+          "sql": "DROP FUNCTION IF EXISTS public.get_customer_stage_suggestions(uuid, uuid, integer);"
+        },
+        {
+          "line": 1143,
+          "sql": "DROP FUNCTION IF EXISTS public.verify_ai_stage_suggestion(uuid, uuid, text, uuid, text, text, uuid);"
+        },
+        {
+          "line": 1144,
+          "sql": "DROP FUNCTION IF EXISTS public.verify_ai_stage_suggestion(uuid, uuid, text, uuid, text, text, uuid);"
+        },
+        {
+          "line": 1215,
+          "sql": "UPDATE public.ai_analyses"
+        },
+        {
+          "line": 1280,
+          "sql": "UPDATE public.ai_analyses"
+        }
+      ]
+    },
+    {
+      "file": "20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql",
+      "sha256": "98bd13f4c058bcc8e40992a2eb0b9bacd633a76af7ba2eac9e3a095912506ba8",
+      "lines": 707,
+      "review_candidates": [
+        {
+          "line": 127,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 146,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 169,
+          "sql": "UPDATE public.ai_brain_live_deliveries d"
+        },
+        {
+          "line": 372,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 547,
+          "sql": "DROP TRIGGER IF EXISTS trg_seed_du_hoc_messenger_canary ON public.conversations;"
+        },
+        {
+          "line": 548,
+          "sql": "DROP TRIGGER IF EXISTS trg_seed_messenger_pages_canary ON public.conversations;"
+        },
+        {
+          "line": 675,
+          "sql": "DELETE FROM cron_internal.ai_brain_live_messenger_dispatch_history"
+        }
+      ]
+    },
+    {
+      "file": "20261028140000_fix_messenger_confidence_and_sla_resolution.sql",
+      "sha256": "684efe87b6170086cb0158eb6c47c116fc43bed5d081e6e1e1431351e9ee880e",
+      "lines": 280,
+      "review_candidates": [
+        {
+          "line": 13,
+          "sql": "UPDATE public.ai_brain_live_settings"
+        },
+        {
+          "line": 185,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 249,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        },
+        {
+          "line": 256,
+          "sql": "UPDATE public.conversations c"
+        },
+        {
+          "line": 263,
+          "sql": "UPDATE public.response_sla_windows"
+        }
+      ]
+    },
+    {
+      "file": "20261028150000_always_reply_messenger_fallback_and_no_pause.sql",
+      "sha256": "d46e8361c1d14f5dd3da5a4bde54424d6a645a29bd4d36c1be487e2d9f482b83",
+      "lines": 134,
+      "review_candidates": [
+        {
+          "line": 82,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 130,
+          "sql": "UPDATE public.conversations"
+        }
+      ]
+    },
+    {
+      "file": "20261028160000_c360_editable_notes_and_sale_name.sql",
+      "sha256": "ffc33cb11b597d9f2b810018e583879a0b19feb3d7ebc2052a1e891db5802084",
+      "lines": 105,
+      "review_candidates": [
+        {
+          "line": 11,
+          "sql": "UPDATE public.customer_dossier_profiles"
+        },
+        {
+          "line": 16,
+          "sql": "UPDATE public.customer_dossier_profiles p"
+        }
+      ]
+    },
+    {
+      "file": "20261029100000_c360_channel_outreach.sql",
+      "sha256": "16f4d3b12c7dff99ebbbf4d279268d8fdcc2fff788586ac7f14a6ba97004c767",
+      "lines": 172,
+      "review_candidates": []
+    },
+    {
+      "file": "20261029120000_zcajs_groups_and_zalo_ai_pause.sql",
+      "sha256": "4ae0402a7303104dd4bc0539028ab25ce8740f63c4911c0af4e1a8137a53b8e3",
+      "lines": 438,
+      "review_candidates": [
+        {
+          "line": 197,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 204,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 289,
+          "sql": "UPDATE public.conversations"
+        },
+        {
+          "line": 422,
+          "sql": "UPDATE public.ai_brain_live_settings"
+        },
+        {
+          "line": 430,
+          "sql": "UPDATE public.ai_brain_live_deliveries"
+        }
+      ]
+    },
+    {
+      "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+      "sha256": "f9e135d22b21e9a1812a275759eadba0fbdfe5c2af16d28c3508abd2b6627dd4",
+      "lines": 551,
+      "review_candidates": [
+        {
+          "line": 529,
+          "sql": "EXECUTE format('DROP FUNCTION %s CASCADE', f.signature);"
+        },
+        {
+          "line": 534,
+          "sql": "DROP TABLE IF EXISTS"
+        }
+      ]
+    },
+    {
+      "file": "20261030090000_meta_ads_lead_attribution.sql",
+      "sha256": "420512ade71d9f1c48dd3876a80d54108e5b2024b09d2f38522aa653441cdfa6",
+      "lines": 654,
+      "review_candidates": [
+        {
+          "line": 357,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 369,
+          "sql": "UPDATE public.customers"
+        }
+      ]
+    },
+    {
+      "file": "20261030100000_meta_ads_hardening.sql",
+      "sha256": "467a791a8b910d31ff19d4b3b3af5a9490d4865ba5b6ef1d0178b45c00424830",
+      "lines": 908,
+      "review_candidates": [
+        {
+          "line": 134,
+          "sql": "UPDATE public.meta_ad_accounts"
+        },
+        {
+          "line": 262,
+          "sql": "UPDATE private.meta_leadgen_events"
+        },
+        {
+          "line": 306,
+          "sql": "UPDATE public.meta_ad_accounts"
+        },
+        {
+          "line": 359,
+          "sql": "UPDATE public.meta_ad_accounts"
+        },
+        {
+          "line": 594,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 606,
+          "sql": "UPDATE public.customers"
+        }
+      ]
+    },
+    {
+      "file": "20261030110000_meta_ads_final_remediation.sql",
+      "sha256": "f554d787789a15515bf0b80403d45ec4a3c100ac8365450ecb54d14cb150dbe6",
+      "lines": 735,
+      "review_candidates": [
+        {
+          "line": 20,
+          "sql": "DROP FUNCTION public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamptz);"
+        },
+        {
+          "line": 49,
+          "sql": "DROP FUNCTION public.finalize_meta_leadgen_event(uuid,text,text,uuid,uuid,text);"
+        },
+        {
+          "line": 66,
+          "sql": "UPDATE private.meta_leadgen_events SET status=p_status, claim_token=NULL, lease_until=NULL,"
+        },
+        {
+          "line": 248,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 356,
+          "sql": "UPDATE private.han_intake_events"
+        },
+        {
+          "line": 369,
+          "sql": "UPDATE public.care_deliveries"
+        },
+        {
+          "line": 436,
+          "sql": "UPDATE private.meta_leadgen_events SET ingest_args=v_args, interaction_id=(v_result->>'interaction_id')::uuid,"
+        },
+        {
+          "line": 655,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 667,
+          "sql": "UPDATE public.customers"
+        },
+        {
+          "line": 684,
+          "sql": "DROP FUNCTION public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text);"
+        },
+        {
+          "line": 712,
+          "sql": "UPDATE public.meta_ad_accounts"
+        }
+      ]
+    },
+    {
+      "file": "20261030120000_meta_ads_attribution_rpc_security.sql",
+      "sha256": "a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1",
+      "lines": 19,
+      "review_candidates": []
+    },
+    {
+      "file": "20261030120001_staging_function_security_hardening.sql",
+      "sha256": "cace68d93fa4f681b9895c9fd2172d13b58985703e4f678ae10fce6dc9e356ef",
+      "lines": 63,
+      "review_candidates": []
+    }
+  ]
+}

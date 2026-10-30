@@ -1,0 +1,7 @@
+[{"category":"columns","object_count":460,"fingerprint":"9628c8da028e678629c190380d9efb5d"}, 
+ {"category":"constraints","object_count":298,"fingerprint":"e912bdd2add0deb1a097dd81567457c0"}, 
+ {"category":"functions","object_count":92,"fingerprint":"982e28b266370e0537ed24365b1576bd"}, 
+ {"category":"indexes","object_count":154,"fingerprint":"cad7457128356ef2eaa261af0e06a7ad"}, 
+ {"category":"policies","object_count":86,"fingerprint":"aa0f15c44b9701a9e9538b221da0c583"}, 
+ {"category":"relations","object_count":45,"fingerprint":"cd2550814770bef655d1b026b7886909"}, 
+ {"category":"triggers","object_count":63,"fingerprint":"0ed008353955c866921cf3bc8b68b213"}]
