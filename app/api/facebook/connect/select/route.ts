@@ -140,8 +140,8 @@ export async function POST(request: Request) {
           .upsert(accountRows, { onConflict: 'company_id,ad_account_id' });
 
         if (upsertErr) {
-          console.error('[meta-connect] upsert_ad_accounts_failed', upsertErr);
-          throw upsertErr;
+          console.error('[meta-connect] upsert_ad_accounts_failed');
+          throw new Error('META_AD_ACCOUNT_STORE_FAILED');
         }
 
         for (const acc of accountRows) {
@@ -153,8 +153,8 @@ export async function POST(request: Request) {
           });
 
           if (tokenErr) {
-            console.error(`[meta-connect] store_token_rpc_failed id=${acc.ad_account_id}`, tokenErr);
-            throw tokenErr;
+            console.error('[meta-connect] store_token_rpc_failed');
+            throw new Error('META_TOKEN_STORE_FAILED');
           }
         }
 

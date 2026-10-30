@@ -29,12 +29,13 @@ function sql(value: string, database = db) {
 }
 function query(value: string): Promise<string> {
     return new Promise((resolve, reject) => {
-        const proc = spawn('docker', ['exec', '-i', container, 'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', db]);
+        const proc = spawn('docker', ['exec', '-i', container, 'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', db], { timeout: 30_000 });
         let output = '', error = '';
         proc.stdout.on('data', c => output += c);
         proc.stderr.on('data', c => error += c);
         proc.on('error', reject);
-        proc.on('exit', code => code === 0 ? resolve(output.trim()) : reject(new Error(error)));
+        // exit can precede stdout drainage on Linux; close waits for all stdio.
+        proc.on('close', code => code === 0 ? resolve(output.trim()) : reject(new Error(error || 'POSTGRES_TEST_PROCESS_FAILED')));
         proc.stdin.end(value);
     });
 }

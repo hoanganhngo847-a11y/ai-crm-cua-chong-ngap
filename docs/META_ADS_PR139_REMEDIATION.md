@@ -54,7 +54,7 @@ Local validation on 2026-10-30 (no skipped tests):
 
 | Command | Result |
 | --- | --- |
-| `npm run test:meta-ads` | PASS — 28 tests, including original 21 scenarios and remediation/key-verifier regressions |
+| `npm run test:meta-ads` | PASS — 30 tests, including original 21 scenarios, remediation/key-verifier regressions and mocked discovered-asset/OAuth error checks |
 | `npm run test:meta-ads:db` | PASS — native PostgreSQL integration: eight concurrent claims, stale ownership, role ACLs, forged/foreign mapping, timestamp ordering, simultaneous signed webhooks and partial retry/finalization faults |
 | `npm run test:omnichannel` | PASS — 34 tests |
 | `npm run test:crm` | PASS — all 10 scripts; final funnel suite 94 assertions passed |
@@ -75,3 +75,10 @@ CI follow-up repairs keep every gate enabled: the surviving analytics suite now 
 The Verify workflow now explicitly runs Meta Ads unit/database tests, CRM, typecheck and lint in addition to its existing gates. GitHub Actions must finish on the pushed head before handoff; current status is recorded in the PR body.
 
 Pending release evidence: re-inventory production migration drift and token stores, verify the effective old key for any existing legacy ciphertext, complete live Meta endpoint/scope acceptance with an approved test account/Page/lead, and obtain independent final review. These remain release gates regardless of local or GitHub CI results.
+
+
+### Discovered assets and staging proposal
+
+The 2026-10-30 browser-discovered production assets do not supply staging isolation or proven permissions. See [META_ADS_STAGING_VALIDATION_PLAN.md](META_ADS_STAGING_VALIDATION_PLAN.md) for the corrected Render service ID, independent asset relationships, v26 configuration, conditional permission requirements, and the exact future approval procedure. No provider token values were inspected or copied and no live test was executed. In particular, current official form-read documentation and lead-permission dependencies remain unresolved API acceptance blockers.
+
+CI reached and passed the full integration and repeated-fixture gates on `e1d48ea`; the subsequent native Meta database test exposed a Linux process-output race in the test harness (`exit` can occur before stdout drains). The harness now awaits `close` and bounds child processes; it retains all concurrent/RLS/retry assertions. Its final CI status is recorded in the PR body. The local Docker VM became unavailable after host disk exhaustion; worktree-generated `.next` output was removed to recover space. Earlier complete local DB resets/native runs passed; an interrupted later rerun is not recorded as passing.

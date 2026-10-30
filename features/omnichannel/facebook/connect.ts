@@ -203,11 +203,18 @@ export async function exchangeCodeForUserAccessToken(code: string) {
   url.searchParams.set('redirect_uri', config.redirectUri);
   url.searchParams.set('code', code);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    cache: 'no-store',
-    signal: AbortSignal.timeout(10_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    // Transport errors can include the OAuth URL with client_secret/code.
+    throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
+  }
 
   if (!response.ok) throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
   const payload = (await response.json()) as { access_token?: unknown };

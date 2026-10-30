@@ -224,3 +224,73 @@ test('offline key verifier emits only status/counts for verified legacy rows and
         else assert.equal(result.stderr.trim(), 'META_TOKEN_KEY_VERIFICATION_FAILED');
     }
 });
+
+test('discovered asset identifiers are accepted independently and the Page requires an explicit tenant binding', async () => {
+    const { binding } = await import('../../features/omnichannel/facebook/binding');
+    const { configuredFacebookPageIds } = await import('../../features/omnichannel/facebook/connect');
+    const page = '654520554683416';
+    const form = '1698659958359492';
+    const account = '996324396811261';
+    const company = '11111111-1111-4111-8111-111111111111';
+    const oldBindings = process.env.META_PAGE_BINDINGS;
+    const original = globalThis.fetch;
+    try {
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page: '123', company, tokenEnv: 'META_STAGING_PAGE_TOKEN' }]);
+        assert.throws(() => binding(page), /NOT_FOUND/);
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_STAGING_PAGE_TOKEN', name: 'Du Học Áo CHD' }]);
+        assert.equal(binding(page).company, company);
+        assert.equal(binding(page).page, page);
+        assert.ok(configuredFacebookPageIds(company).has(page));
+        let formWrite = false;
+        globalThis.fetch = async (input, init) => {
+            const url = new URL(String(input));
+            if (url.hostname === 'graph.facebook.com') {
+                assert.equal(url.searchParams.has('access_token'), false);
+                if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+                if (url.pathname.endsWith('/me/adaccounts')) return Response.json({ data: [{ id: `act_${account}`, account_id: account, name: 'TKQC Du học - NV mới' }] });
+                if (url.pathname.endsWith(`/${page}/leadgen_forms`)) return Response.json({ data: [{ id: form, name: 'Offline form fixture' }] });
+                if (url.pathname.endsWith(`/act_${account}/campaigns`)) return Response.json({ data: [] });
+                throw new Error('unexpected Graph edge');
+            }
+            assert.equal(url.pathname, '/rest/v1/meta_lead_forms');
+            const rows = JSON.parse(String(init?.body));
+            assert.equal(rows[0].company_id, company);
+            assert.equal(rows[0].page_id, page);
+            assert.equal(rows[0].meta_form_id, form);
+            formWrite = true;
+            return new Response(null, { status: 201 });
+        };
+        assert.equal((await listManagedFacebookPages(secret))[0].id, page);
+        assert.equal((await listManagedAdAccounts(secret))[0].id, `act_${account}`);
+        assert.equal(await syncLeadFormsForPage(company, page, secret), 1);
+        assert.equal(await syncCampaignsForAccount(company, account, secret), 0);
+        assert.equal(formWrite, true);
+        // Co-discovery is deliberately not used to assert Page/account/business ownership.
+    } finally {
+        globalThis.fetch = original;
+        if (oldBindings == null) delete process.env.META_PAGE_BINDINGS; else process.env.META_PAGE_BINDINGS = oldBindings;
+    }
+});
+
+test('OAuth transport errors cannot echo a credential-bearing token-exchange URL', async () => {
+    const { exchangeCodeForUserAccessToken } = await import('../../features/omnichannel/facebook/connect');
+    const original = globalThis.fetch;
+    const oldApp = process.env.META_APP_ID, oldSecret = process.env.META_APP_SECRET, oldOrigin = process.env.WEBSITE_ORIGIN;
+    try {
+        process.env.META_APP_ID = '1780871206505449';
+        process.env.META_APP_SECRET = secret;
+        process.env.WEBSITE_ORIGIN = 'https://staging.invalid';
+        globalThis.fetch = async input => { throw new Error(`transport failed ${String(input)}`); };
+        await assert.rejects(exchangeCodeForUserAccessToken('dummy-oauth-code'), error => {
+            assert.ok(error instanceof Error);
+            assert.equal(error.message, 'FACEBOOK_TOKEN_EXCHANGE_FAILED');
+            assert.ok(!error.message.includes(secret));
+            return true;
+        });
+    } finally {
+        globalThis.fetch = original;
+        for (const [key, value] of [['META_APP_ID', oldApp], ['META_APP_SECRET', oldSecret], ['WEBSITE_ORIGIN', oldOrigin]]) {
+            if (value == null) delete process.env[key!]; else process.env[key!] = value;
+        }
+    }
+});

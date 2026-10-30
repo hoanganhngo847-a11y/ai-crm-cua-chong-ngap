@@ -86,7 +86,7 @@ export async function GET(request: Request) {
       error instanceof Error && error.message.startsWith('FACEBOOK_')
         ? error.message
         : 'FACEBOOK_CONNECT_CALLBACK_FAILED';
-    console.error('[meta-connect] callback_failed', error);
+    console.error('[meta-connect] callback_failed', code);
     return back(request, code);
   }
 }
