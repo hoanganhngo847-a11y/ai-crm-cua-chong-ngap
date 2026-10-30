@@ -48,6 +48,7 @@ async function handleCronSync(request: NextRequest): Promise<NextResponse> {
 
     const companyIds = Array.from(new Set((accounts || []).map((a) => a.company_id)));
     const results: Record<string, { success: boolean; error?: string }> = {};
+    const attributionRetries: Record<string, { resolved: number; remaining: number; error?: string }> = {};
 
     for (const companyId of companyIds) {
         try {
@@ -55,6 +56,26 @@ async function handleCronSync(request: NextRequest): Promise<NextResponse> {
             results[companyId] = res;
         } catch (err: unknown) {
             results[companyId] = { success: false, error: err instanceof Error ? err.message : 'META_SYNC_FAILED' };
+        }
+        // Safe, idempotent completion of pending campaign attributions. Runs even
+        // when asset sync failed: a previous partial sync may already have made
+        // campaigns resolvable. Only resolvable pending lead leads are finalized;
+        // campaign names are never invented.
+        try {
+            const retry = await supabase.rpc('retry_pending_lead_attribution', { p_company: companyId });
+            if (retry.error) {
+                console.error('[cron/meta-ads-sync] attribution retry failed (no leak)', retry.error?.message);
+                attributionRetries[companyId] = { resolved: 0, remaining: 0, error: 'ATTRIBUTION_RETRY_FAILED' };
+            } else if (retry.data && typeof retry.data === 'object') {
+                const data = retry.data as { resolved?: number; remaining?: number };
+                attributionRetries[companyId] = {
+                    resolved: Number(data.resolved || 0),
+                    remaining: Number(data.remaining || 0),
+                };
+            }
+        } catch (_attrErr: unknown) {
+            console.error('[cron/meta-ads-sync] attribution retry crashed (no leak)');
+            attributionRetries[companyId] = { resolved: 0, remaining: 0, error: 'ATTRIBUTION_RETRY_FAILED' };
         }
     }
 
@@ -64,5 +85,6 @@ async function handleCronSync(request: NextRequest): Promise<NextResponse> {
         synced_companies: synced,
         failed_companies: companyIds.length - synced,
         results,
+        attribution_retries: attributionRetries,
     });
 }

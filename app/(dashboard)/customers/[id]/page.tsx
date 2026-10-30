@@ -88,12 +88,15 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       touchpoint_type: string;
       channel: string;
       page_name: string | null;
+      meta_campaign_id: string | null;
       campaign_name_snapshot: string | null;
       ad_set_name_snapshot: string | null;
       ad_name_snapshot: string | null;
       form_name_snapshot: string | null;
       attribution_status: string;
       attribution_method: string;
+      normalized_phone_match_status: string | null;
+      is_duplicate_phone: boolean | null;
       occurred_at: string;
     }>;
     first_campaign_name?: string | null;
@@ -161,22 +164,25 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         touchpoint_type: string;
         channel: string;
         page_name: string | null;
+        meta_campaign_id: string | null;
         campaign_name_snapshot: string | null;
         ad_set_name_snapshot: string | null;
         ad_name_snapshot: string | null;
         form_name_snapshot: string | null;
         attribution_status: string;
         attribution_method: string;
+        normalized_phone_match_status: string | null;
+        is_duplicate_phone: boolean | null;
         occurred_at: string;
       }> = [];
 
       try {
         const { data: tpRows } = await supabase
           .from('lead_attribution_touchpoints')
-          .select('id, touchpoint_type, channel, page_name, campaign_name_snapshot, ad_set_name_snapshot, ad_name_snapshot, form_name_snapshot, attribution_status, attribution_method, occurred_at')
+          .select('id, touchpoint_type, channel, page_name, meta_campaign_id, campaign_name_snapshot, ad_set_name_snapshot, ad_name_snapshot, form_name_snapshot, attribution_status, attribution_method, normalized_phone_match_status, is_duplicate_phone, occurred_at')
           .eq('customer_id', id)
           .eq('company_id', actor.companyId)
-          .order('occurred_at', { ascending: false });
+          .order('occurred_at', { ascending: true });
 
         if (tpRows) {
           touchpointsList = tpRows;
@@ -220,6 +226,27 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
   } catch (err) {
     console.error('Lỗi khi nạp timeline:', err);
   }
+
+  // Nguồn khách hàng & Lịch sử đăng ký: tổng hợp các lượt Lead Meta của khách.
+  // Touchpoints are ordered chronologically (oldest first) at query time.
+  const allTouchpoints = customerData.touchpoints || [];
+  const metaLeadTouchpoints = allTouchpoints.filter((tp) => tp.channel === 'FACEBOOK_LEAD_ADS');
+  const hasDuplicatePhoneLead = allTouchpoints.some((tp) => tp.is_duplicate_phone === true);
+  const distinctCampaignCount = new Set(
+    metaLeadTouchpoints
+      .map((tp) => tp.meta_campaign_id || tp.campaign_name_snapshot)
+      .filter(Boolean)
+  ).size;
+  const firstSubmission = metaLeadTouchpoints[0] ?? null;
+  const latestSubmission = metaLeadTouchpoints[metaLeadTouchpoints.length - 1] ?? null;
+  const CHANNEL_LABELS: Record<string, string> = {
+    FACEBOOK_LEAD_ADS: 'Facebook Ads',
+    FACEBOOK_MESSENGER: 'Messenger',
+    WEBSITE: 'Website',
+    ZALO: 'Zalo',
+    HOTLINE: 'Hotline',
+    OTHER: 'Khác',
+  };
 
   return (
     <div className="space-y-6">
@@ -330,6 +357,17 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   {new Date(customerData.created_at).toLocaleDateString('vi-VN')}
                 </span>
               </div>
+
+              {metaLeadTouchpoints.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Trạng thái Lead:</span>
+                  <Badge variant={hasDuplicatePhoneLead ? 'warning' : 'success'} size="xs">
+                    {hasDuplicatePhoneLead
+                      ? 'Đã có hồ sơ - Lead trùng số điện thoại'
+                      : 'Đã có hồ sơ - Lead mới'}
+                  </Badge>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -365,15 +403,15 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               )}
             </div>
           </Card>
-          {/* Nguồn gốc & Chiến dịch Quảng cáo (Lead Attribution) */}
+          {/* Nguồn khách hàng & Lịch sử đăng ký (Lead Attribution & Duplicate Phone History) */}
           <Card className="p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <CardTitle>Nguồn Lead &amp; Chiến dịch (Attribution)</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Nguồn khách hàng &amp; Lịch sử đăng ký</CardTitle>
               <Badge
                 variant={
                   customerData.attribution_status === 'ATTRIBUTED'
                     ? 'success'
-                    : customerData.attribution_status === 'INFERRED'
+                    : customerData.attribution_status === 'INFERRED' || customerData.attribution_status === 'PENDING_SYNC'
                       ? 'info'
                       : 'neutral'
                 }
@@ -383,76 +421,97 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               </Badge>
             </div>
 
-            <div className="space-y-2 text-xs">
-              {customerData.first_campaign_name && (
-                <div className="p-2.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-1">
-                  <div className="text-[10px] uppercase font-semibold text-text-tertiary">
-                    First-Touch (Nguồn đầu tiên)
-                  </div>
-                  <div className="font-semibold text-text-primary text-xs flex items-center gap-1.5">
-                    <span>🎯</span>
-                    <span>{customerData.first_campaign_name}</span>
-                  </div>
+            {metaLeadTouchpoints.length > 0 && (
+              <div className="p-2.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Tổng số lượt Lead Meta:</span>
+                  <span className="font-semibold text-[var(--text-primary)]">{metaLeadTouchpoints.length}</span>
                 </div>
-              )}
-
-              {customerData.latest_campaign_name &&
-                customerData.latest_campaign_name !== customerData.first_campaign_name && (
-                  <div className="p-2.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-1">
-                    <div className="text-[10px] uppercase font-semibold text-text-tertiary">
-                      Latest-Touch (Tương tác gần nhất)
-                    </div>
-                    <div className="font-semibold text-text-primary text-xs flex items-center gap-1.5">
-                      <span>🔄</span>
-                      <span>{customerData.latest_campaign_name}</span>
-                    </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Chiến dịch khác biệt:</span>
+                  <span className="font-semibold text-[var(--text-primary)]">{distinctCampaignCount}</span>
+                </div>
+                {firstSubmission && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-secondary)]">Đây là Lead đầu tiên:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {new Date(firstSubmission.occurred_at).toLocaleDateString('vi-VN')}
+                      {firstSubmission.campaign_name_snapshot ? ` • ${firstSubmission.campaign_name_snapshot}` : ''}
+                    </span>
                   </div>
                 )}
-
-              {/* Touchpoints History */}
-              <div className="space-y-1.5 pt-2 border-t border-[var(--border-subtle)]">
-                <div className="text-[11px] font-semibold text-text-secondary">
-                  Lịch sử điểm chạm ({customerData.touchpoints?.length || 0})
-                </div>
-                {customerData.touchpoints && customerData.touchpoints.length > 0 ? (
-                  <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                    {customerData.touchpoints.map((tp) => (
-                      <div
-                        key={tp.id}
-                        className="p-2 rounded bg-[var(--surface-primary)] border border-[var(--border-subtle)] text-[11px] space-y-0.5"
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-semibold text-text-primary">
-                            {tp.campaign_name_snapshot || tp.channel}
-                          </span>
-                          <span className="font-mono text-[10px] text-text-tertiary">
-                            {new Date(tp.occurred_at).toLocaleDateString('vi-VN')}
-                          </span>
-                        </div>
-                        {tp.ad_name_snapshot && (
-                          <div className="text-text-secondary text-[10px]">
-                            Quảng cáo: {tp.ad_name_snapshot}
-                          </div>
-                        )}
-                        {tp.form_name_snapshot && (
-                          <div className="text-text-secondary text-[10px]">
-                            Form: {tp.form_name_snapshot}
-                          </div>
-                        )}
-                        <div className="flex items-center gap-1 text-[9px] text-text-tertiary">
-                          <span>{tp.touchpoint_type}</span>
-                          <span>•</span>
-                          <span>{tp.attribution_method}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-[11px] text-[var(--text-tertiary)] py-1 text-center">
-                    Chưa có lịch sử điểm chạm quảng cáo.
+                {latestSubmission && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-secondary)]">Đây là Lead gần nhất:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {new Date(latestSubmission.occurred_at).toLocaleDateString('vi-VN')}
+                      {latestSubmission.campaign_name_snapshot ? ` • ${latestSubmission.campaign_name_snapshot}` : ''}
+                    </span>
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Lịch sử đăng ký (chronological) */}
+            <div className="space-y-1.5 pt-1 border-t border-[var(--border-subtle)]">
+              <div className="text-[11px] font-semibold text-text-secondary">
+                Lịch sử đăng ký ({allTouchpoints.length})
+              </div>
+              {allTouchpoints.length > 0 ? (
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {allTouchpoints.map((tp) => {
+                    const rowStatus = tp.is_duplicate_phone === true
+                      ? { label: 'Lead trùng SĐT', variant: 'warning' as const }
+                      : tp.touchpoint_type === 'FIRST_TOUCH'
+                        ? (tp.attribution_status === 'PENDING_SYNC'
+                          ? { label: 'Lead mới - Chờ chiến dịch', variant: 'info' as const }
+                          : { label: 'Lead đầu tiên', variant: 'success' as const })
+                        : (tp.channel === 'FACEBOOK_LEAD_ADS'
+                          ? { label: 'Lead trùng SĐT', variant: 'warning' as const }
+                          : { label: 'Tương tác gần nhất', variant: 'neutral' as const });
+                    const campaignLabel =
+                      tp.campaign_name_snapshot
+                      || (tp.attribution_status === 'PENDING_SYNC' ? 'Chờ đồng bộ chiến dịch' : '—');
+                    return (
+                      <div
+                        key={tp.id}
+                        className="p-2 rounded bg-[var(--surface-primary)] border border-[var(--border-subtle)] text-[11px] space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-[10px] text-text-tertiary shrink-0">
+                              {new Date(tp.occurred_at).toLocaleDateString('vi-VN')}
+                            </span>
+                            <span className="font-semibold text-text-primary truncate">
+                              {CHANNEL_LABELS[tp.channel] || tp.channel}
+                            </span>
+                          </div>
+                          <Badge variant={rowStatus.variant} size="xs">
+                            {rowStatus.label}
+                          </Badge>
+                        </div>
+                        <div className="text-text-secondary">
+                          Chiến dịch: {campaignLabel}
+                        </div>
+                        {(tp.ad_name_snapshot || tp.form_name_snapshot) && (
+                          <div className="text-[10px] text-text-tertiary">
+                            {tp.ad_name_snapshot ? <span>Quảng cáo: {tp.ad_name_snapshot}</span> : null}
+                            {tp.ad_name_snapshot && tp.form_name_snapshot ? ' • ' : null}
+                            {tp.form_name_snapshot ? <span>Form: {tp.form_name_snapshot}</span> : null}
+                          </div>
+                        )}
+                        {tp.page_name && (
+                          <div className="text-[10px] text-text-tertiary">Trang: {tp.page_name}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-[var(--text-tertiary)] py-1 text-center">
+                  Chưa có lịch sử đăng ký qua quảng cáo.
+                </div>
+              )}
             </div>
           </Card>
           </PhoneRevealProvider>

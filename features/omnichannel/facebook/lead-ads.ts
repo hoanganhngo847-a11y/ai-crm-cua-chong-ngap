@@ -36,8 +36,18 @@ export interface IngestedLeadResult {
 }
 
 /**
- * Fetch lead details from Meta Graph API
+ * Fetch lead details from Meta Graph API.
+ *
+ * Extended attribution fields (campaign/ad/adset identifiers and names) are
+ * requested with the SAME single call used for the field data. If the page
+ * token lacks the permission for those fields (they are optional attributes),
+ * the original minimal field set is retried once so a valid lead is never
+ * destroyed by a permission gap: pending campaign state is handled downstream.
  */
+const LEAD_FIELDS_FULL =
+    'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data';
+const LEAD_FIELDS_MINIMAL = 'id,created_time,form_id,field_data';
+
 export async function fetchMetaLeadDetails(
     leadgenId: string,
     pageAccessToken: string,
@@ -45,32 +55,44 @@ export async function fetchMetaLeadDetails(
 ): Promise<MetaLeadData> {
     const fetchFn = fetchDouble || fetch;
     const version = graphVersion();
-    const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
-    url.searchParams.set(
-        'fields',
-        'id,created_time,form_id,field_data',
-    );
+    let fields = LEAD_FIELDS_FULL;
 
+    for (;;) {
+        const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
+        url.searchParams.set('fields', fields);
 
-    const response = await fetchFn(url.toString(), {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${pageAccessToken}` },
-        redirect: 'error',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(10_000),
-    });
+        const response = await fetchFn(url.toString(), {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${pageAccessToken}` },
+            redirect: 'error',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(10_000),
+        });
 
-    if (!response.ok) {
+        if (response.ok) {
+            return (await response.json()) as MetaLeadData;
+        }
+        if (fields !== LEAD_FIELDS_MINIMAL && response.status === 400) {
+            // Extended attribution fields may require permissions the current
+            // token lacks. Fall back once to the minimal set so a valid lead is
+            // never destroyed by a permission gap; campaign state stays pending.
+            console.warn('[lead-ads] extended_fields_unavailable falling_back status=400');
+            fields = LEAD_FIELDS_MINIMAL;
+            continue;
+        }
         console.error(`[lead-ads] fetch_failed status=${response.status}`);
         throw new ChannelError('LEAD_RETRIEVAL_FAILED', response.status === 429 ? 429 : 503);
     }
-
-    const payload = (await response.json()) as MetaLeadData;
-    return payload;
 }
 
 /**
- * Normalize and extract fields from Lead Ads field_data
+ * Normalize and extract fields from Lead Ads field_data.
+ *
+ * phoneStatus reports whether the form carried a usable canonical phone:
+ * 'VALID' (normalized), 'INVALID' (a phone field existed but failed
+ * normalization) or 'MISSING' (no phone field). Invalid and missing phones are
+ * preserved for review downstream; the raw value itself never leaves these
+ * production modules and is masked in every customer-visible representation.
  */
 export function extractLeadFields(fieldData: Array<{ name: string; values: string[] }> = []) {
     let rawPhone: string | null = null;
@@ -90,7 +112,7 @@ export function extractLeadFields(fieldData: Array<{ name: string; values: strin
             try {
                 normalizedPhone = normalizePhone(value);
             } catch {
-                // Invalid phone candidate
+                // Invalid phone candidate: preserved for review, never used for identity.
             }
         } else if (name === 'full_name' || name === 'name' || name === 'ho_va_ten' || name === 'ho_ten') {
             fullName = value;
@@ -103,9 +125,13 @@ export function extractLeadFields(fieldData: Array<{ name: string; values: strin
         }
     }
 
+    const phoneStatus: 'VALID' | 'INVALID' | 'MISSING' =
+        normalizedPhone !== null ? 'VALID' : rawPhone !== null ? 'INVALID' : 'MISSING';
+
     return {
         rawPhone,
         normalizedPhone,
+        phoneStatus,
         fullName,
         email,
         city,
@@ -177,9 +203,11 @@ export async function processLeadAdsChange(
                 name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
                 content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
                 payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
-                    campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name) },
+                    campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name),
+                    crm_phone_detection: { status: fields.phoneStatus } },
             },
-        }) as { interaction_id?: string; customer_id?: string } | null;
+        }) as { interaction_id?: string; customer_id?: string;
+            phone_match_status?: string; is_duplicate_phone?: boolean } | null;
         if (!ingest?.interaction_id || !ingest.customer_id) throw new ChannelError('LEADGEN_INTAKE_INCOMPLETE', 503);
         const touchpointId = await rpc('record_lead_attribution_touchpoint', {
             p_company: config.company, p_customer: ingest.customer_id, p_interaction: ingest.interaction_id,
@@ -193,6 +221,16 @@ export async function processLeadAdsChange(
             p_occurred: claim.occurred_at || change.time,
         });
         if (typeof touchpointId !== 'string' || !touchpointId) throw new ChannelError('LEADGEN_ATTRIBUTION_INCOMPLETE', 503);
+        // Persist the phone match verdict on the attribution event so the customer
+        // history can show every submission, including duplicate-phone indicators.
+        // Idempotent across webhook retries: the durable event replay yields the
+        // exact same verdict recorded at first admission.
+        await rpc('mark_lead_attribution_phone_match', {
+            p_company: config.company, p_meta_leadgen_id: change.leadgenId,
+            p_phone_match_status: typeof ingest.phone_match_status === 'string' && ingest.phone_match_status
+                ? ingest.phone_match_status : 'NO_PHONE',
+            p_is_duplicate_phone: typeof ingest.is_duplicate_phone === 'boolean' ? ingest.is_duplicate_phone : null,
+        });
         if (await finalize('PROCESSED') !== true) throw new ChannelError('LEADGEN_FINALIZATION_FAILED', 503);
         return { leadgenId: change.leadgenId, customerId: ingest.customer_id, interactionId: ingest.interaction_id,
             touchpointId, status: 'PROCESSED' };

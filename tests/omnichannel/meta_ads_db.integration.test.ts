@@ -94,7 +94,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         for (const [lead, campaign, name, ad] of [['name-only',null,'Fabricated name',null],['forged','unknown','Fabricated',null],['foreign','foreign','Foreign campaign',null],['unknown-ad','campaign','Fabricated','unknown-ad']]) {
             const id = sql(touch(lead!, campaign!, name!, ad, '2026-10-29T10:00:00Z'));
             const row = JSON.parse(sql(`SELECT row_to_json(t) FROM public.lead_attribution_touchpoints t WHERE id=${q(id)};`));
-            assert.equal(row.attribution_status, 'UNATTRIBUTED');
+            // Unverifiable webhook assertions stay non-attributed: identifiers are preserved
+            // in raw_meta, the campaign is resolvable by a later safe retry, no name invented.
+            assert.equal(row.attribution_status, 'PENDING_SYNC');
             assert.equal(row.meta_campaign_id, null);
             assert.equal(row.campaign_name_snapshot, null);
             assert.equal(row.ads_context_data.raw_meta.campaign_id, campaign);
@@ -120,7 +122,22 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
             if (url.hostname === 'graph.facebook.com') {
                 graphCalls++;
                 if (graphGate) await graphGate;
-                return Response.json({ id: url.pathname.split('/').at(-1), campaign_id: 'forged', campaign_name: 'Fabricated', field_data: [{ name: 'full_name', values: ['Stable lead'] }] });
+                const leadId = url.pathname.split('/').at(-1)!;
+                // Phone-bearing leads (3xxxx) exercise duplicate-phone history; campaign
+                // identifiers remain unverifiable webhook assertions like production would
+                // return when asset data is not yet synced.
+                if (/^3\d+$/.test(leadId)) {
+                    return Response.json({
+                        id: leadId, created_time: 1793318400, form_id: '345', form_name: 'Form 300',
+                        campaign_id: '300_campaign', campaign_name: 'Fabricated', ad_id: '300_ad',
+                        ad_name: 'Fabricated ad', adset_id: '300_adset', adset_name: 'Fabricated set',
+                        field_data: [
+                            { name: 'full_name', values: ['Nguyễn Văn A'] },
+                            { name: 'phone_number', values: ['843000000001'] },
+                        ],
+                    });
+                }
+                return Response.json({ id: leadId, campaign_id: 'forged', campaign_name: 'Fabricated', field_data: [{ name: 'full_name', values: ['Stable lead'] }] });
             }
             assert.equal(url.hostname, '127.0.0.1');
             const fn = url.pathname.split('/').at(-1)!;
@@ -131,7 +148,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
             if (fn === 'ingest_meta_leadgen_event' && intakeFault) return Response.json({ message: 'IDEMPOTENCY_CONFLICT' }, { status: 409 });
             if (fn === 'record_lead_attribution_touchpoint' && attributionFault) return Response.json({ message: 'fault' }, { status: 500 });
             if (fn === 'finalize_meta_leadgen_event' && args.p_status === 'PROCESSED' && finalizeFault) return Response.json(false);
-            assert.match(fn, /^(claim_meta_leadgen_event|ingest_meta_leadgen_event|record_lead_attribution_touchpoint|finalize_meta_leadgen_event)$/);
+            assert.match(fn, /^(claim_meta_leadgen_event|ingest_meta_leadgen_event|record_lead_attribution_touchpoint|mark_lead_attribution_phone_match|finalize_meta_leadgen_event)$/);
             const params = Object.entries(args).map(([key, value]) => { assert.match(key, /^[a-z_]+$/); return `${key}=>${q(value)}`; }).join(',');
             try {
                 const result = JSON.parse(await query(`SET statement_timeout='20s'; SET ROLE service_role; SELECT to_json(public.${fn}(${params}));`));
@@ -184,6 +201,99 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         intakeFault = true;
         assert.equal((await webhook('20004')).status, 503, 'idempotency conflict is never successful finalization');
         assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20004';`), 'FAILED');
+
+        // --- Rule C: one customer profile, many attribution events, zero lost history ---
+        intakeFault = false;
+        assert.equal((await webhook('30001')).status, 200);
+        assert.equal((await webhook('30002')).status, 200, 'a duplicate-phone lead must reuse the customer, never fail the webhook');
+        const concurrentSubmissions = await Promise.all([webhook('30003'), webhook('30004')]);
+        assert.deepEqual(
+            concurrentSubmissions.map((r) => r.status).sort((a, b) => (a ?? 600) - (b ?? 600)),
+            [200, 200],
+            'concurrent same-phone submissions must never race into duplicate customers',
+        );
+
+        const phoneEvents = sql(
+            `SELECT leadgen_id||'|'||status||'|'||COALESCE(phone_match_status,'')||'|'||COALESCE(is_duplicate_phone::text,'')
+             FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id ~ '^300' ORDER BY leadgen_id;`,
+        ).split('\n');
+        assert.equal(phoneEvents.length, 4);
+        for (const [idx, line] of phoneEvents.entries()) {
+            const [leadId, status, matchStatus, dup] = line.split('|');
+            assert.equal(status, 'PROCESSED');
+            assert.equal(matchStatus, idx === 0 ? 'NEW_PHONE' : 'MATCHED_EXISTING');
+            assert.equal(dup, idx === 0 ? 'false' : 'true');
+        }
+        assert.equal(
+            sql(`SELECT count(*) FROM public.customers WHERE company_id=${q(company)};`),
+            '6',
+            'fixture customer + four no-phone leadgen profiles (20001/20002/20003/20005: no identity to dedup by) + ONE phone-owned profile for the four 3000x submissions',
+        );
+        const phoneTouchpoints = sql(
+            `SELECT meta_leadgen_id||'|'||touchpoint_type||'|'||attribution_status||'|'||COALESCE(campaign_name_snapshot,'')||'|'
+                ||CASE WHEN is_duplicate_phone THEN 'dup' ELSE 'first' END
+             FROM public.lead_attribution_touchpoints
+             WHERE company_id=${q(company)} AND meta_leadgen_id ~ '^300' ORDER BY meta_leadgen_id;`,
+        ).split('\n');
+        assert.equal(phoneTouchpoints.length, 4, 'every submission keeps its own attribution event');
+        for (const [idx, line] of phoneTouchpoints.entries()) {
+            const [leadId, type, status, campaign, dup] = line.split('|');
+            assert.equal(type, idx === 0 ? 'FIRST_TOUCH' : 'LATEST_TOUCH');
+            assert.equal(status, 'PENDING_SYNC', 'unsynced asset evidence must stay pending, never attributed from webhook names');
+            assert.equal(campaign, '', 'no fabricated campaign name');
+            assert.equal(dup, idx === 0 ? 'first' : 'dup');
+        }
+        assert.equal(
+            sql(`SELECT count(DISTINCT customer_id) FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)} AND meta_leadgen_id ~ '^300';`),
+            '1',
+            'all four submissions belong to ONE customer profile',
+        );
+
+        // Marking is fenced, idempotent and fail-closed on forged statuses.
+        assert.equal(sql(`SET ROLE service_role; SELECT public.mark_lead_attribution_phone_match(${q(company)},'30001','MATCHED_EXISTING',true);`), 't', 're-marking with a different verdict updates the row');
+        assert.equal(sql(`SET ROLE service_role; SELECT public.mark_lead_attribution_phone_match(${q(company)},'30001','MATCHED_EXISTING',true);`), 'f', 'same verdict again is an idempotent no-op');
+        assert.throws(() => sql(`SET ROLE service_role; SELECT public.mark_lead_attribution_phone_match(${q(company)},'30001','FORGED_STATUS',true);`), /INVALID_PHONE_MATCH_STATUS/);
+        assert.throws(() => sql(`SET ROLE service_role; SELECT public.mark_lead_attribution_phone_match(${q(other)},'30001','MATCHED_EXISTING',true);`), /LEADGEN_EVENT_NOT_FOUND/, 'cross-tenant marking fails closed');
+        for (const statement of [
+            `SELECT public.mark_lead_attribution_phone_match(${q(company)},'30001','MATCHED_EXISTING',true)`,
+            `SELECT public.retry_pending_lead_attribution(${q(company)},1)`,
+        ]) for (const role of ['anon', 'authenticated']) assert.throws(() => sql(`SET ROLE ${role}; ${statement};`), /Command failed/);
+
+        // Pending campaign resolution: a bounded, safe retry. Before the asset sync
+        // lands anything, only the assertion corroborated by an existing synced
+        // campaign row resolves (INFERRED); everything else stays pending.
+        const retryBeforeSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
+        assert.equal(retryBeforeSync.checked, 13, 'all pending leadgen rows are inspected in one bounded pass: 5 forged-loop rows, 4 stable no-phone webhooks, 4 duplicate-phone submissions');
+        assert.equal(retryBeforeSync.resolved, 1);
+        assert.equal(Number(retryBeforeSync.remaining), 12);
+        assert.equal(
+            sql(`SELECT attribution_status||'|'||COALESCE(campaign_name_snapshot,'') FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)} AND meta_leadgen_id='unknown-ad';`),
+            'INFERRED|Verified campaign',
+        );
+        // Tenant isolation: no company can claim another company's campaign evidence.
+        const retryOther = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(other)});`));
+        assert.equal(retryOther.resolved, 0);
+
+        // Simulated asset sync evidence (same records the marketing sync writes).
+        sql(`INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+             VALUES (${q(company)},'act_1','300_campaign','Chiến dịch Du học 300','ACTIVE');
+             INSERT INTO public.meta_ad_sets(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,name,status)
+             VALUES (${q(company)},'act_1','300_campaign','300_adset','Nhóm 300','ACTIVE');
+             INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status)
+             VALUES (${q(company)},'act_1','300_campaign','300_adset','300_ad','Quảng cáo Meta 300','ACTIVE');`);
+        const retryAfterSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
+        assert.equal(retryAfterSync.resolved, 4);
+        assert.equal(Number(retryAfterSync.remaining), 8, 'only rows with unresolvable assertions stay pending: forged loops, no-phone stable leads, late-arrival');
+        const resolvedOne = JSON.parse(sql(`SELECT row_to_json(t) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(company)} AND meta_leadgen_id='30001';`));
+        assert.equal(resolvedOne.attribution_status, 'ATTRIBUTED');
+        assert.equal(resolvedOne.campaign_name_snapshot, 'Chiến dịch Du học 300');
+        assert.equal(resolvedOne.ad_name_snapshot, 'Quảng cáo Meta 300');
+        assert.equal(resolvedOne.ad_set_name_snapshot, 'Nhóm 300');
+        assert.equal(resolvedOne.ads_context_data.raw_meta.campaign_name, 'Fabricated', 'the webhook assertion stays recorded for audit');
+        const phoneCustomer = sql(`SELECT customer_id FROM private.customer_private_contacts WHERE company_id=${q(company)} AND normalized_phone='+843000000001';`);
+        const phoneSnapshots = JSON.parse(sql(`SELECT row_to_json(c) FROM public.customers c WHERE id=${q(phoneCustomer)};`));
+        assert.equal(phoneSnapshots.first_campaign_name, 'Chiến dịch Du học 300');
+        assert.equal(phoneSnapshots.attribution_status, 'ATTRIBUTED');
     } finally {
         globalThis.fetch = original;
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');

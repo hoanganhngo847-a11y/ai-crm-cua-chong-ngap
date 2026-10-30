@@ -36,7 +36,7 @@
     "test:voice": "node --conditions=react-server tests/run-voice-tests.cjs",
     "test:omnichannel": "tsx --conditions=react-server --test tests/omnichannel/runtime.test.ts tests/omnichannel/facebook_profile_lookup.test.ts tests/omnichannel/facebook_sync.test.ts tests/omnichannel/lead-form.test.ts",
     "test:meta-messenger": "tsx --conditions=react-server --test tests/omnichannel/meta_messenger_platform.test.ts",
-    "test:meta-ads": "tsx --conditions=react-server --test tests/omnichannel/meta_ads_lead_attribution.test.ts tests/omnichannel/meta_ads_remediation.test.ts",
+    "test:meta-ads": "tsx --conditions=react-server --test tests/omnichannel/meta_ads_lead_attribution.test.ts tests/omnichannel/meta_ads_remediation.test.ts tests/omnichannel/meta_ads_duplicate_phone_history.test.ts",
     "test:meta-deletion:db": "tsx --conditions=react-server --test tests/omnichannel/meta_data_deletion_db.integration.test.ts",
     "test:omnichannel:db": "tsx tests/omnichannel/database.test.ts",
     "test:zalo:db": "tsx --conditions=react-server tests/zalo/zalo_supabase.integration.test.ts",

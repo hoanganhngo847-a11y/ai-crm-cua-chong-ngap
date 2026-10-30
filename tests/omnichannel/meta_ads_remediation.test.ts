@@ -55,7 +55,7 @@ test('all reporting and lead endpoints use independent supported versions and Be
         await syncLeadFormsForPage('company', '123', secret, graphFetch);
         await validateAdAccountAccess('123', secret, graphFetch);
         await fetchMetaLeadDetails('999', secret, graphFetch);
-        assert.equal(requests.at(-1)?.searchParams.get('fields'), 'id,created_time,form_id,field_data', 'Basic lead read must not request ad-level fields requiring ads_management');
+        assert.equal(requests.at(-1)?.searchParams.get('fields'), 'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data', 'Attribution fields ride the SAME single lead read: no extra Graph round-trips');
         await listManagedAdAccounts(secret);
         await listManagedFacebookPages(secret);
         for (const url of requests) {
@@ -813,5 +813,49 @@ test('F-06: webhook isolates Lead Ads failures and processes Messenger messages 
         assert.equal(hanIngestCalls, 2);
     } finally {
         globalThis.fetch = originalFetch;
+    }
+});
+
+test('lead read degrades exactly once to minimal fields on 400; other failures never invent permission', async () => {
+    const original = globalThis.fetch;
+    process.env.META_GRAPH_VERSION = 'v26.0';
+    try {
+        let calls = 0;
+        const seenFields: string[] = [];
+        globalThis.fetch = async (input, init) => {
+            const url = new URL(String(input));
+            assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer test-token`);
+            assert.equal(url.searchParams.has('access_token'), false);
+            seenFields.push(url.searchParams.get('fields') || '');
+            calls++;
+            if (calls === 1) return Response.json({ error: { code: 100, message: 'field not available' } }, { status: 400 });
+            return Response.json({ id: '999', created_time: 1, form_id: 'f1', field_data: [] });
+        };
+        const lead = await fetchMetaLeadDetails('999', 'test-token');
+        assert.equal(lead.id, '999');
+        assert.equal(calls, 2, 'exactly one degrade step: extended fields, then the minimal set');
+        assert.equal(seenFields[0], 'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data');
+        assert.equal(seenFields[1], 'id,created_time,form_id,field_data');
+
+        calls = 0;
+        seenFields.length = 0;
+        globalThis.fetch = async () => {
+            calls++;
+            return Response.json({ error: { code: 190, message: 'permission denied' } }, { status: 403 });
+        };
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
+            err.code === 'LEAD_RETRIEVAL_FAILED' && err.status === 503
+        , 'a hard permission failure is not retried against the minimal set as if it were a transient gap');
+        assert.equal(calls, 1, 'no pointless second call on non-400 failures');
+
+        calls = 0;
+        globalThis.fetch = async () => {
+            calls++;
+            return Response.json({ error: { code: 4, message: 'rate limited' } }, { status: 429 });
+        };
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { status?: number }) => err.status === 429);
+        assert.equal(calls, 1);
+    } finally {
+        globalThis.fetch = original;
     }
 });

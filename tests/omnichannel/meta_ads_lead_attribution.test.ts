@@ -1458,7 +1458,7 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
         const tp1 = (tpUnmappedId.rows[0] as any).record_lead_attribution_touchpoint;
 
         const checkTp1 = await db.query(`SELECT attribution_status FROM public.lead_attribution_touchpoints WHERE id = '${tp1}';`);
-        assert.equal((checkTp1.rows[0] as any).attribution_status, 'UNATTRIBUTED', 'Unmapped ad must be coerced to UNATTRIBUTED');
+        assert.equal((checkTp1.rows[0] as any).attribution_status, 'PENDING_SYNC', 'Unmapped leadgen lead stays resolvable-pending; a safe retry may finish attribution, no name invented');
 
         // 20B: Touchpoint with mapped ad ID becomes ATTRIBUTED and records first-touch
         const tpMappedId = await db.query(`
