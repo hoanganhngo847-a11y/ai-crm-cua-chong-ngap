@@ -47,6 +47,17 @@ export default async function FacebookConnectionPage({
   const connectedPages = textParam(params.pages);
   const connectedCount = Number(textParam(params.count) || 0);
   const connectedAdsCount = Number(textParam(params.ad_accounts_count) || 0);
+  const leadAdsStatus = textParam(params.lead_ads_status);
+  const connectionSummary =
+    connectedCount > 0
+      ? leadAdsStatus === 'ALL_CONNECTED'
+        ? `Đã xác minh webhook Messenger và Lead Ads cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : '.'}${connectedAdsCount > 0 ? ` Đồng thời kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.` : ''}`
+        : leadAdsStatus === 'SUBSCRIPTION_UNKNOWN'
+          ? `Messenger đã kết nối cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''}. Trạng thái Lead Ads chưa xác minh; CRM không coi Lead Ads đã kết nối.`
+          : `Messenger đã kết nối cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''}. Lead Ads chưa được xác nhận kết nối.`
+      : connectedAdsCount > 0
+        ? `Đã kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.`
+        : 'Kết nối đã hoàn tất.';
   const actor = await getActorContext();
   const companyId = actor?.companyId || '';
 
@@ -101,12 +112,12 @@ export default async function FacebookConnectionPage({
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 flex items-start gap-3">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <div>
-            <div className="font-semibold">Kết nối thành công</div>
-            <div className="mt-0.5 text-xs text-emerald-700">
-              Đã đăng ký webhook Messenger và Lead Ads cho {connectedCount || 1} Page
-              {connectedPages ? `: ${connectedPages}` : '.'}
-              {connectedAdsCount > 0 ? ` Đồng thời kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.` : ''}
+            <div className="font-semibold">
+              {connectedCount > 0 && leadAdsStatus !== 'ALL_CONNECTED'
+                ? 'Messenger đã kết nối; Lead Ads chưa xác nhận'
+                : 'Kết nối thành công'}
             </div>
+            <div className="mt-0.5 text-xs text-emerald-700">{connectionSummary}</div>
           </div>
         </div>
       )}
