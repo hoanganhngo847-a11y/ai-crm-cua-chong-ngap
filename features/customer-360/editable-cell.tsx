@@ -35,6 +35,7 @@ export function Customer360EditableCell({
 
   // Sync state when external value changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCurrentValue(value ?? '');
     setDraftValue(value ?? '');
   }, [value]);

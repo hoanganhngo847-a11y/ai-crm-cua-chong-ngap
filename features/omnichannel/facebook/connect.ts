@@ -23,9 +23,17 @@ export type ManagedFacebookPage = {
   name: string;
 };
 
+export type ManagedAdAccount = {
+  id: string;
+  name: string;
+  currency: string;
+  accountStatus: number;
+};
+
 type ConnectSession = {
   userAccessToken: string;
   pages: ManagedFacebookPage[];
+  adAccounts?: ManagedAdAccount[];
   companyId: string;
   userId: string;
   expiresAt: number;
@@ -112,7 +120,16 @@ function unseal(value: string): ConnectSession | null {
         page.name.trim().length > 0,
     );
 
-    return { ...parsed, pages };
+    const adAccounts = Array.isArray(parsed.adAccounts)
+      ? parsed.adAccounts.filter(
+          (acc) =>
+            acc &&
+            typeof acc.id === 'string' &&
+            typeof acc.name === 'string',
+        )
+      : [];
+
+    return { ...parsed, pages, adAccounts };
   } catch {
     return null;
   }
@@ -244,6 +261,39 @@ export async function listManagedFacebookPages(userAccessToken: string) {
   return pages.map(({ id, name }) => ({ id, name }));
 }
 
+export async function listManagedAdAccounts(userAccessToken: string): Promise<ManagedAdAccount[]> {
+  try {
+    const version = graphVersion();
+    const url = new URL(`https://graph.facebook.com/${version}/me/adaccounts`);
+    url.searchParams.set('fields', 'id,account_id,name,account_status,currency');
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('access_token', userAccessToken);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${userAccessToken}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) return [];
+    const payload = (await response.json()) as {
+      data?: Array<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>;
+    };
+
+    return (payload.data || [])
+      .filter((acc) => typeof acc.id === 'string' && typeof acc.name === 'string')
+      .map((acc) => ({
+        id: String(acc.id),
+        name: String(acc.name).trim().slice(0, 120),
+        currency: typeof acc.currency === 'string' ? acc.currency : 'VND',
+        accountStatus: typeof acc.account_status === 'number' ? acc.account_status : 1,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 export function configuredFacebookPageIds(companyId: string) {
   return new Set(bindingsForCompany(companyId).map((item) => item.page));
 }
@@ -270,7 +320,7 @@ export async function subscribeManagedPage(
   );
 
   const body = new URLSearchParams({
-    subscribed_fields: 'messages',
+    subscribed_fields: 'messages,leadgen',
     access_token: page.accessToken,
   });
 

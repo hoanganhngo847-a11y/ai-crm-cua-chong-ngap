@@ -4,6 +4,7 @@ import { getActorContext, requireBossAdmin } from '@/lib/auth/context';
 import { isMetaReviewerMfaExempt } from '@/lib/auth/meta-review';
 import {
   exchangeCodeForUserAccessToken,
+  listManagedAdAccounts,
   listManagedFacebookPages,
   storeFacebookConnectSession,
   verifyAndClearFacebookOAuthState,
@@ -64,11 +65,15 @@ export async function GET(request: Request) {
     if (!code) return back(request, 'FACEBOOK_MISSING_CODE');
 
     const userAccessToken = await exchangeCodeForUserAccessToken(code);
-    const pages = await listManagedFacebookPages(userAccessToken);
+    const [pages, adAccounts] = await Promise.all([
+      listManagedFacebookPages(userAccessToken),
+      listManagedAdAccounts(userAccessToken),
+    ]);
 
     await storeFacebookConnectSession({
       userAccessToken,
       pages,
+      adAccounts,
       companyId: actor.companyId,
       userId: actor.userId,
     });

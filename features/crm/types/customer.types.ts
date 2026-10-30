@@ -590,6 +590,13 @@ export interface CustomerResponse {
   phone?: string;
   is_phone_masked: boolean;
   identities?: Identity[];
+  first_campaign_name?: string | null;
+  first_ad_name?: string | null;
+  first_touch_at?: string | null;
+  latest_campaign_name?: string | null;
+  latest_ad_name?: string | null;
+  latest_touch_at?: string | null;
+  attribution_status?: string | null;
   urgency_reason?: 'HIGH_POTENTIAL' | 'PRICE_OFFERED' | 'NEGOTIATING' | 'PENDING_REPLY' | string;
   urgency_label?: string;
   created_at: string;

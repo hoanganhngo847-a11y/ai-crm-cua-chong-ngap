@@ -16,6 +16,7 @@ import {
   Search,
   Sparkles,
   KanbanSquare,
+  Megaphone,
 } from 'lucide-react';
 import { Avatar } from '../ui/avatar';
 import { Tooltip } from '../ui/tooltip';
@@ -89,6 +90,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         { label: 'Chiến dịch tin nhắn', href: '/campaigns', icon: <Share2 className="w-4 h-4 shrink-0" />, roles: ['BOSS_ADMIN', 'SALE'] },
         {
+          label: 'Báo cáo Meta Ads',
+          href: '/admin/analytics/meta-ads',
+          icon: <Megaphone className="w-4 h-4 shrink-0" />,
+          roles: ['BOSS_ADMIN', 'SALE'],
+        },
+        {
           label: 'Cuộc gọi & Ghi âm',
           href: '/calls',
           icon: <Phone className="w-4 h-4 shrink-0" />,
@@ -117,7 +124,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           roles: ['BOSS_ADMIN'],
         },
         {
-          label: 'Kết nối Facebook',
+          label: 'Kết nối Facebook & Meta Ads',
           href: '/admin/facebook',
           icon: <Share2 className="w-4 h-4 shrink-0" />,
           roles: ['BOSS_ADMIN'],

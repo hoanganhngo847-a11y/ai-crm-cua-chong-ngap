@@ -8,6 +8,9 @@ import {
   readFacebookConnectSession,
   subscribeManagedPage,
 } from '@/features/omnichannel/facebook/connect';
+import { encryptToken } from '@/features/omnichannel/facebook/token-vault';
+import { syncCompanyMetaAds } from '@/features/omnichannel/facebook/marketing-sync';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 
@@ -66,8 +69,17 @@ export async function POST(request: Request) {
       ),
     );
 
+    const requestedAdAccountIds = Array.from(
+      new Set(
+        form
+          .getAll('ad_account_id')
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
     if (
-      requestedPageIds.length === 0 ||
+      (requestedPageIds.length === 0 && requestedAdAccountIds.length === 0) ||
       requestedPageIds.length > 100 ||
       requestedPageIds.some((pageId) => !/^\d+$/.test(pageId))
     ) {
@@ -95,11 +107,49 @@ export async function POST(request: Request) {
       );
     }
 
+    // Save and sync selected Ad Accounts
+    let connectedAdAccountsCount = 0;
+    if (requestedAdAccountIds.length > 0 && session.adAccounts) {
+      const managedAccountsMap = new Map(session.adAccounts.map((a) => [a.id, a]));
+      const encryptedToken = encryptToken(session.userAccessToken);
+      const supabase = createAdminClient();
+
+      const accountRows = requestedAdAccountIds
+        .filter((id) => managedAccountsMap.has(id))
+        .map((id) => {
+          const acc = managedAccountsMap.get(id)!;
+          return {
+            company_id: actor.companyId,
+            ad_account_id: acc.id,
+            name: acc.name,
+            currency: acc.currency,
+            account_status: acc.accountStatus,
+            access_token: encryptedToken,
+            token_expires_at: new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString(),
+            sync_status: 'PENDING',
+            updated_at: new Date().toISOString(),
+          };
+        });
+
+      if (accountRows.length > 0) {
+        await supabase
+          .from('meta_ad_accounts')
+          .upsert(accountRows, { onConflict: 'company_id,ad_account_id' });
+        connectedAdAccountsCount = accountRows.length;
+
+        // Trigger background initial sync
+        syncCompanyMetaAds(actor.companyId, { token: session.userAccessToken }).catch((err) => {
+          console.warn('[meta-connect] initial_ad_sync_background_error', err);
+        });
+      }
+    }
+
     await clearFacebookConnectSession();
 
     const url = publicAdminUrl(request);
     url.searchParams.set('connected', '1');
     url.searchParams.set('count', String(connectedPages.length));
+    url.searchParams.set('ad_accounts_count', String(connectedAdAccountsCount));
     url.searchParams.set(
       'pages',
       connectedPages.map((page) => page.name).join(', ').slice(0, 500),

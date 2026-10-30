@@ -6,11 +6,12 @@ import {
   getConfiguredFacebookConnections,
   readFacebookConnectSession,
 } from '@/features/omnichannel/facebook/connect';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, AlertCircle, MessageSquare } from 'lucide-react';
+import { CheckCircle2, AlertCircle, MessageSquare, RefreshCw, BarChart3, Megaphone } from 'lucide-react';
 
 const ERROR_MESSAGES: Record<string, string> = {
   NO_COMPANY: 'Không xác định được doanh nghiệp hiện tại.',
@@ -45,13 +46,21 @@ export default async function FacebookConnectionPage({
   const connected = textParam(params.connected) === '1';
   const connectedPages = textParam(params.pages);
   const connectedCount = Number(textParam(params.count) || 0);
+  const connectedAdsCount = Number(textParam(params.ad_accounts_count) || 0);
   const actor = await getActorContext();
   const companyId = actor?.companyId || '';
 
-  const [connections, session] = await Promise.all([
+  const supabase = createAdminClient();
+  const [connections, session, adAccountsRes] = await Promise.all([
     getConfiguredFacebookConnections(companyId),
     readFacebookConnectSession(),
+    supabase
+      .from('meta_ad_accounts')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false }),
   ]);
+  const adAccounts = adAccountsRes.data || [];
   const configuredPageIds = configuredFacebookPageIds(companyId);
   const fullyConnected =
     connections.length > 0 && connections.every((connection) => connection.subscribed);
@@ -94,8 +103,9 @@ export default async function FacebookConnectionPage({
           <div>
             <div className="font-semibold">Kết nối thành công</div>
             <div className="mt-0.5 text-xs text-emerald-700">
-              Đã đăng ký webhook Messenger cho {connectedCount || 1} Page
+              Đã đăng ký webhook Messenger và Lead Ads cho {connectedCount || 1} Page
               {connectedPages ? `: ${connectedPages}` : '.'}
+              {connectedAdsCount > 0 ? ` Đồng thời kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.` : ''}
             </div>
           </div>
         </div>
@@ -174,16 +184,96 @@ export default async function FacebookConnectionPage({
           )}
         </div>
 
-        <div className="pt-2 border-t border-border-subtle">
+        <div className="pt-2 border-t border-border-subtle flex flex-wrap items-center justify-between gap-3">
           <a
             href="/api/facebook/connect/start"
             className="inline-flex items-center justify-center rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-accent-hover transition"
           >
-            Kết nối / xác minh các Facebook Page
+            Kết nối / xác minh Facebook Pages &amp; Meta Ads
           </a>
-          <p className="mt-2 text-[11px] text-text-tertiary">
-            Access token onboarding chỉ tồn tại trong cookie HttpOnly mã hóa tối đa 10 phút. Token runtime của từng Page vẫn nằm trong cấu hình secret phía server.
+          <p className="text-[11px] text-text-tertiary">
+            Access token onboarding chỉ tồn tại trong cookie HttpOnly mã hóa tối đa 10 phút. Token runtime của từng Page và Ad Account được quản lý bảo mật phía server.
           </p>
+        </div>
+      </Card>
+
+      {/* Connected Meta Ad Accounts Section */}
+      <Card className="p-6 space-y-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Megaphone className="w-5 h-5 text-accent" />
+              <h2 className="text-base font-semibold text-text-primary">Tài khoản Quảng cáo Meta Ads</h2>
+            </div>
+            <p className="mt-1 text-xs text-text-secondary">
+              Đồng bộ dữ liệu read-only từ Meta Marketing API (Campaign, Ad Set, Ad, Lead Form và Insights).
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/analytics/meta-ads"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-subtle bg-surface-primary hover:bg-surface-hover text-text-primary text-xs font-medium transition"
+            >
+              <BarChart3 className="w-3.5 h-3.5 text-accent" />
+              <span>Xem Báo cáo Meta Ads</span>
+            </Link>
+            <form action="/api/admin/meta-ads/sync" method="post">
+              <Button type="submit" variant="outline" size="sm" leftIcon={<RefreshCw className="w-3.5 h-3.5" />}>
+                Đồng bộ ngay
+              </Button>
+            </form>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          {adAccounts.length === 0 ? (
+            <div className="rounded-lg border border-border-subtle bg-surface-secondary p-4 text-xs text-text-secondary md:col-span-2 text-center">
+              Chưa có tài khoản quảng cáo Meta nào được kết nối. Bấm nút kết nối phía trên để ủy quyền truy cập tài khoản quảng cáo.
+            </div>
+          ) : (
+            adAccounts.map((account) => (
+              <div
+                key={account.id}
+                className="rounded-lg border border-border-subtle bg-surface-secondary p-4 space-y-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] text-text-tertiary">Ad Account</div>
+                    <div className="mt-0.5 font-semibold text-text-primary text-sm">{account.name}</div>
+                    <div className="font-mono text-xs text-text-secondary">{account.ad_account_id} • {account.currency}</div>
+                  </div>
+                  <Badge
+                    variant={
+                      account.sync_status === 'SUCCESS'
+                        ? 'success'
+                        : account.sync_status === 'FAILED'
+                          ? 'danger'
+                          : 'warning'
+                    }
+                  >
+                    {account.sync_status === 'SUCCESS'
+                      ? 'Đã đồng bộ'
+                      : account.sync_status === 'FAILED'
+                        ? 'Lỗi đồng bộ'
+                        : 'Chờ đồng bộ'}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-text-tertiary pt-2 border-t border-border-subtle">
+                  <span>
+                    Đồng bộ gần nhất:{' '}
+                    {account.last_synced_at
+                      ? new Date(account.last_synced_at).toLocaleString('vi-VN')
+                      : 'Chưa đồng bộ'}
+                  </span>
+                  {account.sync_error && (
+                    <span className="text-rose-600 truncate max-w-[180px]" title={account.sync_error}>
+                      {account.sync_error}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </Card>
 
@@ -248,13 +338,48 @@ export default async function FacebookConnectionPage({
                 })}
               </div>
 
+              {/* Ad Accounts Section */}
+              {session.adAccounts && session.adAccounts.length > 0 && (
+                <div className="pt-3 border-t border-border-subtle space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold text-text-primary uppercase tracking-wider">
+                      Tài khoản Quảng cáo Meta Ads tìm thấy ({session.adAccounts.length})
+                    </h3>
+                    <Badge variant="info">ads_read</Badge>
+                  </div>
+                  <div className="grid gap-2">
+                    {session.adAccounts.map((account) => (
+                      <label
+                        key={account.id}
+                        className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-primary hover:border-accent p-3 cursor-pointer transition"
+                      >
+                        <input
+                          type="checkbox"
+                          name="ad_account_id"
+                          value={account.id}
+                          defaultChecked={true}
+                          className="h-4 w-4 rounded border-border-strong text-accent focus:ring-accent"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-text-primary text-xs">{account.name}</span>
+                            <span className="text-[10px] text-text-tertiary">({account.currency})</span>
+                          </div>
+                          <div className="mt-0.5 font-mono text-[11px] text-text-tertiary">{account.id}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <Button
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={!session.pages.some((page) => configuredPageIds.has(page.id))}
+                disabled={!session.pages.some((page) => configuredPageIds.has(page.id)) && (!session.adAccounts || session.adAccounts.length === 0)}
               >
-                Kết nối các Page đã chọn
+                Kết nối các Page &amp; Ad Account đã chọn
               </Button>
             </form>
           )}
