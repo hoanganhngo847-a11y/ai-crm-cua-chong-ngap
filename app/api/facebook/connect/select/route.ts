@@ -109,7 +109,9 @@ export async function POST(request: Request) {
         pageId,
         actor.companyId,
       );
-      if (pageResult.status === 'SUBSCRIPTION_UNKNOWN' || !pageResult.messengerSubscribed) {
+      // Preserve a verified Messenger connection when only Lead Ads read-back is unknown.
+      // Unknown Messenger state remains a hard failure.
+      if (!pageResult.messengerSubscribed) {
         throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
       }
       connectedPages.push(pageResult);
@@ -183,10 +185,18 @@ export async function POST(request: Request) {
     if (session.isLongLived === false) {
       url.searchParams.set('token_lifecycle', 'short_lived_fallback');
     }
-    const allLeadAdsConnected = connectedPages.length > 0 && connectedPages.every((page) => page.leadAdsSubscribed);
+    const allLeadAdsConnected =
+      connectedPages.length > 0 && connectedPages.every((page) => page.leadAdsSubscribed);
+    const leadAdsStateUnknown = connectedPages.some(
+      (page) => page.status === 'SUBSCRIPTION_UNKNOWN' && page.messengerSubscribed,
+    );
     url.searchParams.set(
       'lead_ads_status',
-      allLeadAdsConnected ? 'ALL_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED',
+      allLeadAdsConnected
+        ? 'ALL_CONNECTED'
+        : leadAdsStateUnknown
+          ? 'SUBSCRIPTION_UNKNOWN'
+          : 'LEAD_ADS_NOT_CONNECTED',
     );
     url.searchParams.set(
       'pages',
