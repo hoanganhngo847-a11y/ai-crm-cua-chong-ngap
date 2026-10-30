@@ -7,7 +7,7 @@ import {
 } from './core';
 import type { PageBinding } from './binding';
 import { rpc } from './server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { graphVersion } from './graph-api';
 
 export interface MetaLeadData {
     id: string;
@@ -35,12 +35,6 @@ export interface IngestedLeadResult {
     error?: string;
 }
 
-function graphVersion(): string {
-    const v = process.env.META_GRAPH_VERSION?.trim();
-    if (v && /^v\d+\.\d+$/.test(v)) return v;
-    return 'v21.0';
-}
-
 /**
  * Fetch lead details from Meta Graph API
  */
@@ -54,19 +48,20 @@ export async function fetchMetaLeadDetails(
     const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
     url.searchParams.set(
         'fields',
-        'id,created_time,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,field_data',
+        'id,created_time,form_id,field_data',
     );
-    url.searchParams.set('access_token', pageAccessToken);
+
 
     const response = await fetchFn(url.toString(), {
         method: 'GET',
+        headers: { Authorization: `Bearer ${pageAccessToken}` },
+        redirect: 'error',
         cache: 'no-store',
         signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[lead-ads] fetch_failed id=${leadgenId} status=${response.status} msg=${errorText}`);
+        console.error(`[lead-ads] fetch_failed status=${response.status}`);
         throw new ChannelError('LEAD_RETRIEVAL_FAILED', response.status === 429 ? 429 : 503);
     }
 
@@ -156,190 +151,55 @@ export async function processLeadAdsChange(
         throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
     }
 
-    // 0. Durable event intake: claim event (Priority 3)
+    const claim = await rpc('claim_meta_leadgen_event', {
+        p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
+        p_form_id: change.formId || null, p_ad_id: change.adId || null, p_occurred: change.time,
+    }) as { status?: string; claim_token?: string; occurred_at?: string; ingest_args?: { lead_data?: MetaLeadData } } | null;
+    if (claim?.status === 'ALREADY_PROCESSED') return { leadgenId: change.leadgenId, status: 'EXISTING' };
+    if (claim?.status !== 'CLAIMED' || !claim.claim_token) throw new ChannelError('LEADGEN_CLAIM_UNAVAILABLE', 503);
+    const claimToken = claim.claim_token;
+    const finalize = (status: 'PROCESSED' | 'FAILED', error?: string) => rpc('finalize_meta_leadgen_event', {
+        p_company_id: config.company, p_leadgen_id: change.leadgenId,
+        p_claim_token: claimToken, p_status: status, p_error: error || null,
+    });
     try {
-        const claimResult = (await rpc('claim_meta_leadgen_event', {
-            p_company_id: config.company,
-            p_page_id: config.page,
-            p_leadgen_id: change.leadgenId,
-            p_form_id: change.formId || null,
-            p_ad_id: change.adId || null,
-            p_occurred: change.time,
-        })) as string;
-
-        if (claimResult === 'ALREADY_PROCESSED') {
-            return {
-                leadgenId: change.leadgenId,
-                status: 'EXISTING',
-            };
-        }
-    } catch (claimErr) {
-        console.warn(`[lead-ads] claim_leadgen_event_rpc_error id=${change.leadgenId}`, claimErr);
-    }
-
-    // 1. Retrieve lead details from Meta Graph API
-    let leadData: MetaLeadData;
-    try {
-        leadData = await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
-    } catch (err) {
-        console.error(`[lead-ads] failed_to_fetch_lead id=${change.leadgenId}`);
-        try {
-            await rpc('finalize_meta_leadgen_event', {
-                p_company_id: config.company,
-                p_leadgen_id: change.leadgenId,
-                p_status: 'FAILED',
-                p_error: 'FETCH_LEAD_DETAILS_FAILED',
-            });
-        } catch {
-            // Best effort finalize
-        }
-        throw err;
-    }
-
-    // 2. Extract fields
-    const fields = extractLeadFields(leadData.field_data || []);
-    const safeContent = formatLeadAdsSafeContent(leadData, fields);
-    const customerName = fields.fullName || 'Khách Lead Ads';
-
-    // 3. Fallback to change IDs if leadData doesn't contain them
-    const adId = leadData.ad_id || change.adId || null;
-    const formId = leadData.form_id || change.formId || null;
-    const campaignId = leadData.campaign_id || null;
-    const adsetId = leadData.adset_id || change.adgroupId || null;
-
-    // 4. Ingest into CRM via han_ingest RPC
-    const intakeKey = `${config.page}:leadgen:${change.leadgenId}`;
-    let ingestResult: unknown;
-    try {
-        ingestResult = await rpc('han_ingest', {
-            p_company: config.company,
-            p_channel: 'FACEBOOK',
-            p_external: `${config.page}:leadgen:${change.leadgenId}`,
-            p_key: intakeKey,
-            p_name: customerName,
-            p_phone: fields.normalizedPhone,
-            p_content: safeContent,
-            p_safe: safeContent,
-            p_safe_status: 'SUCCEEDED',
-            p_occurred: change.time,
-            p_payload: {
-                ...change.raw,
-                leadgen_id: change.leadgenId,
-                form_id: formId,
-                ad_id: adId,
-                campaign_id: campaignId,
-                crm_lead_ads: true,
-                field_data_keys: (leadData.field_data || []).map((f) => f.name),
+        // Reuse the immutable persisted response after partial intake. Changes to
+        // the form/lead in Meta cannot alter han_ingest's idempotency payload.
+        const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
+        const fields = extractLeadFields(leadData.field_data || []);
+        const adId = leadData.ad_id || change.adId || null;
+        const formId = leadData.form_id || change.formId || null;
+        const campaignId = leadData.campaign_id || null;
+        const adsetId = leadData.adset_id || change.adgroupId || null;
+        const ingest = await rpc('ingest_meta_leadgen_event', {
+            p_company_id: config.company, p_leadgen_id: change.leadgenId, p_claim_token: claimToken,
+            p_ingest: {
+                name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
+                content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
+                payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
+                    campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name) },
             },
+        }) as { interaction_id?: string; customer_id?: string } | null;
+        if (!ingest?.interaction_id || !ingest.customer_id) throw new ChannelError('LEADGEN_INTAKE_INCOMPLETE', 503);
+        const touchpointId = await rpc('record_lead_attribution_touchpoint', {
+            p_company: config.company, p_customer: ingest.customer_id, p_interaction: ingest.interaction_id,
+            p_channel: 'FACEBOOK_LEAD_ADS', p_page_id: config.page, p_page_name: config.name || null,
+            p_meta_campaign_id: campaignId, p_campaign_name: leadData.campaign_name || null,
+            p_meta_ad_set_id: adsetId, p_ad_set_name: leadData.adset_name || null,
+            p_meta_ad_id: adId, p_ad_name: leadData.ad_name || null, p_meta_form_id: formId,
+            p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
+            p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
+            p_attribution_status: 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
+            p_occurred: claim.occurred_at || change.time,
         });
-    } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes('IDEMPOTENCY_CONFLICT')) {
-            try {
-                await rpc('finalize_meta_leadgen_event', {
-                    p_company_id: config.company,
-                    p_leadgen_id: change.leadgenId,
-                    p_status: 'PROCESSED',
-                });
-            } catch {
-                // Best effort
-            }
-            return {
-                leadgenId: change.leadgenId,
-                status: 'EXISTING',
-            };
-        }
-
-        try {
-            await rpc('finalize_meta_leadgen_event', {
-                p_company_id: config.company,
-                p_leadgen_id: change.leadgenId,
-                p_status: 'FAILED',
-                p_error: 'INGEST_FAILED',
-            });
-        } catch {
-            // Best effort
-        }
-        throw err;
+        if (typeof touchpointId !== 'string' || !touchpointId) throw new ChannelError('LEADGEN_ATTRIBUTION_INCOMPLETE', 503);
+        if (await finalize('PROCESSED') !== true) throw new ChannelError('LEADGEN_FINALIZATION_FAILED', 503);
+        return { leadgenId: change.leadgenId, customerId: ingest.customer_id, interactionId: ingest.interaction_id,
+            touchpointId, status: 'PROCESSED' };
+    } catch {
+        // Failure acknowledgement must stay retryable even if the DB is down.
+        // A lost lease is reclaimed after expiry and stale tokens cannot finalize.
+        try { await finalize('FAILED', 'LEADGEN_PROCESSING_FAILED'); } catch { /* Retry via lease expiry. */ }
+        throw new ChannelError('LEADGEN_PROCESSING_FAILED', 503);
     }
-
-    const interactionId =
-        ingestResult && typeof ingestResult === 'object' && 'interaction_id' in ingestResult
-            ? String((ingestResult as Record<string, unknown>).interaction_id || '')
-            : undefined;
-
-    // 5. Find Customer ID for touchpoint linking
-    let customerId: string | undefined;
-    if (interactionId) {
-        const client = createAdminClient();
-        const { data: interaction } = await client
-            .from('interactions')
-            .select('customer_id')
-            .eq('id', interactionId)
-            .maybeSingle();
-        if (interaction?.customer_id) {
-            customerId = interaction.customer_id;
-        }
-    }
-
-    // 6. Record Lead Attribution Touchpoint (Priority 5: ATTRIBUTED only if campaign resolved)
-    let touchpointId: string | undefined;
-    try {
-        const initialStatus = campaignId ? 'ATTRIBUTED' : 'UNATTRIBUTED';
-
-        touchpointId = (await rpc('record_lead_attribution_touchpoint', {
-            p_company: config.company,
-            p_customer: customerId || null,
-            p_interaction: interactionId || null,
-            p_conversation: null,
-            p_channel: 'FACEBOOK_LEAD_ADS',
-            p_page_id: config.page,
-            p_page_name: config.name || null,
-            p_ad_account_id: null,
-            p_meta_campaign_id: campaignId,
-            p_campaign_name: leadData.campaign_name || null,
-            p_meta_ad_set_id: adsetId,
-            p_ad_set_name: leadData.adset_name || null,
-            p_meta_ad_id: adId,
-            p_ad_name: leadData.ad_name || null,
-            p_meta_form_id: formId,
-            p_form_name: leadData.form_name || null,
-            p_meta_leadgen_id: change.leadgenId,
-            p_referral_source: 'LEAD_ADS',
-            p_referral_type: 'INSTANT_FORM',
-            p_ads_context_data: null,
-            p_utm_source: null,
-            p_utm_medium: null,
-            p_utm_campaign: null,
-            p_utm_content: null,
-            p_utm_term: null,
-            p_fbclid: null,
-            p_attribution_status: initialStatus,
-            p_attribution_method: 'DIRECT_LEADGEN',
-            p_occurred: change.time,
-        })) as string;
-    } catch (touchpointErr) {
-        console.warn(`[lead-ads] failed_to_record_touchpoint id=${change.leadgenId}`, touchpointErr);
-    }
-
-    // 7. Finalize durable event as PROCESSED
-    try {
-        await rpc('finalize_meta_leadgen_event', {
-            p_company_id: config.company,
-            p_leadgen_id: change.leadgenId,
-            p_status: 'PROCESSED',
-            p_interaction_id: interactionId || null,
-            p_customer_id: customerId || null,
-        });
-    } catch (finErr) {
-        console.warn(`[lead-ads] finalize_meta_leadgen_event_failed id=${change.leadgenId}`, finErr);
-    }
-
-    return {
-        leadgenId: change.leadgenId,
-        customerId,
-        interactionId,
-        touchpointId,
-        status: 'PROCESSED',
-    };
 }

@@ -9,6 +9,8 @@ import {
 } from 'node:crypto';
 import { cookies } from 'next/headers';
 
+import { fetchMetaPages, graphVersion, marketingVersion } from './graph-api';
+
 import { bindingsForCompany, pageBindings, type PageBinding } from './binding';
 
 const STATE_COOKIE = 'fb_connect_state';
@@ -51,14 +53,6 @@ function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing ${name}`);
   return value;
-}
-
-function graphVersion() {
-  const version = requiredEnv('META_GRAPH_VERSION');
-  if (!/^v\d+\.\d+$/.test(version)) {
-    throw new Error('Invalid META_GRAPH_VERSION');
-  }
-  return version;
 }
 
 function redirectUri() {
@@ -224,97 +218,24 @@ export async function exchangeCodeForUserAccessToken(code: string) {
 }
 
 async function fetchManagedPagesWithTokens(userAccessToken: string) {
-  const version = graphVersion();
-  let nextUrl: string | null = `https://graph.facebook.com/${version}/me/accounts?fields=id,name,access_token&limit=100`;
-  const allPages: Array<{ id: string; name: string; accessToken: string }> = [];
-  let pageCount = 0;
-
-  while (nextUrl && pageCount < 10) {
-    pageCount++;
-    const response = await fetch(nextUrl, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${userAccessToken}` },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[meta-connect] page_list_failed status=${response.status} msg=${errorText.slice(0, 200)}`);
-      throw new Error(`FACEBOOK_PAGE_LIST_FAILED_${response.status}`);
-    }
-
-    const payload = (await response.json()) as {
-      data?: Array<{ id?: unknown; name?: unknown; access_token?: unknown }>;
-      paging?: { next?: string };
-    };
-
-    const validInPage = (payload.data || [])
-      .filter(
-        (page) =>
-          typeof page.id === 'string' &&
-          /^\d+$/.test(page.id) &&
-          typeof page.name === 'string' &&
-          typeof page.access_token === 'string',
-      )
-      .map((page) => ({
-        id: page.id as string,
-        name: (page.name as string).trim().slice(0, 120),
-        accessToken: page.access_token as string,
-      }));
-
-    allPages.push(...validInPage);
-    nextUrl = payload.paging?.next || null;
-  }
-
-  return allPages;
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}/me/accounts?fields=id,name,access_token&limit=100`);
+  const pages = await fetchMetaPages<{ id?: unknown; name?: unknown; access_token?: unknown }>(url, userAccessToken);
+  return pages.filter(page => typeof page.id === 'string' && /^\d+$/.test(page.id) && typeof page.name === 'string' && typeof page.access_token === 'string')
+    .map(page => ({ id: page.id as string, name: (page.name as string).trim().slice(0, 120), accessToken: page.access_token as string }));
 }
 
 export async function listManagedFacebookPages(userAccessToken: string) {
-  const pages = await fetchManagedPagesWithTokens(userAccessToken);
-  return pages.map(({ id, name }) => ({ id, name }));
+  return (await fetchManagedPagesWithTokens(userAccessToken)).map(({ id, name }) => ({ id, name }));
 }
 
 export async function listManagedAdAccounts(userAccessToken: string): Promise<ManagedAdAccount[]> {
-  const version = graphVersion();
-  let nextUrl: string | null = `https://graph.facebook.com/${version}/me/adaccounts?fields=id,account_id,name,account_status,currency&limit=100`;
-  const allAccounts: ManagedAdAccount[] = [];
-  let pageCount = 0;
-
-  while (nextUrl && pageCount < 10) {
-    pageCount++;
-    const response = await fetch(nextUrl, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${userAccessToken}` },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[meta-connect] ad_accounts_fetch_failed status=${response.status} msg=${errorText.slice(0, 200)}`);
-      throw new Error(`FACEBOOK_AD_ACCOUNTS_FETCH_FAILED_${response.status}`);
-    }
-
-    const payload = (await response.json()) as {
-      data?: Array<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>;
-      paging?: { next?: string };
-    };
-
-    const validInPage = (payload.data || [])
-      .filter((acc) => typeof acc.id === 'string' && typeof acc.name === 'string')
-      .map((acc) => ({
-        id: String(acc.id),
-        name: String(acc.name).trim().slice(0, 120),
-        currency: typeof acc.currency === 'string' ? acc.currency : 'VND',
-        accountStatus: typeof acc.account_status === 'number' ? acc.account_status : 1,
-      }));
-
-    allAccounts.push(...validInPage);
-    nextUrl = payload.paging?.next || null;
-  }
-
-  return allAccounts;
+  const url = new URL(`https://graph.facebook.com/${marketingVersion()}/me/adaccounts?fields=id,account_id,name,account_status,currency&limit=100`);
+  const accounts = await fetchMetaPages<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>(url, userAccessToken);
+  return accounts.filter(acc => typeof acc.id === 'string' && typeof acc.name === 'string').map(acc => ({
+    id: String(acc.id), name: String(acc.name).trim().slice(0, 120),
+    currency: typeof acc.currency === 'string' ? acc.currency : 'VND',
+    accountStatus: typeof acc.account_status === 'number' ? acc.account_status : 1,
+  }));
 }
 
 export function configuredFacebookPageIds(companyId: string) {
@@ -344,12 +265,11 @@ export async function subscribeManagedPage(
 
   const body = new URLSearchParams({
     subscribed_fields: 'messages,leadgen',
-    access_token: page.accessToken,
   });
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${page.accessToken}` },
     body,
     cache: 'no-store',
     signal: AbortSignal.timeout(10_000),
@@ -382,9 +302,10 @@ async function resolveConfiguredPageName(binding: PageBinding): Promise<string |
       `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}`,
     );
     url.searchParams.set('fields', 'id,name');
-    url.searchParams.set('access_token', token);
+
 
     const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
       signal: AbortSignal.timeout(8_000),
     });
@@ -424,8 +345,9 @@ async function configuredConnectionForBinding(
   try {
     const version = graphVersion();
     const response = await fetch(
-      `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
+      `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}/subscribed_apps`,
       {
+        headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
         signal: AbortSignal.timeout(8_000),
       },

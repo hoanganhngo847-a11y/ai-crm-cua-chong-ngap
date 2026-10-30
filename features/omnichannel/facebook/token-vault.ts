@@ -26,7 +26,7 @@ export function parseEncryptionKey(rawKey: string | undefined, keyName: string):
     // Base64 format (44 characters -> 32 bytes)
     if (/^[A-Za-z0-9+/]{43}=$/.test(trimmed) || /^[A-Za-z0-9+/]{44}$/.test(trimmed)) {
         const buf = Buffer.from(trimmed, 'base64');
-        if (buf.length === 32) return buf;
+        if (buf.length === 32 && buf.toString('base64') === trimmed) return buf;
     }
 
     // Raw 32-character ASCII/UTF8 string

@@ -30,6 +30,7 @@ Chỉ yêu cầu các quyền thực sự cần thiết, **không** yêu cầu `
 | :--- | :--- | :--- |
 | `pages_show_list` | Lấy danh sách Facebook Pages mà người dùng quản lý | Có |
 | `pages_manage_metadata` | Đăng ký webhook subscription cho Page | Có |
+| `pages_read_engagement` | Đọc thông tin Page cần cho kết nối | Có |
 | `pages_messaging` | Tiếp nhận và gửi tin nhắn Messenger | Có |
 | `ads_read` | Đọc cấu trúc chiến dịch và báo cáo chi phí từ Marketing API | Có |
 | `leads_retrieval` | Truy xuất dữ liệu lead từ Instant Forms (Facebook Lead Ads) | Có |
@@ -56,11 +57,14 @@ Bổ sung các biến môi trường sau vào server hosting (Render / Vercel / 
 # Meta Webhook & App
 META_APP_SECRET=your-meta-app-secret-here
 META_VERIFY_TOKEN=your-long-random-verify-token-here
-META_GRAPH_VERSION=v21.0
+META_GRAPH_VERSION=v26.0
+META_MARKETING_VERSION=v26.0
 
 # Bảo mật Token Vault (AES-256-GCM)
 # Khoá 32-byte ngẫu nhiên dạng hex hoặc chuỗi bảo mật cao để mã hoá token khi lưu vào database
-META_TOKEN_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+META_TOKEN_ENCRYPTION_KEY=<32-byte-key-as-64-hex-characters>
+# Optional previous effective AES key during rotation; never the legacy passphrase
+META_PREVIOUS_TOKEN_ENCRYPTION_KEY=
 
 # Token người dùng hệ thống (System User Token) tuỳ chọn cho cron sync ngầm
 META_SYSTEM_USER_TOKEN=EAAB...
@@ -74,7 +78,7 @@ CRON_SECRET=your-random-cron-secret-32-chars
 ```
 
 > [!IMPORTANT]
-> `META_TOKEN_ENCRYPTION_KEY` là khoá bảo mật cực kỳ quan trọng. Không bao giờ commit vào Git hoặc public cho frontend. Nếu thay đổi khoá này mà không migrate dữ liệu, các token cũ trong bảng `meta_ad_accounts` sẽ không thể giải mã.
+> `META_TOKEN_ENCRYPTION_KEY` là khoá bảo mật cực kỳ quan trọng. Không bao giờ commit vào Git hoặc public cho frontend. Nếu thay đổi khoá này mà không migrate dữ liệu, các token cũ trong vault `private.meta_ad_account_tokens` sẽ không thể giải mã.
 
 ---
 
@@ -91,7 +95,7 @@ Quản trị viên cấp cao (**BOSS_ADMIN**) thực hiện:
    - Hệ thống tự động truy vấn danh sách Pages và Ad Accounts mà người dùng có quyền quản lý.
    - Giao diện hiển thị danh sách để quản trị viên chọn cụ thể Page nào và Ad Account nào được liên kết với công ty hiện tại.
 5. Khi nhấn **"Lưu cấu hình & Đăng ký Webhook"**:
-   - Access token được mã hoá AES-256-GCM và lưu vào bảng `public.meta_ad_accounts`.
+   - Access token được mã hoá AES-256-GCM và lưu vào bảng `private.meta_ad_account_tokens` qua RPC chỉ dành cho `service_role`.
    - Hệ thống tự động đăng ký Page subscription cho cả `messages` và `leadgen`.
    - Tự động kích hoạt đợt đồng bộ cấu trúc quảng cáo đầu tiên ngầm dưới nền.
 
@@ -103,7 +107,7 @@ Quản trị viên cấp cao (**BOSS_ADMIN**) thực hiện:
 1. Khi khách hàng điền biểu mẫu tức thì, Meta gửi webhook sự kiện `leadgen` đến `/api/webhooks/meta`.
 2. Hệ thống kiểm tra chữ ký `x-hub-signature-256` bằng `META_APP_SECRET` theo cơ chế fail-closed.
 3. Webhook parser tách riêng luồng `entry.changes[field === 'leadgen']`, không đưa vào chat stream của Messenger.
-4. Server dùng Page Access Token gọi Graph API `GET /v21.0/{leadgen_id}` để lấy chi tiết các câu trả lời (`field_data`), `ad_id`, `form_id`, `campaign_id`.
+4. Server dùng Page Access Token gọi Graph API `GET /v26.0/{leadgen_id}` để lấy chi tiết các câu trả lời (`field_data`), `form_id` và `field_data`; `ad_id` lấy từ webhook đã xác minh chữ ký, mapping campaign chỉ lấy từ dữ liệu Ads đã sync.
 5. Số điện thoại được chuẩn hoá sang định dạng chuẩn quốc tế (`+84...`).
 6. Gọi RPC `han_ingest` tạo Customer và Interaction với `p_key = page_id:leadgen:leadgen_id`. Webhook gửi lại (retry) từ Meta sẽ được xử lý idempotent, **không tạo trùng khách hàng hay tương tác**.
 7. Gọi RPC `record_lead_attribution_touchpoint` ghi nhận touchpoint:
@@ -194,10 +198,19 @@ Hàm RPC `get_meta_ads_performance_report` xử lý an toàn phép chia cho 0:
 
 ## 9. Danh Sách Kiểm Tra An Toàn (Production Checklist)
 
-- [x] Đã cấu hình `META_TOKEN_ENCRYPTION_KEY` an toàn (32 bytes).
-- [x] Đã thiết lập `META_APP_SECRET` và `META_VERIFY_TOKEN`.
+- [ ] Xác nhận trên môi trường phát hành: cấu hình `META_TOKEN_ENCRYPTION_KEY` an toàn (32 bytes).
+- [ ] Xác nhận trên môi trường phát hành: thiết lập `META_APP_SECRET` và `META_VERIFY_TOKEN`.
 - [x] Webhook `x-hub-signature-256` xác minh nghiêm ngặt, fail-closed khi sai chữ ký.
 - [x] Toàn bộ dữ liệu Meta Ads có RLS cô lập theo `company_id`.
 - [x] Zero-Phone compliance: không xuất hiện số điện thoại thô trên giao diện hoặc public payload.
 - [x] Phân quyền chặt chẽ: chỉ `BOSS_ADMIN` mới có quyền kích hoạt đồng bộ hoặc kết nối OAuth.
-- [x] Đã kiểm thử thành công 15 kịch bản tự động với `npm run test:meta-ads`.
+- [x] Kiểm thử tự động và database: xem kết quả cuối trong runbook; chạy lại với `npm run test:meta-ads`.
+
+
+### Final remediation release gate (2026-10-30)
+
+See [META_ADS_PR139_REMEDIATION.md](META_ADS_PR139_REMEDIATION.md) for the authoritative migration/key runbook and validation record. The earlier readiness checklist does not authorize production release.
+
+Graph/Messenger and Marketing use separate version settings. Both default to `v26.0`; Marketing accepts `v25.0`/`v26.0` only. Basic lead retrieval requests `id,created_time,form_id,field_data`. Ad identifiers arrive in the signed webhook and must map to this company's synced Ads/campaign records before attribution. Webhook-provided names and status never become attribution evidence. `ads_management` and `pages_manage_ads` are omitted from default OAuth scopes; ad-specific Lead fields are intentionally not requested.
+
+Token RPCs are service-role only. Ordinary members can read allowed reporting tables but cannot write synced evidence or overwrite stored credentials.

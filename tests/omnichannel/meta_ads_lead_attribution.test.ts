@@ -41,7 +41,8 @@ const PAGE_A_TOKEN = 'META_TEST_TOKEN_CHD_PAGE_ACCESS_TOKEN';
 process.env.WEBSITE_ORIGIN = 'https://ai-crm-cua-chong-ngap.onrender.com';
 process.env.META_APP_SECRET = APP_SECRET;
 process.env.META_VERIFY_TOKEN = VERIFY_TOKEN;
-process.env.META_GRAPH_VERSION = 'v21.0';
+process.env.META_GRAPH_VERSION = 'v26.0';
+process.env.META_MARKETING_VERSION = 'v26.0';
 process.env.META_PAGE_CHD_TOKEN = PAGE_A_TOKEN;
 process.env.META_TOKEN_ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
@@ -164,9 +165,11 @@ test('Scenario 2: Valid Lead Ads webhook (leadgen) is received and processed wit
                 ],
             });
         }
-        if (url.includes('/rest/v1/rpc/han_ingest')) {
+        if (url.includes('/rest/v1/rpc/claim_meta_leadgen_event')) return Response.json({ status: 'CLAIMED', claim_token: 'test-claim-token' });
+        if (url.includes('/rest/v1/rpc/finalize_meta_leadgen_event')) return Response.json(true);
+        if (url.includes('/rest/v1/rpc/ingest_meta_leadgen_event')) {
             const body = JSON.parse(String(init?.body));
-            rpcCalls.push({ name: 'han_ingest', args: body });
+            rpcCalls.push({ name: 'ingest_meta_leadgen_event', args: body });
             return Response.json({
                 status: 'RECEIVED',
                 customer_id: 'cust_lead_001',
@@ -220,12 +223,10 @@ test('Scenario 2: Valid Lead Ads webhook (leadgen) is received and processed wit
         assert.equal(resBody.received, true);
 
         // Verify han_ingest was called for the lead
-        const ingestCall = rpcCalls.find(c => c.name === 'han_ingest');
+        const ingestCall = rpcCalls.find(c => c.name === 'ingest_meta_leadgen_event');
         assert.ok(ingestCall, 'han_ingest should be called for the lead');
-        assert.equal(ingestCall.args.p_channel, 'FACEBOOK');
-        assert.equal(ingestCall.args.p_company, COMPANY_A);
-        assert.equal(ingestCall.args.p_key, `${TARGET_PAGE_ID}:leadgen:leadgen_001`);
-        assert.equal(ingestCall.args.p_phone, '+84988123456', 'Phone normalized to standard VN format');
+        assert.equal(ingestCall.args.p_company_id, COMPANY_A);
+        assert.equal(ingestCall.args.p_ingest.phone, '+84988123456', 'Phone normalized to standard VN format');
 
         // Verify record_lead_attribution_touchpoint was recorded
         const touchpointCall = rpcCalls.find(c => c.name === 'record_lead_attribution_touchpoint');
@@ -1135,7 +1136,11 @@ test('Scenario 16: Token security, private schema isolation, and format validati
             }
         );
 
-        // 16C: Store and retrieve encrypted token via server-only RPCs as authorized company member
+        // 16C: Ordinary members cannot invoke either credential RPC, including their own company.
+        await assert.rejects(db.query(`SELECT public.store_meta_ad_account_token('${companyId}', 'act_token_sec_01', 'overwrite');`), /permission denied/i);
+        await assert.rejects(db.query(`SELECT * FROM public.get_meta_ad_account_token('${companyId}', 'act_token_sec_01');`), /permission denied/i);
+        await db.exec('RESET ROLE; SET ROLE service_role;');
+        // Service-only storage remains usable.
         const encrypted = encryptToken('EAA_TEST_SECRET_TOKEN_VALUE');
         const expiresAt = new Date(Date.now() + 86400000).toISOString();
 
@@ -1296,31 +1301,32 @@ test('Scenario 18: Durable event intake, idempotency, and multi-leadgen batch fa
             SELECT public.claim_meta_leadgen_event(
                 '${companyId}'::uuid,
                 '1026991374010112',
-                'lg_durable_001',
+                '100000001',
                 'form_001',
                 'ad_001'
             );
         `);
-        assert.equal((claim1.rows[0] as any).claim_meta_leadgen_event, 'CLAIMED');
-
-        // Finalize as PROCESSED
-        await db.query(`
-            SELECT public.finalize_meta_leadgen_event(
-                '${companyId}'::uuid,
-                'lg_durable_001',
-                'PROCESSED'
-            );
-        `);
+        const claim = (claim1.rows[0] as any).claim_meta_leadgen_event;
+        assert.equal(claim.status, 'CLAIMED');
+        // Processing duplicate receives BUSY and cannot steal ownership.
+        const busy = await db.query(`SELECT public.claim_meta_leadgen_event('${companyId}', '1026991374010112', '100000001') AS claim;`);
+        assert.equal((busy.rows[0] as any).claim.status, 'BUSY');
+        await assert.rejects(db.query(`SELECT public.finalize_meta_leadgen_event('${companyId}', '100000001', '${claim.claim_token}', 'PROCESSED');`), /ATTRIBUTION_NOT_RECORDED/);
+        const intake = await db.query(`SELECT public.ingest_meta_leadgen_event('${companyId}', '100000001', '${claim.claim_token}', '{"name":"Durable lead","phone":null,"content":"Safe content","payload":{}}'::jsonb) AS result;`);
+        const result = (intake.rows[0] as any).result;
+        await db.query(`SELECT public.record_lead_attribution_touchpoint(p_company=>'${companyId}', p_customer=>'${result.customer_id}', p_interaction=>'${result.interaction_id}', p_meta_leadgen_id=>'100000001');`);
+        const completed = await db.query(`SELECT public.finalize_meta_leadgen_event('${companyId}', '100000001', '${claim.claim_token}', 'PROCESSED') AS completed;`);
+        assert.equal((completed.rows[0] as any).completed, true);
 
         // Repeated claim returns ALREADY_PROCESSED
         const claim2 = await db.query(`
             SELECT public.claim_meta_leadgen_event(
                 '${companyId}'::uuid,
                 '1026991374010112',
-                'lg_durable_001'
+                '100000001'
             );
         `);
-        assert.equal((claim2.rows[0] as any).claim_meta_leadgen_event, 'ALREADY_PROCESSED');
+        assert.equal((claim2.rows[0] as any).claim_meta_leadgen_event.status, 'ALREADY_PROCESSED');
     } finally {
         await supabase.close();
     }
@@ -1486,7 +1492,7 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
             SELECT first_campaign_name, latest_campaign_name FROM public.customers WHERE id = '${customerId}';
         `);
         const cRow = custAfter.rows[0] as any;
-        assert.equal(cRow.first_campaign_name, 'Chiến dịch Đầu Tiên Có Thật');
+        assert.equal(cRow.first_campaign_name, null, 'The first, unattributed touch remains immutable');
         assert.equal(cRow.latest_campaign_name, 'Chiến dịch Thứ Hai (Mới)');
     } finally {
         await supabase.close();

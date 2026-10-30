@@ -47,20 +47,22 @@ async function handleCronSync(request: NextRequest): Promise<NextResponse> {
     }
 
     const companyIds = Array.from(new Set((accounts || []).map((a) => a.company_id)));
-    const results: Record<string, unknown> = {};
+    const results: Record<string, { success: boolean; error?: string }> = {};
 
     for (const companyId of companyIds) {
         try {
             const res = await syncCompanyMetaAds(companyId);
             results[companyId] = res;
         } catch (err: unknown) {
-            results[companyId] = { error: err instanceof Error ? err.message : String(err) };
+            results[companyId] = { success: false, error: err instanceof Error ? err.message : 'META_SYNC_FAILED' };
         }
     }
 
+    const synced = Object.values(results).filter(result => result.success).length;
     return NextResponse.json({
-        ok: true,
-        synced_companies: companyIds.length,
+        ok: synced === companyIds.length,
+        synced_companies: synced,
+        failed_companies: companyIds.length - synced,
         results,
     });
 }

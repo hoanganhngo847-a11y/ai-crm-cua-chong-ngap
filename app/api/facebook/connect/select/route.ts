@@ -161,8 +161,10 @@ export async function POST(request: Request) {
         connectedAdAccountsCount = accountRows.length;
 
         // Trigger background initial sync
-        syncCompanyMetaAds(actor.companyId, { token: session.userAccessToken }).catch((err) => {
-          console.warn('[meta-connect] initial_ad_sync_background_error', err);
+        syncCompanyMetaAds(actor.companyId, { token: session.userAccessToken }).then(result => {
+          if (!result.success) console.warn('[meta-connect] initial_ad_sync_incomplete');
+        }).catch(() => {
+          console.warn('[meta-connect] initial_ad_sync_background_error');
         });
       }
     }
