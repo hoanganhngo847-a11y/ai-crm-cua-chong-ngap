@@ -14,6 +14,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
+    "test:staging-readiness": "node --conditions=react-server --import tsx --test tests/staging/pre-destructive/readiness.test.ts tests/staging/pre-destructive/rehearsal.test.ts",
     "test:cron-auth": "tsx --conditions=react-server tests/staging/cron-authorization.test.ts",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/rpc_only_domain_acls.test.ts",

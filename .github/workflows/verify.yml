@@ -35,6 +35,7 @@ jobs:
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
       - run: npx tsx --conditions=react-server --test tests/staging/migration-ledger.test.ts tests/staging/migration-security-db.test.ts
+      - run: npm run test:staging-readiness
       - run: npx tsx --conditions=react-server --test tests/ai-brain/zalo-sla-retry-db.test.ts
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db

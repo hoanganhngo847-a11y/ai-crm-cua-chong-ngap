@@ -1,0 +1,107 @@
+{
+  "scope": "Synthetic isolated local databases only; not a staging backup or live executor proof.",
+  "source": "crm_preflight_bf6873db68c945738ecec774f315a0d1_source",
+  "restored": "crm_preflight_bf6873db68c945738ecec774f315a0d1_restore",
+  "container": "supabase_db_crm-meta-migration-validation",
+  "cli": {
+    "tested": true,
+    "status": "DRIFT_REJECTED_WITHOUT_SQL_OR_REPAIR"
+  },
+  "backup": {
+    "encrypted": true,
+    "algorithm": "AES-256-GCM",
+    "ciphertextSha256": "caa87f78f4fb1ffc0bb5601e6940910743553a928beba61cd3631fe05e183494",
+    "archiveBytes": 53324,
+    "restoreMilliseconds": 6443,
+    "verifiedTableCount": 17,
+    "rowCountsAndHashes": [
+      {
+        "table": "public.companies",
+        "count": "2",
+        "hash": "cbda81438dad5ce1b1c9ed1a3038edee9edf9ac72d23edee042a5943c2a045f7"
+      },
+      {
+        "table": "public.user_profiles",
+        "count": "4",
+        "hash": "8eed7e4b639d397fd2e639e81846deba2033da70c4c267adbb522973f43b4b87"
+      },
+      {
+        "table": "public.company_members",
+        "count": "4",
+        "hash": "2a2ee2537c3f0b4eda0989a46bed2185951ed8618a137a48a7c188a1aafba56b"
+      },
+      {
+        "table": "public.customers",
+        "count": "2",
+        "hash": "f5549af8ca958f043587677e39e972a19c652a2a37c5e38dc9737168692e8bb4"
+      },
+      {
+        "table": "public.appointments",
+        "count": "2",
+        "hash": "5920c32ec755f7ee5a4366332601f4a98435d681586ce733641e5f1d1adc6feb"
+      },
+      {
+        "table": "public.surveys",
+        "count": "1",
+        "hash": "09f45ef57fa83db047fd038d70301213fdc9d36094e5907a76239af4ce1408c1"
+      },
+      {
+        "table": "public.orders",
+        "count": "1",
+        "hash": "8279023864b4f56ad1574af0be7316a7ce41d9c6820a0782615e8f0ce44a40b9"
+      },
+      {
+        "table": "public.production_orders",
+        "count": "1",
+        "hash": "8df7d1a6460b5da6ec575c24e4146b31239f798c348676c2c698f447e24c1b84"
+      },
+      {
+        "table": "public.installations",
+        "count": "1",
+        "hash": "3efa7734e6176885a752f0b1622c0f1e1f644d56db25f1e977091b5c8b0c7b26"
+      },
+      {
+        "table": "public.contracts",
+        "count": "1",
+        "hash": "8301c7e0f38b2ffe86452ffe1d03af9532f096085af4e79b7a7b2142d4e3c4ed"
+      },
+      {
+        "table": "public.calls",
+        "count": "2",
+        "hash": "34ac1e398be36dcaebb0d708a02ea18de746d095d473c21446ffda4cc8a54ea9"
+      },
+      {
+        "table": "public.audit_logs",
+        "count": "3",
+        "hash": "d11c58e1fb0324426f1f46b3f64ede9ecf4c18f87b7045d4b81489b739b38d64"
+      },
+      {
+        "table": "storage.objects",
+        "count": "8",
+        "hash": "08ca51f066ae533e7b4a8f1a549f2a8c0e4d9bf3f9b8a38630550d16af729547"
+      },
+      {
+        "table": "private.token_store",
+        "count": "1",
+        "hash": "bf255987068afab3068fa033fca340396140e3ceb3cb4dc22a705cbb51207a12"
+      },
+      {
+        "table": "supabase_migrations.schema_migrations",
+        "count": "26",
+        "hash": "27b699821e5a4baa40769ceda940660f4ae2162dba8f76de0200f59992225f62"
+      },
+      {
+        "table": "rehearsal_private.source_mapping",
+        "count": "26",
+        "hash": "124eb127ecf7bba6e3d2046ea6fcbcf2615c25dd5c8092cb5818af20bd2a8199"
+      },
+      {
+        "table": "public.rehearsal_events",
+        "count": "26",
+        "hash": "e392098b34ade995c0db9dc9f9ecf739cafc89310d2e96063c491332cdebc466"
+      }
+    ]
+  },
+  "status": "PASS",
+  "elapsedMilliseconds": 43234
+}

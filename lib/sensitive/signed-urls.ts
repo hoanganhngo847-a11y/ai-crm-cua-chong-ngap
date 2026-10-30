@@ -22,6 +22,9 @@ import { verifyActorForCompany } from '../server-auth/authorize';
  * Client input is NEVER allowed to control or override TTL values.
  */
 export function getCategoryTTL(category: SignedUrlResourceCategory): number {
+  if (!Object.hasOwn(SIGNED_URL_TTL, category)) {
+    throw new ServerAuthError('Danh mục tệp tài nguyên không hợp lệ.', 400, 'INVALID_PURPOSE');
+  }
   const ttl = SIGNED_URL_TTL[category];
   if (!ttl) {
     throw new ServerAuthError(
@@ -53,6 +56,9 @@ export async function createAuthorizedSignedUrl(
   request: SignedUrlRequest,
   client?: SupabaseClient
 ): Promise<SignedUrlResult> {
+  if (!request || typeof request !== 'object') {
+    throw new ServerAuthError('Yêu cầu tệp không hợp lệ.', 400, 'INVALID_PURPOSE');
+  }
   const { category, resourceId } = request;
 
   if (!category || !resourceId) {
@@ -64,15 +70,22 @@ export async function createAuthorizedSignedUrl(
   }
 
   const ttl = getCategoryTTL(category);
+  if ((category === 'SURVEY' && request.photoIndex !== undefined && (!Number.isInteger(request.photoIndex) || request.photoIndex < 0)) ||
+      (category === 'CONTRACT' && request.variant !== undefined && !['generated', 'signed'].includes(request.variant)) ||
+      (category === 'INSTALLATION' && !['photo', 'handover'].includes(request.variant))) {
+    throw new ServerAuthError('Bộ chọn tệp không hợp lệ.', 400, 'INVALID_PURPOSE');
+  }
   const adminClient = createAdminClient();
 
   let bucketName: string;
   let canonicalFileRef: string;
+  let resourceCompanyId: string;
 
   switch (category) {
     case 'SURVEY': {
       // 1. Authorize survey access (Boss, Sale, or assigned Tech)
-      await authorizeSurveyAccess(resourceId, client);
+      const { survey: authorizedSurvey } = await authorizeSurveyAccess(resourceId, client);
+      resourceCompanyId = authorizedSurvey.company_id;
 
       // 2. Load canonical file reference from database
       const { data: survey, error: surveyError } = await adminClient
@@ -85,9 +98,14 @@ export async function createAuthorizedSignedUrl(
         throw new ServerAuthError('Không tìm thấy bản khảo sát.', 404, 'RESOURCE_NOT_FOUND');
       }
 
-      const photos = Array.isArray(survey.photos) ? (survey.photos as string[]) : [];
+      const photos: unknown[] = Array.isArray(survey.photos) ? survey.photos : [];
       const index = request.photoIndex !== undefined ? request.photoIndex : 0;
-      const ref = photos[index];
+      const photo = photos[index];
+      // The canonical survey RPC stores { slot, objectPath, ... }; historical
+      // rows may still contain plain object-key strings.
+      const ref = typeof photo === 'string' ? photo
+        : photo && typeof photo === 'object' && 'objectPath' in photo && typeof photo.objectPath === 'string'
+          ? photo.objectPath : null;
 
       if (!ref) {
         throw new ServerAuthError('Không tìm thấy tệp ảnh khảo sát yêu cầu.', 404, 'RESOURCE_NOT_FOUND');
@@ -100,7 +118,8 @@ export async function createAuthorizedSignedUrl(
 
     case 'CONTRACT': {
       // 1. Authorize contract access (Boss, Sale)
-      await authorizeContractAccess(resourceId, client);
+      const { contract: authorizedContract } = await authorizeContractAccess(resourceId, client);
+      resourceCompanyId = authorizedContract.company_id;
 
       // 2. Load canonical file reference from database
       const { data: contract, error: contractError } = await adminClient
@@ -138,6 +157,7 @@ export async function createAuthorizedSignedUrl(
       if (minError || !minimal) {
         throw new ServerAuthError('Không tìm thấy bản ghi cuộc gọi.', 404, 'RESOURCE_NOT_FOUND');
       }
+      resourceCompanyId = minimal.company_id;
 
       // STEP 2-7: Derive company_id and authenticate actor (Boss only, AAL2 enforced)
       await verifyActorForCompany(
@@ -172,6 +192,7 @@ export async function createAuthorizedSignedUrl(
       // company from DB, verifies the actor and current technician assignment, and
       // only then reads the canonical `photos` / `handover_ref` fields.
       const { installation } = await authorizeInstallationAccess(resourceId, client);
+      resourceCompanyId = installation.company_id;
 
       if (request.variant === 'handover') {
         if (!installation.handover_ref?.trim()) {
@@ -212,6 +233,20 @@ export async function createAuthorizedSignedUrl(
     default: {
       throw new ServerAuthError('Danh mục tài nguyên không hợp lệ.', 400, 'INVALID_PURPOSE');
     }
+  }
+
+  // A canonical DB value is still an object key, never a URL/traversal path.
+  // Keep legacy bucket/path formats; reject corrupted references after auth.
+  if (typeof canonicalFileRef !== 'string' || !canonicalFileRef.trim() ||
+      canonicalFileRef.startsWith('/') || canonicalFileRef.includes('\\') ||
+      /^[a-z][a-z0-9+.-]*:/i.test(canonicalFileRef) || [...canonicalFileRef].some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
+      canonicalFileRef.split('/').some(part => part === '.' || part === '..' || part === '')) {
+    throw new ServerAuthError('Tham chiếu tệp bảo mật không hợp lệ.', 502, 'SIGNED_URL_UNAVAILABLE');
+  }
+  const tenantPrefixes = [`${resourceCompanyId}/`];
+  if (category === 'RECORDING') tenantPrefixes.push(`call-recordings/${resourceCompanyId}/`, `voice/${resourceCompanyId}/`);
+  if (!tenantPrefixes.some(prefix => canonicalFileRef.startsWith(prefix))) {
+    throw new ServerAuthError('Tham chiếu tệp bảo mật không hợp lệ.', 502, 'SIGNED_URL_UNAVAILABLE');
   }
 
   // 3. Generate signed URL using Supabase Storage admin client

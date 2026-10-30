@@ -1,0 +1,72 @@
+{
+  "scope": "Local verification; CI is tracked by PR #139 checks for the pushed head. No production/provider E2E claim.",
+  "checks": [
+    {
+      "check": "TypeScript",
+      "status": "PASS",
+      "logSha256": "e1f6775949f5e9c98a522624ab1d5b6de452551768ac3c22223a9c09e1cc3ffe",
+      "localLogPath": "/tmp/crm-pre-typecheck.log"
+    },
+    {
+      "check": "Lint excluding prior untracked scanner only",
+      "status": "PASS",
+      "logSha256": "d6bd398817770f880f6fb881aac5bc23bb3b251fb3541477f40cc6c7b67098e6",
+      "localLogPath": "/tmp/crm-pre-lint.log"
+    },
+    {
+      "check": "Build with localhost configuration",
+      "status": "PASS",
+      "logSha256": "ff3ea98ad4b82487bdd598f6bbbe953494d9d587c1794f2bc9848faa0c1ab0b7",
+      "localLogPath": "/tmp/crm-pre-build.log"
+    },
+    {
+      "check": "Meta Ads 34/34",
+      "status": "PASS",
+      "logSha256": "a51aad19526fb37bf51c9afec142c3db4f16cc54c44f9a7b874ea5f3d8b2d0d0",
+      "localLogPath": "/tmp/crm-pre-meta-ads.log"
+    },
+    {
+      "check": "Omnichannel 34/34",
+      "status": "PASS",
+      "logSha256": "6297df45a12c1c28f58c1c7c74094e2e6c77ad53f23a005c4c31aa313d069d96",
+      "localLogPath": "/tmp/crm-pre-omnichannel.log"
+    },
+    {
+      "check": "Meta Ads native DB 1/1",
+      "status": "PASS",
+      "logSha256": "6a5e492a70145b10ffb90fd8f00f83465b04c12bda47cd8d9a57d49a035cddf8",
+      "localLogPath": "/tmp/crm-pre-meta-db.log"
+    },
+    {
+      "check": "Canonical migration ledger/security native DB 4/4",
+      "status": "PASS",
+      "logSha256": "7ac3f23ccd93217e41c15ada9f2d427550362878ab3fc5128c2db67a0c42c34f",
+      "localLogPath": "/tmp/crm-pre-migration.log"
+    },
+    {
+      "check": "New readiness native DB/unit 13/13",
+      "status": "PASS",
+      "logSha256": "f354d217397d4f3c284ad29e12ee8508bf4b0a72842ed2aeb0a0366804622503",
+      "localLogPath": "/tmp/crm-pre-rehearsal.log"
+    },
+    {
+      "check": "Omnichannel native DB SQL assertions",
+      "status": "PASS",
+      "logSha256": "2b03c6440973cecc4b287c10b8b4fce5ecf6d29ab387bdc2619f1d0768c7e15d",
+      "localLogPath": "/tmp/crm-pre-omnichannel-db.log"
+    },
+    {
+      "check": "CRM 94/94 final suite plus preceding scripts",
+      "status": "PASS",
+      "logSha256": "0c0741bbfeda9ce7ae6c9f2d8adaace46d2fb11d32a2e62a19d21c54e14b0063",
+      "localLogPath": "/tmp/crm-pre-crm.log"
+    },
+    {
+      "check": "RPC-only domain ACLs",
+      "status": "PASS",
+      "logSha256": "6747e61d5e1f22f89cc87ca715ba4c0448e653231d011adad159a52c7a7a1e55",
+      "localLogPath": "/tmp/crm-pre-security.log"
+    }
+  ],
+  "lintNote": "Previous untracked docs/evidence/meta-ads-dependency-audit/scan_repository.cjs has four existing CommonJS require-style lint errors. Excluded that file only for local lint; it is unchanged and not committed with this task. No lint configuration changed; CI runs npm run lint normally."
+}
