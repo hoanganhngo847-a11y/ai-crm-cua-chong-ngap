@@ -34,6 +34,7 @@ export type ManagedAdAccount = {
 
 type ConnectSession = {
   userAccessToken: string;
+  tokenExpiresAt?: string | null;
   pages: ManagedFacebookPage[];
   adAccounts?: ManagedAdAccount[];
   companyId: string;
@@ -46,6 +47,8 @@ export type ConfiguredFacebookConnection = {
   pageId: string | null;
   pageName: string | null;
   subscribed: boolean;
+  leadAdsSubscribed?: boolean;
+  leadAdsStatus?: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED';
   tokenConfigured?: boolean;
 };
 
@@ -123,7 +126,12 @@ function unseal(value: string): ConnectSession | null {
         )
       : [];
 
-    return { ...parsed, pages, adAccounts };
+    const tokenExpiresAt =
+      typeof parsed.tokenExpiresAt === 'string' && parsed.tokenExpiresAt.trim().length > 0
+        ? parsed.tokenExpiresAt.trim()
+        : null;
+
+    return { ...parsed, tokenExpiresAt, pages, adAccounts };
   } catch {
     return null;
   }
@@ -193,7 +201,79 @@ export async function clearFacebookConnectSession() {
   store.delete(SESSION_COOKIE);
 }
 
-export async function exchangeCodeForUserAccessToken(code: string) {
+export function parseTokenExpiration(expiresIn?: unknown, now = Date.now()): {
+  expiresIn: number | null;
+  tokenExpiresAt: string | null;
+  isExpired: boolean;
+} {
+  if (expiresIn == null) {
+    return { expiresIn: null, tokenExpiresAt: null, isExpired: false };
+  }
+  const parsed = typeof expiresIn === 'number' ? expiresIn : parseInt(String(expiresIn), 10);
+  if (!Number.isFinite(parsed)) {
+    return { expiresIn: null, tokenExpiresAt: null, isExpired: false };
+  }
+  if (parsed <= 0) {
+    return { expiresIn: parsed, tokenExpiresAt: new Date(now).toISOString(), isExpired: true };
+  }
+  return {
+    expiresIn: parsed,
+    tokenExpiresAt: new Date(now + parsed * 1000).toISOString(),
+    isExpired: false,
+  };
+}
+
+export type FacebookTokenExchangeResult = {
+  accessToken: string;
+  tokenExpiresAt: string | null;
+  expiresIn: number | null;
+};
+
+export async function exchangeLongLivedUserAccessToken(
+  shortLivedToken: string,
+  fetchDouble?: typeof fetch,
+): Promise<FacebookTokenExchangeResult | null> {
+  const config = facebookOAuthConfig();
+  const url = new URL(
+    `https://graph.facebook.com/${config.graphVersion}/oauth/access_token`,
+  );
+  url.searchParams.set('grant_type', 'fb_exchange_token');
+  url.searchParams.set('client_id', config.appId);
+  url.searchParams.set('client_secret', config.appSecret);
+  url.searchParams.set('fb_exchange_token', shortLivedToken);
+
+  const fetchFn = fetchDouble || fetch;
+  try {
+    const response = await fetchFn(url.toString(), {
+      method: 'GET',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      // fb_exchange_token is optional / may not be supported for every Login for Business config
+      return null;
+    }
+    const payload = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
+    if (typeof payload.access_token !== 'string' || !payload.access_token) {
+      return null;
+    }
+    const { expiresIn, tokenExpiresAt } = parseTokenExpiration(payload.expires_in);
+    return {
+      accessToken: payload.access_token,
+      tokenExpiresAt,
+      expiresIn,
+    };
+  } catch {
+    // Never expose credentials in error or transport failure
+    return null;
+  }
+}
+
+export async function exchangeCodeForUserAccessToken(
+  code: string,
+  fetchDouble?: typeof fetch,
+): Promise<FacebookTokenExchangeResult> {
   const config = facebookOAuthConfig();
   const url = new URL(
     `https://graph.facebook.com/${config.graphVersion}/oauth/access_token`,
@@ -203,9 +283,10 @@ export async function exchangeCodeForUserAccessToken(code: string) {
   url.searchParams.set('redirect_uri', config.redirectUri);
   url.searchParams.set('code', code);
 
+  const fetchFn = fetchDouble || fetch;
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchFn(url.toString(), {
       method: 'GET',
       cache: 'no-store',
       redirect: 'error',
@@ -217,27 +298,45 @@ export async function exchangeCodeForUserAccessToken(code: string) {
   }
 
   if (!response.ok) throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
-  const payload = (await response.json()) as { access_token?: unknown };
+  const payload = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
   if (typeof payload.access_token !== 'string' || !payload.access_token) {
     throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
   }
-  return payload.access_token;
+
+  const shortLivedToken = payload.access_token;
+  const initialExp = parseTokenExpiration(payload.expires_in);
+
+  if (initialExp.isExpired) {
+    throw new Error('FACEBOOK_TOKEN_EXPIRED');
+  }
+
+  // Attempt long-lived token exchange (graceful fallback if unsupported for this app/login config)
+  const longLived = await exchangeLongLivedUserAccessToken(shortLivedToken, fetchFn);
+  if (longLived) {
+    return longLived;
+  }
+
+  return {
+    accessToken: shortLivedToken,
+    tokenExpiresAt: initialExp.tokenExpiresAt,
+    expiresIn: initialExp.expiresIn,
+  };
 }
 
-async function fetchManagedPagesWithTokens(userAccessToken: string) {
+async function fetchManagedPagesWithTokens(userAccessToken: string, customFetch?: typeof fetch) {
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/me/accounts?fields=id,name,access_token&limit=100`);
-  const pages = await fetchMetaPages<{ id?: unknown; name?: unknown; access_token?: unknown }>(url, userAccessToken);
+  const pages = await fetchMetaPages<{ id?: unknown; name?: unknown; access_token?: unknown }>(url, userAccessToken, customFetch);
   return pages.filter(page => typeof page.id === 'string' && /^\d+$/.test(page.id) && typeof page.name === 'string' && typeof page.access_token === 'string')
     .map(page => ({ id: page.id as string, name: (page.name as string).trim().slice(0, 120), accessToken: page.access_token as string }));
 }
 
-export async function listManagedFacebookPages(userAccessToken: string) {
-  return (await fetchManagedPagesWithTokens(userAccessToken)).map(({ id, name }) => ({ id, name }));
+export async function listManagedFacebookPages(userAccessToken: string, customFetch?: typeof fetch) {
+  return (await fetchManagedPagesWithTokens(userAccessToken, customFetch)).map(({ id, name }) => ({ id, name }));
 }
 
-export async function listManagedAdAccounts(userAccessToken: string): Promise<ManagedAdAccount[]> {
+export async function listManagedAdAccounts(userAccessToken: string, customFetch?: typeof fetch): Promise<ManagedAdAccount[]> {
   const url = new URL(`https://graph.facebook.com/${marketingVersion()}/me/adaccounts?fields=id,account_id,name,account_status,currency&limit=100`);
-  const accounts = await fetchMetaPages<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>(url, userAccessToken);
+  const accounts = await fetchMetaPages<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>(url, userAccessToken, customFetch);
   return accounts.filter(acc => typeof acc.id === 'string' && typeof acc.name === 'string').map(acc => ({
     id: String(acc.id), name: String(acc.name).trim().slice(0, 120),
     currency: typeof acc.currency === 'string' ? acc.currency : 'VND',
@@ -249,11 +348,22 @@ export function configuredFacebookPageIds(companyId: string) {
   return new Set(bindingsForCompany(companyId).map((item) => item.page));
 }
 
+export type SubscribePageResult = {
+  id: string;
+  name: string;
+  messengerSubscribed: boolean;
+  leadAdsSubscribed: boolean;
+  status: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED';
+  leadAdsError?: string;
+};
+
 export async function subscribeManagedPage(
   userAccessToken: string,
   pageId: string,
   companyId: string,
-) {
+  customFetch?: typeof fetch,
+): Promise<SubscribePageResult> {
+  const fetchFn = customFetch || fetch;
   const configured = pageBindings().find(
     (item) => item.company === companyId && item.page === pageId,
   );
@@ -261,37 +371,111 @@ export async function subscribeManagedPage(
     throw new Error('FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
   }
 
-  const pages = await fetchManagedPagesWithTokens(userAccessToken);
+  const pages = await fetchManagedPagesWithTokens(userAccessToken, fetchFn);
   const page = pages.find((item) => item.id === pageId);
   if (!page) throw new Error('FACEBOOK_PAGE_NOT_MANAGED');
 
   const version = graphVersion();
-  const url = new URL(
+  const appId = process.env.META_APP_ID?.trim() || null;
+
+  // 1. Check existing subscriptions on the page to avoid overwriting fields
+  let existingFields: string[] = [];
+  try {
+    const listUrl = new URL(
+      `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
+    );
+    const listRes = await fetchFn(listUrl.toString(), {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${page.accessToken}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (listRes.ok) {
+      const payload = (await listRes.json()) as {
+        data?: Array<{ id?: unknown; subscribed_fields?: unknown }>;
+      };
+      const appEntry = (payload.data || []).find(
+        (app) => !appId || String(app.id || '') === appId,
+      );
+      if (Array.isArray(appEntry?.subscribed_fields)) {
+        existingFields = appEntry.subscribed_fields.map(String);
+      }
+    }
+  } catch {
+    // Non-fatal if list check fails, proceed with safe subscription
+  }
+
+  const subUrl = new URL(
     `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
   );
 
-  const body = new URLSearchParams({
-    subscribed_fields: 'messages,leadgen',
-  });
+  // 2. Ensure Messenger messages subscription
+  let messengerSubscribed = existingFields.includes('messages');
+  if (!messengerSubscribed) {
+    const messengerFields = Array.from(new Set([...existingFields, 'messages'])).join(',');
+    const msgRes = await fetchFn(subUrl.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Bearer ${page.accessToken}`,
+      },
+      body: new URLSearchParams({ subscribed_fields: messengerFields }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!msgRes.ok) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+    const msgPayload = (await msgRes.json()) as { success?: unknown };
+    if (msgPayload.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+    messengerSubscribed = true;
+    existingFields = Array.from(new Set([...existingFields, 'messages']));
+  }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${page.accessToken}` },
-    body,
-    cache: 'no-store',
-    signal: AbortSignal.timeout(10_000),
-  });
+  // 3. Decoupled Lead Ads subscription (do not fail Messenger if leadgen fails)
+  let leadAdsSubscribed = existingFields.includes('leadgen');
+  let leadAdsError: string | undefined;
 
-  if (!response.ok) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
-  const payload = (await response.json()) as { success?: unknown };
-  if (payload.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+  if (!leadAdsSubscribed) {
+    try {
+      const leadAdsFields = Array.from(new Set([...existingFields, 'leadgen'])).join(',');
+      const leadRes = await fetchFn(subUrl.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Bearer ${page.accessToken}`,
+        },
+        body: new URLSearchParams({ subscribed_fields: leadAdsFields }),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (leadRes.ok) {
+        const leadPayload = (await leadRes.json()) as { success?: unknown };
+        if (leadPayload.success === true) {
+          leadAdsSubscribed = true;
+        } else {
+          leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
+        }
+      } else {
+        leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
+      }
+    } catch {
+      leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
+    }
+  }
 
   pageNameCache.set(page.id, {
     name: page.name,
     expiresAt: Date.now() + PAGE_NAME_CACHE_MS,
   });
 
-  return { id: page.id, name: page.name };
+  return {
+    id: page.id,
+    name: page.name,
+    messengerSubscribed: true,
+    leadAdsSubscribed,
+    status: leadAdsSubscribed ? 'ALL_CONNECTED' : 'MESSENGER_CONNECTED',
+    ...(leadAdsError ? { leadAdsError } : {}),
+  };
 }
 
 async function resolveConfiguredPageName(binding: PageBinding): Promise<string | null> {
@@ -345,6 +529,8 @@ async function configuredConnectionForBinding(
       pageId: binding.page,
       pageName,
       subscribed: false,
+      leadAdsSubscribed: false,
+      leadAdsStatus: 'LEAD_ADS_NOT_CONNECTED',
       tokenConfigured: Boolean(token),
     };
   }
@@ -360,16 +546,31 @@ async function configuredConnectionForBinding(
       },
     );
     const payload = response.ok
-      ? ((await response.json()) as { data?: Array<{ id?: unknown }> })
+      ? ((await response.json()) as { data?: Array<{ id?: unknown; subscribed_fields?: unknown }> })
       : {};
+
+    const appEntry = (payload.data || []).find(
+      (app) => String(app.id || '') === appId,
+    );
+    const subscribedFields = Array.isArray(appEntry?.subscribed_fields)
+      ? appEntry.subscribed_fields.map(String)
+      : [];
+
+    const isSubscribed = Boolean(appEntry);
+    const messengerSubscribed = isSubscribed && (subscribedFields.length === 0 || subscribedFields.includes('messages'));
+    const leadAdsSubscribed = isSubscribed && subscribedFields.includes('leadgen');
+    const leadAdsStatus: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED' =
+      leadAdsSubscribed
+        ? 'ALL_CONNECTED'
+        : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED');
 
     return {
       configured: true,
       pageId: binding.page,
       pageName,
-      subscribed: (payload.data || []).some(
-        (app) => String(app.id || '') === appId,
-      ),
+      subscribed: isSubscribed,
+      leadAdsSubscribed,
+      leadAdsStatus,
       tokenConfigured: true,
     };
   } catch {
@@ -378,6 +579,8 @@ async function configuredConnectionForBinding(
       pageId: binding.page,
       pageName,
       subscribed: false,
+      leadAdsSubscribed: false,
+      leadAdsStatus: 'LEAD_ADS_NOT_CONNECTED',
       tokenConfigured: true,
     };
   }

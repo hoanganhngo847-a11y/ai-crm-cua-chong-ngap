@@ -64,7 +64,8 @@ export async function GET(request: Request) {
     const code = query.get('code');
     if (!code) return back(request, 'FACEBOOK_MISSING_CODE');
 
-    const userAccessToken = await exchangeCodeForUserAccessToken(code);
+    const tokenResult = await exchangeCodeForUserAccessToken(code);
+    const userAccessToken = tokenResult.accessToken;
     const [pages, adAccounts] = await Promise.all([
       listManagedFacebookPages(userAccessToken),
       listManagedAdAccounts(userAccessToken),
@@ -72,6 +73,7 @@ export async function GET(request: Request) {
 
     await storeFacebookConnectSession({
       userAccessToken,
+      tokenExpiresAt: tokenResult.tokenExpiresAt,
       pages,
       adAccounts,
       companyId: actor.companyId,

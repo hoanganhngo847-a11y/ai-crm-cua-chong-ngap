@@ -3,7 +3,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { fetchMetaPages, graphVersion, marketingVersion, redactMetaError } from '../../features/omnichannel/facebook/graph-api';
-import { listManagedAdAccounts, listManagedFacebookPages } from '../../features/omnichannel/facebook/connect';
+import { listManagedAdAccounts, listManagedFacebookPages, parseTokenExpiration, exchangeCodeForUserAccessToken, exchangeLongLivedUserAccessToken, subscribeManagedPage } from '../../features/omnichannel/facebook/connect';
 import { decryptToken, encryptToken, rotateToken } from '../../features/omnichannel/facebook/token-vault';
 import { fetchMetaLeadDetails } from '../../features/omnichannel/facebook/lead-ads';
 import { fetchUserAdAccounts, syncCompanyMetaAds, syncCampaignsForAccount, syncAdsForAccount, syncAdSetsForAccount, syncDailyInsightsForAccount, syncLeadFormsForPage, validateAdAccountAccess } from '../../features/omnichannel/facebook/marketing-sync';
@@ -29,6 +29,7 @@ test('migration versions are unique; applied funnel migration is unchanged; fina
     assert.ok(messenger > files.indexOf('20261028130000_customer_funnel_six_stages.sql'));
     assert.ok(messenger < files.indexOf('20261028140000_fix_messenger_confidence_and_sla_resolution.sql'), 'Renumbering must preserve newer RPC safety definitions');
     assert.ok(files.indexOf('20261030110000_meta_ads_final_remediation.sql') > files.indexOf('20261030100000_meta_ads_hardening.sql'));
+    assert.ok(files.indexOf('20261030120000_meta_ads_attribution_rpc_security.sql') > files.indexOf('20261030110000_meta_ads_final_remediation.sql'));
 });
 
 test('all reporting and lead endpoints use independent supported versions and Bearer headers', async () => {
@@ -292,5 +293,294 @@ test('OAuth transport errors cannot echo a credential-bearing token-exchange URL
         for (const [key, value] of [['META_APP_ID', oldApp], ['META_APP_SECRET', oldSecret], ['WEBSITE_ORIGIN', oldOrigin]]) {
             if (value == null) delete process.env[key!]; else process.env[key!] = value;
         }
+    }
+});
+
+test('F-14: parseTokenExpiration parses actual Meta expires_in and detects expired tokens without hardcoding 60 days', () => {
+    const fixedNow = 1700000000000;
+    // 1. Long-lived token (~60 days: 5184000s)
+    const longLived = parseTokenExpiration(5184000, fixedNow);
+    assert.equal(longLived.expiresIn, 5184000);
+    assert.equal(longLived.tokenExpiresAt, new Date(fixedNow + 5184000 * 1000).toISOString());
+    assert.equal(longLived.isExpired, false);
+
+    // 2. Short-lived token (~2 hours: 7200s)
+    const shortLived = parseTokenExpiration('7200', fixedNow);
+    assert.equal(shortLived.expiresIn, 7200);
+    assert.equal(shortLived.tokenExpiresAt, new Date(fixedNow + 7200 * 1000).toISOString());
+    assert.equal(shortLived.isExpired, false);
+
+    // 3. Expired token (0 or negative)
+    const expiredZero = parseTokenExpiration(0, fixedNow);
+    assert.equal(expiredZero.isExpired, true);
+    const expiredNegative = parseTokenExpiration(-3600, fixedNow);
+    assert.equal(expiredNegative.isExpired, true);
+
+    // 4. Missing / null expires_in (e.g. system user tokens)
+    const missing = parseTokenExpiration(null, fixedNow);
+    assert.equal(missing.expiresIn, null);
+    assert.equal(missing.tokenExpiresAt, null);
+    assert.equal(missing.isExpired, false);
+});
+
+test('F-14: exchangeCodeForUserAccessToken performs long-lived exchange when supported and falls back gracefully', async () => {
+    const original = globalThis.fetch;
+    process.env.META_APP_ID = '123456';
+    process.env.META_APP_SECRET = secret;
+    process.env.WEBSITE_ORIGIN = 'https://staging.invalid';
+
+    try {
+        // Case A: long-lived exchange succeeds
+        const fetchA: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return Response.json({ access_token: 'long-lived-token-xyz', expires_in: 5184000 });
+            }
+            return Response.json({ access_token: 'short-lived-token-abc', expires_in: 7200 });
+        };
+        const resA = await exchangeCodeForUserAccessToken('code-a', fetchA);
+        assert.equal(resA.accessToken, 'long-lived-token-xyz');
+        assert.equal(resA.expiresIn, 5184000);
+        assert.ok(resA.tokenExpiresAt);
+
+        // Case B: fb_exchange_token unsupported (returns 400 OAuth error) -> fallback to short-lived token
+        const fetchB: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return new Response(JSON.stringify({ error: { message: 'fb_exchange_token unsupported', code: 100 } }), { status: 400 });
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
+        const resB = await exchangeCodeForUserAccessToken('code-b', fetchB);
+        assert.equal(resB.accessToken, 'short-lived-token-123');
+        assert.equal(resB.expiresIn, 3600);
+        assert.ok(resB.tokenExpiresAt);
+
+        // Case C: code exchange returns expired token -> throws FACEBOOK_TOKEN_EXPIRED
+        const fetchC: typeof fetch = async () => Response.json({ access_token: 'expired-token', expires_in: 0 });
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-c', fetchC),
+            /FACEBOOK_TOKEN_EXPIRED/,
+        );
+    } finally {
+        globalThis.fetch = original;
+    }
+});
+
+test('F-15: subscribeManagedPage decouples Messenger and Lead Ads subscriptions and preserves existing fields', async () => {
+    const page = '654520554683416';
+    const company = '11111111-1111-4111-8111-111111111111';
+    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', name: 'Du Học Áo CHD' }]);
+    process.env.META_PAGE_TEST_TOKEN = secret;
+    process.env.META_APP_ID = '123456';
+
+    // Scenario 1: Messenger succeeds, Lead Ads fails (e.g. 403 lack of permissions) -> reported as MESSENGER_CONNECTED, does NOT throw
+    const calls: string[] = [];
+    const fetch1: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) {
+            return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+        }
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [] });
+            }
+            if (init?.method === 'POST') {
+                const body = String(init.body);
+                calls.push(body);
+                if (body.includes('leadgen')) {
+                    return new Response(JSON.stringify({ error: { message: 'Permissions error', code: 200 } }), { status: 403 });
+                }
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+
+    const res1 = await subscribeManagedPage('dummy-user-token', page, company, fetch1);
+    assert.equal(res1.messengerSubscribed, true);
+    assert.equal(res1.leadAdsSubscribed, false);
+    assert.equal(res1.status, 'MESSENGER_CONNECTED');
+    assert.equal(res1.leadAdsError, 'LEAD_ADS_NOT_CONNECTED');
+
+    // Scenario 2: Both subscriptions succeed -> ALL_CONNECTED
+    const fetch2: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return Response.json({ data: [] });
+            if (init?.method === 'POST') return Response.json({ success: true });
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const res2 = await subscribeManagedPage('dummy-user-token', page, company, fetch2);
+    assert.equal(res2.messengerSubscribed, true);
+    assert.equal(res2.leadAdsSubscribed, true);
+    assert.equal(res2.status, 'ALL_CONNECTED');
+
+    // Scenario 3: Messenger fails -> throws FACEBOOK_SUBSCRIBE_FAILED
+    const fetch3: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return Response.json({ data: [] });
+            if (init?.method === 'POST') return new Response(JSON.stringify({ error: 'Server error' }), { status: 500 });
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    await assert.rejects(
+        () => subscribeManagedPage('dummy-user-token', page, company, fetch3),
+        /FACEBOOK_SUBSCRIBE_FAILED/,
+    );
+
+    // Scenario 4: Existing subscriptions preserved and reconnection does not duplicate fields
+    let postedFields = '';
+    const fetch4: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: '123456', subscribed_fields: ['messages', 'feed'] }] });
+            }
+            if (init?.method === 'POST') {
+                postedFields = String(init.body);
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const res4 = await subscribeManagedPage('dummy-user-token', page, company, fetch4);
+    assert.equal(res4.messengerSubscribed, true);
+    assert.equal(res4.leadAdsSubscribed, true);
+    assert.ok(postedFields.includes('feed'));
+    assert.ok(postedFields.includes('messages'));
+    assert.ok(postedFields.includes('leadgen'));
+});
+
+test('F-06: webhook isolates Lead Ads failures and processes Messenger messages in mixed batch; retries deduplicate safely', async () => {
+    const { POST: webhookPost } = await import('../../app/api/webhooks/meta/route');
+    const { createHmac } = await import('node:crypto');
+    const originalFetch = globalThis.fetch;
+    const page = '654520554683416';
+    const company = '11111111-1111-4111-8111-111111111111';
+    const testSecret = 'meta-test-secret-32-chars-long!!';
+    process.env.META_APP_SECRET = testSecret;
+    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', name: 'Du Học Áo CHD' }]);
+    process.env.META_PAGE_TEST_TOKEN = secret;
+
+    let hanIngestCalls = 0;
+    let leadgenProcessed = 0;
+    let shouldFailLead1 = true;
+
+    const mockFetch: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.includes('/rest/v1/rpc/han_ingest')) {
+            hanIngestCalls++;
+            return Response.json({ status: 'ACCEPTED', interaction_id: 'int-msg-123' });
+        }
+        if (url.includes('graph.facebook.com')) {
+            if (url.includes('lead_fail_01')) {
+                if (shouldFailLead1) {
+                    return new Response(JSON.stringify({ error: 'Graph retrieval failed' }), { status: 500 });
+                }
+                return Response.json({
+                    id: 'lead_fail_01',
+                    created_time: '2026-10-30T00:00:00+0000',
+                    field_data: [{ name: 'phone_number', values: ['0912345678'] }],
+                });
+            }
+            if (url.includes('lead_ok_02')) {
+                return Response.json({
+                    id: 'lead_ok_02',
+                    created_time: '2026-10-30T00:00:00+0000',
+                    field_data: [{ name: 'phone_number', values: ['0987654321'] }],
+                });
+            }
+            return Response.json({ name: 'Nguyễn Văn Test' });
+        }
+        if (url.includes('/rest/v1/rpc/claim_meta_leadgen_event')) {
+            const body = JSON.parse(String(init?.body));
+            if (body.p_leadgen_id === 'lead_ok_02' && leadgenProcessed > 0) {
+                return Response.json({ status: 'ALREADY_PROCESSED' });
+            }
+            return Response.json({ status: 'CLAIMED', claim_token: `token-${body.p_leadgen_id}` });
+        }
+        if (url.includes('/rest/v1/rpc/finalize_meta_leadgen_event')) {
+            return Response.json(true);
+        }
+        if (url.includes('/rest/v1/rpc/ingest_meta_leadgen_event')) {
+            leadgenProcessed++;
+            return Response.json({ customer_id: 'cust-123', interaction_id: 'int-456' });
+        }
+        if (url.includes('/rest/v1/rpc/record_lead_attribution_touchpoint')) {
+            return Response.json('tp-123');
+        }
+        if (url.includes('/rest/v1/')) {
+            return Response.json([]);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    globalThis.fetch = mockFetch;
+
+    try {
+        const mixedBatch = {
+            object: 'page',
+            entry: [
+                {
+                    id: page,
+                    messaging: [
+                        {
+                            sender: { id: '987654321012345' },
+                            recipient: { id: page },
+                            timestamp: Date.now(),
+                            message: { mid: 'mid.mixed_01', text: 'Xin chào tư vấn du học' },
+                        },
+                    ],
+                    changes: [
+                        { field: 'leadgen', value: { leadgen_id: 'lead_fail_01', form_id: 'form_1', page_id: page, created_time: Math.floor(Date.now() / 1000) } },
+                        { field: 'leadgen', value: { leadgen_id: 'lead_ok_02', form_id: 'form_1', page_id: page, created_time: Math.floor(Date.now() / 1000) } },
+                    ],
+                },
+            ],
+        };
+
+        const raw = JSON.stringify(mixedBatch);
+        const validSig = 'sha256=' + createHmac('sha256', testSecret).update(raw).digest('hex');
+
+        // PASS 1: Lead Ads 1 fails, but Messenger message MUST be processed!
+        const req1 = new Request('https://staging.invalid/api/webhooks/meta', {
+            method: 'POST',
+            headers: { 'x-hub-signature-256': validSig },
+            body: raw,
+        });
+
+        const res1 = await webhookPost(req1);
+        // Batch returns 503 so Meta will retry
+        assert.equal(res1.status, 503);
+        const body1 = await res1.json();
+        assert.equal(body1.error, 'LEAD_INGESTION_FAILED');
+
+        // VERIFIED: Messenger message WAS processed even though a Lead Ads event failed!
+        assert.equal(hanIngestCalls, 1, 'Messenger message must be ingested despite Lead Ads failure');
+
+        // PASS 2: Meta retries the batch. Now the transient failure on lead_fail_01 is resolved.
+        shouldFailLead1 = false;
+        const req2 = new Request('https://staging.invalid/api/webhooks/meta', {
+            method: 'POST',
+            headers: { 'x-hub-signature-256': validSig },
+            body: raw,
+        });
+
+        const res2 = await webhookPost(req2);
+        // Entire batch now succeeds with 200
+        assert.equal(res2.status, 200);
+        const body2 = await res2.json();
+        assert.equal(body2.received, true);
+
+        // VERIFIED: Idempotency held - han_ingest called for the retry and handled deduplication
+        assert.equal(hanIngestCalls, 2);
+    } finally {
+        globalThis.fetch = originalFetch;
     }
 });

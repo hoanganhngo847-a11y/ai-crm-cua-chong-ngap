@@ -1217,7 +1217,8 @@ test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization an
             SET "request.jwt.claim.role" = 'authenticated';
         `);
 
-        // 17A: User A calling record_lead_attribution_touchpoint for Company B MUST FAIL CLOSED
+        // 17A: Anonymous users calling record_lead_attribution_touchpoint MUST FAIL (permission denied)
+        await db.exec(`SET ROLE anon;`);
         await assert.rejects(
             async () => {
                 await db.query(`
@@ -1228,13 +1229,29 @@ test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization an
                     );
                 `);
             },
-            (err: any) => {
-                assert.match(err.message, /UNAUTHORIZED_COMPANY_ACCESS/);
-                return true;
-            }
+            /permission denied/i
         );
 
-        // 17B: User A calling get_meta_ads_performance_report for Company B MUST FAIL CLOSED
+        // 17B: Authenticated users calling record_lead_attribution_touchpoint MUST FAIL (F-11 security restriction)
+        await db.exec(`
+            SET ROLE authenticated;
+            SET "request.jwt.claim.sub" = '${userA}';
+            SET "request.jwt.claim.role" = 'authenticated';
+        `);
+        await assert.rejects(
+            async () => {
+                await db.query(`
+                    SELECT record_lead_attribution_touchpoint(
+                        '${compA}'::uuid,
+                        NULL, NULL, NULL,
+                        'FACEBOOK_LEAD_ADS'
+                    );
+                `);
+            },
+            /permission denied/i
+        );
+
+        // 17C: User A calling get_meta_ads_performance_report for Company B MUST FAIL CLOSED
         await assert.rejects(
             async () => {
                 await db.query(`
@@ -1251,7 +1268,10 @@ test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization an
             }
         );
 
-        // 17C: User A calling record_lead_attribution_touchpoint for Company A with Customer of Company B MUST FAIL
+        // 17D: Switch to service_role (the authorized server-side path)
+        await db.exec(`SET ROLE service_role;`);
+
+        // Cross-company attribution writes are rejected through the authorized path
         await assert.rejects(
             async () => {
                 await db.query(`
@@ -1267,7 +1287,7 @@ test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization an
             }
         );
 
-        // 17D: User A calling for Company A with valid parameters SUCCEEDS
+        // Authorized service_role call for Company A with valid parameters SUCCEEDS
         const validTouchpoint = await db.query(`
             SELECT record_lead_attribution_touchpoint(
                 '${compA}'::uuid,

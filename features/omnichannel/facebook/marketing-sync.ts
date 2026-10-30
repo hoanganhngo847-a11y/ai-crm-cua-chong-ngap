@@ -501,7 +501,14 @@ export async function syncCompanyMetaAds(
                 p_company_id: companyId, p_ad_account_id: acc.ad_account_id,
             });
             if (stored.error) throw new Error('TOKEN_RETRIEVAL_FAILED');
-            if (stored.data?.[0]?.encrypted_access_token) token = decryptToken(stored.data[0].encrypted_access_token);
+            const tokenRecord = stored.data?.[0];
+            if (tokenRecord?.token_expires_at) {
+                const expiresAtMs = new Date(tokenRecord.token_expires_at).getTime();
+                if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+                    throw new Error('TOKEN_EXPIRED');
+                }
+            }
+            if (tokenRecord?.encrypted_access_token) token = decryptToken(tokenRecord.encrypted_access_token);
             if (!token) throw new Error('MISSING_ACCESS_TOKEN');
             const validation = await validateAdAccountAccess(acc.ad_account_id, token, options.customFetch);
             if (!validation.valid) throw new Error(validation.error || 'INVALID_AD_ACCOUNT_ACCESS');

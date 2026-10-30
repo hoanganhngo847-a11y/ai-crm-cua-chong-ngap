@@ -102,7 +102,7 @@ export async function POST(request: Request) {
       return back(request, 'FACEBOOK_AD_ACCOUNT_NOT_MANAGED');
     }
 
-    const connectedPages: Array<{ id: string; name: string }> = [];
+    const connectedPages: Array<Awaited<ReturnType<typeof subscribeManagedPage>>> = [];
     for (const pageId of requestedPageIds) {
       connectedPages.push(
         await subscribeManagedPage(
@@ -116,8 +116,11 @@ export async function POST(request: Request) {
     // Save metadata and store encrypted tokens via secure private RPC (Priority 1)
     let connectedAdAccountsCount = 0;
     if (requestedAdAccountIds.length > 0) {
+      if (session.tokenExpiresAt && new Date(session.tokenExpiresAt).getTime() <= Date.now()) {
+        return back(request, 'FACEBOOK_TOKEN_EXPIRED');
+      }
       const encryptedToken = encryptToken(session.userAccessToken);
-      const tokenExpiresAt = new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString();
+      const tokenExpiresAt = session.tokenExpiresAt ?? null;
       const supabase = createAdminClient();
 
       const accountRows = requestedAdAccountIds
@@ -175,6 +178,11 @@ export async function POST(request: Request) {
     url.searchParams.set('connected', '1');
     url.searchParams.set('count', String(connectedPages.length));
     url.searchParams.set('ad_accounts_count', String(connectedAdAccountsCount));
+    const allLeadAdsConnected = connectedPages.length > 0 && connectedPages.every((page) => page.leadAdsSubscribed);
+    url.searchParams.set(
+      'lead_ads_status',
+      allLeadAdsConnected ? 'ALL_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED',
+    );
     url.searchParams.set(
       'pages',
       connectedPages.map((page) => page.name).join(', ').slice(0, 500),
@@ -187,6 +195,7 @@ export async function POST(request: Request) {
       'FACEBOOK_PAGE_NOT_MANAGED',
       'FACEBOOK_AD_ACCOUNT_NOT_MANAGED',
       'FACEBOOK_SUBSCRIBE_FAILED',
+      'FACEBOOK_TOKEN_EXPIRED',
     ]);
     return back(
       request,

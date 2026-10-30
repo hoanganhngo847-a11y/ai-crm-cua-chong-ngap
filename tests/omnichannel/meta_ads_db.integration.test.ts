@@ -83,6 +83,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
                 `SELECT public.store_meta_ad_account_token(${q(company)},'act_1','overwrite')`,
                 `SELECT * FROM public.get_meta_ad_account_token(${q(company)},'act_1')`,
                 `INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name) VALUES (${q(company)},'act_1','forged','Forged')`,
+                `SELECT public.record_lead_attribution_touchpoint(p_company=>${q(company)})`,
             ]) assert.throws(() => sql(`SET ROLE ${role}; ${statement};`), /Command failed/);
         }
         sql(`SET ROLE service_role; SELECT public.store_meta_ad_account_token(${q(company)},'act_1','dummy-encrypted');`);
