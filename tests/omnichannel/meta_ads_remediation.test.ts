@@ -3,7 +3,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { fetchMetaPages, graphVersion, marketingVersion, redactMetaError } from '../../features/omnichannel/facebook/graph-api';
-import { listManagedAdAccounts, listManagedFacebookPages, parseTokenExpiration, exchangeCodeForUserAccessToken, exchangeLongLivedUserAccessToken, subscribeManagedPage } from '../../features/omnichannel/facebook/connect';
+import { listManagedAdAccounts, listManagedFacebookPages, parseTokenExpiration, exchangeCodeForUserAccessToken, exchangeLongLivedUserAccessToken, subscribeManagedPage, readPageSubscribedFields, isExplicitlyUnsupportedExchangeError } from '../../features/omnichannel/facebook/connect';
 import { decryptToken, encryptToken, rotateToken } from '../../features/omnichannel/facebook/token-vault';
 import { fetchMetaLeadDetails } from '../../features/omnichannel/facebook/lead-ads';
 import { fetchUserAdAccounts, syncCompanyMetaAds, syncCampaignsForAccount, syncAdsForAccount, syncAdSetsForAccount, syncDailyInsightsForAccount, syncLeadFormsForPage, validateAdAccountAccess } from '../../features/omnichannel/facebook/marketing-sync';
@@ -323,43 +323,99 @@ test('F-14: parseTokenExpiration parses actual Meta expires_in and detects expir
     assert.equal(missing.isExpired, false);
 });
 
-test('F-14: exchangeCodeForUserAccessToken performs long-lived exchange when supported and falls back gracefully', async () => {
+test('FIX A: OAuth token exchange handles long-lived, explicit unsupported, transient errors, malformed responses, and expired fallback', async () => {
     const original = globalThis.fetch;
     process.env.META_APP_ID = '123456';
     process.env.META_APP_SECRET = secret;
     process.env.WEBSITE_ORIGIN = 'https://staging.invalid';
 
     try {
-        // Case A: long-lived exchange succeeds
-        const fetchA: typeof fetch = async (input) => {
+        // 1. Successful long-lived exchange
+        const fetchSuccess: typeof fetch = async (input) => {
             const url = new URL(String(input));
             if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
                 return Response.json({ access_token: 'long-lived-token-xyz', expires_in: 5184000 });
             }
             return Response.json({ access_token: 'short-lived-token-abc', expires_in: 7200 });
         };
-        const resA = await exchangeCodeForUserAccessToken('code-a', fetchA);
-        assert.equal(resA.accessToken, 'long-lived-token-xyz');
-        assert.equal(resA.expiresIn, 5184000);
-        assert.ok(resA.tokenExpiresAt);
+        const resSuccess = await exchangeCodeForUserAccessToken('code-success', fetchSuccess);
+        assert.equal(resSuccess.accessToken, 'long-lived-token-xyz');
+        assert.equal(resSuccess.expiresIn, 5184000);
+        assert.equal(resSuccess.tokenType, 'long_lived');
+        assert.equal(resSuccess.isLongLived, true);
+        assert.ok(resSuccess.tokenExpiresAt);
 
-        // Case B: fb_exchange_token unsupported (returns 400 OAuth error) -> fallback to short-lived token
-        const fetchB: typeof fetch = async (input) => {
+        // 2. Explicit unsupported exchange (HTTP 400 with OAuthException / code 100) -> safe short-lived fallback
+        const fetchUnsupported: typeof fetch = async (input) => {
             const url = new URL(String(input));
             if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
-                return new Response(JSON.stringify({ error: { message: 'fb_exchange_token unsupported', code: 100 } }), { status: 400 });
+                return new Response(JSON.stringify({ error: { message: 'fb_exchange_token unsupported for this app', code: 100, type: 'OAuthException' } }), { status: 400 });
             }
             return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
         };
-        const resB = await exchangeCodeForUserAccessToken('code-b', fetchB);
-        assert.equal(resB.accessToken, 'short-lived-token-123');
-        assert.equal(resB.expiresIn, 3600);
-        assert.ok(resB.tokenExpiresAt);
+        const resUnsupported = await exchangeCodeForUserAccessToken('code-unsupported', fetchUnsupported);
+        assert.equal(resUnsupported.accessToken, 'short-lived-token-123');
+        assert.equal(resUnsupported.expiresIn, 3600);
+        assert.equal(resUnsupported.tokenType, 'short_lived_fallback');
+        assert.equal(resUnsupported.isLongLived, false);
+        assert.ok(resUnsupported.tokenExpiresAt);
 
-        // Case C: code exchange returns expired token -> throws FACEBOOK_TOKEN_EXPIRED
-        const fetchC: typeof fetch = async () => Response.json({ access_token: 'expired-token', expires_in: 0 });
+        // 3. Timeout on long-lived exchange -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
+        const fetchTimeout: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
         await assert.rejects(
-            () => exchangeCodeForUserAccessToken('code-c', fetchC),
+            () => exchangeCodeForUserAccessToken('code-timeout', fetchTimeout),
+            /FACEBOOK_TOKEN_EXCHANGE_FAILED/,
+        );
+
+        // 4. HTTP 429 on long-lived exchange -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
+        const fetch429: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return new Response(JSON.stringify({ error: { message: 'Rate limit exceeded', code: 17 } }), { status: 429 });
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-429', fetch429),
+            /FACEBOOK_TOKEN_EXCHANGE_FAILED/,
+        );
+
+        // 5. HTTP 500 on long-lived exchange -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
+        const fetch500: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return new Response(JSON.stringify({ error: { message: 'Internal server error' } }), { status: 500 });
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-500', fetch500),
+            /FACEBOOK_TOKEN_EXCHANGE_FAILED/,
+        );
+
+        // 6. Malformed response (non-JSON or missing access_token) -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
+        const fetchMalformed: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return new Response('<html>502 Bad Gateway</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-malformed', fetchMalformed),
+            /FACEBOOK_TOKEN_EXCHANGE_FAILED/,
+        );
+
+        // 7. Expired short-lived fallback -> throws FACEBOOK_TOKEN_EXPIRED
+        const fetchExpired: typeof fetch = async () => Response.json({ access_token: 'expired-token', expires_in: 0 });
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-expired', fetchExpired),
             /FACEBOOK_TOKEN_EXPIRED/,
         );
     } finally {
@@ -367,94 +423,199 @@ test('F-14: exchangeCodeForUserAccessToken performs long-lived exchange when sup
     }
 });
 
-test('F-15: subscribeManagedPage decouples Messenger and Lead Ads subscriptions and preserves existing fields', async () => {
+test('FIX B: subscribeManagedPage handles subscription preservation, read-back verification, and error edge cases', async () => {
     const page = '654520554683416';
     const company = '11111111-1111-4111-8111-111111111111';
+    const appId = '123456';
     process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', name: 'Du Học Áo CHD' }]);
     process.env.META_PAGE_TEST_TOKEN = secret;
-    process.env.META_APP_ID = '123456';
+    process.env.META_APP_ID = appId;
 
-    // Scenario 1: Messenger succeeds, Lead Ads fails (e.g. 403 lack of permissions) -> reported as MESSENGER_CONNECTED, does NOT throw
-    const calls: string[] = [];
-    const fetch1: typeof fetch = async (input, init) => {
+    const basePageResponse = { data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] };
+
+    // 1. GET 403 on initial check: does not mutate subscriptions, returns SUBSCRIPTION_UNKNOWN
+    let postCalled = false;
+    const fetch403: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
-        if (url.pathname.endsWith('/me/accounts')) {
-            return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 });
+            if (init?.method === 'POST') { postCalled = true; return Response.json({ success: true }); }
         }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const res403 = await subscribeManagedPage('token', page, company, fetch403);
+    assert.equal(postCalled, false, 'POST must not be called when GET returns 403');
+    assert.equal(res403.status, 'SUBSCRIPTION_UNKNOWN');
+    assert.equal(res403.messengerSubscribed, false);
+    assert.equal(res403.leadAdsSubscribed, false);
+
+    // 2. GET 500 on initial check: does not mutate subscriptions, returns SUBSCRIPTION_UNKNOWN
+    postCalled = false;
+    const fetch500: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return new Response(JSON.stringify({ error: 'Server error' }), { status: 500 });
+            if (init?.method === 'POST') { postCalled = true; return Response.json({ success: true }); }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const res500 = await subscribeManagedPage('token', page, company, fetch500);
+    assert.equal(postCalled, false, 'POST must not be called when GET returns 500');
+    assert.equal(res500.status, 'SUBSCRIPTION_UNKNOWN');
+
+    // 3. GET timeout on initial check: does not mutate subscriptions, returns SUBSCRIPTION_UNKNOWN
+    postCalled = false;
+    const fetchTimeout: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') throw new DOMException('Timeout', 'TimeoutError');
+            if (init?.method === 'POST') { postCalled = true; return Response.json({ success: true }); }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resTimeout = await subscribeManagedPage('token', page, company, fetchTimeout);
+    assert.equal(postCalled, false, 'POST must not be called when GET times out');
+    assert.equal(resTimeout.status, 'SUBSCRIPTION_UNKNOWN');
+
+    // 4. GET malformed response on initial check: does not mutate subscriptions, returns SUBSCRIPTION_UNKNOWN
+    postCalled = false;
+    const fetchMalformed: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return Response.json({ data: 'not-an-array' });
+            if (init?.method === 'POST') { postCalled = true; return Response.json({ success: true }); }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resMalformed = await subscribeManagedPage('token', page, company, fetchMalformed);
+    assert.equal(postCalled, false, 'POST must not be called when GET is malformed');
+    assert.equal(resMalformed.status, 'SUBSCRIPTION_UNKNOWN');
+
+    // 5. App not found in a successful GET response: treated as empty existing fields, subscribes and verifies
+    let postedCount5 = 0;
+    let currentFields5: string[] = [];
+    const fetchAppNotFoundWithReadBack: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
         if (url.pathname.endsWith('/subscribed_apps')) {
             if (init?.method === 'GET') {
-                return Response.json({ data: [] });
+                if (postedCount5 === 0) {
+                    return Response.json({ data: [{ id: '999999', subscribed_fields: ['feed'] }] });
+                }
+                return Response.json({ data: [{ id: appId, subscribed_fields: currentFields5 }] });
+            }
+            if (init?.method === 'POST') {
+                postedCount5++;
+                const params = new URLSearchParams(String(init.body));
+                currentFields5 = (params.get('subscribed_fields') || '').split(',');
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resAppNotFound = await subscribeManagedPage('token', page, company, fetchAppNotFoundWithReadBack);
+    assert.equal(resAppNotFound.messengerSubscribed, true);
+    assert.equal(resAppNotFound.leadAdsSubscribed, true);
+    assert.equal(resAppNotFound.status, 'ALL_CONNECTED');
+
+    // 6. Existing fields preserved: existing fields ['feed', 'mention'] are preserved in all POST bodies
+    const postBodies6: string[] = [];
+    let currentFields6: string[] = ['feed', 'mention'];
+    const fetchPreserve: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: appId, subscribed_fields: currentFields6 }] });
             }
             if (init?.method === 'POST') {
                 const body = String(init.body);
-                calls.push(body);
+                postBodies6.push(body);
+                const params = new URLSearchParams(body);
+                currentFields6 = (params.get('subscribed_fields') || '').split(',');
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resPreserve = await subscribeManagedPage('token', page, company, fetchPreserve);
+    assert.equal(resPreserve.status, 'ALL_CONNECTED');
+    for (const body of postBodies6) {
+        assert.ok(body.includes('feed'), `POST body must preserve feed: ${body}`);
+        assert.ok(body.includes('mention'), `POST body must preserve mention: ${body}`);
+    }
+
+    // 7. Read-back mismatch: POST for messages returns success, but read-back lacks messages
+    const fetchMismatch: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: appId, subscribed_fields: ['feed'] }] });
+            }
+            if (init?.method === 'POST') {
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resMismatch = await subscribeManagedPage('token', page, company, fetchMismatch);
+    assert.equal(resMismatch.status, 'SUBSCRIPTION_UNKNOWN');
+    assert.equal(resMismatch.messengerSubscribed, false);
+    assert.equal(resMismatch.error, 'SUBSCRIPTION_READBACK_MISMATCH');
+
+    // 8. Both subscriptions successful
+    let currentFields8: string[] = [];
+    const fetchBoth: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: appId, subscribed_fields: currentFields8 }] });
+            }
+            if (init?.method === 'POST') {
+                const params = new URLSearchParams(String(init.body));
+                currentFields8 = (params.get('subscribed_fields') || '').split(',');
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resBoth = await subscribeManagedPage('token', page, company, fetchBoth);
+    assert.equal(resBoth.messengerSubscribed, true);
+    assert.equal(resBoth.leadAdsSubscribed, true);
+    assert.equal(resBoth.status, 'ALL_CONNECTED');
+
+    // 9. Messenger success with leadgen failure: messages is verified, leadgen returns 403
+    let currentFields9: string[] = [];
+    const fetchLeadFail: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: appId, subscribed_fields: currentFields9 }] });
+            }
+            if (init?.method === 'POST') {
+                const body = String(init.body);
                 if (body.includes('leadgen')) {
                     return new Response(JSON.stringify({ error: { message: 'Permissions error', code: 200 } }), { status: 403 });
                 }
+                const params = new URLSearchParams(body);
+                currentFields9 = (params.get('subscribed_fields') || '').split(',');
                 return Response.json({ success: true });
             }
         }
         throw new Error(`Unexpected call: ${url}`);
     };
-
-    const res1 = await subscribeManagedPage('dummy-user-token', page, company, fetch1);
-    assert.equal(res1.messengerSubscribed, true);
-    assert.equal(res1.leadAdsSubscribed, false);
-    assert.equal(res1.status, 'MESSENGER_CONNECTED');
-    assert.equal(res1.leadAdsError, 'LEAD_ADS_NOT_CONNECTED');
-
-    // Scenario 2: Both subscriptions succeed -> ALL_CONNECTED
-    const fetch2: typeof fetch = async (input, init) => {
-        const url = new URL(String(input));
-        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
-        if (url.pathname.endsWith('/subscribed_apps')) {
-            if (init?.method === 'GET') return Response.json({ data: [] });
-            if (init?.method === 'POST') return Response.json({ success: true });
-        }
-        throw new Error(`Unexpected call: ${url}`);
-    };
-    const res2 = await subscribeManagedPage('dummy-user-token', page, company, fetch2);
-    assert.equal(res2.messengerSubscribed, true);
-    assert.equal(res2.leadAdsSubscribed, true);
-    assert.equal(res2.status, 'ALL_CONNECTED');
-
-    // Scenario 3: Messenger fails -> throws FACEBOOK_SUBSCRIBE_FAILED
-    const fetch3: typeof fetch = async (input, init) => {
-        const url = new URL(String(input));
-        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
-        if (url.pathname.endsWith('/subscribed_apps')) {
-            if (init?.method === 'GET') return Response.json({ data: [] });
-            if (init?.method === 'POST') return new Response(JSON.stringify({ error: 'Server error' }), { status: 500 });
-        }
-        throw new Error(`Unexpected call: ${url}`);
-    };
-    await assert.rejects(
-        () => subscribeManagedPage('dummy-user-token', page, company, fetch3),
-        /FACEBOOK_SUBSCRIBE_FAILED/,
-    );
-
-    // Scenario 4: Existing subscriptions preserved and reconnection does not duplicate fields
-    let postedFields = '';
-    const fetch4: typeof fetch = async (input, init) => {
-        const url = new URL(String(input));
-        if (url.pathname.endsWith('/me/accounts')) return Response.json({ data: [{ id: page, name: 'Du Học Áo CHD', access_token: secret }] });
-        if (url.pathname.endsWith('/subscribed_apps')) {
-            if (init?.method === 'GET') {
-                return Response.json({ data: [{ id: '123456', subscribed_fields: ['messages', 'feed'] }] });
-            }
-            if (init?.method === 'POST') {
-                postedFields = String(init.body);
-                return Response.json({ success: true });
-            }
-        }
-        throw new Error(`Unexpected call: ${url}`);
-    };
-    const res4 = await subscribeManagedPage('dummy-user-token', page, company, fetch4);
-    assert.equal(res4.messengerSubscribed, true);
-    assert.equal(res4.leadAdsSubscribed, true);
-    assert.ok(postedFields.includes('feed'));
-    assert.ok(postedFields.includes('messages'));
-    assert.ok(postedFields.includes('leadgen'));
+    const resLeadFail = await subscribeManagedPage('token', page, company, fetchLeadFail);
+    assert.equal(resLeadFail.messengerSubscribed, true);
+    assert.equal(resLeadFail.leadAdsSubscribed, false);
+    assert.equal(resLeadFail.status, 'MESSENGER_CONNECTED');
+    assert.equal(resLeadFail.leadAdsError, 'LEAD_ADS_NOT_CONNECTED');
 });
 
 test('F-06: webhook isolates Lead Ads failures and processes Messenger messages in mixed batch; retries deduplicate safely', async () => {

@@ -74,6 +74,8 @@ export async function GET(request: Request) {
     await storeFacebookConnectSession({
       userAccessToken,
       tokenExpiresAt: tokenResult.tokenExpiresAt,
+      tokenType: tokenResult.tokenType,
+      isLongLived: tokenResult.isLongLived,
       pages,
       adAccounts,
       companyId: actor.companyId,

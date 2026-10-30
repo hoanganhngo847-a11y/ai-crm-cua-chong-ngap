@@ -104,13 +104,15 @@ export async function POST(request: Request) {
 
     const connectedPages: Array<Awaited<ReturnType<typeof subscribeManagedPage>>> = [];
     for (const pageId of requestedPageIds) {
-      connectedPages.push(
-        await subscribeManagedPage(
-          session.userAccessToken,
-          pageId,
-          actor.companyId,
-        ),
+      const pageResult = await subscribeManagedPage(
+        session.userAccessToken,
+        pageId,
+        actor.companyId,
       );
+      if (pageResult.status === 'SUBSCRIPTION_UNKNOWN' || !pageResult.messengerSubscribed) {
+        throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+      }
+      connectedPages.push(pageResult);
     }
 
     // Save metadata and store encrypted tokens via secure private RPC (Priority 1)
@@ -178,6 +180,9 @@ export async function POST(request: Request) {
     url.searchParams.set('connected', '1');
     url.searchParams.set('count', String(connectedPages.length));
     url.searchParams.set('ad_accounts_count', String(connectedAdAccountsCount));
+    if (session.isLongLived === false) {
+      url.searchParams.set('token_lifecycle', 'short_lived_fallback');
+    }
     const allLeadAdsConnected = connectedPages.length > 0 && connectedPages.every((page) => page.leadAdsSubscribed);
     url.searchParams.set(
       'lead_ads_status',

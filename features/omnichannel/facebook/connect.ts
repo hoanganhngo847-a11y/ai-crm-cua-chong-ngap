@@ -35,6 +35,8 @@ export type ManagedAdAccount = {
 type ConnectSession = {
   userAccessToken: string;
   tokenExpiresAt?: string | null;
+  tokenType?: 'long_lived' | 'short_lived_fallback';
+  isLongLived?: boolean;
   pages: ManagedFacebookPage[];
   adAccounts?: ManagedAdAccount[];
   companyId: string;
@@ -48,7 +50,11 @@ export type ConfiguredFacebookConnection = {
   pageName: string | null;
   subscribed: boolean;
   leadAdsSubscribed?: boolean;
-  leadAdsStatus?: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED';
+  leadAdsStatus?:
+    | 'MESSENGER_CONNECTED'
+    | 'ALL_CONNECTED'
+    | 'LEAD_ADS_NOT_CONNECTED'
+    | 'SUBSCRIPTION_UNKNOWN';
   tokenConfigured?: boolean;
 };
 
@@ -131,7 +137,15 @@ function unseal(value: string): ConnectSession | null {
         ? parsed.tokenExpiresAt.trim()
         : null;
 
-    return { ...parsed, tokenExpiresAt, pages, adAccounts };
+    const tokenType =
+      parsed.tokenType === 'long_lived' || parsed.tokenType === 'short_lived_fallback'
+        ? parsed.tokenType
+        : undefined;
+
+    const isLongLived =
+      typeof parsed.isLongLived === 'boolean' ? parsed.isLongLived : undefined;
+
+    return { ...parsed, tokenExpiresAt, tokenType, isLongLived, pages, adAccounts };
   } catch {
     return null;
   }
@@ -227,7 +241,59 @@ export type FacebookTokenExchangeResult = {
   accessToken: string;
   tokenExpiresAt: string | null;
   expiresIn: number | null;
+  tokenType: 'long_lived' | 'short_lived_fallback';
+  isLongLived: boolean;
 };
+
+export function isExplicitlyUnsupportedExchangeError(
+  status: number,
+  payload: unknown,
+): boolean {
+  if (status !== 400 && status !== 403) return false;
+  if (!payload || typeof payload !== 'object') return false;
+
+  const err = (
+    payload as {
+      error?: {
+        message?: unknown;
+        type?: unknown;
+        code?: unknown;
+        error_subcode?: unknown;
+      };
+    }
+  ).error;
+
+  if (!err || typeof err !== 'object') return false;
+
+  const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+  const type = typeof err.type === 'string' ? err.type : '';
+  const code = typeof err.code === 'number' ? err.code : parseInt(String(err.code), 10);
+
+  if (type && type !== 'OAuthException' && type !== 'FacebookApiException') {
+    return false;
+  }
+
+  const mentionsUnsupported =
+    message.includes('unsupported') ||
+    message.includes('not supported') ||
+    message.includes('not allowed') ||
+    message.includes('invalid grant_type');
+
+  const mentionsGrantOrExchange =
+    message.includes('fb_exchange_token') ||
+    message.includes('grant_type') ||
+    message.includes('flow');
+
+  if (mentionsUnsupported && mentionsGrantOrExchange) {
+    return true;
+  }
+
+  if (code === 100 && (mentionsUnsupported || message.includes('fb_exchange_token'))) {
+    return true;
+  }
+
+  return false;
+}
 
 export async function exchangeLongLivedUserAccessToken(
   shortLivedToken: string,
@@ -243,31 +309,63 @@ export async function exchangeLongLivedUserAccessToken(
   url.searchParams.set('fb_exchange_token', shortLivedToken);
 
   const fetchFn = fetchDouble || fetch;
+  let response: Response;
   try {
-    const response = await fetchFn(url.toString(), {
+    response = await fetchFn(url.toString(), {
       method: 'GET',
       cache: 'no-store',
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) {
-      // fb_exchange_token is optional / may not be supported for every Login for Business config
-      return null;
+  } catch {
+    // Treat timeout, network failure, or transport errors as exchange failures
+    throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
+  }
+
+  // Treat HTTP 429 and HTTP 5xx as exchange failures
+  if (response.status === 429 || response.status >= 500) {
+    throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    // Malformed response (non-JSON)
+    throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
+  }
+
+  if (response.ok) {
+    const successPayload = payload as { access_token?: unknown; expires_in?: unknown };
+    if (
+      typeof successPayload.access_token !== 'string' ||
+      !successPayload.access_token.trim()
+    ) {
+      // Malformed response: 200 OK without valid access_token
+      throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
     }
-    const payload = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
-    if (typeof payload.access_token !== 'string' || !payload.access_token) {
-      return null;
+    const { expiresIn, tokenExpiresAt, isExpired } = parseTokenExpiration(
+      successPayload.expires_in,
+    );
+    if (isExpired) {
+      throw new Error('FACEBOOK_TOKEN_EXPIRED');
     }
-    const { expiresIn, tokenExpiresAt } = parseTokenExpiration(payload.expires_in);
     return {
-      accessToken: payload.access_token,
+      accessToken: successPayload.access_token,
       tokenExpiresAt,
       expiresIn,
+      tokenType: 'long_lived',
+      isLongLived: true,
     };
-  } catch {
-    // Never expose credentials in error or transport failure
+  }
+
+  // If not ok, only permit fallback for recognized unsupported-flow responses
+  if (isExplicitlyUnsupportedExchangeError(response.status, payload)) {
     return null;
   }
+
+  // All other errors (unrecognized 4xx, code 190, malformed error payload) are exchange failures
+  throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
 }
 
 export async function exchangeCodeForUserAccessToken(
@@ -298,28 +396,44 @@ export async function exchangeCodeForUserAccessToken(
   }
 
   if (!response.ok) throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
-  const payload = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
-  if (typeof payload.access_token !== 'string' || !payload.access_token) {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
     throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
   }
 
-  const shortLivedToken = payload.access_token;
-  const initialExp = parseTokenExpiration(payload.expires_in);
+  const successPayload = payload as { access_token?: unknown; expires_in?: unknown };
+  if (
+    typeof successPayload.access_token !== 'string' ||
+    !successPayload.access_token.trim()
+  ) {
+    throw new Error('FACEBOOK_TOKEN_EXCHANGE_FAILED');
+  }
+
+  const shortLivedToken = successPayload.access_token;
+  const initialExp = parseTokenExpiration(successPayload.expires_in);
 
   if (initialExp.isExpired) {
     throw new Error('FACEBOOK_TOKEN_EXPIRED');
   }
 
-  // Attempt long-lived token exchange (graceful fallback if unsupported for this app/login config)
+  // Attempt long-lived token exchange.
+  // Throws on timeout, 429, 500, malformed, or invalid exchange.
+  // Returns null ONLY when fb_exchange_token is explicitly recognized as unsupported.
   const longLived = await exchangeLongLivedUserAccessToken(shortLivedToken, fetchFn);
   if (longLived) {
     return longLived;
   }
 
+  // Fallback permitted only for recognized unsupported fb_exchange_token configs.
+  // Exposes safe tokenType: 'short_lived_fallback', isLongLived: false, preserving actual expires_in.
   return {
     accessToken: shortLivedToken,
     tokenExpiresAt: initialExp.tokenExpiresAt,
     expiresIn: initialExp.expiresIn,
+    tokenType: 'short_lived_fallback',
+    isLongLived: false,
   };
 }
 
@@ -353,9 +467,78 @@ export type SubscribePageResult = {
   name: string;
   messengerSubscribed: boolean;
   leadAdsSubscribed: boolean;
-  status: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED';
+  status:
+    | 'MESSENGER_CONNECTED'
+    | 'ALL_CONNECTED'
+    | 'LEAD_ADS_NOT_CONNECTED'
+    | 'SUBSCRIPTION_UNKNOWN';
   leadAdsError?: string;
+  error?: string;
 };
+
+export async function readPageSubscribedFields(
+  pageId: string,
+  pageAccessToken: string,
+  appId: string | null,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ success: true; fields: string[]; appFound: boolean } | { success: false; reason: string }> {
+  const version = graphVersion();
+  const listUrl = new URL(
+    `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
+  );
+  try {
+    const listRes = await fetchFn(listUrl.toString(), {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${pageAccessToken}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (!listRes.ok) {
+      return { success: false, reason: `HTTP_${listRes.status}` };
+    }
+
+    let payload: unknown;
+    try {
+      payload = await listRes.json();
+    } catch {
+      return { success: false, reason: 'MALFORMED_JSON' };
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return { success: false, reason: 'MALFORMED_PAYLOAD' };
+    }
+
+    const data = (payload as { data?: unknown }).data;
+    if (!Array.isArray(data)) {
+      return { success: false, reason: 'MALFORMED_DATA_ARRAY' };
+    }
+
+    const appEntry = data.find(
+      (app) =>
+        app &&
+        typeof app === 'object' &&
+        (!appId || String((app as { id?: unknown }).id || '') === appId),
+    ) as { subscribed_fields?: unknown } | undefined;
+
+    if (!appEntry) {
+      // App not found in a successful GET response -> app currently has no subscriptions
+      return { success: true, fields: [], appFound: false };
+    }
+
+    if (!Array.isArray(appEntry.subscribed_fields)) {
+      return { success: true, fields: [], appFound: true };
+    }
+
+    return {
+      success: true,
+      fields: appEntry.subscribed_fields.map(String),
+      appFound: true,
+    };
+  } catch {
+    return { success: false, reason: 'TRANSPORT_ERROR' };
+  }
+}
 
 export async function subscribeManagedPage(
   userAccessToken: string,
@@ -378,41 +561,36 @@ export async function subscribeManagedPage(
   const version = graphVersion();
   const appId = process.env.META_APP_ID?.trim() || null;
 
-  // 1. Check existing subscriptions on the page to avoid overwriting fields
-  let existingFields: string[] = [];
-  try {
-    const listUrl = new URL(
-      `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
-    );
-    const listRes = await fetchFn(listUrl.toString(), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${page.accessToken}` },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (listRes.ok) {
-      const payload = (await listRes.json()) as {
-        data?: Array<{ id?: unknown; subscribed_fields?: unknown }>;
-      };
-      const appEntry = (payload.data || []).find(
-        (app) => !appId || String(app.id || '') === appId,
-      );
-      if (Array.isArray(appEntry?.subscribed_fields)) {
-        existingFields = appEntry.subscribed_fields.map(String);
-      }
-    }
-  } catch {
-    // Non-fatal if list check fails, proceed with safe subscription
+  // 1. Read existing subscriptions reliably before mutating anything
+  const initialRead = await readPageSubscribedFields(
+    pageId,
+    page.accessToken,
+    appId,
+    fetchFn,
+  );
+
+  if (!initialRead.success) {
+    // Do not mutate subscriptions when existing subscription state cannot be read reliably
+    // Return explicit safe status SUBSCRIPTION_UNKNOWN
+    return {
+      id: page.id,
+      name: page.name,
+      messengerSubscribed: false,
+      leadAdsSubscribed: false,
+      status: 'SUBSCRIPTION_UNKNOWN',
+      error: `CANNOT_VERIFY_SUBSCRIPTION_STATE: ${initialRead.reason}`,
+    };
   }
 
+  let currentFields = [...initialRead.fields];
   const subUrl = new URL(
     `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
   );
 
-  // 2. Ensure Messenger messages subscription
-  let messengerSubscribed = existingFields.includes('messages');
+  // 2. Ensure Messenger messages subscription and preserve existing fields
+  let messengerSubscribed = currentFields.includes('messages');
   if (!messengerSubscribed) {
-    const messengerFields = Array.from(new Set([...existingFields, 'messages'])).join(',');
+    const messengerFields = Array.from(new Set([...currentFields, 'messages'])).join(',');
     const msgRes = await fetchFn(subUrl.toString(), {
       method: 'POST',
       headers: {
@@ -424,19 +602,40 @@ export async function subscribeManagedPage(
       signal: AbortSignal.timeout(10_000),
     });
     if (!msgRes.ok) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
-    const msgPayload = (await msgRes.json()) as { success?: unknown };
-    if (msgPayload.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+    const msgPayload = (await msgRes.json().catch(() => null)) as { success?: unknown } | null;
+    if (msgPayload?.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+
+    // 4. After subscription changes, read back the fields and verify the expected state
+    const postRead = await readPageSubscribedFields(
+      pageId,
+      page.accessToken,
+      appId,
+      fetchFn,
+    );
+
+    if (!postRead.success || !postRead.fields.includes('messages')) {
+      // Read-back mismatch: Meta did not confirm messages subscription
+      return {
+        id: page.id,
+        name: page.name,
+        messengerSubscribed: false,
+        leadAdsSubscribed: false,
+        status: 'SUBSCRIPTION_UNKNOWN',
+        error: 'SUBSCRIPTION_READBACK_MISMATCH',
+      };
+    }
+
     messengerSubscribed = true;
-    existingFields = Array.from(new Set([...existingFields, 'messages']));
+    currentFields = postRead.fields;
   }
 
   // 3. Decoupled Lead Ads subscription (do not fail Messenger if leadgen fails)
-  let leadAdsSubscribed = existingFields.includes('leadgen');
+  let leadAdsSubscribed = currentFields.includes('leadgen');
   let leadAdsError: string | undefined;
 
   if (!leadAdsSubscribed) {
     try {
-      const leadAdsFields = Array.from(new Set([...existingFields, 'leadgen'])).join(',');
+      const leadAdsFields = Array.from(new Set([...currentFields, 'leadgen'])).join(',');
       const leadRes = await fetchFn(subUrl.toString(), {
         method: 'POST',
         headers: {
@@ -449,9 +648,21 @@ export async function subscribeManagedPage(
       });
 
       if (leadRes.ok) {
-        const leadPayload = (await leadRes.json()) as { success?: unknown };
-        if (leadPayload.success === true) {
-          leadAdsSubscribed = true;
+        const leadPayload = (await leadRes.json().catch(() => null)) as { success?: unknown } | null;
+        if (leadPayload?.success === true) {
+          // Read-back verification for leadgen
+          const postLeadRead = await readPageSubscribedFields(
+            pageId,
+            page.accessToken,
+            appId,
+            fetchFn,
+          );
+          if (postLeadRead.success && postLeadRead.fields.includes('leadgen')) {
+            leadAdsSubscribed = true;
+            currentFields = postLeadRead.fields;
+          } else {
+            leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
+          }
         } else {
           leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
         }
@@ -471,9 +682,9 @@ export async function subscribeManagedPage(
   return {
     id: page.id,
     name: page.name,
-    messengerSubscribed: true,
+    messengerSubscribed,
     leadAdsSubscribed,
-    status: leadAdsSubscribed ? 'ALL_CONNECTED' : 'MESSENGER_CONNECTED',
+    status: leadAdsSubscribed ? 'ALL_CONNECTED' : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'SUBSCRIPTION_UNKNOWN'),
     ...(leadAdsError ? { leadAdsError } : {}),
   };
 }
@@ -535,55 +746,43 @@ async function configuredConnectionForBinding(
     };
   }
 
-  try {
-    const version = graphVersion();
-    const response = await fetch(
-      `https://graph.facebook.com/${version}/${encodeURIComponent(binding.page)}/subscribed_apps`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store',
-        signal: AbortSignal.timeout(8_000),
-      },
-    );
-    const payload = response.ok
-      ? ((await response.json()) as { data?: Array<{ id?: unknown; subscribed_fields?: unknown }> })
-      : {};
+  const readResult = await readPageSubscribedFields(
+    binding.page,
+    token,
+    appId,
+    fetch,
+  );
 
-    const appEntry = (payload.data || []).find(
-      (app) => String(app.id || '') === appId,
-    );
-    const subscribedFields = Array.isArray(appEntry?.subscribed_fields)
-      ? appEntry.subscribed_fields.map(String)
-      : [];
-
-    const isSubscribed = Boolean(appEntry);
-    const messengerSubscribed = isSubscribed && (subscribedFields.length === 0 || subscribedFields.includes('messages'));
-    const leadAdsSubscribed = isSubscribed && subscribedFields.includes('leadgen');
-    const leadAdsStatus: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED' =
-      leadAdsSubscribed
-        ? 'ALL_CONNECTED'
-        : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED');
-
-    return {
-      configured: true,
-      pageId: binding.page,
-      pageName,
-      subscribed: isSubscribed,
-      leadAdsSubscribed,
-      leadAdsStatus,
-      tokenConfigured: true,
-    };
-  } catch {
+  if (!readResult.success) {
     return {
       configured: true,
       pageId: binding.page,
       pageName,
       subscribed: false,
       leadAdsSubscribed: false,
-      leadAdsStatus: 'LEAD_ADS_NOT_CONNECTED',
+      leadAdsStatus: 'SUBSCRIPTION_UNKNOWN',
       tokenConfigured: true,
     };
   }
+
+  const subscribedFields = readResult.fields;
+  const isSubscribed = readResult.appFound;
+  const messengerSubscribed = isSubscribed && (subscribedFields.length === 0 || subscribedFields.includes('messages'));
+  const leadAdsSubscribed = isSubscribed && subscribedFields.includes('leadgen');
+  const leadAdsStatus: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED' =
+    leadAdsSubscribed
+      ? 'ALL_CONNECTED'
+      : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED');
+
+  return {
+    configured: true,
+    pageId: binding.page,
+    pageName,
+    subscribed: isSubscribed,
+    leadAdsSubscribed,
+    leadAdsStatus,
+    tokenConfigured: true,
+  };
 }
 
 export async function getConfiguredFacebookConnections(
