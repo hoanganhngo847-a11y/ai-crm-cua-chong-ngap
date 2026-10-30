@@ -1,0 +1,107 @@
+{
+  "applicationSnapshot": "bdb4ee6b4a42d6e875e96926a6f53c1938f4ccc8",
+  "date": "2026-10-30",
+  "decision": "BLOCKED for deployment; preflight preparation completed.",
+  "scope": "Read-only staging metadata and Render GETs; offline inventory; disposable local PostgreSQL fixtures only.",
+  "checks": [
+    {
+      "command": "external Python with pglast 8.7: staging-preflight-inventory.py --test",
+      "result": "PASS",
+      "assertions": 8
+    },
+    {
+      "command": "external Python with pglast 8.7: staging-preflight-inventory.py",
+      "result": "PASS",
+      "files": 121,
+      "pending": 100,
+      "topLevelStatements": 2330,
+      "pendingTopLevelStatements": 1610,
+      "individualDestructiveItems": 178,
+      "pendingIndividualDestructiveItems": 160
+    },
+    {
+      "command": "CRM_SAFE_PREFLIGHT_EVIDENCE=1 npm run test:meta-staging-preflight",
+      "result": "PASS",
+      "postgresVersion": "17.11",
+      "tests": 1,
+      "cases": "A exact prefix + ten matching catalog/ACL groups; B complete 121 files; C prefix + five Meta files; complete synthetic Meta pipeline; expected QC/canary incompatibilities; all fixture DBs removed."
+    },
+    {
+      "command": "npm run test:meta-ads",
+      "result": "PASS",
+      "tests": 43
+    },
+    {
+      "command": "npm run test:omnichannel",
+      "result": "PASS",
+      "tests": 34
+    },
+    {
+      "command": "npm run test:zalo",
+      "result": "PASS",
+      "coverage": "Zalo OA/PGlite, groups, accounts, runtime and worker regression suites."
+    },
+    {
+      "command": "npm run typecheck; final npx tsc --noEmit",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run lint -- --ignore-pattern docs/evidence/meta-ads-dependency-audit/**",
+      "result": "PASS",
+      "errors": 0,
+      "warnings": 14,
+      "note": "Only the existing untracked prior audit scanner is excluded locally; no CI lint rule/command weakened."
+    },
+    {
+      "command": "JSON parse, report/README local-link and unresolved-placeholder validation",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff bdb4ee6 -- supabase/migrations app features and prior tracked evidence directories",
+      "result": "PASS",
+      "note": "No migration/application/old-evidence changes."
+    }
+  ],
+  "expectedCompatibilityFailures": [
+    {
+      "case": "Full chain retained record_quality_check_atomic",
+      "sqlstate": "42704",
+      "error": "type public.production_orders does not exist",
+      "meaning": "Real retained API defect; successful DDL is not compatibility."
+    },
+    {
+      "case": "Meta-only prefix with diagnostic canary trigger attached inside rolled-back local transaction",
+      "sqlstate": "42703",
+      "error": "record new has no field metadata",
+      "meaning": "The real prefix has no canary trigger; missing prerequisites remain latent. No trigger was attached on staging."
+    }
+  ],
+  "limitations": [
+    "No real staging backup or restore; no object bytes copied or key recovery proven.",
+    "Auth/Storage internals are local platform stubs, not live JWT/MFA/Storage equivalence.",
+    "pg_cron and pg_net absent in local fixtures; guarded provisioning/network branches not exercised.",
+    "One non-empty pricing-policy cleanup example does not establish non-empty behavior for every destructive target.",
+    "No live Meta App Review, credentials, OAuth, Page subscription or real lead acceptance.",
+    "Render environment names only; values and effective Supabase credential target were not inspected.",
+    "Exact pushed-head GitHub Actions must be verified separately; this local record does not assert CI success."
+  ],
+  "safety": {
+    "remoteMigrations": false,
+    "remoteRepairOrReset": false,
+    "productionAccess": false,
+    "remoteExecutorImplemented": false,
+    "realBackupOrRestore": false,
+    "newSupabaseResource": false,
+    "renderConfigChanged": false,
+    "renderDeployed": false,
+    "metaConfigChanged": false,
+    "realMetaLead": false,
+    "customerMessage": false,
+    "prMerged": false,
+    "legacyModulesRemoved": false
+  }
+}

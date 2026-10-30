@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-30T16:23:38.264Z",
+  "query": "SELECT jsonb_build_object('appointments',(SELECT count(*) FROM public.appointments),'survey_photo_operations',(SELECT count(*) FROM public.survey_photo_operations),'surveys',(SELECT count(*) FROM public.surveys),'installations',(SELECT count(*) FROM public.installations),'warranty_tickets',(SELECT count(*) FROM public.warranty_tickets),'production_orders',(SELECT count(*) FROM public.production_orders),'contracts',(SELECT count(*) FROM public.contracts),'payment_transactions',(SELECT count(*) FROM public.payment_transactions),'operations_outbox',(SELECT count(*) FROM public.operations_outbox),'finance_summaries',(SELECT count(*) FROM public.finance_summaries),'orders',(SELECT count(*) FROM public.orders),'price_calculations',(SELECT count(*) FROM public.price_calculations),'pricing_policies',(SELECT count(*) FROM public.pricing_policies),'company_bank_accounts_relation',to_regclass('public.company_bank_accounts')::text) AS legacy_counts;",
+  "data": [
+    {
+      "legacy_counts": {
+        "orders": 0,
+        "surveys": 0,
+        "contracts": 0,
+        "appointments": 0,
+        "installations": 0,
+        "pricing_policies": 0,
+        "warranty_tickets": 0,
+        "finance_summaries": 0,
+        "operations_outbox": 0,
+        "production_orders": 0,
+        "price_calculations": 0,
+        "payment_transactions": 0,
+        "survey_photo_operations": 0,
+        "company_bank_accounts_relation": null
+      }
+    }
+  ]
+}
