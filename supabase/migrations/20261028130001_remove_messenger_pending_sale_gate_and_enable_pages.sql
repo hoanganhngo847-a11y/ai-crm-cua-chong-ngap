@@ -1,4 +1,4 @@
--- Migration: 20261030020722_remove_messenger_pending_sale_gate_and_enable_pages.sql
+-- Migration: 20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql
 -- Description:
 -- 1. Remove PENDING_SALE gate for Facebook Messenger: AI replies immediately on inbound
 --    without waiting for human sale (preserves PENDING_SALE and SLA rules for Zalo).

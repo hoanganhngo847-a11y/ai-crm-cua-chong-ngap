@@ -25,6 +25,9 @@ test('migration versions are unique; applied funnel migration is unchanged; fina
     assert.equal(new Set(files.map(f => f.split('_')[0])).size, files.length);
     assert.ok(files.includes('20261028130000_customer_funnel_six_stages.sql'));
     assert.equal(createHash('sha256').update(readFileSync('supabase/migrations/20261028130000_customer_funnel_six_stages.sql')).digest('hex'), '44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0', 'Preserve the applied production migration byte for byte');
+    const messenger = files.indexOf('20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql');
+    assert.ok(messenger > files.indexOf('20261028130000_customer_funnel_six_stages.sql'));
+    assert.ok(messenger < files.indexOf('20261028140000_fix_messenger_confidence_and_sla_resolution.sql'), 'Renumbering must preserve newer RPC safety definitions');
     assert.ok(files.indexOf('20261030110000_meta_ads_final_remediation.sql') > files.indexOf('20261030100000_meta_ads_hardening.sql'));
 });
 

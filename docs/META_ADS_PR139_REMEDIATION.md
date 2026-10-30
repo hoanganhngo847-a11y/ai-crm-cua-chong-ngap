@@ -4,7 +4,7 @@ No merge, Render deployment, production migration, or production secret mutation
 
 ## Migration history
 
-Read-only production inspection on 2026-10-30, project `yrauljxzyklhisxijeim`, confirmed ledger entry `20261028130000 / customer_funnel_six_stages`. That SQL file/version is unchanged. The colliding, **unapplied** `remove_messenger_pending_sale_gate_and_enable_pages` migration is now `20261030020722`. Its SQL body is unchanged. Supabase CLI generated the replacement; the final remediation was generated with the CLI and moved to `20261030110000` to follow this branch's pre-existing `09:00`/`10:00` foundation migrations.
+Read-only production inspection on 2026-10-30, project `yrauljxzyklhisxijeim`, confirmed ledger entry `20261028130000 / customer_funnel_six_stages`. That SQL file/version is unchanged. The colliding, **unapplied** `remove_messenger_pending_sale_gate_and_enable_pages` migration is now `20261028130001`. Its SQL body is unchanged. Supabase CLI generated the replacement, then its version was positioned immediately after the applied funnel migration to preserve dependency order (a later timestamp would overwrite newer Messenger/Zalo safety definitions); the final remediation was generated with the CLI and moved to `20261030110000` to follow this branch's pre-existing `09:00`/`10:00` foundation migrations.
 
 `20261030110000_meta_ads_final_remediation` is additive. It restricts credential RPCs, fences webhook and sync ownership, adds atomic intake checkpoints, and validates attribution against server-synced campaign records. No production ledger entry was repaired, deleted, or rewritten.
 
