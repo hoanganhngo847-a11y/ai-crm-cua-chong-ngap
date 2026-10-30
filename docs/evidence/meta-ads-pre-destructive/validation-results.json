@@ -68,5 +68,29 @@
       "localLogPath": "/tmp/crm-pre-security.log"
     }
   ],
-  "lintNote": "Previous untracked docs/evidence/meta-ads-dependency-audit/scan_repository.cjs has four existing CommonJS require-style lint errors. Excluded that file only for local lint; it is unchanged and not committed with this task. No lint configuration changed; CI runs npm run lint normally."
+  "lintNote": "Previous untracked docs/evidence/meta-ads-dependency-audit/scan_repository.cjs has four existing CommonJS require-style lint errors. Excluded that file only for local lint; it is unchanged and not committed with this task. No lint configuration changed; CI runs npm run lint normally.",
+  "ciSnapshotCorrection": {
+    "initialRun": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41046325408",
+    "cause": "PR merge checkout has 120 SQL files, while the audit manifest intentionally has 116; the initial assertion incorrectly counted the entire checkout as the audited snapshot.",
+    "fix": "Verify exact hashes of all 116 audited files; separately reconcile and inspect all current checkout migrations. No SQL was skipped from full-chain DB replay.",
+    "localReadiness": "13/13 PASS",
+    "mergedCheckoutManifestTests": "3/3 PASS; 120 SQL files",
+    "mergedCheckoutSource": "d19d322b55517beb1870172f687b4aa86a6c0e44",
+    "typecheck": "PASS",
+    "changedFileLint": "PASS",
+    "logs": [
+      {
+        "path": "/tmp/crm-pre-readiness-ci-fix.log",
+        "sha256": "3894b09d806713500a170177b998cdb0d62a74bf8988e4f971a43063adbacd39"
+      },
+      {
+        "path": "/tmp/crm-pre-typecheck-ci-fix.log",
+        "sha256": "e1f6775949f5e9c98a522624ab1d5b6de452551768ac3c22223a9c09e1cc3ffe"
+      },
+      {
+        "path": "/tmp/crm-pre-lint-ci-fix.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
 }

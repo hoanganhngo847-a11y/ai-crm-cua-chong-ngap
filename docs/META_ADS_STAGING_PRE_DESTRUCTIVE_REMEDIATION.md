@@ -50,6 +50,12 @@ untracked audit scanner, whose four pre-existing CommonJS style errors were left
 untouched. The scanner is outside this commit; CI runs normal lint without an
 exclusion. Verify now runs `npm run test:staging-readiness` after its disposable
 database reset. Current-head CI is available in [PR checks](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139/checks).
+The initial CI run exposed a snapshot-test assumption: PR merge checkouts include
+four additional main-branch migrations (120 total). The test now verifies exact
+source hashes/counts for the audited 116-file manifest and separately reconciles
+and inspects every file in the complete checkout. Full-chain DB tests replay the
+whole checkout; extra migrations are not omitted from execution or approved by
+the historical 116-file report.
 
 ## B. QC RPC
 
