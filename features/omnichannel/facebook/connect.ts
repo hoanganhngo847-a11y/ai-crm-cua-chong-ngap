@@ -259,7 +259,7 @@ export function isExplicitlyUnsupportedExchangeError(
   if (err.type !== 'OAuthException') return false;
 
   const message = typeof err.message === 'string'
-    ? err.message.toLowerCase().replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim()
+    ? err.message.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
     : '';
 
   const referencesExchangeGrant =
