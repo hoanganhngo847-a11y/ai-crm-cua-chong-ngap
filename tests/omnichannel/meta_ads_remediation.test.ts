@@ -360,7 +360,32 @@ test('FIX A: OAuth token exchange handles long-lived, explicit unsupported, tran
         assert.equal(resUnsupported.isLongLived, false);
         assert.ok(resUnsupported.tokenExpiresAt);
 
-        // 3. Timeout on long-lived exchange -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
+        // 3. Ambiguous code-100 invalid-parameter errors must NOT trigger short-lived fallback.
+        const fetchInvalidParameter: typeof fetch = async (input) => {
+            const url = new URL(String(input));
+            if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
+                return new Response(JSON.stringify({
+                    error: {
+                        message: 'Invalid parameter fb_exchange_token',
+                        code: 100,
+                        type: 'OAuthException',
+                    },
+                }), { status: 400 });
+            }
+            return Response.json({ access_token: 'short-lived-token-123', expires_in: 3600 });
+        };
+        await assert.rejects(
+            () => exchangeCodeForUserAccessToken('code-invalid-parameter', fetchInvalidParameter),
+            /FACEBOOK_TOKEN_EXCHANGE_FAILED/,
+        );
+        assert.equal(
+            isExplicitlyUnsupportedExchangeError(400, {
+                error: { message: 'Invalid parameter fb_exchange_token', code: 100, type: 'OAuthException' },
+            }),
+            false,
+        );
+
+        // 4. Timeout on long-lived exchange -> exchange failure (throws FACEBOOK_TOKEN_EXCHANGE_FAILED)
         const fetchTimeout: typeof fetch = async (input) => {
             const url = new URL(String(input));
             if (url.searchParams.get('grant_type') === 'fb_exchange_token') {
@@ -495,6 +520,25 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
     assert.equal(postCalled, false, 'POST must not be called when GET is malformed');
     assert.equal(resMalformed.status, 'SUBSCRIPTION_UNKNOWN');
 
+    // 4b. App exists but subscribed_fields is missing: state is unknown and no POST is allowed.
+    let missingFieldsPostCalled = false;
+    const fetchMissingSubscribedFields: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') return Response.json({ data: [{ id: appId }] });
+            if (init?.method === 'POST') {
+                missingFieldsPostCalled = true;
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resMissingFields = await subscribeManagedPage('token', page, company, fetchMissingSubscribedFields);
+    assert.equal(missingFieldsPostCalled, false, 'POST must not run when subscribed_fields is missing');
+    assert.equal(resMissingFields.status, 'SUBSCRIPTION_UNKNOWN');
+    assert.match(resMissingFields.error || '', /MALFORMED_SUBSCRIBED_FIELDS/);
+
     // 5. App not found in a successful GET response: treated as empty existing fields, subscribes and verifies
     let postedCount5 = 0;
     let currentFields5: string[] = [];
@@ -616,6 +660,32 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
     assert.equal(resLeadFail.leadAdsSubscribed, false);
     assert.equal(resLeadFail.status, 'MESSENGER_CONNECTED');
     assert.equal(resLeadFail.leadAdsError, 'LEAD_ADS_NOT_CONNECTED');
+
+    // 10. Leadgen POST succeeds but read-back omits leadgen: report unknown, never connected.
+    const fetchLeadReadbackMismatch: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
+        if (url.pathname.endsWith('/subscribed_apps')) {
+            if (init?.method === 'GET') {
+                return Response.json({ data: [{ id: appId, subscribed_fields: ['messages'] }] });
+            }
+            if (init?.method === 'POST') {
+                return Response.json({ success: true });
+            }
+        }
+        throw new Error(`Unexpected call: ${url}`);
+    };
+    const resLeadReadbackMismatch = await subscribeManagedPage(
+        'token',
+        page,
+        company,
+        fetchLeadReadbackMismatch,
+    );
+    assert.equal(resLeadReadbackMismatch.messengerSubscribed, true);
+    assert.equal(resLeadReadbackMismatch.leadAdsSubscribed, false);
+    assert.equal(resLeadReadbackMismatch.status, 'SUBSCRIPTION_UNKNOWN');
+    assert.equal(resLeadReadbackMismatch.leadAdsError, 'SUBSCRIPTION_READBACK_MISMATCH');
+    assert.equal(resLeadReadbackMismatch.error, 'SUBSCRIPTION_READBACK_MISMATCH');
 });
 
 test('F-06: webhook isolates Lead Ads failures and processes Messenger messages in mixed batch; retries deduplicate safely', async () => {
