@@ -52,7 +52,7 @@ const SUITE_STEPS: Step[] = [
     id: 'ANALYTICS_RUN_1',
     name: 'Analytics DB Fixtures — Iteration 1',
     command: 'npx',
-    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics.test.ts'],
+    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics_ui.test.ts'],
   },
   {
     id: 'AI_WORKER_RUN_2',
@@ -64,7 +64,7 @@ const SUITE_STEPS: Step[] = [
     id: 'ANALYTICS_RUN_2',
     name: 'Analytics DB Fixtures — Iteration 2 (Verifying repeatability on dirty DB)',
     command: 'npx',
-    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics.test.ts'],
+    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics_ui.test.ts'],
   },
 
   // --- Stage 3: Response SLA DB Repeatability ---

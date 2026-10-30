@@ -56,7 +56,7 @@ Local validation on 2026-10-30 (no skipped tests):
 | --- | --- |
 | `npm run test:meta-ads` | PASS — 28 tests, including original 21 scenarios and remediation/key-verifier regressions |
 | `npm run test:meta-ads:db` | PASS — native PostgreSQL integration: eight concurrent claims, stale ownership, role ACLs, forged/foreign mapping, timestamp ordering, simultaneous signed webhooks and partial retry/finalization faults |
-| `npm run test:omnichannel` | PASS — 33 tests |
+| `npm run test:omnichannel` | PASS — 34 tests |
 | `npm run test:crm` | PASS — all 10 scripts; final funnel suite 94 assertions passed |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS — 0 errors, 18 existing warnings |
@@ -69,6 +69,8 @@ Local validation on 2026-10-30 (no skipped tests):
 The first local build hit an external `node_modules` symlink; `npm ci` installed worktree-local dependencies. A subsequent build lacked Supabase variables, so the final build used only the **local** stack's URL/keys. Type generation and build were rerun sequentially because both write `.next` types. No checks were disabled. The reset warns about the pre-existing missing optional seed file; it exits successfully and applies every migration.
 
 The applied funnel SQL remains byte-identical (SHA-256 `44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0`). The renamed Messenger migration differs only in its filename/version header.
+
+CI follow-up repairs keep every gate enabled: the surviving analytics suite now reconciles its own local auth fixtures (128 assertions); the repeated-fixture runner invokes that existing suite instead of the deleted legacy file; the cross-module suite checks the current canonical stage (101 assertions). Facebook polling now fails closed when the atomic outbound RPC is missing, instead of attempting manual protected/raw-table writes; its regression also proves checkpoints do not advance. The migration Git guard accepts only the reviewed Messenger rename with both SQL bodies pinned to SHA-256 values; four negative/positive regression cases keep deletion, body mutation and applied-funnel mutation rejected (17 integrity tests total).
 
 The Verify workflow now explicitly runs Meta Ads unit/database tests, CRM, typecheck and lint in addition to its existing gates. GitHub Actions must finish on the pushed head before handoff; current status is recorded in the PR body.
 

@@ -638,7 +638,7 @@ async function runAllScenarios() {
 
     assert(pipelineResult !== null, 'Scenario E: Pipeline produced analysis record');
     assert(pipelineResult.modelVersion === 'trusted-ai-model-v1', 'Scenario E: Trusted modelVersion persisted');
-    assert(pipelineResult.stageSuggestion === 'SURVEY_SCHEDULED', 'Scenario E: Stage suggestion recorded');
+    assert(pipelineResult.stageSuggestion === 'interested', `Scenario E: Legacy SURVEY_SCHEDULED suggestion is canonicalized (got ${pipelineResult.stageSuggestion})`);
 
     // Verify Customer.stage was NOT mutated by AI analysis (AI cannot mutate stage directly)
     const { data: custAfter } = await adminClient

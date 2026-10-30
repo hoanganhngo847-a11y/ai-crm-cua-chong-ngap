@@ -226,6 +226,27 @@ export function verifyMigrationGitGuard(
     const rawPath = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
     const filePath = rawPath.replace(/\\/g, '/');
 
+    // PR #139: production ledger inspection proved this colliding Messenger
+    // migration was unapplied; the funnel owns 20261028130000. Permit only this
+    // exact, body-preserving rename, with both original bytes and the applied
+    // funnel anchored to reviewed SHA-256 values. No caller-controlled bypass.
+    if (status === 'D' && filePath === `${migrationsRelPath}/20261028130000_remove_messenger_pending_sale_gate_and_enable_pages.sql`) {
+      const replacement = `${migrationsRelPath}/20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql`;
+      const funnel = `${migrationsRelPath}/20261028130000_customer_funnel_six_stages.sql`;
+      try {
+        const original = execFileSync('git', ['show', `${mergeBase}:${filePath}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const current = fs.readFileSync(path.join(cwd, replacement), 'utf8');
+        const digest = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+        const funnelBefore = execFileSync('git', ['show', `${mergeBase}:${funnel}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const funnelAfter = fs.readFileSync(path.join(cwd, funnel), 'utf8');
+        const originalHash = '8cdfd92019a15f4e3ca22a5f1906a40625332db83dd89712a248f19f851a55d1';
+        const funnelHash = '44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0';
+        if (allChanges.includes(`A\t${replacement}`) && digest(original) === originalHash &&
+            current.replace('-- Migration: 20261028130001_', '-- Migration: 20261028130000_') === original &&
+            digest(funnelBefore) === funnelHash && digest(funnelAfter) === funnelHash) continue;
+      } catch { /* Missing/mutated evidence is rejected by the normal guard. */ }
+    }
+
     if (status !== 'A') {
       errors.push(
         `Disallowed migration modification (${status}) on "${filePath}". Existing migrations are immutable and cannot be modified or deleted.`
