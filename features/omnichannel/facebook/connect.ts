@@ -249,50 +249,27 @@ export function isExplicitlyUnsupportedExchangeError(
   status: number,
   payload: unknown,
 ): boolean {
-  if (status !== 400 && status !== 403) return false;
+  // Only a clearly unsupported OAuth grant may use the short-lived fallback.
+  // Permission errors (403), invalid parameters, and ambiguous code-100 errors must fail closed.
+  if (status !== 400) return false;
   if (!payload || typeof payload !== 'object') return false;
 
-  const err = (
-    payload as {
-      error?: {
-        message?: unknown;
-        type?: unknown;
-        code?: unknown;
-        error_subcode?: unknown;
-      };
-    }
-  ).error;
-
+  const err = (payload as { error?: { message?: unknown; type?: unknown } }).error;
   if (!err || typeof err !== 'object') return false;
+  if (err.type !== 'OAuthException') return false;
 
-  const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
-  const type = typeof err.type === 'string' ? err.type : '';
-  const code = typeof err.code === 'number' ? err.code : parseInt(String(err.code), 10);
+  const message = typeof err.message === 'string'
+    ? err.message.toLowerCase().replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim()
+    : '';
 
-  if (type && type !== 'OAuthException' && type !== 'FacebookApiException') {
-    return false;
-  }
+  const referencesExchangeGrant =
+    message.includes('fb exchange token') ||
+    message.includes('grant type') ||
+    message.includes('exchange flow');
+  const explicitlyUnsupported =
+    message.includes('unsupported') || message.includes('not supported');
 
-  const mentionsUnsupported =
-    message.includes('unsupported') ||
-    message.includes('not supported') ||
-    message.includes('not allowed') ||
-    message.includes('invalid grant_type');
-
-  const mentionsGrantOrExchange =
-    message.includes('fb_exchange_token') ||
-    message.includes('grant_type') ||
-    message.includes('flow');
-
-  if (mentionsUnsupported && mentionsGrantOrExchange) {
-    return true;
-  }
-
-  if (code === 100 && (mentionsUnsupported || message.includes('fb_exchange_token'))) {
-    return true;
-  }
-
-  return false;
+  return referencesExchangeGrant && explicitlyUnsupported;
 }
 
 export async function exchangeLongLivedUserAccessToken(
@@ -527,7 +504,7 @@ export async function readPageSubscribedFields(
     }
 
     if (!Array.isArray(appEntry.subscribed_fields)) {
-      return { success: true, fields: [], appFound: true };
+      return { success: false, reason: 'MALFORMED_SUBSCRIBED_FIELDS' };
     }
 
     return {
@@ -632,6 +609,7 @@ export async function subscribeManagedPage(
   // 3. Decoupled Lead Ads subscription (do not fail Messenger if leadgen fails)
   let leadAdsSubscribed = currentFields.includes('leadgen');
   let leadAdsError: string | undefined;
+  let subscriptionUnknown = false;
 
   if (!leadAdsSubscribed) {
     try {
@@ -661,7 +639,10 @@ export async function subscribeManagedPage(
             leadAdsSubscribed = true;
             currentFields = postLeadRead.fields;
           } else {
-            leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
+            subscriptionUnknown = true;
+            leadAdsError = postLeadRead.success
+              ? 'SUBSCRIPTION_READBACK_MISMATCH'
+              : 'SUBSCRIPTION_READBACK_UNKNOWN';
           }
         } else {
           leadAdsError = 'LEAD_ADS_NOT_CONNECTED';
@@ -684,8 +665,15 @@ export async function subscribeManagedPage(
     name: page.name,
     messengerSubscribed,
     leadAdsSubscribed,
-    status: leadAdsSubscribed ? 'ALL_CONNECTED' : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'SUBSCRIPTION_UNKNOWN'),
+    status: subscriptionUnknown
+      ? 'SUBSCRIPTION_UNKNOWN'
+      : leadAdsSubscribed
+        ? 'ALL_CONNECTED'
+        : messengerSubscribed
+          ? 'MESSENGER_CONNECTED'
+          : 'SUBSCRIPTION_UNKNOWN',
     ...(leadAdsError ? { leadAdsError } : {}),
+    ...(subscriptionUnknown && leadAdsError ? { error: leadAdsError } : {}),
   };
 }
 
