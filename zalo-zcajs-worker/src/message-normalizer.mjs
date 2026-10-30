@@ -178,9 +178,11 @@ function buildNormalizedMessage(message, { isGroup }) {
     // external_ref guarantees a group message can never collide with a DM.
     externalRef: isGroup ? `${ZALO_GROUP_EXTERNAL_REF_PREFIX}${messageId}` : messageId,
     senderName,
+    senderId: isGroup ? normalizeThreadId(data.uidFrom) || undefined : undefined,
     senderNameSource,
     senderDisplayName: isGroup ? senderName : undefined,
     isGroup,
+    recovered: message.__zaloRecovered === true,
     groupId: isGroup ? threadId : undefined,
     groupName: explicitGroupName,
     content,

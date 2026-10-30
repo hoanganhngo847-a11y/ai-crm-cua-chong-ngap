@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { listZaloAccounts } from '@/features/omnichannel/zalo/accounts/service';
+import { ACCOUNT_UUID, scopeZaloThread, scopedZaloMessageId } from '@/features/omnichannel/zalo/accounts/scope';
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedEvent } from '@/features/inbox/services/inbox-ingress.service';
@@ -95,69 +97,23 @@ async function persistZaloGroupMetadata(
   supabase: ReturnType<typeof createAdminClient>,
   companyId: string,
   conversationId: string | undefined,
-  customerId: string | undefined,
-  externalUserId: string,
-  event: import('@/features/omnichannel/zalo/zcajs-inbound').ZcaJsInboundMessage,
-  observedAt: string
+  event: import('@/features/omnichannel/zalo/zcajs-inbound').ZcaJsInboundMessage
 ): Promise<void> {
   if (!conversationId) return;
 
-  const { data: conversation, error: readError } = await supabase
-    .from('conversations')
-    .select('metadata, customer_id')
-    .eq('id', conversationId)
-    .eq('company_id', companyId)
-    .eq('channel', 'ZALO')
-    .maybeSingle();
-
-  if (readError || !conversation) return;
-
-  const currentMetadata =
-    conversation.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
-      ? (conversation.metadata as Record<string, unknown>)
-      : {};
-
-  const existingGroupName = typeof currentMetadata.group_name === 'string' ? currentMetadata.group_name.trim() : '';
-  const newGroupName = event.groupName ? normalizeZaloDisplayName(event.groupName) : undefined;
-  const finalGroupName = newGroupName || existingGroupName || event.senderName || `Nhóm Zalo ${event.groupId?.slice(-4) || ''}`;
-
-  const nextMetadata: Record<string, unknown> = {
-    ...currentMetadata,
-    is_group: true,
-    group_id: event.groupId || currentMetadata.group_id,
-    group_name: finalGroupName,
-    zalo_display_name: finalGroupName,
-    zalo_display_name_source: newGroupName ? 'group_info' : (currentMetadata.zalo_display_name_source || 'message_dname'),
-    zalo_display_name_updated_at: observedAt,
-    ...(event.totalMember ? { member_count: event.totalMember } : {}),
-    ...(event.groupAvatar ? { group_avatar: event.groupAvatar } : {}),
-    ...(event.groupMembers && event.groupMembers.length > 0 ? { members: event.groupMembers } : {}),
-  };
-
-  await supabase
-    .from('conversations')
-    .update({ metadata: nextMetadata })
-    .eq('id', conversationId)
-    .eq('company_id', companyId)
-    .eq('channel', 'ZALO');
-
-  const targetCustomerId = customerId || conversation.customer_id;
-  if (targetCustomerId && finalGroupName) {
-    await supabase
-      .from('customers')
-      .update({ name: finalGroupName })
-      .eq('id', targetCustomerId)
-      .eq('company_id', companyId);
-  }
-
-  if (finalGroupName && externalUserId) {
-    await supabase
-      .from('identities')
-      .update({ display_name: finalGroupName, updated_at: observedAt })
-      .eq('company_id', companyId)
-      .eq('channel', 'ZALO')
-      .eq('external_id', externalUserId);
-  }
+  const { error } = await supabase.rpc('sync_zalo_group_metadata', {
+    p_company_id: companyId,
+    p_conversation_id: conversationId,
+    p_group: {
+      ...(event.groupName ? { group_name: event.groupName } : {}),
+      ...(event.totalMember !== undefined ? { member_count: event.totalMember } : {}),
+      ...(event.groupAvatar ? { group_avatar: event.groupAvatar } : {}),
+      ...(event.groupMembers ? { members: event.groupMembers } : {}),
+      ...(event.membersComplete !== undefined ? { members_complete: event.membersComplete } : {}),
+      ...(event.groupFetchedAt ? { group_fetched_at: event.groupFetchedAt } : {}),
+    },
+  });
+  if (error) console.warn('[ZCAJS inbound] group metadata sync failed:', error.message);
 }
 
 async function applyZaloDisplayName(
@@ -259,8 +215,23 @@ export async function POST(request: NextRequest) {
         : '';
     const normalizedObservedAt = normalizeTimestamp(timestamp);
     const sourceMetadata = buildZcaJsSourceMetadata(event);
-
     const supabase = createAdminClient();
+    const rawAccountId = body && typeof body === 'object' ? (body as { accountId?: unknown }).accountId : undefined;
+    let providerReference = event.messageId;
+    if (rawAccountId !== undefined) {
+      if (typeof rawAccountId !== 'string' || !ACCOUNT_UUID.test(rawAccountId)) return NextResponse.json({ success: false, error: 'INVALID_ACCOUNT_ID' }, { status: 400 });
+      const accounts = await listZaloAccounts(companyId, supabase);
+      const account = accounts.find((item) => item.id === rawAccountId && item.enabled && item.provider_uid);
+      if (!account) return NextResponse.json({ success: false, error: 'ZALO_ACCOUNT_NOT_ACTIVE' }, { status: 409 });
+      sourceMetadata.zalo_account_id = account.id;
+      sourceMetadata.zalo_account_name = account.label;
+      sourceMetadata.zalo_peer_id = event.externalConversationId;
+      event.externalUserId = scopeZaloThread(account.id, event.externalUserId);
+      event.externalConversationId = event.externalUserId;
+      event.externalRef = scopedZaloMessageId(account.id, event.externalRef);
+      providerReference = scopedZaloMessageId(account.id, event.messageId);
+    }
+
     await ensureZcaJsRoutingConfig(supabase, companyId);
 
     // Self-listener messages are observations of messages already sent from the native Zalo account.
@@ -269,7 +240,7 @@ export async function POST(request: NextRequest) {
       const { data, error } = await supabase.rpc('record_observed_zcajs_outbound_atomic', {
         p_company_id: companyId,
         p_external_conversation_id: event.externalConversationId,
-        p_provider_msg_id: event.messageId,
+        p_provider_msg_id: providerReference,
         p_sanitized_content: sanitizePhoneInText(event.content),
         p_raw_content: event.content,
         p_source_metadata: sourceMetadata,
@@ -293,10 +264,7 @@ export async function POST(request: NextRequest) {
           supabase,
           companyId,
           conversationId,
-          typeof result.customer_id === 'string' ? result.customer_id : undefined,
-          event.externalConversationId,
-          event,
-          normalizedObservedAt
+          event
         );
       }
 
@@ -339,14 +307,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (event.isGroup) {
+      if (result.duplicate && result.conversation_id && event.senderId) {
+        const { error: repairError } = await supabase.rpc('repair_zalo_group_message_author', {
+          p_company_id: companyId,
+          p_conversation_id: result.conversation_id,
+          p_external_ref: event.externalRef,
+          p_author: { group_id: event.groupId, zalo_sender_id: event.senderId, zalo_sender_name: event.senderDisplayName },
+        });
+        if (repairError) throw new Error('GROUP_AUTHOR_REPAIR_FAILED');
+      }
       await persistZaloGroupMetadata(
         supabase,
         companyId,
         result.conversation_id,
-        result.customer_id,
-        event.externalUserId,
-        event,
-        normalizedObservedAt
+        event
       );
       // Groups are observational in the CRM: never let AI answer a whole group.
       await pauseZaloGroupAi(supabase, companyId, result.conversation_id);

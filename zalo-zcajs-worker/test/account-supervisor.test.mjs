@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { accountChildEnvironment, createAccountRegistry, splitAccountRecipient } from '../src/account-supervisor.mjs';
+const id = '11111111-1111-4111-8111-111111111111';
+const id2 = '22222222-2222-4222-8222-222222222222';
+const config = (accountId = id, revision = 1) => ({ id: accountId, revision, cookie: `cookie-${accountId}`, imei: `imei-${accountId}`, userAgent: 'test-ua' });
+test('managed routing cannot fall back to legacy on malformed account prefix', () => {
+  assert.deepEqual(splitAccountRecipient(`account:${id}:group:123456`), { accountId: id, peer: 'group:123456' });
+  assert.deepEqual(splitAccountRecipient('123456'), { accountId: null, peer: '123456' });
+  assert.throws(() => splitAccountRecipient('account:invalid:123456'));
+});
+test('each account has its own process credentials, queue and localhost port', () => {
+  const a = accountChildEnvironment({ ZCAJS_INBOX_QUEUE_FILE: '/app/data/legacy.jsonl', ZCAJS_COOKIE: 'legacy' }, config(), 11001);
+  const b = accountChildEnvironment({}, config(id2), 11002);
+  assert.notEqual(a.ZCAJS_COOKIE, b.ZCAJS_COOKIE);
+  assert.notEqual(a.ZCAJS_INBOX_QUEUE_FILE, b.ZCAJS_INBOX_QUEUE_FILE);
+  assert.equal(a.ZCAJS_INBOX_QUEUE_FILE, `/app/data/accounts/${id}/inbound-queue.jsonl`);
+  assert.equal(a.ZCAJS_BIND_HOST, '127.0.0.1');
+});
+test('refresh is idempotent; replacement waits for queue owner exit; pause stops routing', () => {
+  const started = []; let now = 1000;
+  const registry = createAccountRegistry({ baseEnv: {}, now: () => now, launch: (env) => {
+    const child = new EventEmitter(); child.kills = []; child.kill = (signal) => child.kills.push(signal); started.push({ child, env }); return child;
+  } });
+  registry.reconcile([config(), config(id2)]);
+  registry.reconcile([config(), config(id2)]);
+  assert.equal(started.length, 2);
+  registry.reconcile([config(id, 2), config(id2)]);
+  assert.equal(started.length, 2, 'must wait for previous queue owner');
+  assert.equal(registry.get(id).removed, true);
+  started[0].child.emit('exit', 0);
+  registry.reconcile([config(id, 2), config(id2)]);
+  assert.equal(started.length, 3);
+  assert.equal(registry.get(id).revision, 2);
+  registry.reconcile([config(id2)]);
+  assert.equal(registry.get(id).removed, true);
+  started[2].child.emit('exit', 0);
+  registry.reconcile([config(id2)]);
+  assert.equal(registry.get(id), undefined);
+  started[1].child.emit('exit', 1);
+  registry.reconcile([config(id2)]);
+  assert.equal(started.length, 3, 'crash does not produce restart storm');
+  now += 120000;
+  registry.reconcile([config(id2)]);
+  assert.equal(started.length, 4);
+  assert.throws(() => registry.reconcile([config(), config(), config()]));
+  assert.throws(() => registry.reconcile([config(), config(id2), config('bad')]));
+  assert.ok(registry.get(id2).child, 'invalid config does not stop healthy account');
+  registry.stop();
+});

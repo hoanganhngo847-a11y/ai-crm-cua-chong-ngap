@@ -475,6 +475,7 @@ async function runInboxTenantIsolationTests() {
                   error: null,
                 });
                 resPromise.limit = () => resPromise;
+                resPromise.order = () => resPromise;
                 return resPromise;
               },
               maybeSingle: () => {

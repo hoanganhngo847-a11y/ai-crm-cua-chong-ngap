@@ -32,7 +32,7 @@ assert.match(
 );
 assert.match(
   dockerfile,
-  /node src\/dispatch-loop\.mjs & exec node src\/index\.mjs/,
+  /node src\/dispatch-loop\.mjs & exec node src\/supervisor\.mjs/,
   'Docker image must run the durable outbound poller alongside the ZCAJS listener.'
 );
 

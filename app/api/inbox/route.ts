@@ -231,6 +231,17 @@ export async function GET(request: NextRequest, context?: unknown) {
     const search = searchParams.get('search')?.trim() || '';
 
     if (conversationId) {
+      let before: { createdAt: string; id: string } | undefined;
+      const cursor = searchParams.get('before');
+      if (cursor) {
+        try {
+          const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+          if (!UUID_REGEX.test(parsed.id) || typeof parsed.createdAt !== 'string' || !Number.isFinite(Date.parse(parsed.createdAt))) throw new Error('INVALID_CURSOR');
+          before = { id: parsed.id, createdAt: parsed.createdAt };
+        } catch {
+          return NextResponse.json({ success: false, error: 'INVALID_MESSAGE_CURSOR' }, { status: 400 });
+        }
+      }
       const conversation = await InboxService.getConversationById(
         companyId,
         conversationId,
@@ -256,7 +267,7 @@ export async function GET(request: NextRequest, context?: unknown) {
           conversationId,
           role,
           typedContext?.supabaseClient,
-          { userId, actorId: userId }
+          { userId, actorId: userId, pageSize: 100, before }
         );
       } catch (err: unknown) {
         const errorObj = err as { code?: string; status?: number; message?: string } | undefined;
@@ -302,7 +313,11 @@ export async function GET(request: NextRequest, context?: unknown) {
 
       return NextResponse.json({
         success: true,
-        data: { conversation: pageAwareConversation, messages },
+        data: {
+          conversation: pageAwareConversation,
+          messages,
+          nextCursor: messages.length === 100 ? Buffer.from(JSON.stringify({ createdAt: messages[0].created_at, id: messages[0].id })).toString('base64url') : null,
+        },
       });
     }
 

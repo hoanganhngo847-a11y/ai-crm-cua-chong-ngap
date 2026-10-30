@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { presentGroupMessage } from '../../features/inbox/utils/group-message';
 import {
   ZALO_GROUP_EXTERNAL_REF_PREFIX,
   buildZcaJsSourceMetadata,
@@ -100,4 +101,29 @@ test('rejects malformed payloads instead of dropping them silently in the route'
     parseZcaJsInboundPayload({ messageId: 'm', externalUserId: '1', content: '   ' }).ok,
     false
   );
+});
+
+test('keeps author identity even without a display name and does not invent a member count', () => {
+  const parsed = parseZcaJsInboundPayload({ messageId: 'g-4', externalUserId: 'group:99887766', senderId: '123456789012345678', content: 'hello' });
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.equal(parsed.data.senderId, '123456789012345678');
+  assert.equal(parsed.data.totalMember, undefined);
+  assert.match(parsed.data.content, /^Thành viên 123456789012345678:/);
+  assert.equal(buildZcaJsSourceMetadata(parsed.data).zalo_sender_id, '123456789012345678');
+});
+
+test('keeps unresolved roster IDs and an explicit zero count', () => {
+  const parsed = parseZcaJsInboundPayload({ messageId: 'g-5', externalUserId: 'group:99887766', content: 'hello', totalMember: 0, groupMembers: [null, { id: '12345', name: '' }], membersComplete: false });
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.equal(parsed.data.groupMembers?.length, 1);
+  assert.equal(buildZcaJsSourceMetadata(parsed.data).member_count, 0);
+  assert.equal(buildZcaJsSourceMetadata(parsed.data).members_complete, false);
+});
+
+test('history and realtime present the same author, including names with colons', () => {
+  assert.deepEqual(presentGroupMessage('Anh Nam: xin chào', true), { senderName: 'Anh Nam', content: 'xin chào' });
+  assert.deepEqual(presentGroupMessage('Nam: Kỹ thuật: xin chào', true, 'Nam: Kỹ thuật'), { senderName: 'Nam: Kỹ thuật', content: 'xin chào' });
+  assert.deepEqual(presentGroupMessage('Giá: 500k', false), { senderName: undefined, content: 'Giá: 500k' });
 });

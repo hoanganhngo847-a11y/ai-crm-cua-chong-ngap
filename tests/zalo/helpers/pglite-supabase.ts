@@ -124,6 +124,13 @@ class QueryBuilder implements PromiseLike<Result> {
     this.orderBy.push(`${ident(col)} ${opts.ascending === false ? 'DESC' : 'ASC'}`);
     return this;
   }
+  // The inbox uses a two-column keyset cursor. Keep all values parameterized.
+  or(expression: string) {
+    const match = /^created_at\.lt\.([^,]+),and\(created_at\.eq\.([^,]+),id\.lt\.([0-9a-f-]+)\)$/.exec(expression);
+    if (!match || match[1] !== match[2]) throw new Error('Unsupported test OR expression');
+    this.where.push(`(created_at < ${this.bind(match[1])} OR (created_at = ${this.bind(match[2])} AND id < ${this.bind(match[3])}))`);
+    return this;
+  }
   range(from: number, to: number) {
     this.offsetN = from;
     this.limitN = to - from + 1;

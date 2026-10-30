@@ -18,7 +18,7 @@
     "test:cron-auth": "tsx --conditions=react-server tests/staging/cron-authorization.test.ts",
     "test:auth": "tsx --conditions=react-server tests/auth/auth_runtime.test.ts",
     "test:security": "tsx --conditions=react-server tests/security/rpc_only_domain_acls.test.ts",
-    "test:zalo": "tsx --conditions=react-server tests/zalo/zalo_pglite.test.ts && tsx --conditions=react-server tests/zalo/zalo_zcajs_groups_db.test.ts && tsx --conditions=react-server --test tests/zalo/zalo_zcajs_groups.test.ts tests/zalo/zalo_ai_auto_reply_switch.test.ts && npm run test:zalo-zcajs-worker",
+    "test:zalo": "tsx --conditions=react-server tests/zalo/zalo_pglite.test.ts && tsx --conditions=react-server tests/zalo/zalo_zcajs_groups_db.test.ts && tsx --conditions=react-server tests/zalo/zalo_accounts.test.ts && tsx --conditions=react-server --test tests/zalo/zalo_zcajs_groups.test.ts tests/zalo/zalo_ai_auto_reply_switch.test.ts && npm run test:zalo-zcajs-worker",
     "test:zalo-zcajs-worker": "node --test zalo-zcajs-worker/test/*.test.mjs zalo-zcajs-worker/tests/*.test.mjs",
     "test:ai-analysis": "tsx --conditions=react-server tests/ai-analysis/ai-analysis.test.ts",
     "test:sales-style": "tsx --conditions=react-server tests/sales-style/sales-style.test.ts",

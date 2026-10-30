@@ -95,6 +95,63 @@ test('treats an HTTP 200 with success=false as a failed delivery', async () => {
   assert.equal(scheduled.length, 1);
 });
 
+test('requires an explicit application acknowledgement before removing a message', async () => {
+  const { scheduled, delivery } = harness([httpResponse(200, null)]);
+  assert.equal(await delivery.deliver(payload), false);
+  assert.equal(delivery.pendingCount(), 1);
+  assert.equal(scheduled.length, 1);
+});
+
+test('retains every unacknowledged message when the queue exceeds its warning threshold', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zcajs-overflow-'));
+  const queueFile = path.join(dir, 'queue.jsonl');
+  try {
+    const { delivery } = harness(Array.from({ length: 3 }, () => httpResponse(503, {})), { queueFile, queueMaxEntries: 1 });
+    for (let index = 0; index < 3; index++) await delivery.deliver({ ...payload, messageId: `m-${index}` });
+    await delivery.flush();
+    assert.equal(delivery.pendingCount(), 3);
+    assert.equal((await fs.readFile(queueFile, 'utf8')).trim().split('\n').length, 3);
+    delivery.stop();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('persists the original event before group enrichment and retries a failed lookup', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zcajs-enrich-'));
+  const queueFile = path.join(dir, 'queue.jsonl');
+  try {
+    let attempts = 0;
+    const { delivery, scheduled, calls } = harness([httpResponse(200, { success: true })], {
+      queueFile,
+      preparePayload: async (message) => {
+        assert.match(await fs.readFile(queueFile, 'utf8'), /m-1/);
+        if (attempts++ === 0) throw new Error('lookup failed');
+        return { ...message, groupName: 'Nhóm A' };
+      },
+    });
+    assert.equal(await delivery.deliver(payload), false);
+    assert.equal(calls.length, 0);
+    scheduled.shift().fn();
+    for (let i = 0; i < 50 && delivery.pendingCount(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(delivery.pendingCount(), 0);
+    assert.equal(JSON.parse(calls[0].init.body).groupName, 'Nhóm A');
+    await delivery.flush();
+    delivery.stop();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('keeps a message pending and reports an unwritable queue', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zcajs-disk-failure-'));
+  try {
+    const { delivery, calls, scheduled } = harness([], { queueFile: dir });
+    assert.equal(await delivery.deliver(payload), false);
+    assert.equal(calls.length, 0);
+    assert.equal(delivery.pendingCount(), 1);
+    assert.ok(delivery.persistenceError());
+    assert.equal(scheduled.length, 1);
+    delivery.stop();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('stop clears pending retries and does not attempt again', async () => {
   const { calls, scheduled, delivery } = harness([httpResponse(503, { success: false })]);
 
@@ -167,4 +224,22 @@ test('persists an undeliverable message and replays it after a worker restart', 
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('preserves malformed queue bytes in a quarantine file before replay rewrites the queue', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zcajs-corrupt-'));
+  const queueFile = path.join(dir, 'queue.jsonl');
+  const original = JSON.stringify(payload) + '\n{"partial":';
+  try {
+    await fs.writeFile(queueFile, original, { mode: 0o600 });
+    const { delivery } = harness([httpResponse(200, { success: true })], { queueFile });
+    await delivery.resume();
+    for (let i = 0; i < 50 && delivery.pendingCount(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    await delivery.flush();
+    const quarantine = (await fs.readdir(dir)).find((name) => name.includes('.quarantine-'));
+    assert.ok(quarantine);
+    assert.equal(await fs.readFile(path.join(dir, quarantine), 'utf8'), original);
+    assert.equal(delivery.pendingCount(), 0);
+    delivery.stop();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

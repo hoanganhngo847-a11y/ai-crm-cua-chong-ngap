@@ -6,8 +6,13 @@ import path from 'path';
 import { Zalo, MessageType } from 'zca-js';
 import { normalizeZaloMessage } from './message-normalizer.mjs';
 import { createInboundDelivery } from './inbound-delivery.mjs';
+import { createGroupDirectory } from './group-directory.mjs';
 
 const PORT = Number(process.env.PORT || 10000);
+const ACCOUNT_ID = (process.env.ZCAJS_ACCOUNT_ID || '').trim();
+const ACCOUNT_REVISION = Number(process.env.ZCAJS_ACCOUNT_REVISION || 0);
+let accountVerified = !ACCOUNT_ID;
+const pendingVerification = [];
 const COMPANY_ID = (process.env.ZCAJS_COMPANY_ID || '').trim();
 const CRM_BASE_URL = (process.env.ZCAJS_CRM_BASE_URL || '').trim().replace(/\/$/, '');
 const WORKER_SECRET = process.env.ZCAJS_WORKER_SECRET || '';
@@ -21,9 +26,6 @@ const MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_MEDIA_TOTAL_BYTES = 20 * 1024 * 1024;
 const CRM_ECHO_WINDOW_MS = 30_000;
 const RECENT_PROVIDER_ID_TTL_MS = 10 * 60_000;
-const GROUP_NAME_TTL_MS = 6 * 60 * 60_000;
-const GROUP_NAME_NEGATIVE_TTL_MS = 5 * 60_000;
-const GROUP_NAME_LOOKUP_TIMEOUT_MS = 8_000;
 
 let api = null;
 let loggedIn = false;
@@ -33,19 +35,7 @@ let listenerRestartTimer = null;
 let loginLoopRunning = false;
 let inboundDelivery = null;
 
-const groupDetailsCache = new Map();
-const groupDetailsLookups = new Map();
-
-// Backwards-compatibility alias for group name cache tests if any
-const groupNameCache = {
-  get: (k) => {
-    const item = groupDetailsCache.get(k);
-    return item ? { name: item.data?.groupName, expiresAt: item.expiresAt } : undefined;
-  },
-  set: (k, v) => groupDetailsCache.set(k, { data: { groupName: v.name }, expiresAt: v.expiresAt }),
-  delete: (k) => groupDetailsCache.delete(k),
-};
-const groupNameLookups = groupDetailsLookups;
+const groupDirectory = createGroupDirectory();
 
 // Used only to suppress the self-listener echo created by a CRM-originated send.
 // Manual messages sent directly in Zalo are not placed in these maps and are forwarded to CRM.
@@ -154,11 +144,24 @@ function shouldSuppressCrmSelfEcho(message) {
   return false;
 }
 
+async function reportAccountState(status, providerUid, errorCode) {
+  if (!ACCOUNT_ID) return;
+  const response = await fetch(`${CRM_BASE_URL}/api/inbox/zalo-zcajs/accounts/runtime`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${WORKER_SECRET}` },
+    body: JSON.stringify({ accountId: ACCOUNT_ID, revision: ACCOUNT_REVISION, status, providerUid, errorCode }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const result = await response.json();
+  if (!response.ok || result.success !== true) throw new Error(result.error || 'ACCOUNT_VERIFICATION_FAILED');
+}
+
 async function postInbound(payload) {
+  if (ACCOUNT_ID) payload = { ...payload, accountId: ACCOUNT_ID };
   if (!inboundDelivery) {
     inboundDelivery = createInboundDelivery({
       crmBaseUrl: CRM_BASE_URL,
       workerSecret: WORKER_SECRET,
+      preparePayload: enrichInbound,
     });
   }
   return inboundDelivery.deliver(payload);
@@ -180,94 +183,21 @@ function scheduleListenerRestart() {
   }, delayMs);
 }
 
-function groupNameCacheKey(groupId) {
-  return String(groupId || '').trim();
-}
-
-async function lookupGroupDetails(currentApi, groupId) {
-  if (!currentApi || typeof currentApi.getGroupInfo !== 'function') return undefined;
-  const key = groupNameCacheKey(groupId);
-  if (!key) return undefined;
-
-  const cached = groupDetailsCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
-
-  const existing = groupDetailsLookups.get(key);
-  if (existing) return existing;
-
-  const lookup = (async () => {
-    try {
-      const result = await Promise.race([
-        currentApi.getGroupInfo([key]),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('GROUP_NAME_TIMEOUT')), GROUP_NAME_LOOKUP_TIMEOUT_MS).unref?.();
-        }),
-      ]);
-      const raw = result?.gridInfoMap?.[key] || result?.gridInfoMap?.[Number(key)];
-      if (raw) {
-        const name = String(raw?.name || raw?.groupName || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-        const avatar = typeof raw?.avt === 'string' && raw.avt ? raw.avt : (typeof raw?.fullAvt === 'string' ? raw.fullAvt : undefined);
-        const adminIds = Array.isArray(raw?.adminIds) ? raw.adminIds.map(String) : [];
-        const creatorId = raw?.creatorId ? String(raw.creatorId) : undefined;
-        const rawMems = Array.isArray(raw?.currentMems) ? raw.currentMems : (Array.isArray(raw?.members) ? raw.members : []);
-        const totalMember = Number(raw?.totalMember ?? (rawMems.length || (Array.isArray(raw?.memberIds) ? raw.memberIds.length : 0)));
-
-        const members = rawMems.map((m) => {
-          const id = String(m?.id || m?.uid || m?.userId || '').replace(/_0$/, '');
-          const dname = String(m?.dname || m?.dName || m?.displayName || m?.name || '').trim();
-          const memAvatar = typeof m?.avatar === 'string' ? m.avatar : (typeof m?.avt === 'string' ? m.avt : undefined);
-          const isAdmin = adminIds.includes(id) || id === creatorId;
-          const isCreator = id === creatorId;
-          return { id, name: dname, avatar: memAvatar, isAdmin, isCreator };
-        }).filter((m) => Boolean(m.name || m.id));
-
-        const groupData = {
-          groupId: key,
-          groupName: name || undefined,
-          totalMember: totalMember || members.length || 0,
-          avatar,
-          members: members.length > 0 ? members : undefined,
-          adminIds,
-          creatorId,
-        };
-
-        groupDetailsCache.set(key, { data: groupData, expiresAt: Date.now() + GROUP_NAME_TTL_MS });
-        return groupData;
-      }
-      groupDetailsCache.set(key, { data: undefined, expiresAt: Date.now() + 15_000 });
-      return undefined;
-    } catch (error) {
-      groupDetailsCache.set(key, { data: undefined, expiresAt: Date.now() + 15_000 });
-      console.warn(
-        '[ZCAJS] group details lookup failed:',
-        error instanceof Error ? error.message : 'unknown'
-      );
-      return undefined;
-    } finally {
-      groupDetailsLookups.delete(key);
-    }
-  })();
-
-  groupDetailsLookups.set(key, lookup);
-  return lookup;
-}
-
-async function lookupGroupName(currentApi, groupId) {
-  const details = await lookupGroupDetails(currentApi, groupId);
-  return details?.groupName;
-}
-
-async function postNormalizedInbound(currentApi, normalized) {
-  if (normalized.isGroup && normalized.groupId) {
-    const details = await lookupGroupDetails(currentApi, normalized.groupId);
+async function enrichInbound(normalized) {
+  if (normalized.isGroup && normalized.groupId && api) {
+    const details = await groupDirectory.get(api, normalized.groupId);
     if (details) {
-      if (details.groupName && !normalized.groupName) normalized.groupName = details.groupName;
-      if (details.totalMember) normalized.totalMember = details.totalMember;
+      if (details.groupName) normalized.groupName = details.groupName;
+      if (details.totalMember !== undefined) normalized.totalMember = details.totalMember;
       if (details.avatar) normalized.groupAvatar = details.avatar;
-      if (details.members) normalized.groupMembers = details.members;
+      normalized.groupMembers = details.members;
+      normalized.membersComplete = details.membersComplete;
+      normalized.groupFetchedAt = details.fetchedAt;
+      const sender = details.members.find((member) => member.id === normalized.senderId);
+      if (sender?.name) normalized.senderDisplayName = sender.name;
     }
   }
-  await postInbound(normalized);
+  return normalized;
 }
 
 function attachListener(currentApi) {
@@ -275,11 +205,13 @@ function attachListener(currentApi) {
     listenerConnected = true;
     listenerRestartAttempt = 0;
     console.log('[ZCAJS] listener connected');
+    void reportAccountState('CONNECTED', String(currentApi.getOwnId())).catch(() => {});
   });
 
   currentApi.listener.on('closed', () => {
     listenerConnected = false;
     console.warn('[ZCAJS] listener closed; scheduling reconnect');
+    void reportAccountState('ERROR', undefined, 'LISTENER_DISCONNECTED').catch(() => {});
     scheduleListenerRestart();
   });
 
@@ -287,11 +219,17 @@ function attachListener(currentApi) {
     console.error('[ZCAJS] listener error:', error instanceof Error ? error.message : 'unknown');
   });
 
+  currentApi.listener.on('group_event', (event) => {
+    const id = event.threadId || event.data?.groupId;
+    if (id) groupDirectory.invalidate(id);
+  });
+
   currentApi.listener.on('message', (message) => {
     const normalized = normalizeZaloMessage(message);
     if (!normalized) return;
     if (shouldSuppressCrmSelfEcho(normalized)) return;
-    void postNormalizedInbound(currentApi, normalized).catch((error) => {
+    if (!accountVerified) { pendingVerification.push(normalized); return; }
+    void postInbound(normalized).catch((error) => {
       console.error(
         '[ZCAJS] inbound post failed:',
         error instanceof Error ? error.message : 'unknown'
@@ -322,10 +260,21 @@ async function loginLoop() {
       api = currentApi;
       loggedIn = true;
       attachListener(currentApi);
+      // Verify the real Zalo UID before opening another WebSocket. This stops
+      // duplicate credentials from kicking the existing account's listener.
+      await reportAccountState('CONNECTING', String(currentApi.getOwnId()));
+      accountVerified = true;
+      for (const buffered of pendingVerification.splice(0)) void postInbound(buffered);
       currentApi.listener.start();
       console.log('[ZCAJS] login succeeded; listener starting');
       break;
     } catch (error) {
+      if (ACCOUNT_ID) {
+        const allowed = ['DUPLICATE_ZALO_ACCOUNT','ZALO_ACCOUNT_IDENTITY_CHANGED','ZALO_LEGACY_NOT_READY'];
+        const code = allowed.includes(error?.message) ? error.message : 'LOGIN_FAILED';
+        await reportAccountState('ERROR', undefined, code).catch(() => {});
+        process.exit(1);
+      }
       loggedIn = false;
       api = null;
       const delayMs = Math.min(60_000, 2000 * 2 ** Math.min(attempt, 5));
@@ -588,6 +537,9 @@ async function handleGroupDetails(req, res, url) {
   if (!isAuthorized(req)) {
     return json(res, 401, { success: false, error: 'UNAUTHORIZED' });
   }
+  if (url.searchParams.get('companyId') !== COMPANY_ID) {
+    return json(res, 403, { success: false, error: 'COMPANY_MISMATCH' });
+  }
   const groupId = String(url.searchParams.get('groupId') || '').trim();
   if (!/^[0-9]{5,40}$/.test(groupId)) {
     return json(res, 400, { success: false, error: 'INVALID_GROUP_ID' });
@@ -596,8 +548,8 @@ async function handleGroupDetails(req, res, url) {
     return json(res, 503, { success: false, error: 'ZCAJS_NOT_LOGGED_IN' });
   }
   try {
-    const details = await lookupGroupDetails(api, groupId);
-    return json(res, 200, { success: true, group: details || null });
+    const details = await groupDirectory.get(api, groupId, { force: url.searchParams.get('refresh') === '1' });
+    return json(res, details ? 200 : 502, { success: Boolean(details), group: details || null });
   } catch (error) {
     return json(res, 502, { success: false, error: 'GROUP_LOOKUP_FAILED' });
   }
@@ -607,17 +559,21 @@ function requestHandler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    return json(res, 200, {
-      ok: true,
+    const queueDurable = !inboundDelivery?.persistenceError();
+    return json(res, queueDurable ? 200 : 503, {
+      ok: queueDurable,
+      queueDurable,
       loggedIn,
+      providerUid: api && loggedIn ? String(api.getOwnId()) : null,
       listenerConnected,
       pendingInbound: inboundDelivery?.pendingCount?.() ?? 0,
     });
   }
 
   if (req.method === 'GET' && url.pathname === '/ready') {
-    return json(res, api && loggedIn ? 200 : 503, {
-      ready: Boolean(api && loggedIn),
+    const ready = Boolean(api && loggedIn && listenerConnected && !inboundDelivery?.persistenceError());
+    return json(res, ready ? 200 : 503, {
+      ready,
       listenerConnected,
     });
   }
@@ -645,8 +601,9 @@ requireConfig();
 inboundDelivery = createInboundDelivery({
   crmBaseUrl: CRM_BASE_URL,
   workerSecret: WORKER_SECRET,
+  preparePayload: enrichInbound,
 });
-void inboundDelivery.resume().catch((error) => {
+const recoveryReady = inboundDelivery.resume().catch((error) => {
   console.error(
     '[ZCAJS] inbound queue recovery failed:',
     error instanceof Error ? error.message : 'unknown'
@@ -654,16 +611,16 @@ void inboundDelivery.resume().catch((error) => {
 });
 
 const server = http.createServer(requestHandler);
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, process.env.ZCAJS_BIND_HOST || '0.0.0.0', () => {
   console.log(`[ZCAJS] worker listening on port ${PORT}`);
-  void loginLoop();
+  void recoveryReady.then(() => loginLoop());
 });
 
 function shutdown(signal) {
   console.log(`[ZCAJS] received ${signal}; shutting down`);
   if (listenerRestartTimer) clearTimeout(listenerRestartTimer);
   inboundDelivery?.stop();
-  server.close(() => process.exit(0));
+  server.close(() => { void inboundDelivery?.flush().finally(() => process.exit(0)); });
   setTimeout(() => process.exit(0), 5000).unref();
 }
 

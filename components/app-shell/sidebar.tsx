@@ -129,6 +129,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: <Share2 className="w-4 h-4 shrink-0" />,
           roles: ['BOSS_ADMIN'],
         },
+        {
+          label: 'Thêm tài khoản Zalo',
+          href: '/admin/zalo',
+          icon: <Share2 className="w-4 h-4 shrink-0" />,
+          roles: ['BOSS_ADMIN'],
+        },
       ],
     },
   ];

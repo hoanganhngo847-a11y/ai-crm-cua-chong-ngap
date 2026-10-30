@@ -11,15 +11,19 @@ COPY patches/zcajs-old-direct-messages.patch /tmp/zcajs-old-direct-messages.patc
 COPY patches/patch-zcajs-recent-rest.mjs /tmp/patch-zcajs-recent-rest.mjs
 COPY patches/patch-zcajs-user-info.mjs /tmp/patch-zcajs-user-info.mjs
 COPY patches/patch-zcajs-all-friends.mjs /tmp/patch-zcajs-all-friends.mjs
+COPY patches/patch-zcajs-group-members.mjs /tmp/patch-zcajs-group-members.mjs
+COPY patches/patch-zcajs-group-recovery.mjs /tmp/patch-zcajs-group-recovery.mjs
 
 WORKDIR /src/zcajs
 RUN git clone "$ZCAJS_REPO" . \
   && git checkout "$ZCAJS_COMMIT" \
   && git apply --check /tmp/zcajs-old-direct-messages.patch \
   && git apply /tmp/zcajs-old-direct-messages.patch \
+  && node /tmp/patch-zcajs-group-recovery.mjs \
   && node /tmp/patch-zcajs-recent-rest.mjs \
   && node /tmp/patch-zcajs-user-info.mjs \
   && node /tmp/patch-zcajs-all-friends.mjs \
+  && node /tmp/patch-zcajs-group-members.mjs \
   && npm install --no-audit --no-fund \
   && npm run build \
   && mkdir -p /out \
@@ -46,4 +50,4 @@ RUN node /tmp/patch-worker-contact-endpoint.mjs \
   && rm -f /tmp/patch-worker-contact-endpoint.mjs /tmp/patch-worker-phone-resolver.mjs
 
 EXPOSE 10000
-CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/index.mjs"]
+CMD ["sh", "-c", "node src/dispatch-loop.mjs & exec node src/supervisor.mjs"]
