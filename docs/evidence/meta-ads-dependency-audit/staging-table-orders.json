@@ -1,0 +1,193 @@
+{
+  "table_name": "orders",
+  "constraints": [
+    {
+      "name": "fk_contracts_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "fk_finance_summaries_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "fk_installations_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "fk_orders_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "orders"
+    },
+    {
+      "name": "fk_orders_pricing",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, price_calculation_id) REFERENCES price_calculations(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "price_calculations",
+      "referencing_table": "orders"
+    },
+    {
+      "name": "fk_production_orders_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "production_orders"
+    },
+    {
+      "name": "fk_pt_matched_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, matched_order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "fk_wt_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "operations_outbox_order_fk",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id)",
+      "referenced_table": "orders",
+      "referencing_table": "operations_outbox"
+    },
+    {
+      "name": "orders_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "orders"
+    },
+    {
+      "name": "orders_deposit_status_check",
+      "type": "c",
+      "definition": "CHECK (deposit_status = ANY (ARRAY['PENDING'::text, 'DEPOSIT_PENDING'::text, 'CONFIRMED'::text, 'DEPOSIT_CONFIRMED'::text, 'REFUNDED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "orders_final_amount_check",
+      "type": "c",
+      "definition": "CHECK (final_amount >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "orders_order_status_check",
+      "type": "c",
+      "definition": "CHECK (order_status = ANY (ARRAY['DRAFT'::text, 'DEPOSIT_CONFIRMED'::text, 'CONTRACT_SIGNED'::text, 'IN_PRODUCTION'::text, 'READY_FOR_INSTALL'::text, 'INSTALLING'::text, 'HANDOVER_COMPLETED'::text, 'HANDED_OVER'::text, 'COMPLETED'::text, 'CANCELLED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "orders_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "uq_orders_company_customer_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, customer_id, id)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "uq_orders_company_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, id)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "uq_orders_company_order_code",
+      "type": "u",
+      "definition": "UNIQUE (company_id, order_code)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    },
+    {
+      "name": "uq_orders_company_payment_ref",
+      "type": "u",
+      "definition": "UNIQUE (company_id, payment_reference)",
+      "referenced_table": null,
+      "referencing_table": "orders"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_orders_immutability",
+      "function": "enforce_orders_immutability()",
+      "definition": "CREATE TRIGGER trg_orders_immutability BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION enforce_orders_immutability()"
+    },
+    {
+      "name": "trg_tenant_mutation_orders",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_orders BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_orders",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_orders BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_orders_company_created_at",
+      "definition": "CREATE INDEX idx_orders_company_created_at ON public.orders USING btree (company_id, created_at)"
+    },
+    {
+      "name": "idx_orders_customer",
+      "definition": "CREATE INDEX idx_orders_customer ON public.orders USING btree (company_id, customer_id)"
+    },
+    {
+      "name": "idx_orders_status",
+      "definition": "CREATE INDEX idx_orders_status ON public.orders USING btree (company_id, order_status)"
+    },
+    {
+      "name": "orders_pkey",
+      "definition": "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"
+    },
+    {
+      "name": "uq_orders_company_customer_id",
+      "definition": "CREATE UNIQUE INDEX uq_orders_company_customer_id ON public.orders USING btree (company_id, customer_id, id)"
+    },
+    {
+      "name": "uq_orders_company_id",
+      "definition": "CREATE UNIQUE INDEX uq_orders_company_id ON public.orders USING btree (company_id, id)"
+    },
+    {
+      "name": "uq_orders_company_order_code",
+      "definition": "CREATE UNIQUE INDEX uq_orders_company_order_code ON public.orders USING btree (company_id, order_code)"
+    },
+    {
+      "name": "uq_orders_company_payment_ref",
+      "definition": "CREATE UNIQUE INDEX uq_orders_company_payment_ref ON public.orders USING btree (company_id, payment_reference)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "orders_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    }
+  ]
+}

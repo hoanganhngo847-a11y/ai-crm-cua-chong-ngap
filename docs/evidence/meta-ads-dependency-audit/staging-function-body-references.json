@@ -1,0 +1,244 @@
+[
+  {
+    "signature": "begin_survey_photo_operation(uuid,uuid)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "survey_photo_operations"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "installations",
+      "operations_outbox",
+      "orders"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit",
+      "operations_evidence_ref"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "complete_survey_atomic(uuid,uuid,jsonb)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "survey_photo_operations",
+      "surveys"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamp with time zone)",
+    "prosecdef": true,
+    "table_tokens": [
+      "contracts",
+      "orders",
+      "production_orders"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "end_survey_photo_operation(uuid,uuid)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "survey_photo_operations"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_appointments_immutability()",
+    "prosecdef": false,
+    "table_tokens": [
+      "appointments",
+      "installations",
+      "surveys"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_contracts_immutability()",
+    "prosecdef": false,
+    "table_tokens": [
+      "contracts"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_installations_integrity()",
+    "prosecdef": false,
+    "table_tokens": [
+      "appointments",
+      "installations"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_orders_immutability()",
+    "prosecdef": false,
+    "table_tokens": [
+      "orders"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_payment_facts_immutability()",
+    "prosecdef": false,
+    "table_tokens": [
+      "payment_transactions"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_price_calculations_immutability()",
+    "prosecdef": false,
+    "table_tokens": [
+      "price_calculations"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "enforce_surveys_integrity()",
+    "prosecdef": false,
+    "table_tokens": [
+      "appointments"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "get_company_analytics_daily_series(uuid,timestamp with time zone,timestamp with time zone)",
+    "prosecdef": true,
+    "table_tokens": [
+      "orders"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "get_company_analytics_overview(uuid,timestamp with time zone,timestamp with time zone)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "finance_summaries",
+      "orders",
+      "surveys"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "guard_survey_appointment_write()",
+    "prosecdef": true,
+    "table_tokens": [
+      "survey_photo_operations",
+      "surveys"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "is_assigned_technician(uuid)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "installations"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit",
+      "operations_evidence_ref"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "operations_evidence_ref(uuid,uuid,text,text)",
+    "prosecdef": false,
+    "table_tokens": [
+      "installations"
+    ],
+    "legacy_function_calls": [],
+    "tv9_reference": false
+  },
+  {
+    "signature": "record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+    "prosecdef": true,
+    "table_tokens": [
+      "orders",
+      "production_orders"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "schedule_installation_atomic(uuid,uuid,uuid,uuid,jsonb,uuid)",
+    "prosecdef": true,
+    "table_tokens": [
+      "appointments",
+      "installations",
+      "orders",
+      "production_orders"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "update_production_progress_atomic(uuid,uuid,uuid,text)",
+    "prosecdef": true,
+    "table_tokens": [
+      "production_orders"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit"
+    ],
+    "tv9_reference": false
+  },
+  {
+    "signature": "update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+    "prosecdef": true,
+    "table_tokens": [
+      "warranty_tickets"
+    ],
+    "legacy_function_calls": [
+      "operations_actor",
+      "operations_audit"
+    ],
+    "tv9_reference": false
+  }
+]

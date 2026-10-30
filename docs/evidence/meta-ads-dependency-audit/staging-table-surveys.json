@@ -1,0 +1,125 @@
+{
+  "table_name": "surveys",
+  "constraints": [
+    {
+      "name": "fk_pc_survey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, survey_id) REFERENCES surveys(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "surveys",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "fk_surveys_appointment",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "appointments",
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "fk_surveys_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "surveys_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "surveys_completed_by_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (completed_by) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+      "referenced_table": "user_profiles",
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "surveys_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "unique_survey_appointment",
+      "type": "u",
+      "definition": "UNIQUE (appointment_id)",
+      "referenced_table": null,
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "uq_surveys_company_customer_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, customer_id, id)",
+      "referenced_table": null,
+      "referencing_table": "surveys"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_surveys_integrity",
+      "function": "enforce_surveys_integrity()",
+      "definition": "CREATE TRIGGER trg_surveys_integrity BEFORE INSERT OR UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION enforce_surveys_integrity()"
+    },
+    {
+      "name": "trg_tenant_mutation_surveys",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_surveys BEFORE UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_surveys",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_surveys BEFORE UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_surveys_company_completed_at",
+      "definition": "CREATE INDEX idx_surveys_company_completed_at ON public.surveys USING btree (company_id, completed_at)"
+    },
+    {
+      "name": "surveys_pkey",
+      "definition": "CREATE UNIQUE INDEX surveys_pkey ON public.surveys USING btree (id)"
+    },
+    {
+      "name": "unique_survey_appointment",
+      "definition": "CREATE UNIQUE INDEX unique_survey_appointment ON public.surveys USING btree (appointment_id)"
+    },
+    {
+      "name": "uq_surveys_company_customer_id",
+      "definition": "CREATE UNIQUE INDEX uq_surveys_company_customer_id ON public.surveys USING btree (company_id, customer_id, id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "surveys_select_assigned_technician",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND is_assigned_technician(appointment_id))",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "surveys_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "surveys_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    }
+  ]
+}

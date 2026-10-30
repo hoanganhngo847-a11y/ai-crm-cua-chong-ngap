@@ -1,0 +1,3791 @@
+[
+  {
+    "referenced": "column actor_id of table survey_photo_operations",
+    "dependent": "constraint survey_photo_operations_actor_id_fkey on table survey_photo_operations",
+    "class_name": "pg_constraint",
+    "objid": 19153,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "survey_photo_operations"
+  },
+  {
+    "referenced": "column amount of table payment_transactions",
+    "dependent": "constraint payment_transactions_amount_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18192,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column amount of table payment_transactions",
+    "dependent": "constraint payment_transactions_amount_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18192,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column amount of table price_calculations",
+    "dependent": "constraint chk_pc_need_info_amount on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18122,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column amount of table price_calculations",
+    "dependent": "constraint chk_pc_need_info_amount on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18122,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column amount of table price_calculations",
+    "dependent": "constraint price_calculations_amount_check on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18120,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column amount of table price_calculations",
+    "dependent": "constraint price_calculations_amount_check on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18120,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column appointment_id of table installations",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column appointment_id of table installations",
+    "dependent": "policy installations_select_assigned_technician on table installations",
+    "class_name": "pg_policy",
+    "objid": 18701,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column appointment_id of table survey_photo_operations",
+    "dependent": "constraint survey_photo_operations_appointment_id_fkey on table survey_photo_operations",
+    "class_name": "pg_constraint",
+    "objid": 19148,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "survey_photo_operations"
+  },
+  {
+    "referenced": "column appointment_id of table survey_photo_operations",
+    "dependent": "constraint survey_photo_operations_pkey on table survey_photo_operations",
+    "class_name": "pg_constraint",
+    "objid": 19147,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "survey_photo_operations"
+  },
+  {
+    "referenced": "column appointment_id of table surveys",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column appointment_id of table surveys",
+    "dependent": "constraint unique_survey_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18750,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column appointment_id of table surveys",
+    "dependent": "policy surveys_select_assigned_technician on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18682,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column assigned_to of table warranty_tickets",
+    "dependent": "constraint warranty_tickets_assigned_to_fkey on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18466,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column assigned_to of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_assigned",
+    "class_name": "pg_class",
+    "objid": 18547,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column assigned_to of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_assigned",
+    "class_name": "pg_class",
+    "objid": 18547,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column assigned_to of table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_assigned_technician on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18724,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column assignee_id of table appointments",
+    "dependent": "constraint appointments_assignee_id_fkey on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18050,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column assignee_id of table appointments",
+    "dependent": "index idx_appointments_technician",
+    "class_name": "pg_class",
+    "objid": 18528,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column assignee_id of table appointments",
+    "dependent": "policy appointments_select_assigned_technician on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18675,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column collected_amount of table finance_summaries",
+    "dependent": "constraint finance_summaries_collected_amount_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18308,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column collected_amount of table finance_summaries",
+    "dependent": "constraint finance_summaries_collected_amount_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18308,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column collected_amount of table finance_summaries",
+    "dependent": "default value for column collected_amount of table finance_summaries",
+    "class_name": "pg_attrdef",
+    "objid": 18303,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "constraint appointments_company_id_fkey on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18045,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "constraint fk_appointments_customer on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18055,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "constraint uq_appointments_company_customer_id on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18044,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "index idx_appointments_company_survey_created",
+    "class_name": "pg_class",
+    "objid": 19129,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "index idx_appointments_technician",
+    "class_name": "pg_class",
+    "objid": 18528,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_insert_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18676,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_insert_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18677,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_select_assigned_technician on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18675,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_select_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18673,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_select_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18674,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_update_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18678,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_update_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18678,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_update_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18679,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table appointments",
+    "dependent": "policy appointments_update_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18679,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "constraint contracts_company_id_fkey on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18228,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "constraint fk_contracts_order on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18233,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "index idx_contracts_status",
+    "class_name": "pg_class",
+    "objid": 18536,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "policy contracts_select_boss_admin on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18694,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "policy contracts_select_sale on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18695,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "policy contracts_update_boss_admin on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18696,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table contracts",
+    "dependent": "policy contracts_update_boss_admin on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18696,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table finance_summaries",
+    "dependent": "constraint finance_summaries_company_id_fkey on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18313,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column company_id of table finance_summaries",
+    "dependent": "constraint fk_finance_summaries_order on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18318,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column company_id of table finance_summaries",
+    "dependent": "index idx_finance_summaries_company",
+    "class_name": "pg_class",
+    "objid": 18539,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table finance_summaries",
+    "dependent": "policy finance_summaries_select_boss_admin on table finance_summaries",
+    "class_name": "pg_policy",
+    "objid": 18703,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint fk_installations_customer on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18284,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint installations_company_id_fkey on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18279,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "constraint uq_installations_company_customer_order_id on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18278,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "index idx_installations_status",
+    "class_name": "pg_class",
+    "objid": 18538,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "policy installations_select_assigned_technician on table installations",
+    "class_name": "pg_policy",
+    "objid": 18701,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "policy installations_select_boss_admin on table installations",
+    "class_name": "pg_policy",
+    "objid": 18699,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "policy installations_select_sale on table installations",
+    "class_name": "pg_policy",
+    "objid": 18700,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "policy installations_update_boss_admin on table installations",
+    "class_name": "pg_policy",
+    "objid": 18702,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table installations",
+    "dependent": "policy installations_update_boss_admin on table installations",
+    "class_name": "pg_policy",
+    "objid": 18702,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table operations_outbox",
+    "dependent": "constraint operations_outbox_company_id_fkey on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19303,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column company_id of table operations_outbox",
+    "dependent": "constraint operations_outbox_company_id_order_id_event_type_key on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19302,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column company_id of table operations_outbox",
+    "dependent": "constraint operations_outbox_order_fk on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19308,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_contracts_order on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18233,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_finance_summaries_order on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18318,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_orders_customer on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18176,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_production_orders_order on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18257,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_pt_matched_order on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18206,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint operations_outbox_order_fk on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19308,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint orders_company_id_fkey on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18171,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint uq_orders_company_customer_id on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18170,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint uq_orders_company_id on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18168,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint uq_orders_company_order_code on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18164,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "constraint uq_orders_company_payment_ref on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18166,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "index idx_orders_company_created_at",
+    "class_name": "pg_class",
+    "objid": 19128,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "index idx_orders_customer",
+    "class_name": "pg_class",
+    "objid": 18531,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "index idx_orders_status",
+    "class_name": "pg_class",
+    "objid": 18532,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table orders",
+    "dependent": "policy orders_select_boss_admin on table orders",
+    "class_name": "pg_policy",
+    "objid": 18692,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "constraint fk_pt_matched_order on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18206,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "constraint payment_transactions_company_id_fkey on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18201,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "constraint uq_pt_company_provider_ref on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18200,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "index idx_payment_transactions_matched",
+    "class_name": "pg_class",
+    "objid": 18533,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "index idx_payment_transactions_status",
+    "class_name": "pg_class",
+    "objid": 18534,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table payment_transactions",
+    "dependent": "policy payment_transactions_select_boss_admin on table payment_transactions",
+    "class_name": "pg_policy",
+    "objid": 18693,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint fk_pc_customer on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18134,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint price_calculations_company_id_fkey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18129,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "constraint uq_price_calculations_company_customer_id on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18128,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "index idx_price_calculations_customer",
+    "class_name": "pg_class",
+    "objid": 18530,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "policy price_calculations_select_boss_admin on table price_calculations",
+    "class_name": "pg_policy",
+    "objid": 18690,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table price_calculations",
+    "dependent": "policy price_calculations_select_sale on table price_calculations",
+    "class_name": "pg_policy",
+    "objid": 18691,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "constraint pricing_policies_company_id_fkey on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18109,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "constraint uq_pricing_policies_company_id_version on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18108,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "constraint uq_pricing_policies_version on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18106,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "index idx_pricing_policies_active",
+    "class_name": "pg_class",
+    "objid": 18529,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "policy pricing_policies_insert_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18688,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "policy pricing_policies_select_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18687,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "policy pricing_policies_update_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18689,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table pricing_policies",
+    "dependent": "policy pricing_policies_update_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18689,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column company_id of table production_orders",
+    "dependent": "constraint fk_production_orders_order on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18257,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column company_id of table production_orders",
+    "dependent": "constraint production_orders_company_id_fkey on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18252,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column company_id of table production_orders",
+    "dependent": "index idx_production_orders_status",
+    "class_name": "pg_class",
+    "objid": 18537,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table production_orders",
+    "dependent": "policy production_orders_select_boss_admin on table production_orders",
+    "class_name": "pg_policy",
+    "objid": 18697,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column company_id of table production_orders",
+    "dependent": "policy production_orders_select_sale on table production_orders",
+    "class_name": "pg_policy",
+    "objid": 18698,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "constraint fk_surveys_customer on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18084,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "constraint surveys_company_id_fkey on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18074,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "constraint uq_surveys_company_customer_id on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18073,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "index idx_surveys_company_completed_at",
+    "class_name": "pg_class",
+    "objid": 19127,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "policy surveys_select_assigned_technician on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18682,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "policy surveys_select_boss_admin on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18680,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table surveys",
+    "dependent": "policy surveys_select_sale on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18681,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_customer on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18471,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "constraint warranty_tickets_company_id_fkey on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18461,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_assigned",
+    "class_name": "pg_class",
+    "objid": 18547,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_status",
+    "class_name": "pg_class",
+    "objid": 18546,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_insert_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18725,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_insert_sale on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18726,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_assigned_technician on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18724,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18722,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_sale on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18723,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_update_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18727,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column company_id of table warranty_tickets",
+    "dependent": "policy warranty_tickets_update_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18727,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column completed_at of table surveys",
+    "dependent": "default value for column completed_at of table surveys",
+    "class_name": "pg_attrdef",
+    "objid": 18065,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column completed_at of table surveys",
+    "dependent": "index idx_surveys_company_completed_at",
+    "class_name": "pg_class",
+    "objid": 19127,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column completed_by of table surveys",
+    "dependent": "constraint surveys_completed_by_fkey on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18079,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column completed_revenue of table finance_summaries",
+    "dependent": "constraint finance_summaries_completed_revenue_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18310,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column completed_revenue of table finance_summaries",
+    "dependent": "constraint finance_summaries_completed_revenue_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18310,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column completed_revenue of table finance_summaries",
+    "dependent": "default value for column completed_revenue of table finance_summaries",
+    "class_name": "pg_attrdef",
+    "objid": 18305,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column contract_value of table contracts",
+    "dependent": "constraint contracts_contract_value_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18221,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column contract_value of table contracts",
+    "dependent": "constraint contracts_contract_value_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18221,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column contract_value of table finance_summaries",
+    "dependent": "constraint finance_summaries_contract_value_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18307,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column contract_value of table finance_summaries",
+    "dependent": "constraint finance_summaries_contract_value_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18307,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column contract_value of table finance_summaries",
+    "dependent": "default value for column contract_value of table finance_summaries",
+    "class_name": "pg_attrdef",
+    "objid": 18302,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table appointments",
+    "dependent": "default value for column created_at of table appointments",
+    "class_name": "pg_attrdef",
+    "objid": 18035,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table appointments",
+    "dependent": "index idx_appointments_company_survey_created",
+    "class_name": "pg_class",
+    "objid": 19129,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table contracts",
+    "dependent": "default value for column created_at of table contracts",
+    "class_name": "pg_attrdef",
+    "objid": 18217,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table installations",
+    "dependent": "default value for column created_at of table installations",
+    "class_name": "pg_attrdef",
+    "objid": 18268,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table operations_outbox",
+    "dependent": "default value for column created_at of table operations_outbox",
+    "class_name": "pg_attrdef",
+    "objid": 19295,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table orders",
+    "dependent": "default value for column created_at of table orders",
+    "class_name": "pg_attrdef",
+    "objid": 18154,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table orders",
+    "dependent": "index idx_orders_company_created_at",
+    "class_name": "pg_class",
+    "objid": 19128,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table payment_transactions",
+    "dependent": "default value for column created_at of table payment_transactions",
+    "class_name": "pg_attrdef",
+    "objid": 18190,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table price_calculations",
+    "dependent": "default value for column created_at of table price_calculations",
+    "class_name": "pg_attrdef",
+    "objid": 18119,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table price_calculations",
+    "dependent": "index idx_price_calculations_customer",
+    "class_name": "pg_class",
+    "objid": 18530,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table pricing_policies",
+    "dependent": "default value for column created_at of table pricing_policies",
+    "class_name": "pg_attrdef",
+    "objid": 18098,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table production_orders",
+    "dependent": "default value for column created_at of table production_orders",
+    "class_name": "pg_attrdef",
+    "objid": 18242,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table surveys",
+    "dependent": "default value for column created_at of table surveys",
+    "class_name": "pg_attrdef",
+    "objid": 18066,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column created_at of table warranty_tickets",
+    "dependent": "default value for column created_at of table warranty_tickets",
+    "class_name": "pg_attrdef",
+    "objid": 18454,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column crew of table installations",
+    "dependent": "default value for column crew of table installations",
+    "class_name": "pg_attrdef",
+    "objid": 18266,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column customer_id of table appointments",
+    "dependent": "constraint fk_appointments_customer on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18055,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column customer_id of table appointments",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table appointments",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column customer_id of table appointments",
+    "dependent": "constraint uq_appointments_company_customer_id on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18044,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column customer_id of table installations",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table installations",
+    "dependent": "constraint fk_installations_customer on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18284,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table installations",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table installations",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column customer_id of table installations",
+    "dependent": "constraint uq_installations_company_customer_order_id on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18278,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "constraint fk_orders_customer on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18176,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "constraint uq_orders_company_customer_id on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18170,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column customer_id of table orders",
+    "dependent": "index idx_orders_customer",
+    "class_name": "pg_class",
+    "objid": 18531,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column customer_id of table price_calculations",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column customer_id of table price_calculations",
+    "dependent": "constraint fk_pc_customer on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18134,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column customer_id of table price_calculations",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column customer_id of table price_calculations",
+    "dependent": "constraint uq_price_calculations_company_customer_id on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18128,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column customer_id of table price_calculations",
+    "dependent": "index idx_price_calculations_customer",
+    "class_name": "pg_class",
+    "objid": 18530,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column customer_id of table surveys",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column customer_id of table surveys",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column customer_id of table surveys",
+    "dependent": "constraint fk_surveys_customer on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18084,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column customer_id of table surveys",
+    "dependent": "constraint uq_surveys_company_customer_id on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18073,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column customer_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_customer on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18471,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column customer_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column customer_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column deadline of table production_orders",
+    "dependent": "index idx_production_orders_status",
+    "class_name": "pg_class",
+    "objid": 18537,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column deposit_status of table orders",
+    "dependent": "constraint orders_deposit_status_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18156,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column deposit_status of table orders",
+    "dependent": "constraint orders_deposit_status_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18156,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column event_type of table operations_outbox",
+    "dependent": "constraint operations_outbox_company_id_order_id_event_type_key on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19302,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column event_type of table operations_outbox",
+    "dependent": "constraint operations_outbox_event_type_check on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19296,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column event_type of table operations_outbox",
+    "dependent": "constraint operations_outbox_event_type_check on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19296,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column expires_at of table survey_photo_operations",
+    "dependent": "default value for column expires_at of table survey_photo_operations",
+    "class_name": "pg_attrdef",
+    "objid": 19145,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column final_amount of table orders",
+    "dependent": "constraint orders_final_amount_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18158,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column final_amount of table orders",
+    "dependent": "constraint orders_final_amount_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18158,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "constraint appointments_pkey on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18042,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "constraint fk_installations_appointment on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18294,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "constraint fk_surveys_appointment on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18089,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "constraint survey_photo_operations_appointment_id_fkey on table survey_photo_operations",
+    "class_name": "pg_constraint",
+    "objid": 19148,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "survey_photo_operations"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "constraint uq_appointments_company_customer_id on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18044,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column id of table appointments",
+    "dependent": "default value for column id of table appointments",
+    "class_name": "pg_attrdef",
+    "objid": 18034,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table contracts",
+    "dependent": "constraint contracts_pkey on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18225,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column id of table contracts",
+    "dependent": "default value for column id of table contracts",
+    "class_name": "pg_attrdef",
+    "objid": 18214,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table installations",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column id of table installations",
+    "dependent": "constraint installations_pkey on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18274,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column id of table installations",
+    "dependent": "constraint uq_installations_company_customer_order_id on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18278,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column id of table installations",
+    "dependent": "default value for column id of table installations",
+    "class_name": "pg_attrdef",
+    "objid": 18265,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table operations_outbox",
+    "dependent": "constraint operations_outbox_pkey on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19300,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column id of table operations_outbox",
+    "dependent": "default value for column id of table operations_outbox",
+    "class_name": "pg_attrdef",
+    "objid": 19294,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_contracts_order on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18233,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_finance_summaries_order on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18318,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_production_orders_order on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18257,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_pt_matched_order on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18206,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint operations_outbox_order_fk on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19308,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint orders_pkey on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18162,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint uq_orders_company_customer_id on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18170,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "constraint uq_orders_company_id on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18168,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column id of table orders",
+    "dependent": "default value for column id of table orders",
+    "class_name": "pg_attrdef",
+    "objid": 18152,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table payment_transactions",
+    "dependent": "constraint payment_transactions_pkey on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18198,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column id of table payment_transactions",
+    "dependent": "default value for column id of table payment_transactions",
+    "class_name": "pg_attrdef",
+    "objid": 18189,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table price_calculations",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column id of table price_calculations",
+    "dependent": "constraint price_calculations_pkey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18126,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column id of table price_calculations",
+    "dependent": "constraint uq_price_calculations_company_customer_id on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18128,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column id of table price_calculations",
+    "dependent": "default value for column id of table price_calculations",
+    "class_name": "pg_attrdef",
+    "objid": 18117,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table pricing_policies",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column id of table pricing_policies",
+    "dependent": "constraint pricing_policies_pkey on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18104,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column id of table pricing_policies",
+    "dependent": "constraint uq_pricing_policies_company_id_version on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18108,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column id of table pricing_policies",
+    "dependent": "default value for column id of table pricing_policies",
+    "class_name": "pg_attrdef",
+    "objid": 18097,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table production_orders",
+    "dependent": "constraint production_orders_pkey on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18249,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column id of table production_orders",
+    "dependent": "default value for column id of table production_orders",
+    "class_name": "pg_attrdef",
+    "objid": 18241,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table surveys",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column id of table surveys",
+    "dependent": "constraint surveys_pkey on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18071,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column id of table surveys",
+    "dependent": "constraint uq_surveys_company_customer_id on table surveys",
+    "class_name": "pg_constraint",
+    "objid": 18073,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "column id of table surveys",
+    "dependent": "default value for column id of table surveys",
+    "class_name": "pg_attrdef",
+    "objid": 18063,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column id of table warranty_tickets",
+    "dependent": "constraint warranty_tickets_pkey on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18460,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column id of table warranty_tickets",
+    "dependent": "default value for column id of table warranty_tickets",
+    "class_name": "pg_attrdef",
+    "objid": 18452,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column installation_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column is_current of table contracts",
+    "dependent": "default value for column is_current of table contracts",
+    "class_name": "pg_attrdef",
+    "objid": 18216,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column is_current of table contracts",
+    "dependent": "index uq_contracts_order_current",
+    "class_name": "pg_class",
+    "objid": 18535,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column match_confidence of table payment_transactions",
+    "dependent": "constraint payment_transactions_match_confidence_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18193,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column match_confidence of table payment_transactions",
+    "dependent": "constraint payment_transactions_match_confidence_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18193,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column matched_order_id of table payment_transactions",
+    "dependent": "constraint fk_pt_matched_order on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18206,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column matched_order_id of table payment_transactions",
+    "dependent": "index idx_payment_transactions_matched",
+    "class_name": "pg_class",
+    "objid": 18533,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column matched_order_id of table payment_transactions",
+    "dependent": "index idx_payment_transactions_matched",
+    "class_name": "pg_class",
+    "objid": 18533,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column missing_fields of table price_calculations",
+    "dependent": "default value for column missing_fields of table price_calculations",
+    "class_name": "pg_attrdef",
+    "objid": 18118,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column occurred_at of table payment_transactions",
+    "dependent": "index idx_payment_transactions_status",
+    "class_name": "pg_class",
+    "objid": 18534,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column opened_at of table warranty_tickets",
+    "dependent": "default value for column opened_at of table warranty_tickets",
+    "class_name": "pg_attrdef",
+    "objid": 18453,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column order_code of table orders",
+    "dependent": "constraint uq_orders_company_order_code on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18164,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column order_code of table orders",
+    "dependent": "default value for column order_code of table orders",
+    "class_name": "pg_attrdef",
+    "objid": 18153,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column order_id of table contracts",
+    "dependent": "constraint fk_contracts_order on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18233,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column order_id of table contracts",
+    "dependent": "constraint uq_contracts_order_revision on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18227,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column order_id of table contracts",
+    "dependent": "index uq_contracts_order_current",
+    "class_name": "pg_class",
+    "objid": 18535,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column order_id of table finance_summaries",
+    "dependent": "constraint finance_summaries_pkey on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18312,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column order_id of table finance_summaries",
+    "dependent": "constraint fk_finance_summaries_order on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18318,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column order_id of table installations",
+    "dependent": "constraint fk_installations_order on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18289,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column order_id of table installations",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column order_id of table installations",
+    "dependent": "constraint installations_order_id_key on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18276,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column order_id of table installations",
+    "dependent": "constraint uq_installations_company_customer_order_id on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18278,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column order_id of table operations_outbox",
+    "dependent": "constraint operations_outbox_company_id_order_id_event_type_key on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19302,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column order_id of table operations_outbox",
+    "dependent": "constraint operations_outbox_order_fk on table operations_outbox",
+    "class_name": "pg_constraint",
+    "objid": 19308,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "operations_outbox"
+  },
+  {
+    "referenced": "column order_id of table production_orders",
+    "dependent": "constraint fk_production_orders_order on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18257,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column order_id of table production_orders",
+    "dependent": "constraint production_orders_order_id_key on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18251,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column order_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_installation on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18481,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column order_id of table warranty_tickets",
+    "dependent": "constraint fk_wt_order on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18476,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column order_status of table orders",
+    "dependent": "constraint orders_order_status_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18157,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column order_status of table orders",
+    "dependent": "constraint orders_order_status_check on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18157,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column order_status of table orders",
+    "dependent": "index idx_orders_status",
+    "class_name": "pg_class",
+    "objid": 18532,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column payment_reference of table orders",
+    "dependent": "constraint uq_orders_company_payment_ref on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18166,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column photos of table installations",
+    "dependent": "default value for column photos of table installations",
+    "class_name": "pg_attrdef",
+    "objid": 18267,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column photos of table surveys",
+    "dependent": "default value for column photos of table surveys",
+    "class_name": "pg_attrdef",
+    "objid": 18064,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column policy_version of table price_calculations",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column price_calculation_id of table orders",
+    "dependent": "constraint fk_orders_pricing on table orders",
+    "class_name": "pg_constraint",
+    "objid": 18181,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "column pricing_policy_id of table price_calculations",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column provider of table payment_transactions",
+    "dependent": "constraint uq_pt_company_provider_ref on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18200,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column provider_ref of table payment_transactions",
+    "dependent": "constraint uq_pt_company_provider_ref on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18200,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column qc_status of table production_orders",
+    "dependent": "constraint production_orders_qc_status_check on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18245,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column qc_status of table production_orders",
+    "dependent": "constraint production_orders_qc_status_check on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18245,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column receivable_amount of table finance_summaries",
+    "dependent": "constraint finance_summaries_receivable_amount_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18309,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column receivable_amount of table finance_summaries",
+    "dependent": "constraint finance_summaries_receivable_amount_check on table finance_summaries",
+    "class_name": "pg_constraint",
+    "objid": 18309,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "column receivable_amount of table finance_summaries",
+    "dependent": "default value for column receivable_amount of table finance_summaries",
+    "class_name": "pg_attrdef",
+    "objid": 18304,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column revision_no of table contracts",
+    "dependent": "constraint contracts_revision_no_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18219,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column revision_no of table contracts",
+    "dependent": "constraint contracts_revision_no_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18219,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column revision_no of table contracts",
+    "dependent": "constraint uq_contracts_order_revision on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18227,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column revision_no of table contracts",
+    "dependent": "default value for column revision_no of table contracts",
+    "class_name": "pg_attrdef",
+    "objid": 18215,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column start_time of table appointments",
+    "dependent": "index idx_appointments_technician",
+    "class_name": "pg_class",
+    "objid": 18528,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column started_at of table survey_photo_operations",
+    "dependent": "default value for column started_at of table survey_photo_operations",
+    "class_name": "pg_attrdef",
+    "objid": 19144,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table appointments",
+    "dependent": "constraint appointments_status_check on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18038,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column status of table appointments",
+    "dependent": "constraint appointments_status_check on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18038,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column status of table appointments",
+    "dependent": "policy appointments_select_assigned_technician on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18675,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column status of table contracts",
+    "dependent": "constraint contracts_status_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18220,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column status of table contracts",
+    "dependent": "constraint contracts_status_check on table contracts",
+    "class_name": "pg_constraint",
+    "objid": 18220,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "column status of table contracts",
+    "dependent": "index idx_contracts_status",
+    "class_name": "pg_class",
+    "objid": 18536,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table installations",
+    "dependent": "constraint installations_status_check on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18270,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column status of table installations",
+    "dependent": "constraint installations_status_check on table installations",
+    "class_name": "pg_constraint",
+    "objid": 18270,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "column status of table installations",
+    "dependent": "index idx_installations_status",
+    "class_name": "pg_class",
+    "objid": 18538,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table payment_transactions",
+    "dependent": "constraint payment_transactions_status_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18194,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column status of table payment_transactions",
+    "dependent": "constraint payment_transactions_status_check on table payment_transactions",
+    "class_name": "pg_constraint",
+    "objid": 18194,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "column status of table payment_transactions",
+    "dependent": "index idx_payment_transactions_status",
+    "class_name": "pg_class",
+    "objid": 18534,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table price_calculations",
+    "dependent": "constraint chk_pc_need_info_amount on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18122,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column status of table price_calculations",
+    "dependent": "constraint chk_pc_need_info_amount on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18122,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column status of table price_calculations",
+    "dependent": "constraint price_calculations_status_check on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18121,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column status of table price_calculations",
+    "dependent": "constraint price_calculations_status_check on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18121,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column status of table pricing_policies",
+    "dependent": "constraint pricing_policies_status_check on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18100,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column status of table pricing_policies",
+    "dependent": "constraint pricing_policies_status_check on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18100,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column status of table pricing_policies",
+    "dependent": "index idx_pricing_policies_active",
+    "class_name": "pg_class",
+    "objid": 18529,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table pricing_policies",
+    "dependent": "index idx_pricing_policies_active",
+    "class_name": "pg_class",
+    "objid": 18529,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table production_orders",
+    "dependent": "constraint production_orders_status_check on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18244,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column status of table production_orders",
+    "dependent": "constraint production_orders_status_check on table production_orders",
+    "class_name": "pg_constraint",
+    "objid": 18244,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "column status of table production_orders",
+    "dependent": "index idx_production_orders_status",
+    "class_name": "pg_class",
+    "objid": 18537,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table warranty_tickets",
+    "dependent": "constraint warranty_tickets_status_check on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18758,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column status of table warranty_tickets",
+    "dependent": "constraint warranty_tickets_status_check on table warranty_tickets",
+    "class_name": "pg_constraint",
+    "objid": 18758,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "column status of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_assigned",
+    "class_name": "pg_class",
+    "objid": 18547,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column status of table warranty_tickets",
+    "dependent": "index idx_warranty_tickets_status",
+    "class_name": "pg_class",
+    "objid": 18546,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column survey_id of table price_calculations",
+    "dependent": "constraint fk_pc_survey on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18139,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column token of table survey_photo_operations",
+    "dependent": "default value for column token of table survey_photo_operations",
+    "class_name": "pg_attrdef",
+    "objid": 19143,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column type of table appointments",
+    "dependent": "constraint appointments_type_check on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18037,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column type of table appointments",
+    "dependent": "constraint appointments_type_check on table appointments",
+    "class_name": "pg_constraint",
+    "objid": 18037,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "column type of table appointments",
+    "dependent": "index idx_appointments_company_survey_created",
+    "class_name": "pg_class",
+    "objid": 19129,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table appointments",
+    "dependent": "default value for column updated_at of table appointments",
+    "class_name": "pg_attrdef",
+    "objid": 18036,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table contracts",
+    "dependent": "default value for column updated_at of table contracts",
+    "class_name": "pg_attrdef",
+    "objid": 18218,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table finance_summaries",
+    "dependent": "default value for column updated_at of table finance_summaries",
+    "class_name": "pg_attrdef",
+    "objid": 18306,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table installations",
+    "dependent": "default value for column updated_at of table installations",
+    "class_name": "pg_attrdef",
+    "objid": 18269,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table orders",
+    "dependent": "default value for column updated_at of table orders",
+    "class_name": "pg_attrdef",
+    "objid": 18155,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table payment_transactions",
+    "dependent": "default value for column updated_at of table payment_transactions",
+    "class_name": "pg_attrdef",
+    "objid": 18191,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table pricing_policies",
+    "dependent": "default value for column updated_at of table pricing_policies",
+    "class_name": "pg_attrdef",
+    "objid": 18099,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table production_orders",
+    "dependent": "default value for column updated_at of table production_orders",
+    "class_name": "pg_attrdef",
+    "objid": 18243,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table surveys",
+    "dependent": "default value for column updated_at of table surveys",
+    "class_name": "pg_attrdef",
+    "objid": 18067,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column updated_at of table warranty_tickets",
+    "dependent": "default value for column updated_at of table warranty_tickets",
+    "class_name": "pg_attrdef",
+    "objid": 18455,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": null
+  },
+  {
+    "referenced": "column version of table pricing_policies",
+    "dependent": "constraint fk_pc_policy_version on table price_calculations",
+    "class_name": "pg_constraint",
+    "objid": 18144,
+    "objsubid": 0,
+    "deptype": "n",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "column version of table pricing_policies",
+    "dependent": "constraint uq_pricing_policies_company_id_version on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18108,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "column version of table pricing_policies",
+    "dependent": "constraint uq_pricing_policies_version on table pricing_policies",
+    "class_name": "pg_constraint",
+    "objid": 18106,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_insert_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18676,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_insert_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18677,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_select_assigned_technician on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18675,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_select_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18673,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_select_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18674,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_update_boss_admin on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18678,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "policy appointments_update_sale on table appointments",
+    "class_name": "pg_policy",
+    "objid": 18679,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "toast table pg_toast.pg_toast_18031",
+    "class_name": "pg_class",
+    "objid": 18039,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "trigger guard_survey_appointment_write on table appointments",
+    "class_name": "pg_trigger",
+    "objid": 19161,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "trigger trg_appointments_immutability on table appointments",
+    "class_name": "pg_trigger",
+    "objid": 18584,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "trigger trg_tenant_mutation_appointments on table appointments",
+    "class_name": "pg_trigger",
+    "objid": 18560,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "trigger trg_updated_at_appointments on table appointments",
+    "class_name": "pg_trigger",
+    "objid": 18610,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "appointments"
+  },
+  {
+    "referenced": "table appointments",
+    "dependent": "type appointments",
+    "class_name": "pg_type",
+    "objid": 18033,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "policy contracts_select_boss_admin on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18694,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "policy contracts_select_sale on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18695,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "policy contracts_update_boss_admin on table contracts",
+    "class_name": "pg_policy",
+    "objid": 18696,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "toast table pg_toast.pg_toast_18211",
+    "class_name": "pg_class",
+    "objid": 18222,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "trigger trg_contracts_immutability on table contracts",
+    "class_name": "pg_trigger",
+    "objid": 18596,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "trigger trg_tenant_mutation_contracts on table contracts",
+    "class_name": "pg_trigger",
+    "objid": 18565,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "trigger trg_updated_at_contracts on table contracts",
+    "class_name": "pg_trigger",
+    "objid": 18615,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "contracts"
+  },
+  {
+    "referenced": "table contracts",
+    "dependent": "type contracts",
+    "class_name": "pg_type",
+    "objid": 18213,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table finance_summaries",
+    "dependent": "policy finance_summaries_select_boss_admin on table finance_summaries",
+    "class_name": "pg_policy",
+    "objid": 18703,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "table finance_summaries",
+    "dependent": "trigger trg_tenant_mutation_finance on table finance_summaries",
+    "class_name": "pg_trigger",
+    "objid": 18568,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "table finance_summaries",
+    "dependent": "trigger trg_updated_at_finance_summaries on table finance_summaries",
+    "class_name": "pg_trigger",
+    "objid": 18618,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "finance_summaries"
+  },
+  {
+    "referenced": "table finance_summaries",
+    "dependent": "type finance_summaries",
+    "class_name": "pg_type",
+    "objid": 18301,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "policy installations_select_assigned_technician on table installations",
+    "class_name": "pg_policy",
+    "objid": 18701,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "policy installations_select_boss_admin on table installations",
+    "class_name": "pg_policy",
+    "objid": 18699,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "policy installations_select_sale on table installations",
+    "class_name": "pg_policy",
+    "objid": 18700,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "policy installations_update_boss_admin on table installations",
+    "class_name": "pg_policy",
+    "objid": 18702,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "toast table pg_toast.pg_toast_18262",
+    "class_name": "pg_class",
+    "objid": 18271,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "trigger trg_installations_integrity on table installations",
+    "class_name": "pg_trigger",
+    "objid": 18598,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "trigger trg_tenant_mutation_installations on table installations",
+    "class_name": "pg_trigger",
+    "objid": 18567,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "trigger trg_updated_at_installations on table installations",
+    "class_name": "pg_trigger",
+    "objid": 18617,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "installations"
+  },
+  {
+    "referenced": "table installations",
+    "dependent": "type installations",
+    "class_name": "pg_type",
+    "objid": 18264,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table operations_outbox",
+    "dependent": "toast table pg_toast.pg_toast_19291",
+    "class_name": "pg_class",
+    "objid": 19297,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table operations_outbox",
+    "dependent": "type operations_outbox",
+    "class_name": "pg_type",
+    "objid": 19293,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "policy orders_select_boss_admin on table orders",
+    "class_name": "pg_policy",
+    "objid": 18692,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "toast table pg_toast.pg_toast_18149",
+    "class_name": "pg_class",
+    "objid": 18159,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "trigger trg_orders_immutability on table orders",
+    "class_name": "pg_trigger",
+    "objid": 18592,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "trigger trg_tenant_mutation_orders on table orders",
+    "class_name": "pg_trigger",
+    "objid": 18563,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "trigger trg_updated_at_orders on table orders",
+    "class_name": "pg_trigger",
+    "objid": 18613,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "orders"
+  },
+  {
+    "referenced": "table orders",
+    "dependent": "type orders",
+    "class_name": "pg_type",
+    "objid": 18151,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "policy payment_transactions_select_boss_admin on table payment_transactions",
+    "class_name": "pg_policy",
+    "objid": 18693,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "toast table pg_toast.pg_toast_18186",
+    "class_name": "pg_class",
+    "objid": 18195,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "trigger trg_payment_facts_immutability on table payment_transactions",
+    "class_name": "pg_trigger",
+    "objid": 18594,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "trigger trg_tenant_mutation_payments on table payment_transactions",
+    "class_name": "pg_trigger",
+    "objid": 18564,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "trigger trg_updated_at_payment_transactions on table payment_transactions",
+    "class_name": "pg_trigger",
+    "objid": 18614,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "payment_transactions"
+  },
+  {
+    "referenced": "table payment_transactions",
+    "dependent": "type payment_transactions",
+    "class_name": "pg_type",
+    "objid": 18188,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table price_calculations",
+    "dependent": "policy price_calculations_select_boss_admin on table price_calculations",
+    "class_name": "pg_policy",
+    "objid": 18690,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "table price_calculations",
+    "dependent": "policy price_calculations_select_sale on table price_calculations",
+    "class_name": "pg_policy",
+    "objid": 18691,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "table price_calculations",
+    "dependent": "toast table pg_toast.pg_toast_18114",
+    "class_name": "pg_class",
+    "objid": 18123,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table price_calculations",
+    "dependent": "trigger trg_price_calculations_immutability on table price_calculations",
+    "class_name": "pg_trigger",
+    "objid": 18590,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "price_calculations"
+  },
+  {
+    "referenced": "table price_calculations",
+    "dependent": "type price_calculations",
+    "class_name": "pg_type",
+    "objid": 18116,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "policy pricing_policies_insert_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18688,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "policy pricing_policies_select_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18687,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "policy pricing_policies_update_boss_admin on table pricing_policies",
+    "class_name": "pg_policy",
+    "objid": 18689,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "toast table pg_toast.pg_toast_18094",
+    "class_name": "pg_class",
+    "objid": 18101,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "trigger trg_pricing_policies_immutability on table pricing_policies",
+    "class_name": "pg_trigger",
+    "objid": 18588,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "trigger trg_tenant_mutation_pricing on table pricing_policies",
+    "class_name": "pg_trigger",
+    "objid": 18562,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "trigger trg_updated_at_pricing_policies on table pricing_policies",
+    "class_name": "pg_trigger",
+    "objid": 18612,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "pricing_policies"
+  },
+  {
+    "referenced": "table pricing_policies",
+    "dependent": "type pricing_policies",
+    "class_name": "pg_type",
+    "objid": 18096,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "policy production_orders_select_boss_admin on table production_orders",
+    "class_name": "pg_policy",
+    "objid": 18697,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "policy production_orders_select_sale on table production_orders",
+    "class_name": "pg_policy",
+    "objid": 18698,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "toast table pg_toast.pg_toast_18238",
+    "class_name": "pg_class",
+    "objid": 18246,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "trigger trg_tenant_mutation_production on table production_orders",
+    "class_name": "pg_trigger",
+    "objid": 18566,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "trigger trg_updated_at_production_orders on table production_orders",
+    "class_name": "pg_trigger",
+    "objid": 18616,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "production_orders"
+  },
+  {
+    "referenced": "table production_orders",
+    "dependent": "type production_orders",
+    "class_name": "pg_type",
+    "objid": 18240,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table survey_photo_operations",
+    "dependent": "type survey_photo_operations",
+    "class_name": "pg_type",
+    "objid": 19142,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "policy surveys_select_assigned_technician on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18682,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "policy surveys_select_boss_admin on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18680,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "policy surveys_select_sale on table surveys",
+    "class_name": "pg_policy",
+    "objid": 18681,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "toast table pg_toast.pg_toast_18060",
+    "class_name": "pg_class",
+    "objid": 18068,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "trigger trg_surveys_integrity on table surveys",
+    "class_name": "pg_trigger",
+    "objid": 18586,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "trigger trg_tenant_mutation_surveys on table surveys",
+    "class_name": "pg_trigger",
+    "objid": 18561,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "trigger trg_updated_at_surveys on table surveys",
+    "class_name": "pg_trigger",
+    "objid": 18611,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "surveys"
+  },
+  {
+    "referenced": "table surveys",
+    "dependent": "type surveys",
+    "class_name": "pg_type",
+    "objid": 18062,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_insert_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18725,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_insert_sale on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18726,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_assigned_technician on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18724,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18722,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_select_sale on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18723,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "policy warranty_tickets_update_boss_admin on table warranty_tickets",
+    "class_name": "pg_policy",
+    "objid": 18727,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "toast table pg_toast.pg_toast_18449",
+    "class_name": "pg_class",
+    "objid": 18457,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "trigger trg_tenant_mutation_warranty on table warranty_tickets",
+    "class_name": "pg_trigger",
+    "objid": 18574,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "trigger trg_updated_at_warranty_tickets on table warranty_tickets",
+    "class_name": "pg_trigger",
+    "objid": 18623,
+    "objsubid": 0,
+    "deptype": "a",
+    "owning_relation": "warranty_tickets"
+  },
+  {
+    "referenced": "table warranty_tickets",
+    "dependent": "type warranty_tickets",
+    "class_name": "pg_type",
+    "objid": 18451,
+    "objsubid": 0,
+    "deptype": "i",
+    "owning_relation": null
+  }
+]

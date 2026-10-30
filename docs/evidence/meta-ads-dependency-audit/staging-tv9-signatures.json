@@ -1,0 +1,17 @@
+[
+  {
+    "signature": "resolve_response_sla_on_sale_reply(uuid,uuid,uuid)",
+    "arguments": "p_company_id uuid, p_conversation_id uuid, p_sale_interaction_id uuid",
+    "result": "TABLE(id uuid, company_id uuid, conversation_id uuid, customer_id uuid, trigger_interaction_id uuid, started_at timestamp with time zone, deadline_at timestamp with time zone, state text, resolved_at timestamp with time zone, sale_response_interaction_id uuid, ai_response_interaction_id uuid, ai_claimed_at timestamp with time zone, ai_claim_id uuid, ai_claim_expires_at timestamp with time zone, created_at timestamp with time zone, updated_at timestamp with time zone)",
+    "language": "plpgsql",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "babe9989615da74003df0f4fdd678eb0",
+    "incoming_dependencies": 0
+  }
+]

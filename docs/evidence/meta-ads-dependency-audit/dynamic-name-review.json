@@ -1,0 +1,63 @@
+[
+  {
+    "source": "features/ai-brain/live-delivery/engine.ts:255",
+    "expression": "rpcName",
+    "resolved_candidates": [
+      "finish_ai_brain_live_delivery_extended",
+      "finish_ai_brain_live_delivery"
+    ],
+    "legacy_target": false
+  },
+  {
+    "source": "features/omnichannel/facebook/server.ts:50",
+    "expression": "name",
+    "resolved_candidates": [
+      "claim_meta_leadgen_event",
+      "finalize_meta_leadgen_event",
+      "han_care_stats",
+      "han_finish_send",
+      "han_get_data_deletion_status",
+      "han_ingest",
+      "han_mark_read",
+      "han_message_states",
+      "han_prepare_send",
+      "han_rate_limit",
+      "han_receipt",
+      "han_record_data_deletion_request",
+      "han_resolve_data_deletion_request",
+      "ingest_meta_leadgen_event",
+      "record_lead_attribution_touchpoint"
+    ],
+    "legacy_target": false,
+    "note": "Conservative superset of all literal rpc(...) helper calls in tracked runtime code; all are listed with call sites in repository-references.json. No legacy removal target occurs. This is not an attestation about clients outside the repository."
+  },
+  {
+    "source": "features/crm/services/customer.service.ts:667",
+    "expression": "PRIVATE_CONTACTS_TABLE",
+    "resolved_candidates": [
+      "customer_private_contacts"
+    ],
+    "legacy_target": false
+  },
+  {
+    "source": "storage.from constants in recordings/upload/transcription/media-pipeline",
+    "expression": "RECORDING_BUCKET / BUCKET",
+    "resolved_candidates": [
+      "zalo-call-recordings",
+      "call-recordings"
+    ],
+    "legacy_target": false
+  },
+  {
+    "source": "lib/sensitive/signed-urls.ts:219",
+    "expression": "bucketName",
+    "resolved_candidates": [
+      "survey-photos",
+      "contracts",
+      "installation-docs",
+      "call-recordings"
+    ],
+    "legacy_target": true,
+    "note": "Storage bucket reference, not a query table. The first three branches resolve database rows in removed legacy tables."
+  }
+]

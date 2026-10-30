@@ -1,0 +1,55 @@
+[
+  {
+    "audit": {
+      "buckets": [
+        {
+          "id": "installation-docs",
+          "public": false,
+          "object_count": 0
+        }
+      ],
+      "extensions": [
+        "pg_stat_statements",
+        "pg_trgm",
+        "pgcrypto",
+        "plpgsql",
+        "supabase_vault",
+        "uuid-ossp"
+      ],
+      "storage_policies": [
+        {
+          "name": "operations_evidence_no_client_delete",
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(bucket_id <> 'installation-docs'::text)",
+          "command": "DELETE",
+          "with_check": null
+        },
+        {
+          "name": "operations_evidence_no_client_insert",
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "(bucket_id <> 'installation-docs'::text)"
+        },
+        {
+          "name": "operations_evidence_no_client_update",
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(bucket_id <> 'installation-docs'::text)",
+          "command": "UPDATE",
+          "with_check": "(bucket_id <> 'installation-docs'::text)"
+        }
+      ],
+      "cron_job_relation": null,
+      "configured_exposed_schemas": null
+    }
+  }
+]

@@ -1,0 +1,3383 @@
+[
+  {
+    "name": "appointments",
+    "staging_relation": "appointments",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "appointments",
+      "constraints": [
+        {
+          "name": "appointments_assignee_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (assignee_id) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+          "referenced_table": "user_profiles",
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "appointments_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "appointments_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "appointments_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['ASSIGNED'::text, 'ACCEPTED'::text, 'IN_PROGRESS'::text, 'COMPLETED'::text, 'CANCELLED'::text, 'REJECTED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "appointments_type_check",
+          "type": "c",
+          "definition": "CHECK (type = ANY (ARRAY['SURVEY'::text, 'INSTALLATION'::text]))",
+          "referenced_table": null,
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "fk_appointments_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "appointments"
+        },
+        {
+          "name": "fk_installations_appointment",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "appointments",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "fk_surveys_appointment",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "appointments",
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "survey_photo_operations_appointment_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (appointment_id) REFERENCES appointments(id)",
+          "referenced_table": "appointments",
+          "referencing_table": "survey_photo_operations"
+        },
+        {
+          "name": "uq_appointments_company_customer_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, customer_id, id)",
+          "referenced_table": null,
+          "referencing_table": "appointments"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "guard_survey_appointment_write",
+          "function": "guard_survey_appointment_write()",
+          "definition": "CREATE TRIGGER guard_survey_appointment_write BEFORE INSERT OR UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION guard_survey_appointment_write()"
+        },
+        {
+          "name": "trg_appointments_immutability",
+          "function": "enforce_appointments_immutability()",
+          "definition": "CREATE TRIGGER trg_appointments_immutability BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION enforce_appointments_immutability()"
+        },
+        {
+          "name": "trg_tenant_mutation_appointments",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_appointments BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_appointments",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_appointments BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "appointments_pkey",
+          "definition": "CREATE UNIQUE INDEX appointments_pkey ON public.appointments USING btree (id)"
+        },
+        {
+          "name": "idx_appointments_company_survey_created",
+          "definition": "CREATE INDEX idx_appointments_company_survey_created ON public.appointments USING btree (company_id, created_at) WHERE (type = 'SURVEY'::text)"
+        },
+        {
+          "name": "idx_appointments_technician",
+          "definition": "CREATE INDEX idx_appointments_technician ON public.appointments USING btree (company_id, assignee_id, start_time)"
+        },
+        {
+          "name": "uq_appointments_company_customer_id",
+          "definition": "CREATE UNIQUE INDEX uq_appointments_company_customer_id ON public.appointments USING btree (company_id, customer_id, id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "appointments_insert_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        },
+        {
+          "name": "appointments_insert_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "has_company_role(company_id, 'SALE'::text)"
+        },
+        {
+          "name": "appointments_select_assigned_technician",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND (assignee_id = auth.uid()) AND (status = ANY (ARRAY['ASSIGNED'::text, 'ACCEPTED'::text, 'IN_PROGRESS'::text])))",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "appointments_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "appointments_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "appointments_update_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        },
+        {
+          "name": "appointments_update_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'SALE'::text)"
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 228,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "appointments",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('appointments')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 274,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "appointments",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('appointments')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 333,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "appointments",
+        "argument_keys": [],
+        "text": "adminClient\n      .from('appointments')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 422,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "appointments",
+        "argument_keys": [],
+        "text": "adminClient\n      .from('appointments')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S024",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 421,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S057",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 840,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S089",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 958,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S113",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1060,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S139",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1268,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S058",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 222,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S110",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 474,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S111",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 480,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S112",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 486,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S113",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 496,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S114",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 502,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S115",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 508,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S116",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 515,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M017-S007",
+        "file": "20260923000003_analytics_dashboard.sql",
+        "line": 34,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S021",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 122,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M018-S022",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 123,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M043-S001",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 14,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M043-S002",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 15,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M043-S003",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 24,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M043-S004",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 25,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M043-S005",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 34,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M043-S006",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 35,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M043-S007",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 48,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M043-S008",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 49,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "accept_installation_appointment_atomic",
+        "signature": "public.accept_installation_appointment_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 157
+      },
+      {
+        "name": "begin_survey_photo_operation",
+        "signature": "public.begin_survey_photo_operation(uuid,uuid)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 26
+      },
+      {
+        "name": "complete_installation_atomic",
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      },
+      {
+        "name": "complete_survey_atomic",
+        "signature": "public.complete_survey_atomic(uuid,uuid,jsonb)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 127
+      },
+      {
+        "name": "create_installation_schedule_atomic",
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "name": "end_survey_photo_operation",
+        "signature": "public.end_survey_photo_operation(uuid,uuid)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 71
+      },
+      {
+        "name": "enforce_installations_integrity",
+        "signature": "public.enforce_installations_integrity()",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1197
+      },
+      {
+        "name": "enforce_surveys_integrity",
+        "signature": "public.enforce_surveys_integrity()",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1065
+      },
+      {
+        "name": "is_assigned_technician",
+        "signature": "public.is_assigned_technician(uuid)",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 66
+      },
+      {
+        "name": "mutate_installation_atomic",
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "name": "start_installation_work_atomic",
+        "signature": "public.start_installation_work_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 227
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "company_bank_accounts",
+    "staging_relation": null,
+    "exact_rows": null,
+    "staging_metadata": {
+      "table_name": "company_bank_accounts",
+      "constraints": null,
+      "triggers": null,
+      "indexes": null,
+      "policies": null
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M026-S001",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 6,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M026-S002",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 16,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M026-S003",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 18,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M026-S004",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 19,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M026-S005",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 24,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "contracts",
+    "staging_relation": "contracts",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "contracts",
+      "constraints": [
+        {
+          "name": "contracts_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "contracts_contract_value_check",
+          "type": "c",
+          "definition": "CHECK (contract_value >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "contracts_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "contracts_revision_no_check",
+          "type": "c",
+          "definition": "CHECK (revision_no >= 1)",
+          "referenced_table": null,
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "contracts_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['GENERATED'::text, 'SENT_TO_CUSTOMER'::text, 'SIGNED'::text, 'REJECTED'::text, 'SUPERSEDED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "fk_contracts_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "uq_contracts_order_revision",
+          "type": "u",
+          "definition": "UNIQUE (order_id, revision_no)",
+          "referenced_table": null,
+          "referencing_table": "contracts"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_contracts_immutability",
+          "function": "enforce_contracts_immutability()",
+          "definition": "CREATE TRIGGER trg_contracts_immutability BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION enforce_contracts_immutability()"
+        },
+        {
+          "name": "trg_tenant_mutation_contracts",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_contracts BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_contracts",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_contracts BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contracts_pkey",
+          "definition": "CREATE UNIQUE INDEX contracts_pkey ON public.contracts USING btree (id)"
+        },
+        {
+          "name": "idx_contracts_status",
+          "definition": "CREATE INDEX idx_contracts_status ON public.contracts USING btree (company_id, status)"
+        },
+        {
+          "name": "uq_contracts_order_current",
+          "definition": "CREATE UNIQUE INDEX uq_contracts_order_current ON public.contracts USING btree (order_id) WHERE (is_current = true)"
+        },
+        {
+          "name": "uq_contracts_order_revision",
+          "definition": "CREATE UNIQUE INDEX uq_contracts_order_revision ON public.contracts USING btree (order_id, revision_no)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "contracts_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "contracts_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "contracts_update_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/sensitive/signed-urls.ts",
+        "line": 107,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "contracts",
+        "argument_keys": [],
+        "text": "adminClient\n        .from('contracts')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 527,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "contracts",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('contracts')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 546,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "contracts",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('contracts')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S030",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 557,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S064",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 868,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S065",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 872,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S094",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 963,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S125",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1192,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S144",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1273,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S019",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 135,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S064",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 228,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S131",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 635,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S132",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 641,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S133",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 647,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M026-S007",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 30,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M030-S005",
+        "file": "20260930000001_p0_security_acl_hardening.sql",
+        "line": 37,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M030-S006",
+        "file": "20260930000001_p0_security_acl_hardening.sql",
+        "line": 42,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "claim_contract_generation_rpc",
+        "signature": "public.claim_contract_generation_rpc(uuid,uuid,bool)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 350
+      },
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "finalize_contract_signing_rpc",
+        "signature": "public.finalize_contract_signing_rpc(uuid,uuid,uuid,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 513
+      },
+      {
+        "name": "finalize_generated_contract_rpc",
+        "signature": "public.finalize_generated_contract_rpc(uuid,uuid,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 467
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "finance_summaries",
+    "staging_relation": "finance_summaries",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "finance_summaries",
+      "constraints": [
+        {
+          "name": "finance_summaries_collected_amount_check",
+          "type": "c",
+          "definition": "CHECK (collected_amount >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "finance_summaries_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "finance_summaries_completed_revenue_check",
+          "type": "c",
+          "definition": "CHECK (completed_revenue >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "finance_summaries_contract_value_check",
+          "type": "c",
+          "definition": "CHECK (contract_value >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "finance_summaries_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (order_id)",
+          "referenced_table": null,
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "finance_summaries_receivable_amount_check",
+          "type": "c",
+          "definition": "CHECK (receivable_amount >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "fk_finance_summaries_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "finance_summaries"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_tenant_mutation_finance",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_finance BEFORE UPDATE ON finance_summaries FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_finance_summaries",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_finance_summaries BEFORE UPDATE ON finance_summaries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "finance_summaries_pkey",
+          "definition": "CREATE UNIQUE INDEX finance_summaries_pkey ON public.finance_summaries USING btree (order_id)"
+        },
+        {
+          "name": "idx_finance_summaries_company",
+          "definition": "CREATE INDEX idx_finance_summaries_company ON public.finance_summaries USING btree (company_id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "finance_summaries_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S033",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 621,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S068",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 884,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S097",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 966,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S147",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1276,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S039",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 177,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S067",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 231,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S140",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 702,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "create_order_from_calculation_rpc",
+        "signature": "public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 80
+      },
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      },
+      {
+        "name": "update_order_deposit_rpc",
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "installations",
+    "staging_relation": "installations",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "installations",
+      "constraints": [
+        {
+          "name": "fk_installations_appointment",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "appointments",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "fk_installations_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "fk_installations_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "fk_wt_installation",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id, installation_id) REFERENCES installations(company_id, customer_id, order_id, id) ON DELETE RESTRICT",
+          "referenced_table": "installations",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "installations_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "installations_order_id_key",
+          "type": "u",
+          "definition": "UNIQUE (order_id)",
+          "referenced_table": null,
+          "referencing_table": "installations"
+        },
+        {
+          "name": "installations_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "installations"
+        },
+        {
+          "name": "installations_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['SCHEDULED'::text, 'IN_TRANSIT'::text, 'INSTALLING'::text, 'TESTING'::text, 'HANDOVER_PENDING'::text, 'COMPLETED'::text, 'FAILED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "installations"
+        },
+        {
+          "name": "uq_installations_company_customer_order_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, customer_id, order_id, id)",
+          "referenced_table": null,
+          "referencing_table": "installations"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_installations_integrity",
+          "function": "enforce_installations_integrity()",
+          "definition": "CREATE TRIGGER trg_installations_integrity BEFORE INSERT OR UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION enforce_installations_integrity()"
+        },
+        {
+          "name": "trg_tenant_mutation_installations",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_installations BEFORE UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_installations",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_installations BEFORE UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_installations_status",
+          "definition": "CREATE INDEX idx_installations_status ON public.installations USING btree (company_id, status)"
+        },
+        {
+          "name": "installations_order_id_key",
+          "definition": "CREATE UNIQUE INDEX installations_order_id_key ON public.installations USING btree (order_id)"
+        },
+        {
+          "name": "installations_pkey",
+          "definition": "CREATE UNIQUE INDEX installations_pkey ON public.installations USING btree (id)"
+        },
+        {
+          "name": "uq_installations_company_customer_order_id",
+          "definition": "CREATE UNIQUE INDEX uq_installations_company_customer_order_id ON public.installations USING btree (company_id, customer_id, order_id, id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "installations_select_assigned_technician",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND is_assigned_technician(appointment_id))",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "installations_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "installations_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "installations_update_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 396,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "installations",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('installations')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 452,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "installations",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('installations')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S032",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 598,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S067",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 880,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S096",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 965,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S127",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1222,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S146",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1275,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S020",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 136,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S066",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 230,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S136",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 670,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S137",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 676,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S138",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 682,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S139",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 691,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "complete_installation_atomic",
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      },
+      {
+        "name": "create_installation_schedule_atomic",
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "name": "create_warranty_ticket_atomic",
+        "signature": "public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 368
+      },
+      {
+        "name": "enforce_appointments_immutability",
+        "signature": "public.enforce_appointments_immutability()",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1043
+      },
+      {
+        "name": "mutate_installation_atomic",
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "name": "start_installation_work_atomic",
+        "signature": "public.start_installation_work_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 227
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "operations_outbox",
+    "staging_relation": "operations_outbox",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "operations_outbox",
+      "constraints": [
+        {
+          "name": "operations_outbox_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id)",
+          "referenced_table": "companies",
+          "referencing_table": "operations_outbox"
+        },
+        {
+          "name": "operations_outbox_company_id_order_id_event_type_key",
+          "type": "u",
+          "definition": "UNIQUE (company_id, order_id, event_type)",
+          "referenced_table": null,
+          "referencing_table": "operations_outbox"
+        },
+        {
+          "name": "operations_outbox_event_type_check",
+          "type": "c",
+          "definition": "CHECK (event_type = 'ORDER_COMPLETED'::text)",
+          "referenced_table": null,
+          "referencing_table": "operations_outbox"
+        },
+        {
+          "name": "operations_outbox_order_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id)",
+          "referenced_table": "orders",
+          "referencing_table": "operations_outbox"
+        },
+        {
+          "name": "operations_outbox_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "operations_outbox"
+        }
+      ],
+      "triggers": null,
+      "indexes": [
+        {
+          "name": "operations_outbox_company_id_order_id_event_type_key",
+          "definition": "CREATE UNIQUE INDEX operations_outbox_company_id_order_id_event_type_key ON public.operations_outbox USING btree (company_id, order_id, event_type)"
+        },
+        {
+          "name": "operations_outbox_pkey",
+          "definition": "CREATE UNIQUE INDEX operations_outbox_pkey ON public.operations_outbox USING btree (id)"
+        }
+      ],
+      "policies": null
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M021-S005",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 10,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M021-S006",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 20,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M021-S007",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 21,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M021-S008",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 22,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "complete_installation_atomic",
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "orders",
+    "staging_relation": "orders",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "orders",
+      "constraints": [
+        {
+          "name": "fk_contracts_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "contracts"
+        },
+        {
+          "name": "fk_finance_summaries_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "finance_summaries"
+        },
+        {
+          "name": "fk_installations_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "installations"
+        },
+        {
+          "name": "fk_orders_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "orders"
+        },
+        {
+          "name": "fk_orders_pricing",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, price_calculation_id) REFERENCES price_calculations(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "price_calculations",
+          "referencing_table": "orders"
+        },
+        {
+          "name": "fk_production_orders_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "fk_pt_matched_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, matched_order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "fk_wt_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "operations_outbox_order_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id)",
+          "referenced_table": "orders",
+          "referencing_table": "operations_outbox"
+        },
+        {
+          "name": "orders_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "orders"
+        },
+        {
+          "name": "orders_deposit_status_check",
+          "type": "c",
+          "definition": "CHECK (deposit_status = ANY (ARRAY['PENDING'::text, 'DEPOSIT_PENDING'::text, 'CONFIRMED'::text, 'DEPOSIT_CONFIRMED'::text, 'REFUNDED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "orders_final_amount_check",
+          "type": "c",
+          "definition": "CHECK (final_amount >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "orders_order_status_check",
+          "type": "c",
+          "definition": "CHECK (order_status = ANY (ARRAY['DRAFT'::text, 'DEPOSIT_CONFIRMED'::text, 'CONTRACT_SIGNED'::text, 'IN_PRODUCTION'::text, 'READY_FOR_INSTALL'::text, 'INSTALLING'::text, 'HANDOVER_COMPLETED'::text, 'HANDED_OVER'::text, 'COMPLETED'::text, 'CANCELLED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "orders_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "uq_orders_company_customer_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, customer_id, id)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "uq_orders_company_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, id)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "uq_orders_company_order_code",
+          "type": "u",
+          "definition": "UNIQUE (company_id, order_code)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        },
+        {
+          "name": "uq_orders_company_payment_ref",
+          "type": "u",
+          "definition": "UNIQUE (company_id, payment_reference)",
+          "referenced_table": null,
+          "referencing_table": "orders"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_orders_immutability",
+          "function": "enforce_orders_immutability()",
+          "definition": "CREATE TRIGGER trg_orders_immutability BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION enforce_orders_immutability()"
+        },
+        {
+          "name": "trg_tenant_mutation_orders",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_orders BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_orders",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_orders BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_orders_company_created_at",
+          "definition": "CREATE INDEX idx_orders_company_created_at ON public.orders USING btree (company_id, created_at)"
+        },
+        {
+          "name": "idx_orders_customer",
+          "definition": "CREATE INDEX idx_orders_customer ON public.orders USING btree (company_id, customer_id)"
+        },
+        {
+          "name": "idx_orders_status",
+          "definition": "CREATE INDEX idx_orders_status ON public.orders USING btree (company_id, order_status)"
+        },
+        {
+          "name": "orders_pkey",
+          "definition": "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"
+        },
+        {
+          "name": "uq_orders_company_customer_id",
+          "definition": "CREATE UNIQUE INDEX uq_orders_company_customer_id ON public.orders USING btree (company_id, customer_id, id)"
+        },
+        {
+          "name": "uq_orders_company_id",
+          "definition": "CREATE UNIQUE INDEX uq_orders_company_id ON public.orders USING btree (company_id, id)"
+        },
+        {
+          "name": "uq_orders_company_order_code",
+          "definition": "CREATE UNIQUE INDEX uq_orders_company_order_code ON public.orders USING btree (company_id, order_code)"
+        },
+        {
+          "name": "uq_orders_company_payment_ref",
+          "definition": "CREATE UNIQUE INDEX uq_orders_company_payment_ref ON public.orders USING btree (company_id, payment_reference)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "orders_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 480,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "orders",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('orders')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 499,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "orders",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('orders')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S028",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 502,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S060",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 853,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S061",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 856,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S092",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 961,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S121",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1146,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S142",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1271,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S041",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 179,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S062",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 226,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S129",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 620,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M017-S006",
+        "file": "20260923000003_analytics_dashboard.sql",
+        "line": 31,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M026-S006",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 27,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "claim_contract_generation_rpc",
+        "signature": "public.claim_contract_generation_rpc(uuid,uuid,bool)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 350
+      },
+      {
+        "name": "complete_installation_atomic",
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      },
+      {
+        "name": "create_installation_schedule_atomic",
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "name": "create_order_from_calculation_rpc",
+        "signature": "public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 80
+      },
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "create_warranty_ticket_atomic",
+        "signature": "public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 368
+      },
+      {
+        "name": "finalize_contract_signing_rpc",
+        "signature": "public.finalize_contract_signing_rpc(uuid,uuid,uuid,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 513
+      },
+      {
+        "name": "mutate_installation_atomic",
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      },
+      {
+        "name": "update_order_deposit_rpc",
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "payment_transactions",
+    "staging_relation": "payment_transactions",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "payment_transactions",
+      "constraints": [
+        {
+          "name": "fk_pt_matched_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, matched_order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "payment_transactions_amount_check",
+          "type": "c",
+          "definition": "CHECK (amount > 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "payment_transactions_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "payment_transactions_match_confidence_check",
+          "type": "c",
+          "definition": "CHECK (match_confidence >= 0::numeric AND match_confidence <= 1::numeric)",
+          "referenced_table": null,
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "payment_transactions_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "payment_transactions_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['PENDING'::text, 'MATCHED'::text, 'MANUAL_REVIEW_REQUIRED'::text, 'REJECTED'::text, 'RECONCILED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "payment_transactions"
+        },
+        {
+          "name": "uq_pt_company_provider_ref",
+          "type": "u",
+          "definition": "UNIQUE (company_id, provider, provider_ref)",
+          "referenced_table": null,
+          "referencing_table": "payment_transactions"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_payment_facts_immutability",
+          "function": "enforce_payment_facts_immutability()",
+          "definition": "CREATE TRIGGER trg_payment_facts_immutability BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION enforce_payment_facts_immutability()"
+        },
+        {
+          "name": "trg_tenant_mutation_payments",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_payments BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_payment_transactions",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_payment_transactions BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_payment_transactions_matched",
+          "definition": "CREATE INDEX idx_payment_transactions_matched ON public.payment_transactions USING btree (company_id, matched_order_id) WHERE (matched_order_id IS NOT NULL)"
+        },
+        {
+          "name": "idx_payment_transactions_status",
+          "definition": "CREATE INDEX idx_payment_transactions_status ON public.payment_transactions USING btree (company_id, status, occurred_at DESC)"
+        },
+        {
+          "name": "payment_transactions_pkey",
+          "definition": "CREATE UNIQUE INDEX payment_transactions_pkey ON public.payment_transactions USING btree (id)"
+        },
+        {
+          "name": "uq_pt_company_provider_ref",
+          "definition": "CREATE UNIQUE INDEX uq_pt_company_provider_ref ON public.payment_transactions USING btree (company_id, provider, provider_ref)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "payment_transactions_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 575,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "payment_transactions",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('payment_transactions')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 594,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "payment_transactions",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('payment_transactions')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S029",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 537,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S062",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 860,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S063",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 864,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S093",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 962,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S123",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1166,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S143",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1272,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S037",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 175,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S063",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 227,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S130",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 628,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M026-S008",
+        "file": "20260929220001_pricing_payment_contract_base.sql",
+        "line": 34,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      },
+      {
+        "name": "update_order_deposit_rpc",
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "price_calculations",
+    "staging_relation": "price_calculations",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "price_calculations",
+      "constraints": [
+        {
+          "name": "chk_pc_need_info_amount",
+          "type": "c",
+          "definition": "CHECK (status = 'NEED_INFO'::text AND amount IS NULL OR status <> 'NEED_INFO'::text)",
+          "referenced_table": null,
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "fk_orders_pricing",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, price_calculation_id) REFERENCES price_calculations(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "price_calculations",
+          "referencing_table": "orders"
+        },
+        {
+          "name": "fk_pc_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "fk_pc_policy_version",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, pricing_policy_id, policy_version) REFERENCES pricing_policies(company_id, id, version) ON DELETE RESTRICT",
+          "referenced_table": "pricing_policies",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "fk_pc_survey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, survey_id) REFERENCES surveys(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "surveys",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "price_calculations_amount_check",
+          "type": "c",
+          "definition": "CHECK (amount IS NULL OR amount >= 0::numeric)",
+          "referenced_table": null,
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "price_calculations_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "price_calculations_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "price_calculations_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['CALCULATED'::text, 'NEED_INFO'::text, 'EXPIRED'::text, 'SUPERSEDED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "uq_price_calculations_company_customer_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, customer_id, id)",
+          "referenced_table": null,
+          "referencing_table": "price_calculations"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_price_calculations_immutability",
+          "function": "enforce_price_calculations_immutability()",
+          "definition": "CREATE TRIGGER trg_price_calculations_immutability BEFORE DELETE OR UPDATE ON price_calculations FOR EACH ROW EXECUTE FUNCTION enforce_price_calculations_immutability()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_price_calculations_customer",
+          "definition": "CREATE INDEX idx_price_calculations_customer ON public.price_calculations USING btree (company_id, customer_id, created_at DESC)"
+        },
+        {
+          "name": "price_calculations_pkey",
+          "definition": "CREATE UNIQUE INDEX price_calculations_pkey ON public.price_calculations USING btree (id)"
+        },
+        {
+          "name": "uq_price_calculations_company_customer_id",
+          "definition": "CREATE UNIQUE INDEX uq_price_calculations_company_customer_id ON public.price_calculations USING btree (company_id, customer_id, id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "price_calculations_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "price_calculations_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S027",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 475,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S059",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 849,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S119",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1128,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S036",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 174,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S061",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 225,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S127",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 605,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S128",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 611,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "create_order_from_calculation_rpc",
+        "signature": "public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 80
+      },
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      },
+      {
+        "name": "save_price_calculation_rpc",
+        "signature": "public.save_price_calculation_rpc(uuid,uuid,uuid,uuid,text,jsonb,numeric,text,jsonb)",
+        "file": "20260929220002_commercial_atomic_rpcs.sql",
+        "line": 6
+      },
+      {
+        "name": "update_order_deposit_rpc",
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "pricing_policies",
+    "staging_relation": "pricing_policies",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "pricing_policies",
+      "constraints": [
+        {
+          "name": "fk_pc_policy_version",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, pricing_policy_id, policy_version) REFERENCES pricing_policies(company_id, id, version) ON DELETE RESTRICT",
+          "referenced_table": "pricing_policies",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "pricing_policies_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "pricing_policies"
+        },
+        {
+          "name": "pricing_policies_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "pricing_policies"
+        },
+        {
+          "name": "pricing_policies_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['DRAFT'::text, 'ACTIVE'::text, 'SUPERSEDED'::text, 'RETIRED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "pricing_policies"
+        },
+        {
+          "name": "uq_pricing_policies_company_id_version",
+          "type": "u",
+          "definition": "UNIQUE (company_id, id, version)",
+          "referenced_table": null,
+          "referencing_table": "pricing_policies"
+        },
+        {
+          "name": "uq_pricing_policies_version",
+          "type": "u",
+          "definition": "UNIQUE (company_id, version)",
+          "referenced_table": null,
+          "referencing_table": "pricing_policies"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_pricing_policies_immutability",
+          "function": "enforce_pricing_policies_immutability()",
+          "definition": "CREATE TRIGGER trg_pricing_policies_immutability BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION enforce_pricing_policies_immutability()"
+        },
+        {
+          "name": "trg_tenant_mutation_pricing",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_pricing BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_pricing_policies",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_pricing_policies BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_pricing_policies_active",
+          "definition": "CREATE INDEX idx_pricing_policies_active ON public.pricing_policies USING btree (company_id, status) WHERE (status = 'ACTIVE'::text)"
+        },
+        {
+          "name": "pricing_policies_pkey",
+          "definition": "CREATE UNIQUE INDEX pricing_policies_pkey ON public.pricing_policies USING btree (id)"
+        },
+        {
+          "name": "uq_pricing_policies_company_id_version",
+          "definition": "CREATE UNIQUE INDEX uq_pricing_policies_company_id_version ON public.pricing_policies USING btree (company_id, id, version)"
+        },
+        {
+          "name": "uq_pricing_policies_version",
+          "definition": "CREATE UNIQUE INDEX uq_pricing_policies_version ON public.pricing_policies USING btree (company_id, version)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "pricing_policies_insert_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        },
+        {
+          "name": "pricing_policies_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "pricing_policies_update_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S026",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 460,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S058",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 844,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S091",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 960,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S117",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1115,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S141",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1270,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S060",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 224,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S124",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 585,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S125",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 591,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S126",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 597,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M031-S006",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 36,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "process_payment_webhook_rpc",
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6
+      },
+      {
+        "name": "save_price_calculation_rpc",
+        "signature": "public.save_price_calculation_rpc(uuid,uuid,uuid,uuid,text,jsonb,numeric,text,jsonb)",
+        "file": "20260929220002_commercial_atomic_rpcs.sql",
+        "line": 6
+      },
+      {
+        "name": "update_order_deposit_rpc",
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "production_orders",
+    "staging_relation": "production_orders",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "production_orders",
+      "constraints": [
+        {
+          "name": "fk_production_orders_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "production_orders_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "production_orders_order_id_key",
+          "type": "u",
+          "definition": "UNIQUE (order_id)",
+          "referenced_table": null,
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "production_orders_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "production_orders_qc_status_check",
+          "type": "c",
+          "definition": "CHECK (qc_status = ANY (ARRAY['PENDING'::text, 'PASSED'::text, 'REWORK_REQUIRED'::text, 'REJECTED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "production_orders"
+        },
+        {
+          "name": "production_orders_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['PENDING_SPECS'::text, 'RELEASED_TO_FACTORY'::text, 'IN_PRODUCTION'::text, 'QC_IN_PROGRESS'::text, 'QC_PASSED'::text, 'QC_FAILED'::text, 'READY_FOR_DISPATCH'::text]))",
+          "referenced_table": null,
+          "referencing_table": "production_orders"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_tenant_mutation_production",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_production BEFORE UPDATE ON production_orders FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_production_orders",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_production_orders BEFORE UPDATE ON production_orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_production_orders_status",
+          "definition": "CREATE INDEX idx_production_orders_status ON public.production_orders USING btree (company_id, status, deadline)"
+        },
+        {
+          "name": "production_orders_order_id_key",
+          "definition": "CREATE UNIQUE INDEX production_orders_order_id_key ON public.production_orders USING btree (order_id)"
+        },
+        {
+          "name": "production_orders_pkey",
+          "definition": "CREATE UNIQUE INDEX production_orders_pkey ON public.production_orders USING btree (id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "production_orders_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "production_orders_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S031",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 581,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S066",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 876,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S095",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 964,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S145",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1274,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S038",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 176,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S065",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 229,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S134",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 657,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S135",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 663,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "create_installation_schedule_atomic",
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "update_production_progress_atomic",
+        "signature": "public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 61
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "survey_photo_operations",
+    "staging_relation": "survey_photo_operations",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "survey_photo_operations",
+      "constraints": [
+        {
+          "name": "survey_photo_operations_actor_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (actor_id) REFERENCES user_profiles(id)",
+          "referenced_table": "user_profiles",
+          "referencing_table": "survey_photo_operations"
+        },
+        {
+          "name": "survey_photo_operations_appointment_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (appointment_id) REFERENCES appointments(id)",
+          "referenced_table": "appointments",
+          "referencing_table": "survey_photo_operations"
+        },
+        {
+          "name": "survey_photo_operations_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (appointment_id)",
+          "referenced_table": null,
+          "referencing_table": "survey_photo_operations"
+        }
+      ],
+      "triggers": null,
+      "indexes": [
+        {
+          "name": "survey_photo_operations_pkey",
+          "definition": "CREATE UNIQUE INDEX survey_photo_operations_pkey ON public.survey_photo_operations USING btree (appointment_id)"
+        }
+      ],
+      "policies": null
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M018-S007",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 12,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M018-S008",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 19,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S009",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 20,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S010",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 21,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S011",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 22,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "begin_survey_photo_operation",
+        "signature": "public.begin_survey_photo_operation(uuid,uuid)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 26
+      },
+      {
+        "name": "complete_survey_atomic",
+        "signature": "public.complete_survey_atomic(uuid,uuid,jsonb)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 127
+      },
+      {
+        "name": "end_survey_photo_operation",
+        "signature": "public.end_survey_photo_operation(uuid,uuid)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 71
+      },
+      {
+        "name": "guard_survey_appointment_write",
+        "signature": "public.guard_survey_appointment_write()",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 92
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "surveys",
+    "staging_relation": "surveys",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "surveys",
+      "constraints": [
+        {
+          "name": "fk_pc_survey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, survey_id) REFERENCES surveys(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "surveys",
+          "referencing_table": "price_calculations"
+        },
+        {
+          "name": "fk_surveys_appointment",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "appointments",
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "fk_surveys_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "surveys_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "surveys_completed_by_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (completed_by) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+          "referenced_table": "user_profiles",
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "surveys_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "unique_survey_appointment",
+          "type": "u",
+          "definition": "UNIQUE (appointment_id)",
+          "referenced_table": null,
+          "referencing_table": "surveys"
+        },
+        {
+          "name": "uq_surveys_company_customer_id",
+          "type": "u",
+          "definition": "UNIQUE (company_id, customer_id, id)",
+          "referenced_table": null,
+          "referencing_table": "surveys"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_surveys_integrity",
+          "function": "enforce_surveys_integrity()",
+          "definition": "CREATE TRIGGER trg_surveys_integrity BEFORE INSERT OR UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION enforce_surveys_integrity()"
+        },
+        {
+          "name": "trg_tenant_mutation_surveys",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_surveys BEFORE UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_surveys",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_surveys BEFORE UPDATE ON surveys FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_surveys_company_completed_at",
+          "definition": "CREATE INDEX idx_surveys_company_completed_at ON public.surveys USING btree (company_id, completed_at)"
+        },
+        {
+          "name": "surveys_pkey",
+          "definition": "CREATE UNIQUE INDEX surveys_pkey ON public.surveys USING btree (id)"
+        },
+        {
+          "name": "unique_survey_appointment",
+          "definition": "CREATE UNIQUE INDEX unique_survey_appointment ON public.surveys USING btree (appointment_id)"
+        },
+        {
+          "name": "uq_surveys_company_customer_id",
+          "definition": "CREATE UNIQUE INDEX uq_surveys_company_customer_id ON public.surveys USING btree (company_id, customer_id, id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "surveys_select_assigned_technician",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND is_assigned_technician(appointment_id))",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "surveys_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "surveys_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [
+      {
+        "file": "lib/sensitive/signed-urls.ts",
+        "line": 79,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "surveys",
+        "argument_keys": [],
+        "text": "adminClient\n        .from('surveys')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 307,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "surveys",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('surveys')"
+      },
+      {
+        "file": "lib/server-auth/resource-access.ts",
+        "line": 363,
+        "group": "library_or_configuration",
+        "method": "from",
+        "target": "surveys",
+        "argument_keys": [],
+        "text": "adminClient\n    .from('surveys')"
+      }
+    ],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S025",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 439,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S090",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 959,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S115",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1091,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S140",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1269,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S059",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 223,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S117",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 527,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S118",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 533,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S119",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 539,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S120",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 548,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S121",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 554,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S122",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 563,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S123",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 570,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M017-S005",
+        "file": "20260923000003_analytics_dashboard.sql",
+        "line": 28,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S002",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 5,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M018-S003",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 6,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M018-S004",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 7,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M018-S005",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 8,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M018-S006",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 9,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "complete_survey_atomic",
+        "signature": "public.complete_survey_atomic(uuid,uuid,jsonb)",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 127
+      },
+      {
+        "name": "create_production_order_atomic",
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "name": "enforce_appointments_immutability",
+        "signature": "public.enforce_appointments_immutability()",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1043
+      },
+      {
+        "name": "guard_survey_appointment_write",
+        "signature": "public.guard_survey_appointment_write()",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 92
+      },
+      {
+        "name": "save_price_calculation_rpc",
+        "signature": "public.save_price_calculation_rpc(uuid,uuid,uuid,uuid,text,jsonb,numeric,text,jsonb)",
+        "file": "20260929220002_commercial_atomic_rpcs.sql",
+        "line": 6
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  },
+  {
+    "name": "warranty_tickets",
+    "staging_relation": "warranty_tickets",
+    "exact_rows": 0,
+    "staging_metadata": {
+      "table_name": "warranty_tickets",
+      "constraints": [
+        {
+          "name": "fk_wt_customer",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+          "referenced_table": "customers",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "fk_wt_installation",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id, installation_id) REFERENCES installations(company_id, customer_id, order_id, id) ON DELETE RESTRICT",
+          "referenced_table": "installations",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "fk_wt_order",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+          "referenced_table": "orders",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "warranty_tickets_assigned_to_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (assigned_to) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+          "referenced_table": "user_profiles",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "warranty_tickets_company_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+          "referenced_table": "companies",
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "warranty_tickets_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)",
+          "referenced_table": null,
+          "referencing_table": "warranty_tickets"
+        },
+        {
+          "name": "warranty_tickets_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['OPEN'::text, 'ASSIGNED'::text, 'IN_PROGRESS'::text, 'RESOLVED'::text, 'CLOSED'::text, 'REOPENED'::text, 'CANCELLED'::text, 'FAILED'::text]))",
+          "referenced_table": null,
+          "referencing_table": "warranty_tickets"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_tenant_mutation_warranty",
+          "function": "prevent_tenant_mutation()",
+          "definition": "CREATE TRIGGER trg_tenant_mutation_warranty BEFORE UPDATE ON warranty_tickets FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+        },
+        {
+          "name": "trg_updated_at_warranty_tickets",
+          "function": "update_updated_at_column()",
+          "definition": "CREATE TRIGGER trg_updated_at_warranty_tickets BEFORE UPDATE ON warranty_tickets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_warranty_tickets_assigned",
+          "definition": "CREATE INDEX idx_warranty_tickets_assigned ON public.warranty_tickets USING btree (company_id, assigned_to, status) WHERE (assigned_to IS NOT NULL)"
+        },
+        {
+          "name": "idx_warranty_tickets_status",
+          "definition": "CREATE INDEX idx_warranty_tickets_status ON public.warranty_tickets USING btree (company_id, status)"
+        },
+        {
+          "name": "warranty_tickets_pkey",
+          "definition": "CREATE UNIQUE INDEX warranty_tickets_pkey ON public.warranty_tickets USING btree (id)"
+        }
+      ],
+      "policies": [
+        {
+          "name": "warranty_tickets_insert_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        },
+        {
+          "name": "warranty_tickets_insert_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": null,
+          "command": "INSERT",
+          "with_check": "has_company_role(company_id, 'SALE'::text)"
+        },
+        {
+          "name": "warranty_tickets_select_assigned_technician",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND (assigned_to = auth.uid()))",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "warranty_tickets_select_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "warranty_tickets_select_sale",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'SALE'::text)",
+          "command": "SELECT",
+          "with_check": null
+        },
+        {
+          "name": "warranty_tickets_update_boss_admin",
+          "roles": [
+            "authenticated"
+          ],
+          "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+          "command": "UPDATE",
+          "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+        }
+      ]
+    },
+    "literal_application_and_test_queries": [],
+    "static_ddl_statements": [
+      {
+        "id": "M001-S039",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 732,
+        "kind": "CreateStmt",
+        "risk": "SAFE"
+      },
+      {
+        "id": "M001-S075",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 913,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S076",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 916,
+        "kind": "IndexStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S103",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 972,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M001-S152",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1281,
+        "kind": "CreateTrigStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S073",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 237,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S159",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 829,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S160",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 835,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S161",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 841,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S162",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 850,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S163",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 856,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M002-S164",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 862,
+        "kind": "CreatePolicyStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M008-S001",
+        "file": "20260920000002_operations_atomic_rpcs.sql",
+        "line": 6,
+        "kind": "AlterTableStmt",
+        "risk": "BLOCKED"
+      },
+      {
+        "id": "M008-S002",
+        "file": "20260920000002_operations_atomic_rpcs.sql",
+        "line": 7,
+        "kind": "AlterTableStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M045-S001",
+        "file": "20261006143500_service_role_core_acl_restore.sql",
+        "line": 20,
+        "kind": "GrantStmt",
+        "risk": "CONDITIONAL"
+      },
+      {
+        "id": "M111-S016",
+        "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+        "line": 534,
+        "kind": "DropStmt",
+        "risk": "BLOCKED"
+      }
+    ],
+    "pre_removal_functions_referencing_table": [
+      {
+        "name": "create_warranty_ticket_atomic",
+        "signature": "public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 368
+      },
+      {
+        "name": "update_warranty_status_atomic",
+        "signature": "public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 160
+      }
+    ],
+    "evidence_limit": "Static DDL events are a timeline, not a claim that every historical index/policy/trigger survives to the deletion boundary. Recapture that catalog after approved predecessors."
+  }
+]
