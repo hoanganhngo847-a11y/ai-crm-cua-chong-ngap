@@ -96,6 +96,12 @@ export async function POST(request: Request) {
       return back(request, 'FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
     }
 
+    // Validate managed Ad Accounts (Priority 8)
+    const managedAccountsMap = new Map((session.adAccounts || []).map((a) => [a.id, a]));
+    if (requestedAdAccountIds.some((id) => !managedAccountsMap.has(id))) {
+      return back(request, 'FACEBOOK_AD_ACCOUNT_NOT_MANAGED');
+    }
+
     const connectedPages: Array<{ id: string; name: string }> = [];
     for (const pageId of requestedPageIds) {
       connectedPages.push(
@@ -107,15 +113,14 @@ export async function POST(request: Request) {
       );
     }
 
-    // Save and sync selected Ad Accounts
+    // Save metadata and store encrypted tokens via secure private RPC (Priority 1)
     let connectedAdAccountsCount = 0;
-    if (requestedAdAccountIds.length > 0 && session.adAccounts) {
-      const managedAccountsMap = new Map(session.adAccounts.map((a) => [a.id, a]));
+    if (requestedAdAccountIds.length > 0) {
       const encryptedToken = encryptToken(session.userAccessToken);
+      const tokenExpiresAt = new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString();
       const supabase = createAdminClient();
 
       const accountRows = requestedAdAccountIds
-        .filter((id) => managedAccountsMap.has(id))
         .map((id) => {
           const acc = managedAccountsMap.get(id)!;
           return {
@@ -124,17 +129,35 @@ export async function POST(request: Request) {
             name: acc.name,
             currency: acc.currency,
             account_status: acc.accountStatus,
-            access_token: encryptedToken,
-            token_expires_at: new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString(),
             sync_status: 'PENDING',
             updated_at: new Date().toISOString(),
           };
         });
 
       if (accountRows.length > 0) {
-        await supabase
+        const { error: upsertErr } = await supabase
           .from('meta_ad_accounts')
           .upsert(accountRows, { onConflict: 'company_id,ad_account_id' });
+
+        if (upsertErr) {
+          console.error('[meta-connect] upsert_ad_accounts_failed', upsertErr);
+          throw upsertErr;
+        }
+
+        for (const acc of accountRows) {
+          const { error: tokenErr } = await supabase.rpc('store_meta_ad_account_token', {
+            p_company_id: actor.companyId,
+            p_ad_account_id: acc.ad_account_id,
+            p_encrypted_access_token: encryptedToken,
+            p_token_expires_at: tokenExpiresAt,
+          });
+
+          if (tokenErr) {
+            console.error(`[meta-connect] store_token_rpc_failed id=${acc.ad_account_id}`, tokenErr);
+            throw tokenErr;
+          }
+        }
+
         connectedAdAccountsCount = accountRows.length;
 
         // Trigger background initial sync
@@ -160,6 +183,7 @@ export async function POST(request: Request) {
     const allowed = new Set([
       'FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE',
       'FACEBOOK_PAGE_NOT_MANAGED',
+      'FACEBOOK_AD_ACCOUNT_NOT_MANAGED',
       'FACEBOOK_SUBSCRIBE_FAILED',
     ]);
     return back(

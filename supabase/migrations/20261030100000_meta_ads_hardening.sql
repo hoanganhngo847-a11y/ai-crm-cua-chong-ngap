@@ -1,0 +1,908 @@
+-- Migration: 20261030100000_meta_ads_hardening.sql
+-- Description: Token Vault Isolation, SECURITY DEFINER RPC Authorization, Durable Webhook Intake & Reporting Accuracy
+
+-- Ensure private schema exists
+CREATE SCHEMA IF NOT EXISTS private;
+
+-- =============================================================================
+-- 1. PRIVATE SCHEMA: META AD ACCOUNT TOKENS (Priority 1)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS private.meta_ad_account_tokens (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
+    ad_account_id text NOT NULL,
+    encrypted_access_token text NOT NULL,
+    token_expires_at timestamptz,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT uq_meta_ad_account_tokens_company_account UNIQUE (company_id, ad_account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meta_ad_account_tokens_company ON private.meta_ad_account_tokens(company_id);
+
+ALTER TABLE private.meta_ad_account_tokens ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON private.meta_ad_account_tokens FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON private.meta_ad_account_tokens TO service_role;
+
+-- Migrate existing tokens from public.meta_ad_accounts into private.meta_ad_account_tokens
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'meta_ad_accounts' AND column_name = 'access_token'
+    ) THEN
+        INSERT INTO private.meta_ad_account_tokens (company_id, ad_account_id, encrypted_access_token, token_expires_at)
+        SELECT company_id, ad_account_id, access_token, token_expires_at
+        FROM public.meta_ad_accounts
+        WHERE access_token IS NOT NULL AND access_token <> ''
+        ON CONFLICT (company_id, ad_account_id) DO UPDATE
+            SET encrypted_access_token = EXCLUDED.encrypted_access_token,
+                token_expires_at = EXCLUDED.token_expires_at,
+                updated_at = now();
+    END IF;
+END $$;
+
+-- Drop sensitive token columns from public table
+ALTER TABLE public.meta_ad_accounts
+    DROP COLUMN IF EXISTS access_token,
+    DROP COLUMN IF EXISTS token_expires_at;
+
+-- Add concurrency lease columns to public.meta_ad_accounts
+ALTER TABLE public.meta_ad_accounts
+    ADD COLUMN IF NOT EXISTS sync_lease_until timestamptz,
+    ADD COLUMN IF NOT EXISTS sync_lease_token uuid;
+
+-- =============================================================================
+-- 2. PRIVATE SCHEMA: DURABLE LEADGEN WEBHOOK INTAKE (Priority 3)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS private.meta_leadgen_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
+    page_id text NOT NULL,
+    leadgen_id text NOT NULL,
+    form_id text,
+    ad_id text,
+    status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED')),
+    interaction_id uuid REFERENCES public.interactions(id) ON DELETE SET NULL,
+    customer_id uuid REFERENCES public.customers(id) ON DELETE SET NULL,
+    error_message text,
+    retry_count integer DEFAULT 0,
+    occurred_at timestamptz NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT uq_meta_leadgen_company_lead UNIQUE (company_id, leadgen_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meta_leadgen_events_lookup ON private.meta_leadgen_events(company_id, leadgen_id);
+ALTER TABLE private.meta_leadgen_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON private.meta_leadgen_events FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON private.meta_leadgen_events TO service_role;
+
+-- =============================================================================
+-- 3. TOKEN STORAGE & RETRIEVAL RPCS (Priority 1)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.store_meta_ad_account_token(
+    p_company_id uuid,
+    p_ad_account_id text,
+    p_encrypted_access_token text,
+    p_token_expires_at timestamptz DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, private, pg_temp
+AS $$
+BEGIN
+    -- Authorization check: if authenticated user, must be ACTIVE member of p_company_id
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company_id
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company_id;
+        END IF;
+    END IF;
+
+    -- Verify company exists
+    IF NOT EXISTS (SELECT 1 FROM public.companies WHERE id = p_company_id) THEN
+        RAISE EXCEPTION 'INVALID_COMPANY_ID: company % does not exist', p_company_id;
+    END IF;
+
+    INSERT INTO private.meta_ad_account_tokens (
+        company_id,
+        ad_account_id,
+        encrypted_access_token,
+        token_expires_at,
+        updated_at
+    )
+    VALUES (
+        p_company_id,
+        p_ad_account_id,
+        p_encrypted_access_token,
+        p_token_expires_at,
+        now()
+    )
+    ON CONFLICT (company_id, ad_account_id) DO UPDATE
+    SET
+        encrypted_access_token = EXCLUDED.encrypted_access_token,
+        token_expires_at = EXCLUDED.token_expires_at,
+        updated_at = now();
+
+    -- Touch updated_at on public.meta_ad_accounts
+    UPDATE public.meta_ad_accounts
+    SET updated_at = now()
+    WHERE company_id = p_company_id AND ad_account_id = p_ad_account_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.store_meta_ad_account_token FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.store_meta_ad_account_token FROM anon;
+GRANT EXECUTE ON FUNCTION public.store_meta_ad_account_token TO service_role;
+GRANT EXECUTE ON FUNCTION public.store_meta_ad_account_token TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_meta_ad_account_token(
+    p_company_id uuid,
+    p_ad_account_id text
+)
+RETURNS TABLE (
+    encrypted_access_token text,
+    token_expires_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, private, pg_temp
+AS $$
+BEGIN
+    -- Authorization check: if authenticated user, must be ACTIVE member of p_company_id
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company_id
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company_id;
+        END IF;
+    END IF;
+
+    RETURN QUERY
+    SELECT t.encrypted_access_token, t.token_expires_at
+    FROM private.meta_ad_account_tokens t
+    WHERE t.company_id = p_company_id
+      AND t.ad_account_id = p_ad_account_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_meta_ad_account_token FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_meta_ad_account_token FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_meta_ad_account_token TO service_role;
+GRANT EXECUTE ON FUNCTION public.get_meta_ad_account_token TO authenticated;
+
+-- =============================================================================
+-- 4. DURABLE WEBHOOK CLAIM & FINALIZE RPCS (Priority 3)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.claim_meta_leadgen_event(
+    p_company_id uuid,
+    p_page_id text,
+    p_leadgen_id text,
+    p_form_id text DEFAULT NULL,
+    p_ad_id text DEFAULT NULL,
+    p_occurred timestamptz DEFAULT now()
+)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, private, pg_temp
+AS $$
+DECLARE
+    v_status text;
+BEGIN
+    SELECT status INTO v_status
+    FROM private.meta_leadgen_events
+    WHERE company_id = p_company_id AND leadgen_id = p_leadgen_id;
+
+    IF v_status = 'PROCESSED' THEN
+        RETURN 'ALREADY_PROCESSED';
+    END IF;
+
+    INSERT INTO private.meta_leadgen_events (
+        company_id,
+        page_id,
+        leadgen_id,
+        form_id,
+        ad_id,
+        status,
+        retry_count,
+        occurred_at,
+        updated_at
+    )
+    VALUES (
+        p_company_id,
+        p_page_id,
+        p_leadgen_id,
+        p_form_id,
+        p_ad_id,
+        'PROCESSING',
+        0,
+        p_occurred,
+        now()
+    )
+    ON CONFLICT (company_id, leadgen_id) DO UPDATE
+    SET
+        status = 'PROCESSING',
+        retry_count = private.meta_leadgen_events.retry_count + 1,
+        form_id = COALESCE(EXCLUDED.form_id, private.meta_leadgen_events.form_id),
+        ad_id = COALESCE(EXCLUDED.ad_id, private.meta_leadgen_events.ad_id),
+        updated_at = now();
+
+    RETURN 'CLAIMED';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.claim_meta_leadgen_event FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.claim_meta_leadgen_event FROM anon;
+GRANT EXECUTE ON FUNCTION public.claim_meta_leadgen_event TO service_role;
+
+CREATE OR REPLACE FUNCTION public.finalize_meta_leadgen_event(
+    p_company_id uuid,
+    p_leadgen_id text,
+    p_status text,
+    p_interaction_id uuid DEFAULT NULL,
+    p_customer_id uuid DEFAULT NULL,
+    p_error text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, private, pg_temp
+AS $$
+BEGIN
+    UPDATE private.meta_leadgen_events
+    SET
+        status = p_status,
+        interaction_id = COALESCE(p_interaction_id, interaction_id),
+        customer_id = COALESCE(p_customer_id, customer_id),
+        error_message = p_error,
+        updated_at = now()
+    WHERE company_id = p_company_id AND leadgen_id = p_leadgen_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.finalize_meta_leadgen_event FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.finalize_meta_leadgen_event FROM anon;
+GRANT EXECUTE ON FUNCTION public.finalize_meta_leadgen_event TO service_role;
+
+-- =============================================================================
+-- 5. MARKETING API CONCURRENCY LEASE RPCS (Priority 4)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.acquire_meta_ad_account_sync_lease(
+    p_company_id uuid,
+    p_ad_account_id text,
+    p_lease_duration_seconds integer DEFAULT 300
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_token uuid := gen_random_uuid();
+    v_acquired boolean;
+BEGIN
+    -- Authorization check for authenticated users
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company_id
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company_id;
+        END IF;
+    END IF;
+
+    UPDATE public.meta_ad_accounts
+    SET
+        sync_status = 'SYNCING',
+        sync_lease_token = v_token,
+        sync_lease_until = now() + (p_lease_duration_seconds || ' seconds')::interval,
+        updated_at = now()
+    WHERE company_id = p_company_id
+      AND ad_account_id = p_ad_account_id
+      AND (
+          sync_status != 'SYNCING'
+          OR sync_lease_until IS NULL
+          OR sync_lease_until < now()
+      );
+
+    GET DIAGNOSTICS v_acquired = ROW_COUNT;
+    IF v_acquired THEN
+        RETURN v_token;
+    ELSE
+        RETURN NULL;
+    END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.acquire_meta_ad_account_sync_lease FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.acquire_meta_ad_account_sync_lease FROM anon;
+GRANT EXECUTE ON FUNCTION public.acquire_meta_ad_account_sync_lease TO service_role;
+GRANT EXECUTE ON FUNCTION public.acquire_meta_ad_account_sync_lease TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.release_meta_ad_account_sync_lease(
+    p_company_id uuid,
+    p_ad_account_id text,
+    p_lease_token uuid,
+    p_status text,
+    p_error text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    -- Authorization check for authenticated users
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company_id
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company_id;
+        END IF;
+    END IF;
+
+    UPDATE public.meta_ad_accounts
+    SET
+        sync_status = p_status,
+        sync_error = p_error,
+        sync_lease_token = NULL,
+        sync_lease_until = NULL,
+        last_synced_at = CASE WHEN p_status = 'SUCCESS' THEN now() ELSE last_synced_at END,
+        updated_at = now()
+    WHERE company_id = p_company_id
+      AND ad_account_id = p_ad_account_id
+      AND (sync_lease_token = p_lease_token OR sync_lease_token IS NULL);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.release_meta_ad_account_sync_lease FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.release_meta_ad_account_sync_lease FROM anon;
+GRANT EXECUTE ON FUNCTION public.release_meta_ad_account_sync_lease TO service_role;
+GRANT EXECUTE ON FUNCTION public.release_meta_ad_account_sync_lease TO authenticated;
+
+-- =============================================================================
+-- 6. HARDENED RPC: record_lead_attribution_touchpoint (Priorities 2 & 5)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.record_lead_attribution_touchpoint(
+    p_company uuid,
+    p_customer uuid DEFAULT NULL,
+    p_interaction uuid DEFAULT NULL,
+    p_conversation uuid DEFAULT NULL,
+    p_channel text DEFAULT 'FACEBOOK_LEAD_ADS',
+    p_page_id text DEFAULT NULL,
+    p_page_name text DEFAULT NULL,
+    p_ad_account_id text DEFAULT NULL,
+    p_meta_campaign_id text DEFAULT NULL,
+    p_campaign_name text DEFAULT NULL,
+    p_meta_ad_set_id text DEFAULT NULL,
+    p_ad_set_name text DEFAULT NULL,
+    p_meta_ad_id text DEFAULT NULL,
+    p_ad_name text DEFAULT NULL,
+    p_meta_form_id text DEFAULT NULL,
+    p_form_name text DEFAULT NULL,
+    p_meta_leadgen_id text DEFAULT NULL,
+    p_referral_source text DEFAULT NULL,
+    p_referral_type text DEFAULT NULL,
+    p_ads_context_data jsonb DEFAULT NULL,
+    p_utm_source text DEFAULT NULL,
+    p_utm_medium text DEFAULT NULL,
+    p_utm_campaign text DEFAULT NULL,
+    p_utm_content text DEFAULT NULL,
+    p_utm_term text DEFAULT NULL,
+    p_fbclid text DEFAULT NULL,
+    p_attribution_status text DEFAULT 'UNATTRIBUTED',
+    p_attribution_method text DEFAULT 'DIRECT_LEADGEN',
+    p_occurred timestamptz DEFAULT now()
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_touchpoint_id uuid;
+    v_has_previous boolean := false;
+    v_type text := 'FIRST_TOUCH';
+    v_existing_id uuid;
+    v_resolved_campaign_id text := p_meta_campaign_id;
+    v_resolved_ad_set_id text := p_meta_ad_set_id;
+    v_resolved_campaign text := p_campaign_name;
+    v_resolved_ad_set text := p_ad_set_name;
+    v_resolved_ad text := p_ad_name;
+    v_resolved_form text := p_form_name;
+    v_status text := p_attribution_status;
+BEGIN
+    -- 1. STRICT AUTHORIZATION CHECK (Priority 2)
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company;
+        END IF;
+    END IF;
+
+    -- 2. Verify company exists
+    IF NOT EXISTS (SELECT 1 FROM public.companies WHERE id = p_company) THEN
+        RAISE EXCEPTION 'INVALID_COMPANY_ID: company % does not exist', p_company;
+    END IF;
+
+    -- 3. Scope validation for foreign keys
+    IF p_customer IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.customers WHERE id = p_customer AND company_id = p_company) THEN
+        RAISE EXCEPTION 'CUSTOMER_COMPANY_MISMATCH: customer % does not belong to company %', p_customer, p_company;
+    END IF;
+
+    IF p_interaction IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.interactions WHERE id = p_interaction AND company_id = p_company) THEN
+        RAISE EXCEPTION 'INTERACTION_COMPANY_MISMATCH: interaction % does not belong to company %', p_interaction, p_company;
+    END IF;
+
+    IF p_conversation IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.conversations WHERE id = p_conversation AND company_id = p_company) THEN
+        RAISE EXCEPTION 'CONVERSATION_COMPANY_MISMATCH: conversation % does not belong to company %', p_conversation, p_company;
+    END IF;
+
+    -- 4. Idempotency check for leadgen_id
+    IF p_meta_leadgen_id IS NOT NULL THEN
+        SELECT id INTO v_existing_id
+        FROM public.lead_attribution_touchpoints
+        WHERE company_id = p_company
+          AND meta_leadgen_id = p_meta_leadgen_id;
+
+        IF v_existing_id IS NOT NULL THEN
+            RETURN v_existing_id;
+        END IF;
+    END IF;
+
+    -- 5. Look up snapshots from synced Meta Ads metadata if names are not provided
+    IF p_meta_ad_id IS NOT NULL AND (v_resolved_ad IS NULL OR v_resolved_campaign_id IS NULL) THEN
+        SELECT a.name, s.name, c.name, a.meta_campaign_id, a.meta_ad_set_id, a.ad_account_id
+        INTO v_resolved_ad, v_resolved_ad_set, v_resolved_campaign, v_resolved_campaign_id, v_resolved_ad_set_id, p_ad_account_id
+        FROM public.meta_ads a
+        LEFT JOIN public.meta_ad_sets s ON s.company_id = p_company AND s.meta_ad_set_id = a.meta_ad_set_id
+        LEFT JOIN public.meta_campaigns c ON c.company_id = p_company AND c.meta_campaign_id = a.meta_campaign_id
+        WHERE a.company_id = p_company AND a.meta_ad_id = p_meta_ad_id;
+
+        IF v_resolved_campaign IS NOT NULL AND v_status = 'UNATTRIBUTED' THEN
+            v_status := 'ATTRIBUTED';
+        END IF;
+    END IF;
+
+    -- Resolve ad_account_id from campaign if missing
+    IF p_ad_account_id IS NULL AND v_resolved_campaign_id IS NOT NULL THEN
+        SELECT c.ad_account_id INTO p_ad_account_id
+        FROM public.meta_campaigns c
+        WHERE c.company_id = p_company AND c.meta_campaign_id = v_resolved_campaign_id;
+    END IF;
+
+    IF p_meta_form_id IS NOT NULL AND v_resolved_form IS NULL THEN
+        SELECT f.name INTO v_resolved_form
+        FROM public.meta_lead_forms f
+        WHERE f.company_id = p_company AND f.meta_form_id = p_meta_form_id;
+    END IF;
+
+    -- 6. STRICT ATTRIBUTION RULE (Priority 5)
+    -- Do not label a lead ATTRIBUTED just because it has an ad_id unless that ad is successfully
+    -- mapped to a trusted Meta campaign or valid attribution record.
+    IF v_status = 'ATTRIBUTED' THEN
+        IF COALESCE(v_resolved_campaign_id, p_meta_campaign_id) IS NULL AND COALESCE(v_resolved_campaign, p_campaign_name) IS NULL THEN
+            v_status := 'UNATTRIBUTED';
+        END IF;
+    END IF;
+
+    -- 7. Determine FIRST_TOUCH vs LATEST_TOUCH
+    IF p_customer IS NOT NULL THEN
+        SELECT EXISTS (
+            SELECT 1 FROM public.lead_attribution_touchpoints
+            WHERE company_id = p_company AND customer_id = p_customer
+        ) INTO v_has_previous;
+
+        IF v_has_previous THEN
+            v_type := 'LATEST_TOUCH';
+        ELSE
+            v_type := 'FIRST_TOUCH';
+        END IF;
+    END IF;
+
+    -- 8. Insert touchpoint
+    INSERT INTO public.lead_attribution_touchpoints (
+        company_id,
+        customer_id,
+        interaction_id,
+        conversation_id,
+        touchpoint_type,
+        channel,
+        page_id,
+        page_name,
+        ad_account_id,
+        meta_campaign_id,
+        campaign_name_snapshot,
+        meta_ad_set_id,
+        ad_set_name_snapshot,
+        meta_ad_id,
+        ad_name_snapshot,
+        meta_form_id,
+        form_name_snapshot,
+        meta_leadgen_id,
+        referral_source,
+        referral_type,
+        ads_context_data,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
+        fbclid,
+        attribution_status,
+        attribution_method,
+        occurred_at,
+        created_at
+    )
+    VALUES (
+        p_company,
+        p_customer,
+        p_interaction,
+        p_conversation,
+        v_type,
+        p_channel,
+        p_page_id,
+        p_page_name,
+        p_ad_account_id,
+        COALESCE(p_meta_campaign_id, v_resolved_campaign_id),
+        v_resolved_campaign,
+        COALESCE(p_meta_ad_set_id, v_resolved_ad_set_id),
+        v_resolved_ad_set,
+        p_meta_ad_id,
+        v_resolved_ad,
+        p_meta_form_id,
+        v_resolved_form,
+        p_meta_leadgen_id,
+        p_referral_source,
+        p_referral_type,
+        p_ads_context_data,
+        p_utm_source,
+        p_utm_medium,
+        p_utm_campaign,
+        p_utm_content,
+        p_utm_term,
+        p_fbclid,
+        v_status,
+        p_attribution_method,
+        COALESCE(p_occurred, now()),
+        now()
+    )
+    RETURNING id INTO v_touchpoint_id;
+
+    -- 9. Update Customer snapshot fields atomically (First-touch strictly preserved)
+    IF p_customer IS NOT NULL THEN
+        IF NOT v_has_previous THEN
+            UPDATE public.customers
+            SET
+                first_campaign_name = v_resolved_campaign,
+                first_ad_name = v_resolved_ad,
+                first_touch_at = COALESCE(p_occurred, now()),
+                latest_campaign_name = v_resolved_campaign,
+                latest_ad_name = v_resolved_ad,
+                latest_touch_at = COALESCE(p_occurred, now()),
+                attribution_status = v_status,
+                updated_at = now()
+            WHERE id = p_customer AND company_id = p_company;
+        ELSE
+            UPDATE public.customers
+            SET
+                first_campaign_name = COALESCE(first_campaign_name, v_resolved_campaign),
+                first_ad_name = COALESCE(first_ad_name, v_resolved_ad),
+                latest_campaign_name = COALESCE(v_resolved_campaign, latest_campaign_name),
+                latest_ad_name = COALESCE(v_resolved_ad, latest_ad_name),
+                latest_touch_at = COALESCE(p_occurred, now()),
+                attribution_status = CASE
+                    WHEN v_status = 'ATTRIBUTED' THEN 'ATTRIBUTED'
+                    ELSE attribution_status
+                END,
+                updated_at = now()
+            WHERE id = p_customer AND company_id = p_company;
+        END IF;
+    END IF;
+
+    RETURN v_touchpoint_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.record_lead_attribution_touchpoint FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_lead_attribution_touchpoint FROM anon;
+GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO service_role;
+GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO authenticated;
+
+-- =============================================================================
+-- 7. HARDENED RPC: get_meta_ads_performance_report (Priorities 2 & 6)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.get_meta_ads_performance_report(
+    p_company uuid,
+    p_from timestamptz,
+    p_to timestamptz,
+    p_ad_account_id text DEFAULT NULL,
+    p_campaign_id text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_total_spend numeric := 0;
+    v_total_impressions bigint := 0;
+    v_total_clicks bigint := 0;
+    v_total_meta_leads integer := 0;
+    v_total_crm_leads bigint := 0;
+    v_total_attributed_leads bigint := 0;
+    v_unique_attributed_customers bigint := 0;
+    v_total_touchpoints bigint := 0;
+    v_total_qualified_leads bigint := 0;
+    v_ctr numeric := 0;
+    v_cpl numeric := 0;
+    v_cost_per_qualified numeric := 0;
+    v_campaign_rows jsonb := '[]'::jsonb;
+BEGIN
+    -- 1. STRICT AUTHORIZATION CHECK (Priority 2)
+    IF auth.role() = 'authenticated' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.company_members cm
+            WHERE cm.company_id = p_company
+              AND cm.user_id = auth.uid()
+              AND cm.status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'UNAUTHORIZED_COMPANY_ACCESS: user % not authorized for company %', auth.uid(), p_company;
+        END IF;
+    END IF;
+
+    -- 2. Verify company exists
+    IF NOT EXISTS (SELECT 1 FROM public.companies WHERE id = p_company) THEN
+        RAISE EXCEPTION 'INVALID_COMPANY_ID: company % does not exist', p_company;
+    END IF;
+
+    -- 3. Consistent Meta daily insights aggregation (Priority 6)
+    -- When p_campaign_id is specified, aggregate from CAMPAIGN level rows; otherwise ACCOUNT level rows
+    IF p_campaign_id IS NOT NULL THEN
+        SELECT
+            COALESCE(SUM(spend), 0),
+            COALESCE(SUM(impressions), 0),
+            COALESCE(SUM(clicks), 0),
+            COALESCE(SUM(meta_leads), 0)
+        INTO
+            v_total_spend,
+            v_total_impressions,
+            v_total_clicks,
+            v_total_meta_leads
+        FROM public.meta_insights_daily
+        WHERE company_id = p_company
+          AND date >= p_from::date
+          AND date <= p_to::date
+          AND entity_type = 'CAMPAIGN'
+          AND entity_id = p_campaign_id
+          AND (p_ad_account_id IS NULL OR ad_account_id = p_ad_account_id);
+    ELSE
+        SELECT
+            COALESCE(SUM(spend), 0),
+            COALESCE(SUM(impressions), 0),
+            COALESCE(SUM(clicks), 0),
+            COALESCE(SUM(meta_leads), 0)
+        INTO
+            v_total_spend,
+            v_total_impressions,
+            v_total_clicks,
+            v_total_meta_leads
+        FROM public.meta_insights_daily
+        WHERE company_id = p_company
+          AND date >= p_from::date
+          AND date <= p_to::date
+          AND entity_type = 'ACCOUNT'
+          AND (p_ad_account_id IS NULL OR ad_account_id = p_ad_account_id);
+    END IF;
+
+    -- 4. Calculate CTR
+    IF v_total_impressions > 0 THEN
+        v_ctr := ROUND((v_total_clicks::numeric / v_total_impressions::numeric) * 100, 2);
+    ELSE
+        v_ctr := 0;
+    END IF;
+
+    -- 5. Aggregate CRM metrics separately (Priority 6)
+    -- A: Total distinct CRM leads (counting distinct leadgen ID / customer ID)
+    SELECT COUNT(DISTINCT COALESCE(t.customer_id::text, t.meta_leadgen_id, t.id::text))
+    INTO v_total_crm_leads
+    FROM public.lead_attribution_touchpoints t
+    WHERE t.company_id = p_company
+      AND t.occurred_at >= p_from
+      AND t.occurred_at <= p_to
+      AND (
+          p_ad_account_id IS NULL
+          OR t.ad_account_id = p_ad_account_id
+          OR (t.ad_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM public.meta_campaigns mc
+              WHERE mc.company_id = t.company_id AND mc.meta_campaign_id = t.meta_campaign_id AND mc.ad_account_id = p_ad_account_id
+          ))
+      )
+      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
+
+    -- B: Total distinct Attributed leads
+    SELECT COUNT(DISTINCT COALESCE(t.customer_id::text, t.meta_leadgen_id, t.id::text))
+    INTO v_total_attributed_leads
+    FROM public.lead_attribution_touchpoints t
+    WHERE t.company_id = p_company
+      AND t.occurred_at >= p_from
+      AND t.occurred_at <= p_to
+      AND t.attribution_status = 'ATTRIBUTED'
+      AND (
+          p_ad_account_id IS NULL
+          OR t.ad_account_id = p_ad_account_id
+          OR (t.ad_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM public.meta_campaigns mc
+              WHERE mc.company_id = t.company_id AND mc.meta_campaign_id = t.meta_campaign_id AND mc.ad_account_id = p_ad_account_id
+          ))
+      )
+      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
+
+    -- C: Unique Attributed Customers
+    SELECT COUNT(DISTINCT t.customer_id)
+    INTO v_unique_attributed_customers
+    FROM public.lead_attribution_touchpoints t
+    WHERE t.company_id = p_company
+      AND t.occurred_at >= p_from
+      AND t.occurred_at <= p_to
+      AND t.attribution_status = 'ATTRIBUTED'
+      AND t.customer_id IS NOT NULL
+      AND (
+          p_ad_account_id IS NULL
+          OR t.ad_account_id = p_ad_account_id
+          OR (t.ad_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM public.meta_campaigns mc
+              WHERE mc.company_id = t.company_id AND mc.meta_campaign_id = t.meta_campaign_id AND mc.ad_account_id = p_ad_account_id
+          ))
+      )
+      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
+
+    -- D: Total Touchpoints
+    SELECT COUNT(t.id)
+    INTO v_total_touchpoints
+    FROM public.lead_attribution_touchpoints t
+    WHERE t.company_id = p_company
+      AND t.occurred_at >= p_from
+      AND t.occurred_at <= p_to
+      AND (
+          p_ad_account_id IS NULL
+          OR t.ad_account_id = p_ad_account_id
+          OR (t.ad_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM public.meta_campaigns mc
+              WHERE mc.company_id = t.company_id AND mc.meta_campaign_id = t.meta_campaign_id AND mc.ad_account_id = p_ad_account_id
+          ))
+      )
+      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
+
+    -- E: Calculate CPL (Safe division by unique attributed leads)
+    IF v_total_attributed_leads > 0 THEN
+        v_cpl := ROUND(v_total_spend / v_total_attributed_leads, 0);
+    ELSE
+        v_cpl := 0;
+    END IF;
+
+    -- F: Aggregate Qualified Leads (distinct customers with ATTRIBUTED touchpoint in qualified stages)
+    SELECT COUNT(DISTINCT c.id)
+    INTO v_total_qualified_leads
+    FROM public.lead_attribution_touchpoints t
+    JOIN public.customers c ON c.id = t.customer_id AND c.company_id = p_company
+    WHERE t.company_id = p_company
+      AND t.occurred_at >= p_from
+      AND t.occurred_at <= p_to
+      AND t.attribution_status = 'ATTRIBUTED'
+      AND c.stage IN ('INTERESTED', 'HIGH_POTENTIAL', 'DEPOSIT_PENDING', 'DEPOSIT_CONFIRMED', 'CONTRACT_SIGNED', 'interested', 'deep_research', 'high_potential', 'contract_signed')
+      AND (
+          p_ad_account_id IS NULL
+          OR t.ad_account_id = p_ad_account_id
+          OR (t.ad_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM public.meta_campaigns mc
+              WHERE mc.company_id = t.company_id AND mc.meta_campaign_id = t.meta_campaign_id AND mc.ad_account_id = p_ad_account_id
+          ))
+      )
+      AND (p_campaign_id IS NULL OR t.meta_campaign_id = p_campaign_id);
+
+    IF v_total_qualified_leads > 0 THEN
+        v_cost_per_qualified := ROUND(v_total_spend / v_total_qualified_leads, 0);
+    ELSE
+        v_cost_per_qualified := 0;
+    END IF;
+
+    -- 6. Campaign breakdown (Pre-aggregated to prevent Cartesian products)
+    SELECT COALESCE(jsonb_agg(sub), '[]'::jsonb)
+    INTO v_campaign_rows
+    FROM (
+        SELECT
+            c.meta_campaign_id AS campaign_id,
+            c.name AS campaign_name,
+            c.status AS campaign_status,
+            COALESCE(ins.spend, 0) AS spend,
+            COALESCE(ins.impressions, 0) AS impressions,
+            COALESCE(ins.clicks, 0) AS clicks,
+            CASE
+                WHEN COALESCE(ins.impressions, 0) > 0 THEN ROUND((COALESCE(ins.clicks, 0)::numeric / ins.impressions::numeric) * 100, 2)
+                ELSE 0
+            END AS ctr,
+            COALESCE(ins.meta_leads, 0) AS meta_leads,
+            COALESCE(crm.crm_leads, 0) AS crm_leads,
+            COALESCE(crm.attributed_leads, 0) AS attributed_leads,
+            COALESCE(crm.unique_customers, 0) AS unique_customers,
+            CASE
+                WHEN COALESCE(crm.attributed_leads, 0) > 0 THEN ROUND(COALESCE(ins.spend, 0) / crm.attributed_leads, 0)
+                ELSE 0
+            END AS cpl
+        FROM public.meta_campaigns c
+        LEFT JOIN (
+            SELECT
+                entity_id,
+                SUM(spend) AS spend,
+                SUM(impressions) AS impressions,
+                SUM(clicks) AS clicks,
+                SUM(meta_leads) AS meta_leads
+            FROM public.meta_insights_daily
+            WHERE company_id = p_company
+              AND date >= p_from::date
+              AND date <= p_to::date
+              AND entity_type = 'CAMPAIGN'
+            GROUP BY entity_id
+        ) ins ON ins.entity_id = c.meta_campaign_id
+        LEFT JOIN (
+            SELECT
+                meta_campaign_id,
+                COUNT(DISTINCT COALESCE(customer_id::text, meta_leadgen_id, id::text)) AS crm_leads,
+                COUNT(DISTINCT COALESCE(customer_id::text, meta_leadgen_id, id::text)) FILTER (WHERE attribution_status = 'ATTRIBUTED') AS attributed_leads,
+                COUNT(DISTINCT customer_id) FILTER (WHERE attribution_status = 'ATTRIBUTED' AND customer_id IS NOT NULL) AS unique_customers
+            FROM public.lead_attribution_touchpoints
+            WHERE company_id = p_company
+              AND occurred_at >= p_from
+              AND occurred_at <= p_to
+            GROUP BY meta_campaign_id
+        ) crm ON crm.meta_campaign_id = c.meta_campaign_id
+        WHERE c.company_id = p_company
+          AND (p_ad_account_id IS NULL OR c.ad_account_id = p_ad_account_id)
+          AND (p_campaign_id IS NULL OR c.meta_campaign_id = p_campaign_id)
+        ORDER BY spend DESC, crm_leads DESC
+    ) sub;
+
+    RETURN jsonb_build_object(
+        'overview', jsonb_build_object(
+            'spend', v_total_spend,
+            'impressions', v_total_impressions,
+            'clicks', v_total_clicks,
+            'ctr', v_ctr,
+            'meta_leads', v_total_meta_leads,
+            'crm_leads', v_total_crm_leads,
+            'attributed_leads', v_total_attributed_leads,
+            'unique_customers', v_unique_attributed_customers,
+            'total_touchpoints', v_total_touchpoints,
+            'qualified_leads', v_total_qualified_leads,
+            'cpl', v_cpl,
+            'cost_per_qualified', v_cost_per_qualified
+        ),
+        'campaigns', v_campaign_rows
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_meta_ads_performance_report FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_meta_ads_performance_report FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_meta_ads_performance_report TO service_role;
+GRANT EXECUTE ON FUNCTION public.get_meta_ads_performance_report TO authenticated;

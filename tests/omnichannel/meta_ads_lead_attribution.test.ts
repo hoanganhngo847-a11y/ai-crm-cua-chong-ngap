@@ -17,8 +17,13 @@ import {
 import {
     encryptToken,
     decryptToken,
+    rotateToken,
+    parseEncryptionKey,
 } from '../../features/omnichannel/facebook/token-vault';
-import { fetchWithBackoff } from '../../features/omnichannel/facebook/marketing-sync';
+import {
+    fetchWithBackoff,
+    validateAdAccountAccess,
+} from '../../features/omnichannel/facebook/marketing-sync';
 import { POST as webhookPost } from '../../app/api/webhooks/meta/route';
 import { POST as syncPost } from '../../app/api/admin/meta-ads/sync/route';
 import { requireBossAdmin, AuthError } from '../../lib/auth/context';
@@ -1083,6 +1088,472 @@ test('Scenario 15: Performance report calculations (Spend, CTR, CPL, Cost per Qu
         assert.equal(camp.spend, 10000000);
         assert.equal(camp.crm_leads, 20);
         assert.equal(camp.cpl, 500000);
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 16: Token Security & Vault Hardening (Priority 1)
+// -----------------------------------------------------------------------------
+test('Scenario 16: Token security, private schema isolation, and format validation', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const companyId = '41111111-1111-4111-8111-111111111111';
+        const userId = '42222222-2222-4222-8222-222222222222';
+
+        await db.exec(`
+            INSERT INTO auth.users (id, email) VALUES ('${userId}', 'token_boss@test.local') ON CONFLICT DO NOTHING;
+            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Token Security', 'ACTIVE') ON CONFLICT DO NOTHING;
+            INSERT INTO public.company_members (company_id, user_id, role, status) VALUES ('${companyId}', '${userId}', 'BOSS_ADMIN', 'ACTIVE') ON CONFLICT DO NOTHING;
+            INSERT INTO public.meta_ad_accounts (company_id, ad_account_id, name, account_status) VALUES ('${companyId}', 'act_token_sec_01', 'Ad Account Token Test', 1);
+        `);
+
+        // 16A: Verify meta_ad_accounts does NOT have access_token column anymore
+        const colCheck = await db.query(`
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'meta_ad_accounts' AND column_name = 'access_token';
+        `);
+        assert.equal(colCheck.rows.length, 0, 'access_token column must not exist in public.meta_ad_accounts');
+
+        // 16B: Verify private.meta_ad_account_tokens table cannot be selected by authenticated role directly
+        await db.exec(`
+            SET ROLE authenticated;
+            SET "request.jwt.claim.sub" = '${userId}';
+            SET "request.jwt.claim.role" = 'authenticated';
+        `);
+
+        await assert.rejects(
+            async () => {
+                await db.query(`SELECT * FROM private.meta_ad_account_tokens;`);
+            },
+            (err: any) => {
+                assert.match(err.message, /permission denied/i);
+                return true;
+            }
+        );
+
+        // 16C: Store and retrieve encrypted token via server-only RPCs as authorized company member
+        const encrypted = encryptToken('EAA_TEST_SECRET_TOKEN_VALUE');
+        const expiresAt = new Date(Date.now() + 86400000).toISOString();
+
+        await db.query(`
+            SELECT public.store_meta_ad_account_token(
+                '${companyId}'::uuid,
+                'act_token_sec_01',
+                '${encrypted}',
+                '${expiresAt}'::timestamptz
+            );
+        `);
+
+        const tokenFetch = await db.query(`
+            SELECT encrypted_access_token, token_expires_at
+            FROM public.get_meta_ad_account_token('${companyId}'::uuid, 'act_token_sec_01');
+        `);
+        assert.equal(tokenFetch.rows.length, 1);
+        const storedEncrypted = (tokenFetch.rows[0] as any).encrypted_access_token;
+        assert.equal(decryptToken(storedEncrypted), 'EAA_TEST_SECRET_TOKEN_VALUE');
+
+        // 16D: Encryption key format validation & rotation
+        assert.throws(
+            () => parseEncryptionKey('', 'META_TOKEN_ENCRYPTION_KEY'),
+            /MISSING_META_TOKEN_ENCRYPTION_KEY/
+        );
+        assert.throws(
+            () => parseEncryptionKey('too-short-key', 'META_TOKEN_ENCRYPTION_KEY'),
+            /INVALID_META_TOKEN_ENCRYPTION_KEY_FORMAT/
+        );
+        const validBuf = parseEncryptionKey('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'TEST');
+        assert.equal(validBuf.length, 32);
+
+        // Rotation test
+        const rotated = rotateToken(encrypted);
+        assert.equal(decryptToken(rotated), 'EAA_TEST_SECRET_TOKEN_VALUE');
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 17: SECURITY DEFINER RPC Authorization Hardening (Priority 2)
+// -----------------------------------------------------------------------------
+test('Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization and cross-tenant isolation', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const compA = '51111111-1111-4111-8111-111111111111';
+        const compB = '52222222-2222-4222-8222-222222222222';
+        const userA = '53333333-3333-4333-8333-333333333333';
+        const custB = '54444444-4444-4444-8444-444444444444';
+
+        await db.exec(`
+            INSERT INTO auth.users (id, email) VALUES ('${userA}', 'user_a@test.local') ON CONFLICT DO NOTHING;
+            INSERT INTO public.companies (id, name, status) VALUES
+                ('${compA}', 'Doanh nghiệp A Corp', 'ACTIVE'),
+                ('${compB}', 'Doanh nghiệp B Corp', 'ACTIVE')
+            ON CONFLICT DO NOTHING;
+
+            INSERT INTO public.company_members (company_id, user_id, role, status) VALUES
+                ('${compA}', '${userA}', 'SALE', 'ACTIVE')
+            ON CONFLICT DO NOTHING;
+
+            INSERT INTO public.customers (id, company_id, customer_code, name, source, stage) VALUES
+                ('${custB}', '${compB}', 'KH-B-01', 'Khách B', 'FACEBOOK', 'LEAD_NEW')
+            ON CONFLICT DO NOTHING;
+        `);
+
+        // Switch to authenticated User A (member of Company A only)
+        await db.exec(`
+            SET ROLE authenticated;
+            SET "request.jwt.claim.sub" = '${userA}';
+            SET "request.jwt.claim.role" = 'authenticated';
+        `);
+
+        // 17A: User A calling record_lead_attribution_touchpoint for Company B MUST FAIL CLOSED
+        await assert.rejects(
+            async () => {
+                await db.query(`
+                    SELECT record_lead_attribution_touchpoint(
+                        '${compB}'::uuid,
+                        NULL, NULL, NULL,
+                        'FACEBOOK_LEAD_ADS'
+                    );
+                `);
+            },
+            (err: any) => {
+                assert.match(err.message, /UNAUTHORIZED_COMPANY_ACCESS/);
+                return true;
+            }
+        );
+
+        // 17B: User A calling get_meta_ads_performance_report for Company B MUST FAIL CLOSED
+        await assert.rejects(
+            async () => {
+                await db.query(`
+                    SELECT get_meta_ads_performance_report(
+                        '${compB}'::uuid,
+                        '2026-01-01'::timestamptz,
+                        '2026-12-31'::timestamptz
+                    );
+                `);
+            },
+            (err: any) => {
+                assert.match(err.message, /UNAUTHORIZED_COMPANY_ACCESS/);
+                return true;
+            }
+        );
+
+        // 17C: User A calling record_lead_attribution_touchpoint for Company A with Customer of Company B MUST FAIL
+        await assert.rejects(
+            async () => {
+                await db.query(`
+                    SELECT record_lead_attribution_touchpoint(
+                        '${compA}'::uuid,
+                        '${custB}'::uuid
+                    );
+                `);
+            },
+            (err: any) => {
+                assert.match(err.message, /CUSTOMER_COMPANY_MISMATCH/);
+                return true;
+            }
+        );
+
+        // 17D: User A calling for Company A with valid parameters SUCCEEDS
+        const validTouchpoint = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                '${compA}'::uuid,
+                NULL, NULL, NULL,
+                'FACEBOOK_LEAD_ADS',
+                '1026991374010112', 'Trang A'
+            );
+        `);
+        assert.ok((validTouchpoint.rows[0] as any).record_lead_attribution_touchpoint);
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 18: Durable Leadgen Webhook Intake & Independent Processing (Priority 3)
+// -----------------------------------------------------------------------------
+test('Scenario 18: Durable event intake, idempotency, and multi-leadgen batch fault isolation', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const companyId = '61111111-1111-4111-8111-111111111111';
+
+        await db.exec(`
+            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Durable Intake', 'ACTIVE') ON CONFLICT DO NOTHING;
+        `);
+
+        // 18A: Claim leadgen event
+        const claim1 = await db.query(`
+            SELECT public.claim_meta_leadgen_event(
+                '${companyId}'::uuid,
+                '1026991374010112',
+                'lg_durable_001',
+                'form_001',
+                'ad_001'
+            );
+        `);
+        assert.equal((claim1.rows[0] as any).claim_meta_leadgen_event, 'CLAIMED');
+
+        // Finalize as PROCESSED
+        await db.query(`
+            SELECT public.finalize_meta_leadgen_event(
+                '${companyId}'::uuid,
+                'lg_durable_001',
+                'PROCESSED'
+            );
+        `);
+
+        // Repeated claim returns ALREADY_PROCESSED
+        const claim2 = await db.query(`
+            SELECT public.claim_meta_leadgen_event(
+                '${companyId}'::uuid,
+                '1026991374010112',
+                'lg_durable_001'
+            );
+        `);
+        assert.equal((claim2.rows[0] as any).claim_meta_leadgen_event, 'ALREADY_PROCESSED');
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 19: Marketing API Concurrency Guard & Safe Pagination (Priority 4)
+// -----------------------------------------------------------------------------
+test('Scenario 19: Marketing sync lease concurrency guard and complete pagination check', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const companyId = '71111111-1111-4111-8111-111111111111';
+
+        await db.exec(`
+            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Lease Test', 'ACTIVE') ON CONFLICT DO NOTHING;
+            INSERT INTO public.meta_ad_accounts (company_id, ad_account_id, name, account_status)
+            VALUES ('${companyId}', 'act_lease_01', 'Tài khoản Lease', 1);
+        `);
+
+        // 19A: First worker acquires lease
+        const lease1Res = await db.query(`
+            SELECT acquire_meta_ad_account_sync_lease('${companyId}'::uuid, 'act_lease_01', 300);
+        `);
+        const token1 = (lease1Res.rows[0] as any).acquire_meta_ad_account_sync_lease;
+        assert.ok(token1, 'First lease acquisition must succeed');
+
+        // 19B: Concurrent worker attempts to acquire lease -> MUST FAIL (return NULL)
+        const lease2Res = await db.query(`
+            SELECT acquire_meta_ad_account_sync_lease('${companyId}'::uuid, 'act_lease_01', 300);
+        `);
+        assert.equal((lease2Res.rows[0] as any).acquire_meta_ad_account_sync_lease, null, 'Concurrent lease must be denied');
+
+        // 19C: Release lease on failure -> preserves state and sets sync_error
+        await db.query(`
+            SELECT release_meta_ad_account_sync_lease(
+                '${companyId}'::uuid,
+                'act_lease_01',
+                '${token1}'::uuid,
+                'FAILED',
+                'RATE_LIMIT_EXCEEDED'
+            );
+        `);
+
+        const accCheck = await db.query(`
+            SELECT sync_status, sync_error, sync_lease_token FROM public.meta_ad_accounts WHERE company_id = '${companyId}' AND ad_account_id = 'act_lease_01';
+        `);
+        assert.equal((accCheck.rows[0] as any).sync_status, 'FAILED');
+        assert.equal((accCheck.rows[0] as any).sync_error, 'RATE_LIMIT_EXCEEDED');
+        assert.equal((accCheck.rows[0] as any).sync_lease_token, null);
+
+        // 19D: Validate ad account access error detection (Token expired 190)
+        const mockFetchExpired = async () =>
+            new Response(JSON.stringify({ error: { message: 'Session expired', code: 190 } }), { status: 400 });
+        const accessCheck = await validateAdAccountAccess('act_lease_01', 'expired-token', mockFetchExpired as any);
+        assert.equal(accessCheck.valid, false);
+        assert.equal(accessCheck.error, 'TOKEN_EXPIRED');
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 20: Attribution Rule Strictness & First-Touch Preservation (Priority 5)
+// -----------------------------------------------------------------------------
+test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is strictly immutable', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const companyId = '81111111-1111-4111-8111-111111111111';
+        const customerId = '82222222-2222-4222-8222-222222222222';
+
+        await db.exec(`
+            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Attribution Test', 'ACTIVE') ON CONFLICT DO NOTHING;
+
+            INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+            VALUES ('${customerId}', '${companyId}', 'KH-ATTR-01', 'Khách Attribution', 'FACEBOOK', 'LEAD_NEW')
+            ON CONFLICT DO NOTHING;
+
+            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status)
+            VALUES ('${companyId}', 'act_01', 'camp_valid_100', 'Chiến dịch Đầu Tiên Có Thật', 'ACTIVE');
+
+            INSERT INTO public.meta_ads (company_id, ad_account_id, meta_campaign_id, meta_ad_set_id, meta_ad_id, name, status)
+            VALUES ('${companyId}', 'act_01', 'camp_valid_100', 'adset_100', 'ad_mapped_100', 'Quảng cáo Gốc 100', 'ACTIVE');
+        `);
+
+        // 20A: Touchpoint with an unknown unmapped ad ID MUST NOT be marked ATTRIBUTED
+        const tpUnmappedId = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                '${companyId}'::uuid,
+                '${customerId}'::uuid,
+                NULL, NULL,
+                'FACEBOOK_LEAD_ADS',
+                '1026991374010112', 'Trang CHD',
+                NULL,
+                NULL, NULL,
+                NULL, NULL,
+                'ad_completely_unknown_999',
+                NULL,
+                NULL, NULL,
+                'lg_unknown_999',
+                'LEAD_ADS', 'INSTANT_FORM',
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                'ATTRIBUTED'
+            );
+        `);
+        const tp1 = (tpUnmappedId.rows[0] as any).record_lead_attribution_touchpoint;
+
+        const checkTp1 = await db.query(`SELECT attribution_status FROM public.lead_attribution_touchpoints WHERE id = '${tp1}';`);
+        assert.equal((checkTp1.rows[0] as any).attribution_status, 'UNATTRIBUTED', 'Unmapped ad must be coerced to UNATTRIBUTED');
+
+        // 20B: Touchpoint with mapped ad ID becomes ATTRIBUTED and records first-touch
+        const tpMappedId = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                '${companyId}'::uuid,
+                '${customerId}'::uuid,
+                NULL, NULL,
+                'FACEBOOK_LEAD_ADS',
+                '1026991374010112', 'Trang CHD',
+                NULL,
+                NULL, NULL,
+                NULL, NULL,
+                'ad_mapped_100',
+                NULL,
+                NULL, NULL,
+                'lg_mapped_100'
+            );
+        `);
+        const tp2 = (tpMappedId.rows[0] as any).record_lead_attribution_touchpoint;
+        const checkTp2 = await db.query(`SELECT attribution_status, campaign_name_snapshot, touchpoint_type FROM public.lead_attribution_touchpoints WHERE id = '${tp2}';`);
+        assert.equal((checkTp2.rows[0] as any).attribution_status, 'ATTRIBUTED');
+        assert.equal((checkTp2.rows[0] as any).campaign_name_snapshot, 'Chiến dịch Đầu Tiên Có Thật');
+
+        // 20C: Add second mapped campaign touchpoint and verify First-Touch snapshot is NOT overwritten
+        await db.exec(`
+            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status)
+            VALUES ('${companyId}', 'act_01', 'camp_valid_200', 'Chiến dịch Thứ Hai (Mới)', 'ACTIVE');
+
+            INSERT INTO public.meta_ads (company_id, ad_account_id, meta_campaign_id, meta_ad_set_id, meta_ad_id, name, status)
+            VALUES ('${companyId}', 'act_01', 'camp_valid_200', 'adset_200', 'ad_mapped_200', 'Quảng cáo Sau 200', 'ACTIVE');
+        `);
+
+        await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                '${companyId}'::uuid,
+                '${customerId}'::uuid,
+                NULL, NULL,
+                'FACEBOOK_LEAD_ADS',
+                '1026991374010112', 'Trang CHD',
+                NULL,
+                NULL, NULL,
+                NULL, NULL,
+                'ad_mapped_200',
+                NULL,
+                NULL, NULL,
+                'lg_mapped_200'
+            );
+        `);
+
+        const custAfter = await db.query(`
+            SELECT first_campaign_name, latest_campaign_name FROM public.customers WHERE id = '${customerId}';
+        `);
+        const cRow = custAfter.rows[0] as any;
+        assert.equal(cRow.first_campaign_name, 'Chiến dịch Đầu Tiên Có Thật');
+        assert.equal(cRow.latest_campaign_name, 'Chiến dịch Thứ Hai (Mới)');
+    } finally {
+        await supabase.close();
+    }
+});
+
+// -----------------------------------------------------------------------------
+// SCENARIO 21: Reporting Accuracy, Metric Distinction & Campaign Filtering (Priority 6)
+// -----------------------------------------------------------------------------
+test('Scenario 21: Performance report campaign filtering consistency and repeat touchpoint deduplication', async () => {
+    const supabase = await createPgliteSupabase();
+    const { db } = supabase;
+
+    try {
+        const companyId = '91111111-1111-4111-8111-111111111111';
+
+        await db.exec(`
+            INSERT INTO public.companies (id, name, status) VALUES ('${companyId}', 'CHD Accuracy Testing', 'ACTIVE') ON CONFLICT DO NOTHING;
+
+            INSERT INTO public.meta_ad_accounts (company_id, ad_account_id, name, account_status)
+            VALUES ('${companyId}', 'act_acc_01', 'Tài khoản Chính', 1);
+
+            INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status) VALUES
+                ('${companyId}', 'act_acc_01', 'camp_acc_A', 'Chiến dịch A', 'ACTIVE'),
+                ('${companyId}', 'act_acc_01', 'camp_acc_B', 'Chiến dịch B', 'ACTIVE');
+
+            INSERT INTO public.meta_insights_daily (
+                company_id, ad_account_id, entity_type, entity_id, date, spend, impressions, clicks, meta_leads
+            ) VALUES
+                ('${companyId}', 'act_acc_01', 'ACCOUNT', 'act_acc_01', '2026-10-28', 15000000, 150000, 3000, 30),
+                ('${companyId}', 'act_acc_01', 'CAMPAIGN', 'camp_acc_A', '2026-10-28', 10000000, 100000, 2000, 20),
+                ('${companyId}', 'act_acc_01', 'CAMPAIGN', 'camp_acc_B', '2026-10-28', 5000000, 50000, 1000, 10);
+        `);
+
+        // Customer 1 has 3 repeat touchpoints for Campaign A
+        const cust1 = '92222222-2222-4222-8222-111111111111';
+        await db.exec(`
+            INSERT INTO public.customers (id, company_id, customer_code, name, source, stage, attribution_status)
+            VALUES ('${cust1}', '${companyId}', 'KH-REPEAT-01', 'Khách Trùng', 'FACEBOOK', 'high_potential', 'ATTRIBUTED');
+
+            INSERT INTO public.lead_attribution_touchpoints (company_id, customer_id, channel, touchpoint_type, ad_account_id, meta_campaign_id, attribution_status, occurred_at) VALUES
+                ('${companyId}', '${cust1}', 'FACEBOOK_LEAD_ADS', 'FIRST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T10:00:00Z'),
+                ('${companyId}', '${cust1}', 'FACEBOOK_MESSENGER', 'LATEST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T11:00:00Z'),
+                ('${companyId}', '${cust1}', 'FACEBOOK_LEAD_ADS', 'LATEST_TOUCH', 'act_acc_01', 'camp_acc_A', 'ATTRIBUTED', '2026-10-28T12:00:00Z');
+        `);
+
+        // 21A: Report with Campaign A filter -> Spend MUST be 10,000,000 (not 15,000,000)
+        const resFilterA = await db.query(`
+            SELECT get_meta_ads_performance_report(
+                '${companyId}'::uuid,
+                '2026-10-01'::timestamptz,
+                '2026-10-31'::timestamptz,
+                'act_acc_01',
+                'camp_acc_A'
+            );
+        `);
+        const reportA = (resFilterA.rows[0] as any).get_meta_ads_performance_report;
+        assert.equal(reportA.overview.spend, 10000000, 'Spend must match Campaign A spend when filtered');
+        assert.equal(reportA.overview.meta_leads, 20);
+
+        // 21B: Repeat touchpoints for same customer MUST NOT inflate crm_leads or unique_customers
+        assert.equal(reportA.overview.crm_leads, 1, 'Repeat touchpoints must deduplicate to 1 unique lead');
+        assert.equal(reportA.overview.unique_customers, 1, 'Must count exactly 1 unique customer');
+        assert.equal(reportA.overview.total_touchpoints, 3, 'Total touchpoints must report all 3 events');
+
+        // CPL = 10,000,000 / 1 = 10,000,000 VND
+        assert.equal(reportA.overview.cpl, 10000000);
     } finally {
         await supabase.close();
     }

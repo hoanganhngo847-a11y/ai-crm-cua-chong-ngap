@@ -59,7 +59,7 @@ export async function GET(request: Request) {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set(
       'scope',
-      'pages_show_list,pages_manage_metadata,pages_messaging,ads_read,leads_retrieval',
+      'pages_show_list,pages_manage_metadata,pages_messaging,pages_read_engagement,pages_manage_ads,ads_read,ads_management,leads_retrieval',
     );
     if (config.loginConfigId) {
       url.searchParams.set('config_id', config.loginConfigId);

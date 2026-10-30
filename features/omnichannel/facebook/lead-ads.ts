@@ -156,12 +156,43 @@ export async function processLeadAdsChange(
         throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
     }
 
+    // 0. Durable event intake: claim event (Priority 3)
+    try {
+        const claimResult = (await rpc('claim_meta_leadgen_event', {
+            p_company_id: config.company,
+            p_page_id: config.page,
+            p_leadgen_id: change.leadgenId,
+            p_form_id: change.formId || null,
+            p_ad_id: change.adId || null,
+            p_occurred: change.time,
+        })) as string;
+
+        if (claimResult === 'ALREADY_PROCESSED') {
+            return {
+                leadgenId: change.leadgenId,
+                status: 'EXISTING',
+            };
+        }
+    } catch (claimErr) {
+        console.warn(`[lead-ads] claim_leadgen_event_rpc_error id=${change.leadgenId}`, claimErr);
+    }
+
     // 1. Retrieve lead details from Meta Graph API
     let leadData: MetaLeadData;
     try {
         leadData = await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
     } catch (err) {
-        console.error(`[lead-ads] failed_to_fetch_lead id=${change.leadgenId}`, err);
+        console.error(`[lead-ads] failed_to_fetch_lead id=${change.leadgenId}`);
+        try {
+            await rpc('finalize_meta_leadgen_event', {
+                p_company_id: config.company,
+                p_leadgen_id: change.leadgenId,
+                p_status: 'FAILED',
+                p_error: 'FETCH_LEAD_DETAILS_FAILED',
+            });
+        } catch {
+            // Best effort finalize
+        }
         throw err;
     }
 
@@ -204,10 +235,30 @@ export async function processLeadAdsChange(
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('IDEMPOTENCY_CONFLICT')) {
+            try {
+                await rpc('finalize_meta_leadgen_event', {
+                    p_company_id: config.company,
+                    p_leadgen_id: change.leadgenId,
+                    p_status: 'PROCESSED',
+                });
+            } catch {
+                // Best effort
+            }
             return {
                 leadgenId: change.leadgenId,
                 status: 'EXISTING',
             };
+        }
+
+        try {
+            await rpc('finalize_meta_leadgen_event', {
+                p_company_id: config.company,
+                p_leadgen_id: change.leadgenId,
+                p_status: 'FAILED',
+                p_error: 'INGEST_FAILED',
+            });
+        } catch {
+            // Best effort
         }
         throw err;
     }
@@ -231,10 +282,10 @@ export async function processLeadAdsChange(
         }
     }
 
-    // 6. Record Lead Attribution Touchpoint
+    // 6. Record Lead Attribution Touchpoint (Priority 5: ATTRIBUTED only if campaign resolved)
     let touchpointId: string | undefined;
     try {
-        const attributionStatus = campaignId || adId ? 'ATTRIBUTED' : 'UNATTRIBUTED';
+        const initialStatus = campaignId ? 'ATTRIBUTED' : 'UNATTRIBUTED';
 
         touchpointId = (await rpc('record_lead_attribution_touchpoint', {
             p_company: config.company,
@@ -263,12 +314,25 @@ export async function processLeadAdsChange(
             p_utm_content: null,
             p_utm_term: null,
             p_fbclid: null,
-            p_attribution_status: attributionStatus,
+            p_attribution_status: initialStatus,
             p_attribution_method: 'DIRECT_LEADGEN',
             p_occurred: change.time,
         })) as string;
     } catch (touchpointErr) {
         console.warn(`[lead-ads] failed_to_record_touchpoint id=${change.leadgenId}`, touchpointErr);
+    }
+
+    // 7. Finalize durable event as PROCESSED
+    try {
+        await rpc('finalize_meta_leadgen_event', {
+            p_company_id: config.company,
+            p_leadgen_id: change.leadgenId,
+            p_status: 'PROCESSED',
+            p_interaction_id: interactionId || null,
+            p_customer_id: customerId || null,
+        });
+    } catch (finErr) {
+        console.warn(`[lead-ads] finalize_meta_leadgen_event_failed id=${change.leadgenId}`, finErr);
     }
 
     return {

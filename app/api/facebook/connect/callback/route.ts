@@ -81,7 +81,12 @@ export async function GET(request: Request) {
     const url = publicAdminUrl(request);
     url.searchParams.set('step', 'select');
     return NextResponse.redirect(url);
-  } catch {
-    return back(request, 'FACEBOOK_CONNECT_CALLBACK_FAILED');
+  } catch (error) {
+    const code =
+      error instanceof Error && error.message.startsWith('FACEBOOK_')
+        ? error.message
+        : 'FACEBOOK_CONNECT_CALLBACK_FAILED';
+    console.error('[meta-connect] callback_failed', error);
+    return back(request, code);
   }
 }

@@ -127,9 +127,20 @@ export async function POST(request: Request) {
             throw new ChannelError('TOO_MANY_EVENTS', 413);
         }
 
-        // Process Lead Ads events (Instant Forms)
+        // Process Lead Ads events (Instant Forms) independently (Priority 3)
+        const leadgenErrors: Array<{ leadgenId: string; error: unknown }> = [];
         for (const { config, change } of leadgenChanges) {
-            await processLeadAdsChange(config, change);
+            try {
+                await processLeadAdsChange(config, change);
+            } catch (err) {
+                console.error(`[meta-webhook] leadgen_event_failed id=${change.leadgenId}`);
+                leadgenErrors.push({ leadgenId: change.leadgenId, error: err });
+            }
+        }
+
+        if (leadgenErrors.length > 0) {
+            console.error(`[meta-webhook] ${leadgenErrors.length} leadgen events failed in batch`);
+            throw new ChannelError('LEAD_INGESTION_FAILED', 503);
         }
 
         // Process Messenger messaging events
@@ -216,7 +227,7 @@ export async function POST(request: Request) {
                                 p_utm_content: null,
                                 p_utm_term: null,
                                 p_fbclid: null,
-                                p_attribution_status: isAd ? 'ATTRIBUTED' : 'UNATTRIBUTED',
+                                p_attribution_status: 'UNATTRIBUTED',
                                 p_attribution_method: isAd ? 'AD_LOOKUP' : 'MESSENGER_REFERRAL',
                                 p_occurred: event.time,
                             });

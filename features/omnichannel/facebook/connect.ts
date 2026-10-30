@@ -225,35 +225,49 @@ export async function exchangeCodeForUserAccessToken(code: string) {
 
 async function fetchManagedPagesWithTokens(userAccessToken: string) {
   const version = graphVersion();
-  const url = new URL(`https://graph.facebook.com/${version}/me/accounts`);
-  url.searchParams.set('fields', 'id,name,access_token');
-  url.searchParams.set('limit', '100');
+  let nextUrl: string | null = `https://graph.facebook.com/${version}/me/accounts?fields=id,name,access_token&limit=100`;
+  const allPages: Array<{ id: string; name: string; accessToken: string }> = [];
+  let pageCount = 0;
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${userAccessToken}` },
-    cache: 'no-store',
-    signal: AbortSignal.timeout(10_000),
-  });
+  while (nextUrl && pageCount < 10) {
+    pageCount++;
+    const response = await fetch(nextUrl, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${userAccessToken}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
 
-  if (!response.ok) throw new Error('FACEBOOK_PAGE_LIST_FAILED');
-  const payload = (await response.json()) as {
-    data?: Array<{ id?: unknown; name?: unknown; access_token?: unknown }>;
-  };
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[meta-connect] page_list_failed status=${response.status} msg=${errorText.slice(0, 200)}`);
+      throw new Error(`FACEBOOK_PAGE_LIST_FAILED_${response.status}`);
+    }
 
-  return (payload.data || [])
-    .filter(
-      (page) =>
-        typeof page.id === 'string' &&
-        /^\d+$/.test(page.id) &&
-        typeof page.name === 'string' &&
-        typeof page.access_token === 'string',
-    )
-    .map((page) => ({
-      id: page.id as string,
-      name: (page.name as string).trim().slice(0, 120),
-      accessToken: page.access_token as string,
-    }));
+    const payload = (await response.json()) as {
+      data?: Array<{ id?: unknown; name?: unknown; access_token?: unknown }>;
+      paging?: { next?: string };
+    };
+
+    const validInPage = (payload.data || [])
+      .filter(
+        (page) =>
+          typeof page.id === 'string' &&
+          /^\d+$/.test(page.id) &&
+          typeof page.name === 'string' &&
+          typeof page.access_token === 'string',
+      )
+      .map((page) => ({
+        id: page.id as string,
+        name: (page.name as string).trim().slice(0, 120),
+        accessToken: page.access_token as string,
+      }));
+
+    allPages.push(...validInPage);
+    nextUrl = payload.paging?.next || null;
+  }
+
+  return allPages;
 }
 
 export async function listManagedFacebookPages(userAccessToken: string) {
@@ -262,26 +276,32 @@ export async function listManagedFacebookPages(userAccessToken: string) {
 }
 
 export async function listManagedAdAccounts(userAccessToken: string): Promise<ManagedAdAccount[]> {
-  try {
-    const version = graphVersion();
-    const url = new URL(`https://graph.facebook.com/${version}/me/adaccounts`);
-    url.searchParams.set('fields', 'id,account_id,name,account_status,currency');
-    url.searchParams.set('limit', '100');
-    url.searchParams.set('access_token', userAccessToken);
+  const version = graphVersion();
+  let nextUrl: string | null = `https://graph.facebook.com/${version}/me/adaccounts?fields=id,account_id,name,account_status,currency&limit=100`;
+  const allAccounts: ManagedAdAccount[] = [];
+  let pageCount = 0;
 
-    const response = await fetch(url.toString(), {
+  while (nextUrl && pageCount < 10) {
+    pageCount++;
+    const response = await fetch(nextUrl, {
       method: 'GET',
       headers: { Authorization: `Bearer ${userAccessToken}` },
       cache: 'no-store',
       signal: AbortSignal.timeout(10_000),
     });
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[meta-connect] ad_accounts_fetch_failed status=${response.status} msg=${errorText.slice(0, 200)}`);
+      throw new Error(`FACEBOOK_AD_ACCOUNTS_FETCH_FAILED_${response.status}`);
+    }
+
     const payload = (await response.json()) as {
       data?: Array<{ id?: unknown; name?: unknown; currency?: unknown; account_status?: unknown }>;
+      paging?: { next?: string };
     };
 
-    return (payload.data || [])
+    const validInPage = (payload.data || [])
       .filter((acc) => typeof acc.id === 'string' && typeof acc.name === 'string')
       .map((acc) => ({
         id: String(acc.id),
@@ -289,9 +309,12 @@ export async function listManagedAdAccounts(userAccessToken: string): Promise<Ma
         currency: typeof acc.currency === 'string' ? acc.currency : 'VND',
         accountStatus: typeof acc.account_status === 'number' ? acc.account_status : 1,
       }));
-  } catch {
-    return [];
+
+    allAccounts.push(...validInPage);
+    nextUrl = payload.paging?.next || null;
   }
+
+  return allAccounts;
 }
 
 export function configuredFacebookPageIds(companyId: string) {

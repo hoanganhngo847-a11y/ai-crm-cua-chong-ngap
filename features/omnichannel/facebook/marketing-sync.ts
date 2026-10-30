@@ -153,12 +153,12 @@ export async function fetchUserAdAccounts(
 }
 
 /**
- * Paginated Graph API fetcher
+ * Paginated Graph API fetcher with complete pagination verification (Priority 4)
  */
 async function fetchAllPages<T>(
     initialUrl: URL,
     customFetch?: typeof fetch,
-    maxPages = 10,
+    maxPages = 50,
 ): Promise<T[]> {
     const results: T[] = [];
     let currentUrl: string | null = initialUrl.toString();
@@ -167,7 +167,11 @@ async function fetchAllPages<T>(
     while (currentUrl && pages < maxPages) {
         pages++;
         const response = await fetchWithBackoff(currentUrl, {}, customFetch);
-        if (!response.ok) break;
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[meta-sync] page_fetch_failed status=${response.status} url=${currentUrl}`);
+            throw new Error(`GRAPH_PAGE_FETCH_FAILED_${response.status}: ${errorText.slice(0, 200)}`);
+        }
 
         const payload = (await response.json()) as {
             data?: T[];
@@ -179,6 +183,10 @@ async function fetchAllPages<T>(
         }
 
         currentUrl = payload.paging?.next || null;
+    }
+
+    if (currentUrl && pages >= maxPages) {
+        console.warn(`[meta-sync] pagination_limit_reached maxPages=${maxPages} initialUrl=${initialUrl.pathname}`);
     }
 
     return results;
@@ -480,6 +488,34 @@ export async function syncDailyInsightsForAccount(
 }
 
 /**
+ * Validate token access to a specific Ad Account (Priority 4)
+ */
+export async function validateAdAccountAccess(
+    adAccountId: string,
+    accessToken: string,
+    customFetch?: typeof fetch,
+): Promise<{ valid: boolean; error?: string }> {
+    const version = graphVersion();
+    const formattedId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+    const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(formattedId)}`);
+    url.searchParams.set('fields', 'id,account_status');
+    url.searchParams.set('access_token', accessToken);
+
+    const response = await fetchWithBackoff(url.toString(), {}, customFetch);
+    if (!response.ok) {
+        const text = await response.text();
+        if (text.includes('"code":190')) {
+            return { valid: false, error: 'TOKEN_EXPIRED' };
+        }
+        if (text.includes('"code":10') || text.includes('"code":200')) {
+            return { valid: false, error: 'TOKEN_PERMISSION_DENIED' };
+        }
+        return { valid: false, error: `ACCOUNT_ACCESS_FAILED_${response.status}` };
+    }
+    return { valid: true };
+}
+
+/**
  * Master coordinator to sync all Meta Ads assets for a company
  */
 export async function syncCompanyMetaAds(
@@ -509,7 +545,7 @@ export async function syncCompanyMetaAds(
         throw new Error('FAILED_TO_LOAD_AD_ACCOUNTS');
     }
 
-    // 2. Resolve access token: passed token > ad account stored token > system user token
+    // 2. Resolve access token: passed token > ad account stored token via private RPC > system user token
     const fallbackToken =
         options.token ||
         process.env.META_SYSTEM_USER_TOKEN?.trim() ||
@@ -522,23 +558,51 @@ export async function syncCompanyMetaAds(
 
     for (const acc of accounts || []) {
         let token = fallbackToken;
-        if (acc.access_token) {
+
+        // Retrieve encrypted token from private schema via server-only RPC (Priority 1)
+        const { data: tokenData } = await supabase.rpc('get_meta_ad_account_token', {
+            p_company_id: companyId,
+            p_ad_account_id: acc.ad_account_id,
+        });
+
+        if (tokenData && Array.isArray(tokenData) && tokenData.length > 0 && tokenData[0].encrypted_access_token) {
             try {
-                token = decryptToken(acc.access_token);
-            } catch {
-                // If decryption fails, use fallback
+                token = decryptToken(tokenData[0].encrypted_access_token);
+            } catch (decErr) {
+                // Do not silently swallow token decryption errors (Priority 4)
+                console.error(`[meta-sync] token_decryption_failed id=${acc.ad_account_id}`, decErr);
+                await supabase
+                    .from('meta_ad_accounts')
+                    .update({
+                        sync_status: 'FAILED',
+                        sync_error: 'TOKEN_DECRYPTION_FAILED',
+                    })
+                    .eq('id', acc.id);
+                continue;
             }
         }
 
         if (!token) continue;
 
-        // Mark account as SYNCING
-        await supabase
-            .from('meta_ad_accounts')
-            .update({ sync_status: 'SYNCING', sync_error: null })
-            .eq('id', acc.id);
+        // Concurrency Guard: Acquire Lease (Priority 4)
+        const { data: leaseToken } = await supabase.rpc('acquire_meta_ad_account_sync_lease', {
+            p_company_id: companyId,
+            p_ad_account_id: acc.ad_account_id,
+            p_lease_duration_seconds: 300,
+        });
+
+        if (!leaseToken) {
+            console.info(`[meta-sync] sync_lease_unavailable id=${acc.ad_account_id}`);
+            continue;
+        }
 
         try {
+            // Validate token ownership and access for this ad account (Priority 4)
+            const validation = await validateAdAccountAccess(acc.ad_account_id, token, options.customFetch);
+            if (!validation.valid) {
+                throw new Error(validation.error || 'INVALID_AD_ACCOUNT_ACCESS');
+            }
+
             const campaignsCount = await syncCampaignsForAccount(companyId, acc.ad_account_id, token, options.customFetch);
             const adSetsCount = await syncAdSetsForAccount(companyId, acc.ad_account_id, token, options.customFetch);
             const adsCount = await syncAdsForAccount(companyId, acc.ad_account_id, token, options.customFetch);
@@ -549,25 +613,24 @@ export async function syncCompanyMetaAds(
             totalAds += adsCount;
             totalInsights += insightsCount;
 
-            await supabase
-                .from('meta_ad_accounts')
-                .update({
-                    sync_status: 'SUCCESS',
-                    last_synced_at: new Date().toISOString(),
-                    sync_error: null,
-                })
-                .eq('id', acc.id);
+            await supabase.rpc('release_meta_ad_account_sync_lease', {
+                p_company_id: companyId,
+                p_ad_account_id: acc.ad_account_id,
+                p_lease_token: leaseToken,
+                p_status: 'SUCCESS',
+            });
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`[meta-sync] sync_account_failed id=${acc.ad_account_id}`, err);
 
-            await supabase
-                .from('meta_ad_accounts')
-                .update({
-                    sync_status: 'FAILED',
-                    sync_error: errMsg,
-                })
-                .eq('id', acc.id);
+            // Preserve last successful sync data when a new sync fails (Priority 4)
+            await supabase.rpc('release_meta_ad_account_sync_lease', {
+                p_company_id: companyId,
+                p_ad_account_id: acc.ad_account_id,
+                p_lease_token: leaseToken,
+                p_status: 'FAILED',
+                p_error: errMsg,
+            });
         }
     }
 
