@@ -52,7 +52,7 @@ const SUITE_STEPS: Step[] = [
     id: 'ANALYTICS_RUN_1',
     name: 'Analytics DB Fixtures — Iteration 1',
     command: 'npx',
-    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics.test.ts'],
+    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics_ui.test.ts'],
   },
   {
     id: 'AI_WORKER_RUN_2',
@@ -64,7 +64,7 @@ const SUITE_STEPS: Step[] = [
     id: 'ANALYTICS_RUN_2',
     name: 'Analytics DB Fixtures — Iteration 2 (Verifying repeatability on dirty DB)',
     command: 'npx',
-    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics.test.ts'],
+    args: ['tsx', '--conditions=react-server', 'tests/analytics/analytics_ui.test.ts'],
   },
 
   // --- Stage 3: Response SLA DB Repeatability ---
@@ -144,8 +144,8 @@ async function verifyCanonicalInboxFixture(
   );
   assert.strictEqual(
     row.external_conversation_id,
-    'fb-conv-test-001',
-    `external_conversation_id must be canonical 'fb-conv-test-001' (received '${row.external_conversation_id}').`
+    '987654321012345:880000000000031',
+    `external_conversation_id must be canonical '987654321012345:880000000000031' (received '${row.external_conversation_id}').`
   );
   assert.strictEqual(
     row.status,
@@ -210,7 +210,7 @@ async function main() {
       company_id: TEST_COMPANY_ID_2,
       customer_id: DIRTY_STALE_CUSTOMER_ID, // CORRUPTED: canonical is CANONICAL_CUSTOMER_ID
       channel: 'ZALO', // CORRUPTED: canonical is 'FACEBOOK'
-      external_conversation_id: 'corrupt_stale_ext_id_999', // CORRUPTED: canonical is 'fb-conv-test-001'
+      external_conversation_id: 'corrupt_stale_ext_id_999', // CORRUPTED: canonical is '987654321012345:880000000000031'
       status: 'CLOSED', // CORRUPTED: canonical is 'OPEN'
       unread_count: 42, // CORRUPTED: canonical is 0
     });

@@ -1,0 +1,100 @@
+{
+  "table_name": "payment_transactions",
+  "constraints": [
+    {
+      "name": "fk_pt_matched_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, matched_order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "payment_transactions_amount_check",
+      "type": "c",
+      "definition": "CHECK (amount > 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "payment_transactions_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "payment_transactions_match_confidence_check",
+      "type": "c",
+      "definition": "CHECK (match_confidence >= 0::numeric AND match_confidence <= 1::numeric)",
+      "referenced_table": null,
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "payment_transactions_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "payment_transactions_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['PENDING'::text, 'MATCHED'::text, 'MANUAL_REVIEW_REQUIRED'::text, 'REJECTED'::text, 'RECONCILED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "payment_transactions"
+    },
+    {
+      "name": "uq_pt_company_provider_ref",
+      "type": "u",
+      "definition": "UNIQUE (company_id, provider, provider_ref)",
+      "referenced_table": null,
+      "referencing_table": "payment_transactions"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_payment_facts_immutability",
+      "function": "enforce_payment_facts_immutability()",
+      "definition": "CREATE TRIGGER trg_payment_facts_immutability BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION enforce_payment_facts_immutability()"
+    },
+    {
+      "name": "trg_tenant_mutation_payments",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_payments BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_payment_transactions",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_payment_transactions BEFORE UPDATE ON payment_transactions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_payment_transactions_matched",
+      "definition": "CREATE INDEX idx_payment_transactions_matched ON public.payment_transactions USING btree (company_id, matched_order_id) WHERE (matched_order_id IS NOT NULL)"
+    },
+    {
+      "name": "idx_payment_transactions_status",
+      "definition": "CREATE INDEX idx_payment_transactions_status ON public.payment_transactions USING btree (company_id, status, occurred_at DESC)"
+    },
+    {
+      "name": "payment_transactions_pkey",
+      "definition": "CREATE UNIQUE INDEX payment_transactions_pkey ON public.payment_transactions USING btree (id)"
+    },
+    {
+      "name": "uq_pt_company_provider_ref",
+      "definition": "CREATE UNIQUE INDEX uq_pt_company_provider_ref ON public.payment_transactions USING btree (company_id, provider, provider_ref)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "payment_transactions_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    }
+  ]
+}

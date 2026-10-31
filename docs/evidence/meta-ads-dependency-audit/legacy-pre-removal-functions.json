@@ -1,0 +1,2512 @@
+[
+  {
+    "name": "accept_installation_appointment_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.accept_installation_appointment_atomic(uuid,uuid,uuid)",
+        "name": "accept_installation_appointment_atomic",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 157,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4799
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4786
+          },
+          {
+            "name": "p_appointment_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4824
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4807
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4843
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4832
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  a public.appointments;\n  r text;\nBEGIN\n  -- 1. Authorize ACTIVE TECHNICIAN in target company\n  r := public.operations_actor(p_company_id, p_actor_id, ARRAY['TECHNICIAN']);\n\n  -- 2. Lock appointment\n  SELECT * INTO a FROM public.appointments\n  WHERE company_id = p_company_id AND id = p_appointment_id\n  FOR UPDATE;\n\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  -- 3. Verify appointment type\n  IF a.type <> 'INSTALLATION' THEN\n    RAISE EXCEPTION 'INVALID_INPUT';\n  END IF;\n\n  -- 4. Only the exact assigned ACTIVE TECHNICIAN may accept it\n  IF a.assignee_id <> p_actor_id THEN\n    RAISE EXCEPTION 'PERMISSION_DENIED';\n  END IF;\n\n  -- 5. Idempotent check\n  IF a.status = 'ACCEPTED' THEN\n    RETURN jsonb_build_object('success', true, 'idempotent', true);\n  END IF;\n\n  IF a.status <> 'ASSIGNED' THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  -- 6. Transition\n  UPDATE public.appointments\n  SET status = 'ACCEPTED',\n      updated_at = now()\n  WHERE id = a.id;\n\n  -- 7. Audit log\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'ACCEPT_INSTALLATION_APPOINTMENT',\n    'appointments',\n    a.id,\n    jsonb_build_object(\n      'from_status', 'ASSIGNED',\n      'to_status', 'ACCEPTED'\n    )\n  );\n\n  RETURN jsonb_build_object('success', true, 'idempotent', false);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "begin_survey_photo_operation",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.begin_survey_photo_operation(uuid,uuid)",
+        "name": "begin_survey_photo_operation",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 26,
+        "parameters": [
+          {
+            "name": "p_appointment_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 1630
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 1613
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 1649
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 1638
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  a public.appointments;\n  v_op public.survey_photo_operations;\n  v_token uuid;\nBEGIN\n  SELECT * INTO a FROM public.appointments WHERE id = p_appointment_id FOR UPDATE;\n  IF NOT FOUND OR a.type <> 'SURVEY' OR a.status NOT IN ('ASSIGNED','ACCEPTED','IN_PROGRESS') THEN\n    RAISE EXCEPTION 'INVALID_SURVEY_PHOTO_RESOURCE';\n  END IF;\n  IF NOT EXISTS (\n    SELECT 1 FROM public.user_profiles p JOIN public.company_members m ON m.user_id = p.id\n    WHERE p.id = p_actor_id AND p.status = 'ACTIVE' AND m.status = 'ACTIVE'\n      AND m.company_id = a.company_id\n      AND (m.role = 'BOSS_ADMIN' OR (m.role = 'TECHNICIAN' AND a.assignee_id = p_actor_id))\n  ) THEN RAISE EXCEPTION 'SURVEY_PHOTO_FORBIDDEN'; END IF;\n\n  SELECT * INTO v_op FROM public.survey_photo_operations\n  WHERE appointment_id = a.id FOR UPDATE;\n\n  IF FOUND THEN\n    IF v_op.expires_at > pg_catalog.now() THEN\n      RAISE EXCEPTION 'SURVEY_PHOTO_OPERATION_IN_PROGRESS';\n    END IF;\n    -- Expired lock: atomically reclaim it with new token and fixed 15-minute lease\n    v_token := pg_catalog.gen_random_uuid();\n    UPDATE public.survey_photo_operations\n    SET token = v_token,\n        actor_id = p_actor_id,\n        started_at = pg_catalog.now(),\n        expires_at = pg_catalog.now() + interval '15 minutes'\n    WHERE appointment_id = a.id;\n    RETURN v_token;\n  END IF;\n\n  v_token := pg_catalog.gen_random_uuid();\n  INSERT INTO public.survey_photo_operations(appointment_id, token, actor_id, started_at, expires_at)\n  VALUES (a.id, v_token, p_actor_id, pg_catalog.now(), pg_catalog.now() + interval '15 minutes');\n  RETURN v_token;\nEND ",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "claim_contract_generation_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.claim_contract_generation_rpc(uuid,uuid,bool)",
+        "name": "claim_contract_generation_rpc",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 350,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14975
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14962
+          },
+          {
+            "name": "p_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14996
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14985
+          },
+          {
+            "name": "p_force_revision",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "pg_catalog"
+                  }
+                },
+                {
+                  "String": {
+                    "sval": "bool"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 15023
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "boolval": {},
+                "location": 15039
+              }
+            },
+            "location": 15006
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_order public.orders%ROWTYPE;\n    v_current_contract public.contracts%ROWTYPE;\n    v_contract_id uuid;\n    v_max_revision integer := 0;\n    v_next_revision integer;\nBEGIN\n    -- Advisory lock per (company_id, order_id)\n    PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || ':CONTRACT:' || p_order_id::text));\n\n    SELECT * INTO v_order\n    FROM public.orders\n    WHERE id = p_order_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_order.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Order not found';\n    END IF;\n\n    IF v_order.deposit_status <> 'DEPOSIT_CONFIRMED' THEN\n        RAISE EXCEPTION 'DEPOSIT_NOT_CONFIRMED: Cannot generate contract until deposit is confirmed';\n    END IF;\n\n    -- Look up current contract for this order\n    SELECT * INTO v_current_contract\n    FROM public.contracts\n    WHERE company_id = p_company_id AND order_id = p_order_id AND is_current\n    LIMIT 1;\n\n    IF v_current_contract.id IS NOT NULL THEN\n        -- Section 9: Never overwrite SIGNED contracts\n        IF v_current_contract.status = 'SIGNED' AND p_force_revision THEN\n            RAISE EXCEPTION 'CANNOT_REVISE_SIGNED_CONTRACT: Signed contracts cannot be regenerated or superseded';\n        END IF;\n\n        -- If not forcing revision: return existing canonical contract\n        IF NOT p_force_revision THEN\n            IF v_current_contract.status IN ('GENERATED', 'SENT_TO_CUSTOMER', 'SIGNED') AND v_current_contract.generated_file_ref <> 'CLAIMED' THEN\n                RETURN jsonb_build_object(\n                    'status', 'ALREADY_EXISTS',\n                    'contractId', v_current_contract.id,\n                    'revisionNo', v_current_contract.revision_no,\n                    'contractStatus', v_current_contract.status,\n                    'generatedFileRef', v_current_contract.generated_file_ref\n                );\n            END IF;\n\n            RETURN jsonb_build_object(\n                'status', 'CLAIMED',\n                'contractId', v_current_contract.id,\n                'revisionNo', v_current_contract.revision_no,\n                'orderFinalAmount', v_order.final_amount,\n                'customerId', v_order.customer_id\n            );\n        END IF;\n\n        -- If explicit regeneration requested: previous current becomes SUPERSEDED, is_current = false\n        UPDATE public.contracts\n        SET is_current = false,\n            status = 'SUPERSEDED',\n            updated_at = now()\n        WHERE id = v_current_contract.id;\n    END IF;\n\n    -- Determine next revision number atomically\n    SELECT COALESCE(MAX(revision_no), 0) INTO v_max_revision\n    FROM public.contracts\n    WHERE company_id = p_company_id AND order_id = p_order_id;\n\n    v_next_revision := v_max_revision + 1;\n\n    -- Insert new current contract\n    INSERT INTO public.contracts (\n        company_id,\n        order_id,\n        revision_no,\n        template_version,\n        generated_file_ref,\n        signed_file_ref,\n        status,\n        contract_value,\n        is_current\n    ) VALUES (\n        p_company_id,\n        p_order_id,\n        v_next_revision,\n        'v1',\n        'CLAIMED',\n        NULL,\n        'GENERATED',\n        v_order.final_amount,\n        true\n    )\n    RETURNING id INTO v_contract_id;\n\n    RETURN jsonb_build_object(\n        'status', 'CLAIMED',\n        'contractId', v_contract_id,\n        'revisionNo', v_next_revision,\n        'orderFinalAmount', v_order.final_amount,\n        'customerId', v_order.customer_id\n    );\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "complete_installation_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "name": "complete_installation_atomic",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 11322
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 11309
+          },
+          {
+            "name": "p_installation_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 11348
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 11330
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 11367
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 11356
+          },
+          {
+            "name": "p_verified_photos",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 11393
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 11375
+          },
+          {
+            "name": "p_verified_handover",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 11422
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 11402
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  i public.installations;\n  o public.orders;\n  a public.appointments;\n  r text;\n  ref text;\nBEGIN\n  r := public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN','TECHNICIAN']);\n  SELECT * INTO i FROM public.installations WHERE company_id = p_company_id AND id = p_installation_id FOR UPDATE;\n  IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n\n  SELECT * INTO o FROM public.orders WHERE company_id = p_company_id AND id = i.order_id FOR UPDATE;\n  IF NOT FOUND OR o.customer_id <> i.customer_id THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n\n  SELECT * INTO a FROM public.appointments WHERE company_id = p_company_id AND id = i.appointment_id FOR UPDATE;\n  IF NOT FOUND OR a.customer_id <> i.customer_id OR a.type <> 'INSTALLATION' THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n\n  IF r = 'TECHNICIAN' AND a.assignee_id <> p_actor_id THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n\n  -- Idempotency check: if all are already completed\n  IF i.status = 'COMPLETED' AND o.order_status = 'COMPLETED' THEN\n    IF a.status <> 'COMPLETED' THEN\n      UPDATE public.appointments SET status = 'COMPLETED', updated_at = now() WHERE id = a.id;\n    END IF;\n    RETURN jsonb_build_object('success', true, 'idempotent', true);\n  END IF;\n\n  -- Predecessor checks: installation HANDOVER_PENDING, order in READY_FOR_INSTALL/INSTALLING, appointment in ACCEPTED/IN_PROGRESS\n  IF i.status <> 'HANDOVER_PENDING' OR o.order_status NOT IN ('READY_FOR_INSTALL','INSTALLING') OR a.status NOT IN ('ACCEPTED','IN_PROGRESS') THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  -- Mandatory evidence checks\n  IF jsonb_typeof(i.photos) <> 'array' OR jsonb_array_length(i.photos) = 0 OR NULLIF(btrim(i.handover_ref), '') IS NULL THEN\n    RAISE EXCEPTION 'MISSING_EVIDENCE';\n  END IF;\n\n  IF i.photos IS DISTINCT FROM p_verified_photos OR i.handover_ref IS DISTINCT FROM p_verified_handover THEN\n    RAISE EXCEPTION 'EVIDENCE_CHANGED';\n  END IF;\n\n  FOR ref IN SELECT jsonb_array_elements_text(i.photos) LOOP\n    IF NOT public.operations_evidence_ref(p_company_id, i.id, ref, 'photo') THEN\n      RAISE EXCEPTION 'INVALID_STORAGE_REF';\n    END IF;\n  END LOOP;\n\n  IF NOT public.operations_evidence_ref(p_company_id, i.id, i.handover_ref, 'handover') THEN\n    RAISE EXCEPTION 'INVALID_STORAGE_REF';\n  END IF;\n\n  -- Update all 3 records atomically in one transaction\n  UPDATE public.installations SET status = 'COMPLETED', completed_at = now(), updated_at = now() WHERE id = i.id;\n  UPDATE public.orders SET order_status = 'COMPLETED', updated_at = now() WHERE id = o.id;\n  UPDATE public.appointments SET status = 'COMPLETED', updated_at = now() WHERE id = a.id;\n\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'COMPLETE_INSTALLATION_AND_HANDOVER',\n    'installations',\n    i.id,\n    jsonb_build_object('order_id', o.id, 'appointment_id', a.id)\n  );\n\n  INSERT INTO public.operations_outbox (company_id, order_id, event_type, payload)\n  VALUES (p_company_id, o.id, 'ORDER_COMPLETED', jsonb_build_object('installation_id', i.id, 'completed_at', now()))\n  ON CONFLICT (company_id, order_id, event_type) DO NOTHING;\n\n  RETURN jsonb_build_object('success', true, 'idempotent', false);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "complete_survey_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.complete_survey_atomic(uuid,uuid,jsonb)",
+        "name": "complete_survey_atomic",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 127,
+        "parameters": [
+          {
+            "name": "p_appointment_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6140
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6123
+          },
+          {
+            "name": "p_completed_by",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6161
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6146
+          },
+          {
+            "name": "p_survey_payload",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6184
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6167
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  a public.appointments;\n  s public.surveys;\n  v_now timestamptz := pg_catalog.now();\n  m jsonb;\n  c jsonb;\n  v_photos jsonb := '[]'::jsonb;\n  v_slot text;\n  v_path text;\n  v_key text;\n  v_min numeric;\n  v_max numeric;\nBEGIN\n  SELECT * INTO a FROM public.appointments WHERE id = p_appointment_id FOR UPDATE;\n  IF NOT FOUND THEN RAISE EXCEPTION 'APPOINTMENT_NOT_FOUND'; END IF;\n  IF a.type <> 'SURVEY' THEN RAISE EXCEPTION 'APPOINTMENT_TYPE_NOT_SURVEY'; END IF;\n  IF p_completed_by IS NULL OR a.assignee_id IS DISTINCT FROM p_completed_by THEN\n    RAISE EXCEPTION 'INVALID_COMPLETED_BY';\n  END IF;\n  -- Lock actor records too: deactivation must serialize with this completion transaction.\n  PERFORM 1 FROM public.user_profiles p JOIN public.company_members cm ON cm.user_id = p.id\n    WHERE p.id = p_completed_by AND p.status = 'ACTIVE'\n      AND cm.company_id = a.company_id AND cm.status = 'ACTIVE' AND cm.role = 'TECHNICIAN'\n    FOR SHARE OF p, cm;\n  IF NOT FOUND THEN RAISE EXCEPTION 'INVALID_COMPLETED_BY'; END IF;\n\n  SELECT * INTO s FROM public.surveys WHERE appointment_id = a.id;\n  IF a.status = 'COMPLETED' THEN\n    IF s.id IS NULL OR s.company_id <> a.company_id OR s.customer_id <> a.customer_id\n       OR s.completed_by IS DISTINCT FROM p_completed_by THEN\n      RAISE EXCEPTION 'SURVEY_COMPLETION_INCONSISTENT';\n    END IF;\n    RETURN pg_catalog.jsonb_build_object('id', s.id, 'isExisting', true);\n  END IF;\n  IF a.status NOT IN ('ACCEPTED','IN_PROGRESS') THEN RAISE EXCEPTION 'INVALID_PREDECESSOR_STATE'; END IF;\n  IF s.id IS NOT NULL THEN RAISE EXCEPTION 'SURVEY_ALREADY_EXISTS'; END IF;\n  -- A live (unexpired) photo operation blocks completion\n  IF EXISTS (\n    SELECT 1 FROM public.survey_photo_operations\n    WHERE appointment_id = a.id AND expires_at > pg_catalog.now()\n  ) THEN\n    RAISE EXCEPTION 'SURVEY_PHOTO_OPERATION_IN_PROGRESS';\n  END IF;\n\n  m := p_survey_payload->'measurements';\n  c := (p_survey_payload->>'site_condition')::jsonb;\n  IF pg_catalog.jsonb_typeof(m) IS DISTINCT FROM 'object' OR pg_catalog.jsonb_typeof(c) IS DISTINCT FROM 'object' THEN\n    RAISE EXCEPTION 'INVALID_SURVEY_TECHNICAL_INPUT';\n  END IF;\n  FOR v_key, v_min, v_max IN VALUES ('clear_width_mm',500,15000),\n      ('barrier_height_mm',100,3000),('anticipated_flood_height_mm',100,3000) LOOP\n    IF pg_catalog.jsonb_typeof(m->v_key) IS DISTINCT FROM 'number' THEN RAISE EXCEPTION 'INVALID_SURVEY_MEASUREMENT'; END IF;\n    IF (m->>v_key)::numeric NOT BETWEEN v_min AND v_max\n       OR pg_catalog.trunc((m->>v_key)::numeric) <> (m->>v_key)::numeric THEN\n      RAISE EXCEPTION 'INVALID_SURVEY_MEASUREMENT';\n    END IF;\n  END LOOP;\n  IF m ? 'step_height_mm' AND (pg_catalog.jsonb_typeof(m->'step_height_mm') <> 'number'\n      OR (m->>'step_height_mm')::numeric NOT BETWEEN 0 AND 1000) THEN\n    RAISE EXCEPTION 'INVALID_SURVEY_MEASUREMENT';\n  END IF;\n  IF NOT coalesce(m->>'gate_type' IN ('REMOVABLE_PANEL','AUTOMATIC_HYDRAULIC','ROLL_UP_CANVAS','SWING_GATE'),false)\n    OR NOT coalesce(m->>'mounting_method' IN ('INSIDE_JAMB','OUTSIDE_FACE','INSIDE_FACE'),false)\n    OR NOT coalesce(c->>'wall_material' IN ('SOLID_BRICK','HOLLOW_BRICK','CONCRETE','STEEL_FRAME','ALUMINUM_GLASS','STONE_TILES'),false)\n    OR NOT coalesce(c->>'floor_material' IN ('CONCRETE_SMOOTH','TILES','NATURAL_STONE','ROUGH_CEMENT','PAVING_BRICK'),false)\n    OR NOT coalesce(c->>'floor_evenness' IN ('FLAT','SLIGHTLY_UNEVEN','HIGHLY_UNEVEN'),false)\n    OR NOT coalesce(c->>'slope_grade' IN ('SLOPING_OUT','LEVEL','SLOPING_IN'),false) THEN\n    RAISE EXCEPTION 'INVALID_SURVEY_TECHNICAL_INPUT';\n  END IF;\n  IF pg_catalog.length(coalesce(p_survey_payload->>'notes','')) > 1000\n    OR pg_catalog.length(coalesce(c->>'notes','')) > 1000 OR pg_catalog.length(coalesce(c->>'specialRequirements','')) > 1000 THEN\n    RAISE EXCEPTION 'INVALID_SURVEY_NOTES';\n  END IF;\n\n  -- Server-owned paths only. Ignore payload.photos, Company, Customer, completed_by and completed_at.\n  FOREACH v_slot IN ARRAY ARRAY['OVERVIEW','BOTTOM_LEFT','BOTTOM_RIGHT','OBSTACLE','SLOPE_DETAIL','ADDITIONAL'] LOOP\n    v_path := a.company_id::text || '/' || a.customer_id::text || '/' || a.id::text || '/' || v_slot || '.jpg';\n    IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'survey-photos' AND name = v_path) THEN\n      v_photos := v_photos || pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('slot',v_slot,'objectPath',v_path,\n        'uploadedAt',v_now,'slotLabel',v_slot,'isMandatory',v_slot IN ('OVERVIEW','BOTTOM_LEFT','BOTTOM_RIGHT')));\n    ELSIF v_slot IN ('OVERVIEW','BOTTOM_LEFT','BOTTOM_RIGHT') THEN\n      RAISE EXCEPTION 'MISSING_MANDATORY_SURVEY_PHOTO';\n    END IF;\n  END LOOP;\n\n  INSERT INTO public.surveys(company_id,customer_id,appointment_id,completed_by,measurements,photos,\n    site_condition,notes,completed_at,created_at,updated_at)\n  VALUES (a.company_id,a.customer_id,a.id,p_completed_by,m,v_photos,c::text,p_survey_payload->>'notes',v_now,v_now,v_now)\n  RETURNING * INTO s;\n  PERFORM pg_catalog.set_config('app.survey_completion', a.id::text, true);\n  UPDATE public.appointments SET status = 'COMPLETED', updated_at = v_now\n    WHERE id = a.id AND status IN ('ACCEPTED','IN_PROGRESS');\n  IF NOT FOUND THEN RAISE EXCEPTION 'SURVEY_APPOINTMENT_UPDATE_FAILED'; END IF;\n  PERFORM pg_catalog.set_config('app.survey_completion', '', true);\n  RETURN pg_catalog.jsonb_build_object('id',s.id,'isExisting',false);\nEND ",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "create_installation_schedule_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "name": "create_installation_schedule_atomic",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2631
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2618
+          },
+          {
+            "name": "p_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2650
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2639
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2669
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2658
+          },
+          {
+            "name": "p_technician_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2693
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2677
+          },
+          {
+            "name": "p_start_time",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "timestamptz"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2714
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2701
+          },
+          {
+            "name": "p_address",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2739
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2729
+          },
+          {
+            "name": "p_crew",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2754
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2747
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  p public.production_orders;\n  o public.orders;\n  i public.installations;\n  a public.appointments;\n  v_address text;\n  v_canonical_crew jsonb;\n  v_existing_crew jsonb;\nBEGIN\n  -- 1. Authorize ACTIVE BOSS_ADMIN in the target company\n  PERFORM public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN']);\n\n  -- 2. Validate target technician: ACTIVE UserProfile, ACTIVE membership, role TECHNICIAN, same company\n  PERFORM public.operations_actor(p_company_id, p_technician_id, ARRAY['TECHNICIAN']);\n\n  -- 3. Input validation\n  IF p_start_time IS NULL THEN\n    RAISE EXCEPTION 'INVALID_INPUT: Thời gian bắt đầu lắp đặt không được để trống.';\n  END IF;\n\n  v_address := NULLIF(btrim(p_address), '');\n  IF v_address IS NULL THEN\n    RAISE EXCEPTION 'INVALID_INPUT: Địa chỉ lắp đặt không được để trống.';\n  END IF;\n\n  IF p_crew IS NULL OR jsonb_typeof(p_crew) <> 'array' OR jsonb_array_length(p_crew) = 0 THEN\n    RAISE EXCEPTION 'INVALID_INPUT: Danh sách đội thợ (crew) phải có ít nhất 1 người.';\n  END IF;\n\n  IF EXISTS (SELECT 1 FROM jsonb_array_elements_text(p_crew) elem WHERE btrim(elem) = '') THEN\n    RAISE EXCEPTION 'INVALID_INPUT: Tên thành viên đội thợ không được để trống.';\n  END IF;\n\n  -- Canonicalize crew: trim each member and sort alphabetically for deterministic comparison\n  SELECT COALESCE(\n    jsonb_agg(btrim(elem) ORDER BY btrim(elem)),\n    '[]'::jsonb\n  )\n  INTO v_canonical_crew\n  FROM jsonb_array_elements_text(p_crew) AS elem;\n\n  -- 4. Lock ProductionOrder and Order (match QC lock order: production_orders -> orders)\n  SELECT * INTO p FROM public.production_orders\n  WHERE company_id = p_company_id AND order_id = p_order_id\n  FOR UPDATE;\n\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  SELECT * INTO o FROM public.orders\n  WHERE company_id = p_company_id AND id = p_order_id\n  FOR UPDATE;\n\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  -- 5. Idempotency & Concurrency: Check if an installation already exists for this order\n  SELECT * INTO i FROM public.installations\n  WHERE company_id = p_company_id AND order_id = o.id\n  FOR UPDATE;\n\n  IF FOUND THEN\n    SELECT * INTO a FROM public.appointments\n    WHERE company_id = p_company_id AND id = i.appointment_id\n    FOR UPDATE;\n\n    IF NOT FOUND THEN\n      RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n    END IF;\n\n    -- Canonicalize existing crew for comparison\n    SELECT COALESCE(\n      jsonb_agg(btrim(elem) ORDER BY btrim(elem)),\n      '[]'::jsonb\n    )\n    INTO v_existing_crew\n    FROM jsonb_array_elements_text(i.crew) AS elem;\n\n    -- Strict logical payload mismatch check\n    IF a.assignee_id <> p_technician_id\n       OR a.start_time <> p_start_time\n       OR btrim(a.address) <> v_address\n       OR v_existing_crew <> v_canonical_crew THEN\n      RAISE EXCEPTION 'INSTALLATION_SCHEDULE_ALREADY_EXISTS_WITH_DIFFERENT_PAYLOAD';\n    END IF;\n\n    RETURN jsonb_build_object(\n      'success', true,\n      'idempotent', true,\n      'installation', to_jsonb(i),\n      'appointment', to_jsonb(a)\n    );\n  END IF;\n\n  -- 6. Confirm states: ProductionOrder READY_FOR_DISPATCH & PASSED, Order READY_FOR_INSTALL\n  IF p.status <> 'READY_FOR_DISPATCH' OR p.qc_status <> 'PASSED' OR o.order_status <> 'READY_FOR_INSTALL' THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  -- 7. Create Appointment: type = INSTALLATION, status = ASSIGNED\n  INSERT INTO public.appointments (\n    company_id,\n    customer_id,\n    type,\n    start_time,\n    assignee_id,\n    address,\n    status\n  ) VALUES (\n    p_company_id,\n    o.customer_id,\n    'INSTALLATION',\n    p_start_time,\n    p_technician_id,\n    v_address,\n    'ASSIGNED'\n  ) RETURNING * INTO a;\n\n  -- 8. Create Installation: status = SCHEDULED, storing canonical crew\n  INSERT INTO public.installations (\n    company_id,\n    customer_id,\n    order_id,\n    appointment_id,\n    crew,\n    status\n  ) VALUES (\n    p_company_id,\n    o.customer_id,\n    o.id,\n    a.id,\n    v_canonical_crew,\n    'SCHEDULED'\n  ) RETURNING * INTO i;\n\n  -- 9. Append-only audit record\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'SCHEDULE_INSTALLATION',\n    'installations',\n    i.id,\n    jsonb_build_object(\n      'order_id', o.id,\n      'appointment_id', a.id,\n      'technician_id', p_technician_id,\n      'start_time', p_start_time\n    )\n  );\n\n  -- 10. Commit all-or-nothing\n  RETURN jsonb_build_object(\n    'success', true,\n    'idempotent', false,\n    'installation', to_jsonb(i),\n    'appointment', to_jsonb(a)\n  );\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "create_order_from_calculation_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+        "name": "create_order_from_calculation_rpc",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 80,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3196
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3183
+          },
+          {
+            "name": "p_customer_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3220
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3206
+          },
+          {
+            "name": "p_price_calculation_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3253
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3230
+          },
+          {
+            "name": "p_payment_reference",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3283
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3263
+          },
+          {
+            "name": "p_actor_user_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3309
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3293
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_calc public.price_calculations%ROWTYPE;\n    v_existing_order public.orders%ROWTYPE;\n    v_order_id uuid;\n    v_order_code text;\n    v_current_customer_stage text;\nBEGIN\n    -- Validate actor user ID is provided (no arbitrary or NULL human actor allowed)\n    IF p_actor_user_id IS NULL THEN\n        RAISE EXCEPTION 'ACTOR_REQUIRED: Actor user ID must be provided';\n    END IF;\n\n    -- Validate actor is ACTIVE and has allowed commercial role (BOSS_ADMIN or SALE) in company\n    IF NOT EXISTS (\n        SELECT 1 FROM public.company_members cm\n        JOIN public.user_profiles up ON cm.user_id = up.id\n        WHERE cm.company_id = p_company_id\n          AND cm.user_id = p_actor_user_id\n          AND cm.status = 'ACTIVE'\n          AND up.status = 'ACTIVE'\n          AND cm.role IN ('BOSS_ADMIN', 'SALE')\n    ) THEN\n        RAISE EXCEPTION 'UNAUTHORIZED_ROLE: Actor must be active BOSS_ADMIN or SALE in company';\n    END IF;\n\n    -- Validate calculation exists and belongs to company & customer (acquires authoritative lock)\n    SELECT * INTO v_calc\n    FROM public.price_calculations\n    WHERE id = p_price_calculation_id AND company_id = p_company_id AND customer_id = p_customer_id\n    FOR UPDATE;\n\n    IF v_calc.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Price calculation not found';\n    END IF;\n\n    IF v_calc.status <> 'CALCULATED' OR v_calc.amount IS NULL THEN\n        RAISE EXCEPTION 'INVALID_PRICE_CALCULATION: Cannot create order from calculation status %', v_calc.status;\n    END IF;\n\n    -- Idempotent check: After acquiring lock, re-check for an existing canonical Order\n    SELECT * INTO v_existing_order\n    FROM public.orders\n    WHERE company_id = p_company_id AND price_calculation_id = p_price_calculation_id;\n\n    IF v_existing_order.id IS NOT NULL THEN\n        RETURN jsonb_build_object(\n            'status', 'ALREADY_EXISTS',\n            'orderId', v_existing_order.id,\n            'orderCode', v_existing_order.order_code,\n            'finalAmount', v_existing_order.final_amount,\n            'depositStatus', v_existing_order.deposit_status,\n            'orderStatus', v_existing_order.order_status,\n            'paymentReference', v_existing_order.payment_reference\n        );\n    END IF;\n\n    -- Check customer stage\n    SELECT stage INTO v_current_customer_stage\n    FROM public.customers\n    WHERE id = p_customer_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_current_customer_stage IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Customer not found';\n    END IF;\n\n    -- Generate unique order code\n    v_order_code := public.generate_order_code();\n\n    -- Insert Order (server authoritative final_amount = calculation.amount)\n    INSERT INTO public.orders (\n        company_id,\n        customer_id,\n        order_code,\n        payment_reference,\n        price_calculation_id,\n        deposit_status,\n        order_status,\n        final_amount\n    ) VALUES (\n        p_company_id,\n        p_customer_id,\n        v_order_code,\n        p_payment_reference,\n        v_calc.id,\n        'PENDING',\n        'DRAFT',\n        v_calc.amount\n    ) RETURNING id INTO v_order_id;\n\n    -- Initialize Finance Summary\n    INSERT INTO public.finance_summaries (\n        order_id,\n        company_id,\n        contract_value,\n        collected_amount,\n        receivable_amount,\n        completed_revenue\n    ) VALUES (\n        v_order_id,\n        p_company_id,\n        v_calc.amount,\n        0,\n        v_calc.amount,\n        0\n    );\n\n    -- Update Customer stage to ORDER_CREATED only if customer is in earlier stage\n    IF v_current_customer_stage IN ('LEAD_NEW', 'LEAD', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'NEGOTIATING') THEN\n        UPDATE public.customers\n        SET stage = 'ORDER_CREATED', updated_at = now()\n        WHERE id = p_customer_id;\n\n        INSERT INTO public.customer_stage_histories (\n            company_id, customer_id, from_stage, to_stage, actor_type, changed_by_user_id, reason\n        ) VALUES (\n            p_company_id, p_customer_id, v_current_customer_stage, 'ORDER_CREATED', 'USER', p_actor_user_id, 'Order created from calculation'\n        );\n    END IF;\n\n    -- Mandatory audit log inserted atomically (failure rolls back mutation)\n    INSERT INTO public.audit_logs (\n        company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata\n    ) VALUES (\n        p_company_id,\n        p_actor_user_id,\n        'ORDER_CREATED',\n        'orders',\n        v_order_id,\n        p_customer_id,\n        'SUCCESS',\n        jsonb_build_object(\n            'order_code', v_order_code,\n            'price_calculation_id', v_calc.id,\n            'final_amount', v_calc.amount\n        )\n    );\n\n    RETURN jsonb_build_object(\n        'status', 'CREATED',\n        'orderId', v_order_id,\n        'orderCode', v_order_code,\n        'finalAmount', v_calc.amount,\n        'depositStatus', 'PENDING',\n        'orderStatus', 'DRAFT',\n        'paymentReference', p_payment_reference\n    );\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "create_production_order_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "name": "create_production_order_atomic",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2441
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2428
+          },
+          {
+            "name": "p_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2460
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2449
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2479
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2468
+          },
+          {
+            "name": "p_specs",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2495
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2487
+          },
+          {
+            "name": "p_materials",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2516
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2504
+          },
+          {
+            "name": "p_deadline",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "timestamptz"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2536
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2525
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  o public.orders;\n  c public.contracts;\n  p public.production_orders;\n  pc public.price_calculations;\n  pp public.pricing_policies;\n  s public.surveys;\n  v_canonical_specs jsonb;\n  v_canonical_materials jsonb;\n  v_final_specs jsonb;\n  v_final_materials jsonb;\n  v_canonical_dim text;\n  v_cw_mm numeric;\n  v_bh_mm numeric;\n  v_w numeric;\n  v_h numeric;\n  v_key text;\nBEGIN\n  -- 1. Validate actor: BOSS_ADMIN only\n  PERFORM public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN']);\n\n  -- 2. Reject empty or null client specs / materials\n  IF p_specs IS NULL OR jsonb_typeof(p_specs) = 'null' OR p_specs = '{}'::jsonb\n     OR p_materials IS NULL OR jsonb_typeof(p_materials) = 'null' OR p_materials = '{}'::jsonb THEN\n    RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n  END IF;\n\n  -- 3. Reject arbitrary client-only specs keys (must be domain-recognized technical fields or notes)\n  FOR v_key IN SELECT jsonb_object_keys(p_specs) LOOP\n    IF v_key NOT IN (\n      'dimensions', 'clear_width_mm', 'barrier_height_mm', 'width', 'height',\n      'gate_type', 'mounting_method', 'thickness_mm', 'tolerance_mm', 'notes'\n    ) THEN\n      RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n    END IF;\n  END LOOP;\n\n  -- 4. Reject arbitrary client-only materials keys (must be domain-recognized material specifications)\n  FOR v_key IN SELECT jsonb_object_keys(p_materials) LOOP\n    IF v_key NOT IN (\n      'aluminum', 'inox', 'steel', 'gasket', 'seal', 'profile', 'panel', 'frame', 'hardware', 'fasteners'\n    ) THEN\n      RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n    END IF;\n    -- Material value must not be empty or blank string\n    IF NULLIF(btrim(p_materials->>v_key), '') IS NULL THEN\n      RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n    END IF;\n  END LOOP;\n\n  -- 5. Fetch order with row lock\n  SELECT * INTO o FROM public.orders WHERE company_id = p_company_id AND id = p_order_id FOR UPDATE;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  IF o.order_status NOT IN ('CONTRACT_SIGNED', 'DEPOSIT_CONFIRMED') THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  -- 6. Contract gate: valid signed contract required\n  SELECT * INTO c FROM public.contracts\n  WHERE company_id = p_company_id AND order_id = o.id AND is_current FOR UPDATE;\n  IF NOT FOUND OR c.status <> 'SIGNED' OR NULLIF(btrim(c.signed_file_ref), '') IS NULL THEN\n    RAISE EXCEPTION 'CONTRACT_NOT_SIGNED';\n  END IF;\n\n  -- 7. Prevent duplicate production order\n  IF EXISTS(SELECT 1 FROM public.production_orders WHERE order_id = o.id) THEN\n    RAISE EXCEPTION 'PRODUCTION_ALREADY_EXISTS';\n  END IF;\n\n  -- 8. Fetch authoritative price calculation record\n  SELECT * INTO pc FROM public.price_calculations\n  WHERE id = o.price_calculation_id FOR UPDATE;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  -- Multi-tenant and customer boundary validation\n  IF pc.company_id <> p_company_id THEN\n    RAISE EXCEPTION 'PERMISSION_DENIED';\n  END IF;\n  IF pc.customer_id <> o.customer_id THEN\n    RAISE EXCEPTION 'MISMATCHED_CUSTOMER_REFERENCE';\n  END IF;\n\n  -- Check calculation status: fail closed if input missing or incomplete\n  IF pc.status = 'NEED_INFO' THEN\n    RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'\n      USING ERRCODE = 'NEED_INFO';\n  END IF;\n  IF pc.status <> 'CALCULATED' THEN\n    RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n  END IF;\n  IF pc.input_data IS NULL OR pc.input_data = '{}'::jsonb THEN\n    RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n  END IF;\n\n  -- 9. Fetch and validate authoritative pricing policy\n  SELECT * INTO pp FROM public.pricing_policies\n  WHERE id = pc.pricing_policy_id FOR UPDATE;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n  IF pp.company_id <> p_company_id THEN\n    RAISE EXCEPTION 'PERMISSION_DENIED';\n  END IF;\n\n  -- 10. Validate survey if bound to calculation\n  IF pc.survey_id IS NOT NULL THEN\n    SELECT * INTO s FROM public.surveys\n    WHERE id = pc.survey_id FOR UPDATE;\n    IF NOT FOUND THEN\n      RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n    END IF;\n    IF s.company_id <> p_company_id THEN\n      RAISE EXCEPTION 'PERMISSION_DENIED';\n    END IF;\n    IF s.customer_id <> o.customer_id THEN\n      RAISE EXCEPTION 'MISMATCHED_CUSTOMER_REFERENCE';\n    END IF;\n    IF s.measurements IS NULL OR s.measurements = '{}'::jsonb THEN\n      RAISE EXCEPTION 'INVALID_TECHNICAL_INPUT';\n    END IF;\n  END IF;\n\n  -- 11. Derive authoritative canonical materials from persisted records\n  IF s.id IS NOT NULL AND jsonb_typeof(s.measurements->'materials') = 'object' AND s.measurements->'materials' <> '{}'::jsonb THEN\n    v_canonical_materials := s.measurements->'materials';\n  ELSIF jsonb_typeof(pc.input_data->'materials') = 'object' AND pc.input_data->'materials' <> '{}'::jsonb THEN\n    v_canonical_materials := pc.input_data->'materials';\n  ELSIF jsonb_typeof(pp.conditions->'materials') = 'object' AND pp.conditions->'materials' <> '{}'::jsonb THEN\n    v_canonical_materials := pp.conditions->'materials';\n  ELSIF jsonb_typeof(pp.conditions->'standard_materials') = 'object' AND pp.conditions->'standard_materials' <> '{}'::jsonb THEN\n    v_canonical_materials := pp.conditions->'standard_materials';\n  ELSIF jsonb_typeof(pp.price_rules->'materials') = 'object' AND pp.price_rules->'materials' <> '{}'::jsonb THEN\n    v_canonical_materials := pp.price_rules->'materials';\n  ELSIF jsonb_typeof(pp.price_rules->'standard_materials') = 'object' AND pp.price_rules->'standard_materials' <> '{}'::jsonb THEN\n    v_canonical_materials := pp.price_rules->'standard_materials';\n  ELSE\n    v_canonical_materials := NULL;\n  END IF;\n\n  -- Fail-closed if authoritative materials are missing\n  IF v_canonical_materials IS NULL OR jsonb_typeof(v_canonical_materials) = 'null' OR v_canonical_materials = '{}'::jsonb THEN\n    RAISE EXCEPTION 'Cannot release to production: canonical materials specification is missing'\n      USING ERRCODE = 'INVALID_TECHNICAL_INPUT';\n  END IF;\n\n  -- Detect and reject material tampering / client forgery\n  FOR v_key IN SELECT jsonb_object_keys(p_materials) LOOP\n    IF v_canonical_materials ? v_key THEN\n      IF (p_materials->>v_key) <> (v_canonical_materials->>v_key) THEN\n        RAISE EXCEPTION 'Production order material specification cannot contradict canonical policy/survey materials'\n          USING ERRCODE = 'INVALID_TECHNICAL_INPUT';\n      END IF;\n    END IF;\n  END LOOP;\n\n  -- Client materials are NOT authoritative; canonical materials are strictly persisted\n  v_final_materials := v_canonical_materials;\n\n  -- 12. Derive authoritative canonical specifications (server-authoritative; client cannot override)\n  IF s.id IS NOT NULL THEN\n    v_cw_mm := NULLIF(s.measurements->>'clear_width_mm', '')::numeric;\n    v_bh_mm := NULLIF(s.measurements->>'barrier_height_mm', '')::numeric;\n    IF v_cw_mm IS NULL OR v_bh_mm IS NULL OR v_cw_mm <= 0 OR v_bh_mm <= 0 THEN\n      RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'\n        USING ERRCODE = 'NEED_INFO';\n    END IF;\n    v_canonical_dim := v_cw_mm::text || 'x' || v_bh_mm::text || 'mm';\n    v_canonical_specs := jsonb_build_object(\n      'dimensions', v_canonical_dim,\n      'canonical_dimensions', v_canonical_dim,\n      'canonical_source', 'SURVEY',\n      'calculation_id', pc.id,\n      'survey_id', s.id,\n      'clear_width_mm', v_cw_mm,\n      'barrier_height_mm', v_bh_mm\n    );\n    IF s.measurements ? 'gate_type' AND NULLIF(btrim(s.measurements->>'gate_type'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', s.measurements->>'gate_type');\n    ELSIF pc.input_data ? 'gate_type' AND NULLIF(btrim(pc.input_data->>'gate_type'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', pc.input_data->>'gate_type');\n    END IF;\n    IF s.measurements ? 'mounting_method' AND NULLIF(btrim(s.measurements->>'mounting_method'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', s.measurements->>'mounting_method');\n    ELSIF pc.input_data ? 'mounting_method' AND NULLIF(btrim(pc.input_data->>'mounting_method'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', pc.input_data->>'mounting_method');\n    END IF;\n    -- Canonical thickness from survey -> calculation -> policy\n    IF s.measurements ? 'thickness_mm' AND NULLIF(btrim(s.measurements->>'thickness_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (s.measurements->>'thickness_mm')::numeric);\n    ELSIF pc.input_data ? 'thickness_mm' AND NULLIF(btrim(pc.input_data->>'thickness_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pc.input_data->>'thickness_mm')::numeric);\n    ELSIF pp.conditions ? 'thickness_mm' AND NULLIF(btrim(pp.conditions->>'thickness_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pp.conditions->>'thickness_mm')::numeric);\n    END IF;\n    -- Canonical tolerance from survey -> calculation -> policy\n    IF s.measurements ? 'tolerance_mm' AND NULLIF(btrim(s.measurements->>'tolerance_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (s.measurements->>'tolerance_mm')::numeric);\n    ELSIF pc.input_data ? 'tolerance_mm' AND NULLIF(btrim(pc.input_data->>'tolerance_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pc.input_data->>'tolerance_mm')::numeric);\n    ELSIF pp.conditions ? 'tolerance_mm' AND NULLIF(btrim(pp.conditions->>'tolerance_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pp.conditions->>'tolerance_mm')::numeric);\n    END IF;\n  ELSE\n    v_w := NULLIF(pc.input_data->>'width', '')::numeric;\n    v_h := NULLIF(pc.input_data->>'height', '')::numeric;\n    v_cw_mm := NULLIF(pc.input_data->>'clear_width_mm', '')::numeric;\n    v_bh_mm := NULLIF(pc.input_data->>'barrier_height_mm', '')::numeric;\n\n    IF v_w IS NOT NULL AND v_h IS NOT NULL AND v_w > 0 AND v_h > 0 THEN\n      v_canonical_dim := (round(v_w * 100)::text || 'x' || round(v_h * 100)::text || 'cm');\n      v_canonical_specs := jsonb_build_object(\n        'dimensions', v_canonical_dim,\n        'canonical_dimensions', v_canonical_dim,\n        'canonical_source', 'PRICE_CALCULATION',\n        'calculation_id', pc.id,\n        'width', v_w,\n        'height', v_h\n      );\n    ELSIF v_cw_mm IS NOT NULL AND v_bh_mm IS NOT NULL AND v_cw_mm > 0 AND v_bh_mm > 0 THEN\n      v_canonical_dim := (v_cw_mm::text || 'x' || v_bh_mm::text || 'mm');\n      v_canonical_specs := jsonb_build_object(\n        'dimensions', v_canonical_dim,\n        'canonical_dimensions', v_canonical_dim,\n        'canonical_source', 'PRICE_CALCULATION',\n        'calculation_id', pc.id,\n        'clear_width_mm', v_cw_mm,\n        'barrier_height_mm', v_bh_mm\n      );\n    ELSIF pc.input_data ? 'dimensions' AND NULLIF(btrim(pc.input_data->>'dimensions'), '') IS NOT NULL THEN\n      v_canonical_dim := pc.input_data->>'dimensions';\n      v_canonical_specs := jsonb_build_object(\n        'dimensions', v_canonical_dim,\n        'canonical_dimensions', v_canonical_dim,\n        'canonical_source', 'PRICE_CALCULATION',\n        'calculation_id', pc.id\n      );\n    ELSE\n      -- Incomplete or missing canonical technical input: fail closed\n      RAISE EXCEPTION 'Cannot release to production: missing canonical dimensions or barrier type'\n        USING ERRCODE = 'NEED_INFO';\n    END IF;\n\n    IF pc.input_data ? 'gate_type' AND NULLIF(btrim(pc.input_data->>'gate_type'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('gate_type', pc.input_data->>'gate_type');\n    END IF;\n    IF pc.input_data ? 'mounting_method' AND NULLIF(btrim(pc.input_data->>'mounting_method'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('mounting_method', pc.input_data->>'mounting_method');\n    END IF;\n    -- Canonical thickness from calculation -> policy\n    IF pc.input_data ? 'thickness_mm' AND NULLIF(btrim(pc.input_data->>'thickness_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pc.input_data->>'thickness_mm')::numeric);\n    ELSIF pp.conditions ? 'thickness_mm' AND NULLIF(btrim(pp.conditions->>'thickness_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('thickness_mm', (pp.conditions->>'thickness_mm')::numeric);\n    END IF;\n    -- Canonical tolerance from calculation -> policy\n    IF pc.input_data ? 'tolerance_mm' AND NULLIF(btrim(pc.input_data->>'tolerance_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pc.input_data->>'tolerance_mm')::numeric);\n    ELSIF pp.conditions ? 'tolerance_mm' AND NULLIF(btrim(pp.conditions->>'tolerance_mm'), '') IS NOT NULL THEN\n      v_canonical_specs := v_canonical_specs || jsonb_build_object('tolerance_mm', (pp.conditions->>'tolerance_mm')::numeric);\n    END IF;\n  END IF;\n\n  -- Technical specifications are strictly server-authoritative.\n  -- Every technical field must come from an authoritative persisted source.\n  -- Client cannot inject or override technical facts (dimensions, thickness_mm, tolerance_mm, width, height, gate_type, mounting_method).\n  -- Only non-technical operational note is accepted from client input (bounded to 1000 characters).\n  v_final_specs := v_canonical_specs;\n  IF p_specs ? 'notes' AND NULLIF(btrim(p_specs->>'notes'), '') IS NOT NULL THEN\n    v_final_specs := v_final_specs || jsonb_build_object('notes', left(btrim(p_specs->>'notes'), 1000));\n  END IF;\n\n  -- 12. Insert production order\n  INSERT INTO public.production_orders(\n    company_id,\n    order_id,\n    specs,\n    materials,\n    status,\n    deadline,\n    qc_status\n  ) VALUES (\n    p_company_id,\n    o.id,\n    v_final_specs,\n    v_final_materials,\n    'RELEASED_TO_FACTORY',\n    p_deadline,\n    'PENDING'\n  ) RETURNING * INTO p;\n\n  -- 13. Advance order status\n  UPDATE public.orders SET order_status = 'IN_PRODUCTION', updated_at = now() WHERE id = o.id;\n\n  -- 14. Audit log\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'CREATE_PRODUCTION_ORDER',\n    'production_orders',\n    p.id,\n    jsonb_build_object('order_id', o.id)\n  );\n\n  RETURN to_jsonb(p);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "create_warranty_ticket_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+        "name": "create_warranty_ticket_atomic",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 368,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17549
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 17536
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17568
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 17557
+          },
+          {
+            "name": "p_customer_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17590
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 17576
+          },
+          {
+            "name": "p_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17609
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 17598
+          },
+          {
+            "name": "p_installation_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17635
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 17648
+              }
+            },
+            "location": 17617
+          },
+          {
+            "name": "p_issue",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17664
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 17677
+              }
+            },
+            "location": 17656
+          },
+          {
+            "name": "p_notes",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17693
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 17706
+              }
+            },
+            "location": 17685
+          },
+          {
+            "name": "p_idempotency_key",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 17732
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 17745
+              }
+            },
+            "location": 17714
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  v_role text;\n  v_cust public.customers;\n  v_order public.orders;\n  v_inst public.installations;\n  v_derived_inst_id uuid := NULL;\n  v_ticket public.warranty_tickets;\n  v_existing_id uuid;\nBEGIN\n  -- 1. Validate actor: BOSS_ADMIN or SALE required, active membership and active user profile\n  v_role := public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN', 'SALE']);\n\n  -- 2. Validate issue description\n  IF NULLIF(btrim(p_issue), '') IS NULL THEN\n    RAISE EXCEPTION 'INVALID_INPUT';\n  END IF;\n\n  -- 3. Check idempotency if key provided\n  IF p_idempotency_key IS NOT NULL AND btrim(p_idempotency_key) <> '' THEN\n    SELECT resource_id INTO v_existing_id\n    FROM public.audit_logs\n    WHERE company_id = p_company_id\n      AND action = 'CREATE_WARRANTY_TICKET'\n      AND metadata->>'idempotency_key' = p_idempotency_key\n    LIMIT 1;\n\n    IF v_existing_id IS NOT NULL THEN\n      SELECT * INTO v_ticket FROM public.warranty_tickets\n      WHERE id = v_existing_id AND company_id = p_company_id;\n      IF FOUND THEN\n        RETURN to_jsonb(v_ticket);\n      END IF;\n    END IF;\n  END IF;\n\n  -- 4. Validate customer belongs to company\n  SELECT * INTO v_cust FROM public.customers\n  WHERE company_id = p_company_id AND id = p_customer_id;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  -- 5. Validate order belongs to company and customer\n  SELECT * INTO v_order FROM public.orders\n  WHERE company_id = p_company_id AND customer_id = p_customer_id AND id = p_order_id\n  FOR UPDATE;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  -- 6. Require order status COMPLETED\n  IF v_order.order_status <> 'COMPLETED' THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  -- 7. Validate or derive installation belonging strictly to this company, customer, and order\n  IF p_installation_id IS NOT NULL THEN\n    SELECT * INTO v_inst FROM public.installations\n    WHERE company_id = p_company_id AND customer_id = p_customer_id AND order_id = p_order_id AND id = p_installation_id;\n    IF NOT FOUND THEN\n      RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n    END IF;\n    v_derived_inst_id := v_inst.id;\n  ELSE\n    SELECT id INTO v_derived_inst_id FROM public.installations\n    WHERE company_id = p_company_id AND customer_id = p_customer_id AND order_id = p_order_id\n    ORDER BY created_at DESC LIMIT 1;\n  END IF;\n\n  -- 8. Insert warranty ticket\n  INSERT INTO public.warranty_tickets (\n    company_id,\n    customer_id,\n    order_id,\n    installation_id,\n    issue,\n    status,\n    assigned_to,\n    notes,\n    opened_at\n  ) VALUES (\n    p_company_id,\n    p_customer_id,\n    p_order_id,\n    v_derived_inst_id,\n    btrim(p_issue),\n    'OPEN',\n    NULL,\n    p_notes,\n    now()\n  ) RETURNING * INTO v_ticket;\n\n  -- 9. Insert audit log atomically in the same transaction\n  INSERT INTO public.audit_logs (\n    company_id,\n    user_id,\n    action,\n    resource_type,\n    resource_id,\n    customer_id,\n    result,\n    metadata\n  ) VALUES (\n    p_company_id,\n    p_actor_id,\n    'CREATE_WARRANTY_TICKET',\n    'warranty_tickets',\n    v_ticket.id,\n    p_customer_id,\n    'SUCCESS',\n    jsonb_build_object(\n      'order_id', p_order_id,\n      'installation_id', v_derived_inst_id,\n      'idempotency_key', p_idempotency_key\n    )\n  );\n\n  RETURN to_jsonb(v_ticket);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "end_survey_photo_operation",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.end_survey_photo_operation(uuid,uuid)",
+        "name": "end_survey_photo_operation",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 71,
+        "parameters": [
+          {
+            "name": "p_appointment_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3419
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3402
+          },
+          {
+            "name": "p_token",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 3433
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 3425
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  v_deleted_id uuid;\nBEGIN\n  PERFORM 1 FROM public.appointments WHERE id = p_appointment_id FOR UPDATE;\n  DELETE FROM public.survey_photo_operations\n  WHERE appointment_id = p_appointment_id AND token = p_token\n  RETURNING appointment_id INTO v_deleted_id;\n\n  IF v_deleted_id IS NULL THEN\n    RAISE EXCEPTION 'SURVEY_PHOTO_GUARD_MISMATCH';\n  END IF;\nEND ",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_appointments_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_appointments_immutability()",
+        "name": "enforce_appointments_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1043,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF NEW.customer_id IS DISTINCT FROM OLD.customer_id THEN\n    RAISE EXCEPTION 'appointments.customer_id is immutable';\n  END IF;\n  IF NEW.type IS DISTINCT FROM OLD.type THEN\n    IF EXISTS (SELECT 1 FROM public.surveys WHERE appointment_id = OLD.id)\n       OR EXISTS (SELECT 1 FROM public.installations WHERE appointment_id = OLD.id) THEN\n      RAISE EXCEPTION 'Cannot change appointment type when related survey or installation exists';\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_contracts_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_contracts_immutability()",
+        "name": "enforce_contracts_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1171,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF NEW.order_id IS DISTINCT FROM OLD.order_id THEN\n    RAISE EXCEPTION 'contracts.order_id is immutable';\n  END IF;\n  IF OLD.signed_file_ref IS NOT NULL OR OLD.status = 'SIGNED' THEN\n    IF NEW.contract_value IS DISTINCT FROM OLD.contract_value\n       OR NEW.revision_no IS DISTINCT FROM OLD.revision_no\n       OR NEW.template_version IS DISTINCT FROM OLD.template_version\n       OR NEW.signed_at IS DISTINCT FROM OLD.signed_at\n       OR NEW.generated_file_ref IS DISTINCT FROM OLD.generated_file_ref\n       OR NEW.signed_file_ref IS DISTINCT FROM OLD.signed_file_ref THEN\n      RAISE EXCEPTION 'Signed contract terms and file references are immutable';\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_installations_integrity",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_installations_integrity()",
+        "name": "enforce_installations_integrity",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1197,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NOT EXISTS (\n      SELECT 1 FROM public.appointments a\n      WHERE a.id = NEW.appointment_id\n        AND a.company_id = NEW.company_id\n        AND a.customer_id = NEW.customer_id\n        AND a.type = 'INSTALLATION'\n    ) THEN\n      RAISE EXCEPTION 'Installation appointment must be of type INSTALLATION and belong to the same company and customer';\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.customer_id IS DISTINCT FROM OLD.customer_id\n       OR NEW.order_id IS DISTINCT FROM OLD.order_id\n       OR NEW.appointment_id IS DISTINCT FROM OLD.appointment_id THEN\n      RAISE EXCEPTION 'installations customer_id, order_id, and appointment_id are immutable';\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_orders_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_orders_immutability()",
+        "name": "enforce_orders_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1133,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF NEW.customer_id IS DISTINCT FROM OLD.customer_id\n     OR NEW.order_code IS DISTINCT FROM OLD.order_code\n     OR NEW.price_calculation_id IS DISTINCT FROM OLD.price_calculation_id THEN\n    RAISE EXCEPTION 'orders customer_id, order_code, and price_calculation_id are immutable';\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_payment_facts_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_payment_facts_immutability()",
+        "name": "enforce_payment_facts_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1151,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF NEW.provider IS DISTINCT FROM OLD.provider\n     OR NEW.provider_ref IS DISTINCT FROM OLD.provider_ref\n     OR NEW.amount IS DISTINCT FROM OLD.amount\n     OR NEW.occurred_at IS DISTINCT FROM OLD.occurred_at\n     OR NEW.transfer_content IS DISTINCT FROM OLD.transfer_content THEN\n    RAISE EXCEPTION 'payment_transactions provider source facts are immutable';\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_price_calculations_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_price_calculations_immutability()",
+        "name": "enforce_price_calculations_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1120,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  RAISE EXCEPTION 'price_calculations records are immutable snapshots and cannot be updated or deleted';\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_pricing_policies_immutability",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_pricing_policies_immutability()",
+        "name": "enforce_pricing_policies_immutability",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1096,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF OLD.status = 'ACTIVE' THEN\n    IF NEW.status = 'DRAFT' THEN\n      RAISE EXCEPTION 'Active pricing policy cannot be reverted to DRAFT';\n    END IF;\n    IF NEW.version IS DISTINCT FROM OLD.version\n       OR NEW.conditions IS DISTINCT FROM OLD.conditions\n       OR NEW.price_rules IS DISTINCT FROM OLD.price_rules\n       OR NEW.effective_at IS DISTINCT FROM OLD.effective_at THEN\n      RAISE EXCEPTION 'Active pricing policy rules and version are immutable';\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "enforce_surveys_integrity",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.enforce_surveys_integrity()",
+        "name": "enforce_surveys_integrity",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 1065,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NOT EXISTS (\n      SELECT 1 FROM public.appointments a\n      WHERE a.id = NEW.appointment_id\n        AND a.company_id = NEW.company_id\n        AND a.customer_id = NEW.customer_id\n        AND a.type = 'SURVEY'\n    ) THEN\n      RAISE EXCEPTION 'Survey appointment must be of type SURVEY and belong to the same company and customer';\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.customer_id IS DISTINCT FROM OLD.customer_id\n       OR NEW.appointment_id IS DISTINCT FROM OLD.appointment_id\n       OR NEW.completed_by IS DISTINCT FROM OLD.completed_by\n       OR NEW.completed_at IS DISTINCT FROM OLD.completed_at THEN\n      RAISE EXCEPTION 'Survey customer_id, appointment_id, completed_by, and completed_at are immutable';\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "finalize_contract_signing_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.finalize_contract_signing_rpc(uuid,uuid,uuid,text,text)",
+        "name": "finalize_contract_signing_rpc",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 513,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 20291
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 20278
+          },
+          {
+            "name": "p_contract_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 20315
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 20301
+          },
+          {
+            "name": "p_actor_user_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 20341
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 20325
+          },
+          {
+            "name": "p_signed_file_ref",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 20369
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 20351
+          },
+          {
+            "name": "p_aal_level",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 20391
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 20379
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_contract public.contracts%ROWTYPE;\n    v_order public.orders%ROWTYPE;\n    v_expected_file_ref text;\n    v_customer_previous_stage text;\nBEGIN\n    -- Section 13: Strict AAL2 enforcement (no fallback)\n    IF p_aal_level <> 'aal2' THEN\n        RAISE EXCEPTION 'AAL2_REQUIRED: Signing contracts requires AAL2 MFA authentication';\n    END IF;\n\n    -- Validate actor is ACTIVE BOSS_ADMIN in company\n    IF NOT EXISTS (\n        SELECT 1 FROM public.company_members cm\n        JOIN public.user_profiles up ON cm.user_id = up.id\n        WHERE cm.company_id = p_company_id\n          AND cm.user_id = p_actor_user_id\n          AND cm.status = 'ACTIVE'\n          AND up.status = 'ACTIVE'\n          AND cm.role = 'BOSS_ADMIN'\n    ) THEN\n        RAISE EXCEPTION 'UNAUTHORIZED_BOSS_REQUIRED';\n    END IF;\n\n    -- Lock Contract\n    SELECT * INTO v_contract\n    FROM public.contracts\n    WHERE id = p_contract_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_contract.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Contract not found';\n    END IF;\n\n    -- Section 7: Contract must be current\n    IF NOT v_contract.is_current THEN\n        RAISE EXCEPTION 'INVALID_CONTRACT_STATE: Cannot sign non-current contract';\n    END IF;\n\n    -- Section 8: Validate canonical signed_file_ref against locked contract revision\n    v_expected_file_ref := p_company_id::text || '/contracts/' || p_contract_id::text || '/revision-' || v_contract.revision_no::text || '/signed.pdf';\n    IF p_signed_file_ref <> v_expected_file_ref THEN\n        RAISE EXCEPTION 'INVALID_SIGNED_FILE_REF: Provided path does not match canonical contract pattern';\n    END IF;\n\n    -- Section 7: If already SIGNED, deterministic idempotency only if same file ref supplied\n    IF v_contract.status = 'SIGNED' THEN\n        IF v_contract.signed_file_ref = p_signed_file_ref THEN\n            RETURN jsonb_build_object(\n                'success', true,\n                'status', 'ALREADY_PROCESSED',\n                'contractId', p_contract_id,\n                'orderId', v_contract.order_id\n            );\n        ELSE\n            RAISE EXCEPTION 'CONTRACT_ALREADY_SIGNED_WITH_DIFFERENT_FILE: Cannot overwrite signed contract';\n        END IF;\n    END IF;\n\n    -- Section 7: Allowed source states: only GENERATED or SENT_TO_CUSTOMER\n    IF v_contract.status NOT IN ('GENERATED', 'SENT_TO_CUSTOMER') THEN\n        RAISE EXCEPTION 'INVALID_CONTRACT_STATE: Cannot sign contract with status %', v_contract.status;\n    END IF;\n\n    -- Section 7: generated_file_ref must be valid and not 'CLAIMED'\n    IF v_contract.generated_file_ref IS NULL OR v_contract.generated_file_ref = 'CLAIMED' THEN\n        RAISE EXCEPTION 'CONTRACT_NOT_READY: Contract PDF has not been generated';\n    END IF;\n\n    -- Lock Order\n    SELECT * INTO v_order\n    FROM public.orders\n    WHERE id = v_contract.order_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_order.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Order not found';\n    END IF;\n\n    -- Update contract\n    UPDATE public.contracts\n    SET \n        status = 'SIGNED',\n        signed_at = now(),\n        signed_file_ref = p_signed_file_ref,\n        updated_at = now()\n    WHERE id = p_contract_id;\n\n    -- Update order to CONTRACT_SIGNED\n    UPDATE public.orders\n    SET \n        order_status = 'CONTRACT_SIGNED',\n        updated_at = now()\n    WHERE id = v_order.id;\n\n    -- Section 3: Capture customer previous stage with row lock before updating\n    SELECT stage INTO v_customer_previous_stage\n    FROM public.customers\n    WHERE id = v_order.customer_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    -- Update customer stage to CONTRACT_SIGNED only if in earlier stage\n    IF v_customer_previous_stage IN ('LEAD_NEW', 'LEAD', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'NEGOTIATING', 'ORDER_CREATED', 'DEPOSIT_CONFIRMED') THEN\n        UPDATE public.customers\n        SET stage = 'CONTRACT_SIGNED', updated_at = now()\n        WHERE id = v_order.customer_id;\n\n        INSERT INTO public.customer_stage_histories (\n            company_id, customer_id, from_stage, to_stage, actor_type, changed_by_user_id, reason\n        ) VALUES (\n            p_company_id, v_order.customer_id, v_customer_previous_stage, 'CONTRACT_SIGNED', 'USER', p_actor_user_id, 'Contract signed by Boss Admin with AAL2'\n        );\n    END IF;\n\n    -- Insert audit log\n    INSERT INTO public.audit_logs (\n        company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata\n    ) VALUES (\n        p_company_id, p_actor_user_id, 'CONTRACT_SIGNED', 'contracts', p_contract_id, v_order.customer_id, 'SUCCESS',\n        jsonb_build_object('signed_file_ref', p_signed_file_ref, 'order_id', v_order.id, 'signed_at', now())\n    );\n\n    RETURN jsonb_build_object('success', true, 'contractId', p_contract_id, 'orderId', v_order.id, 'status', 'SIGNED');\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "finalize_generated_contract_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.finalize_generated_contract_rpc(uuid,uuid,text)",
+        "name": "finalize_generated_contract_rpc",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 467,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 18777
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 18764
+          },
+          {
+            "name": "p_contract_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 18801
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 18787
+          },
+          {
+            "name": "p_generated_file_ref",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 18832
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 18811
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_contract public.contracts%ROWTYPE;\n    v_expected_file_ref text;\nBEGIN\n    SELECT * INTO v_contract\n    FROM public.contracts\n    WHERE id = p_contract_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_contract.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Contract not found';\n    END IF;\n\n    IF NOT v_contract.is_current THEN\n        RAISE EXCEPTION 'INVALID_CONTRACT_STATE: Cannot finalize non-current contract';\n    END IF;\n\n    -- Section 8: Validate canonical generated file path against locked contract\n    v_expected_file_ref := p_company_id::text || '/contracts/' || p_contract_id::text || '/revision-' || v_contract.revision_no::text || '/generated.pdf';\n    IF p_generated_file_ref <> v_expected_file_ref THEN\n        RAISE EXCEPTION 'INVALID_GENERATED_FILE_REF: Provided path does not match canonical contract pattern';\n    END IF;\n\n    UPDATE public.contracts\n    SET \n        generated_file_ref = p_generated_file_ref,\n        status = 'GENERATED',\n        updated_at = now()\n    WHERE id = p_contract_id;\n\n    RETURN jsonb_build_object('success', true, 'contractId', p_contract_id, 'fileRef', p_generated_file_ref);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "generate_order_code",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.generate_order_code()",
+        "name": "generate_order_code",
+        "file": "20260914000001_initial_schema.sql",
+        "line": 95,
+        "parameters": [],
+        "language": "sql",
+        "body": "\n  SELECT 'DH-' || lpad(nextval('public.order_code_seq')::text, 6, '0');\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": [
+      {
+        "signature": "public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 80
+      }
+    ]
+  },
+  {
+    "name": "guard_survey_appointment_write",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.guard_survey_appointment_write()",
+        "name": "guard_survey_appointment_write",
+        "file": "20260924000001_survey_integrity_hardening.sql",
+        "line": 92,
+        "parameters": [],
+        "language": "plpgsql",
+        "body": "\nBEGIN\n  IF TG_OP = 'UPDATE' AND OLD.type = 'SURVEY' THEN\n    IF OLD.status IN ('COMPLETED','CANCELLED','REJECTED') THEN\n      IF NEW.status IS DISTINCT FROM OLD.status OR\n         NEW.address IS DISTINCT FROM OLD.address OR\n         NEW.assignee_id IS DISTINCT FROM OLD.assignee_id OR\n         NEW.type IS DISTINCT FROM OLD.type THEN\n        RAISE EXCEPTION 'SURVEY_APPOINTMENT_TERMINAL';\n      END IF;\n    END IF;\n    -- A live (unexpired) photo operation blocks modifications\n    IF EXISTS (\n      SELECT 1 FROM public.survey_photo_operations\n      WHERE appointment_id = OLD.id AND expires_at > pg_catalog.now()\n    ) THEN\n      RAISE EXCEPTION 'SURVEY_PHOTO_OPERATION_IN_PROGRESS';\n    END IF;\n    IF OLD.status <> 'COMPLETED' AND NEW.status = 'COMPLETED' THEN\n      IF pg_catalog.current_setting('app.survey_completion', true) IS DISTINCT FROM NEW.id::text\n         OR NOT EXISTS (SELECT 1 FROM public.surveys s WHERE s.appointment_id = NEW.id\n           AND s.company_id = NEW.company_id AND s.customer_id = NEW.customer_id\n           AND s.completed_by = NEW.assignee_id) THEN\n        RAISE EXCEPTION 'SURVEY_COMPLETION_REQUIRES_ATOMIC_RPC';\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND ",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "is_assigned_technician",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.is_assigned_technician(uuid)",
+        "name": "is_assigned_technician",
+        "file": "20260915000001_rls_foundation.sql",
+        "line": 66,
+        "parameters": [
+          {
+            "name": "target_appointment_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2553
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2531
+          }
+        ],
+        "language": "sql",
+        "body": "\n  SELECT EXISTS (\n    SELECT 1\n    FROM public.appointments a\n    JOIN public.company_members cm ON cm.user_id = a.assignee_id AND cm.company_id = a.company_id\n    JOIN public.user_profiles up ON up.id = cm.user_id\n    WHERE a.id = target_appointment_id\n      AND a.assignee_id = auth.uid()\n      AND cm.role = 'TECHNICIAN'\n      AND cm.status = 'ACTIVE'\n      AND up.status = 'ACTIVE'\n      AND a.status IN ('ASSIGNED', 'ACCEPTED', 'IN_PROGRESS')\n  );\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "mutate_installation_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "name": "mutate_installation_atomic",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7616
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 7603
+          },
+          {
+            "name": "p_installation_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7642
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 7624
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7661
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 7650
+          },
+          {
+            "name": "p_status",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7678
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 7691
+              }
+            },
+            "location": 7669
+          },
+          {
+            "name": "p_ref",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7705
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 7718
+              }
+            },
+            "location": 7699
+          },
+          {
+            "name": "p_type",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 7733
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 7746
+              }
+            },
+            "location": 7726
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  i public.installations;\n  a public.appointments;\n  r text;\n  allowed jsonb := '{\"SCHEDULED\":[\"IN_TRANSIT\",\"INSTALLING\",\"FAILED\"],\"IN_TRANSIT\":[\"INSTALLING\",\"FAILED\"],\"INSTALLING\":[\"TESTING\",\"HANDOVER_PENDING\",\"FAILED\"],\"TESTING\":[\"HANDOVER_PENDING\",\"INSTALLING\",\"FAILED\"],\"HANDOVER_PENDING\":[\"TESTING\",\"INSTALLING\",\"FAILED\"],\"FAILED\":[\"SCHEDULED\",\"IN_TRANSIT\",\"INSTALLING\"]}';\nBEGIN\n  r := public.operations_actor(p_company_id, p_actor_id, ARRAY['BOSS_ADMIN','TECHNICIAN']);\n  SELECT * INTO i FROM public.installations WHERE company_id = p_company_id AND id = p_installation_id FOR UPDATE;\n  IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n\n  SELECT * INTO a FROM public.appointments WHERE company_id = p_company_id AND id = i.appointment_id FOR UPDATE;\n  IF NOT FOUND OR a.customer_id <> i.customer_id OR a.type <> 'INSTALLATION' THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n\n  IF r = 'TECHNICIAN' AND a.assignee_id <> p_actor_id THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n\n  -- Require ACCEPTED or IN_PROGRESS appointment for both evidence upload and progress mutation.\n  -- ASSIGNED appointment cannot upload evidence or mutate installation progress.\n  IF i.status = 'COMPLETED' OR a.status NOT IN ('ACCEPTED', 'IN_PROGRESS') THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  IF p_ref IS NOT NULL THEN\n    IF NOT public.operations_evidence_ref(p_company_id, i.id, p_ref, p_type) THEN\n      RAISE EXCEPTION 'INVALID_STORAGE_REF';\n    END IF;\n    UPDATE public.installations\n    SET photos = CASE WHEN p_type = 'photo' AND NOT(photos ? p_ref) THEN photos || jsonb_build_array(p_ref) ELSE photos END,\n        handover_ref = CASE WHEN p_type = 'handover' THEN p_ref ELSE handover_ref END,\n        updated_at = now()\n    WHERE id = i.id;\n  ELSE\n    IF NOT COALESCE((allowed->i.status) ? p_status, false) THEN\n      RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n    END IF;\n\n    -- When appointment is ACCEPTED and field work mutates, promote appointment -> IN_PROGRESS\n    IF a.status = 'ACCEPTED' THEN\n      UPDATE public.appointments SET status = 'IN_PROGRESS', updated_at = now() WHERE id = a.id;\n    END IF;\n\n    -- If installation enters INSTALLING, advance order_status to INSTALLING if it was READY_FOR_INSTALL\n    IF p_status = 'INSTALLING' THEN\n      UPDATE public.orders SET order_status = 'INSTALLING', updated_at = now()\n      WHERE company_id = p_company_id AND id = i.order_id AND order_status = 'READY_FOR_INSTALL';\n    END IF;\n\n    UPDATE public.installations SET status = p_status, updated_at = now() WHERE id = i.id;\n  END IF;\n\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'UPDATE_INSTALLATION',\n    'installations',\n    i.id,\n    jsonb_build_object('to_status', p_status, 'evidence_type', p_type)\n  );\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "operations_actor",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.operations_actor(uuid,uuid,text[])",
+        "name": "operations_actor",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 24,
+        "parameters": [
+          {
+            "name": "p_company",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 1609
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 1599
+          },
+          {
+            "name": "p_actor",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 1622
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 1614
+          },
+          {
+            "name": "p_roles",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "arrayBounds": [
+                {
+                  "Integer": {
+                    "ival": -1
+                  }
+                }
+              ],
+              "location": 1635
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 1627
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE r text;\nBEGIN\n SELECT m.role INTO r FROM public.company_members m JOIN public.user_profiles u ON u.id=m.user_id\n WHERE m.company_id=p_company AND m.user_id=p_actor AND m.status='ACTIVE' AND u.status='ACTIVE'\n FOR SHARE OF m,u;\n IF r IS NULL OR NOT(r=ANY(p_roles)) THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n RETURN r;\nEND ",
+        "replaces": false
+      }
+    ],
+    "callers_before_removal": [
+      {
+        "signature": "public.record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 75
+      },
+      {
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "signature": "public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 61
+      },
+      {
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      },
+      {
+        "signature": "public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 160
+      },
+      {
+        "signature": "public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 368
+      },
+      {
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "signature": "public.accept_installation_appointment_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 157
+      },
+      {
+        "signature": "public.start_installation_work_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 227
+      }
+    ]
+  },
+  {
+    "name": "operations_audit",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.operations_audit(uuid,uuid,text,text,uuid,jsonb)",
+        "name": "operations_audit",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 34,
+        "parameters": [
+          {
+            "name": "p_company",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2106
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2096
+          },
+          {
+            "name": "p_actor",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2119
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2111
+          },
+          {
+            "name": "p_action",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2133
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2124
+          },
+          {
+            "name": "p_table",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2146
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2138
+          },
+          {
+            "name": "p_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2156
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2151
+          },
+          {
+            "name": "p_metadata",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2172
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2161
+          }
+        ],
+        "language": "sql",
+        "body": "\n INSERT INTO public.audit_logs(company_id,user_id,action,resource_type,resource_id,result,metadata)\n VALUES(p_company,p_actor,p_action,p_table,p_id,'SUCCESS',p_metadata);\n",
+        "replaces": false
+      }
+    ],
+    "callers_before_removal": [
+      {
+        "signature": "public.record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 75
+      },
+      {
+        "signature": "public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamptz)",
+        "file": "20260930120001_p1_backend_remediation.sql",
+        "line": 39
+      },
+      {
+        "signature": "public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 61
+      },
+      {
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      },
+      {
+        "signature": "public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 160
+      },
+      {
+        "signature": "public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamptz,text,jsonb)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 67
+      },
+      {
+        "signature": "public.accept_installation_appointment_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 157
+      },
+      {
+        "signature": "public.start_installation_work_atomic(uuid,uuid,uuid)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 227
+      }
+    ]
+  },
+  {
+    "name": "operations_evidence_ref",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.operations_evidence_ref(uuid,uuid,text,text)",
+        "name": "operations_evidence_ref",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 39,
+        "parameters": [
+          {
+            "name": "p_company",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2479
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2469
+          },
+          {
+            "name": "p_installation",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2499
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2484
+          },
+          {
+            "name": "p_ref",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2510
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2504
+          },
+          {
+            "name": "p_type",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 2522
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 2515
+          }
+        ],
+        "language": "sql",
+        "body": "\n SELECT COALESCE(p_ref ~ ('^' || p_company::text || '/installations/' || p_installation::text || '/' ||\n CASE p_type WHEN 'photo' THEN 'photo/[0-9a-f-]{36}\\.(jpg|png|webp)' WHEN 'handover' THEN 'handover/[0-9a-f-]{36}\\.pdf' ELSE '$a' END || '$'),false);\n",
+        "replaces": false
+      }
+    ],
+    "callers_before_removal": [
+      {
+        "signature": "public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+        "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+        "line": 244
+      },
+      {
+        "signature": "public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 370
+      }
+    ]
+  },
+  {
+    "name": "process_payment_webhook_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.process_payment_webhook_rpc(text,text,text,numeric,timestamptz,text,text)",
+        "name": "process_payment_webhook_rpc",
+        "file": "20260929220003_commercial_security_hardening.sql",
+        "line": 6,
+        "parameters": [
+          {
+            "name": "p_provider",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 387
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 376
+          },
+          {
+            "name": "p_provider_account",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 416
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 397
+          },
+          {
+            "name": "p_provider_ref",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 441
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 426
+          },
+          {
+            "name": "p_amount",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "pg_catalog"
+                  }
+                },
+                {
+                  "String": {
+                    "sval": "numeric"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 460
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 451
+          },
+          {
+            "name": "p_occurred_at",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "timestamptz"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 487
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 473
+          },
+          {
+            "name": "p_transfer_content",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 523
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 504
+          },
+          {
+            "name": "p_payment_reference",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 553
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 533
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_company_id uuid;\n    v_order public.orders%ROWTYPE;\n    v_existing_tx public.payment_transactions%ROWTYPE;\n    v_tx_id uuid;\n    v_collected_amount numeric;\n    v_required_deposit numeric;\n    v_deposit_threshold_reached boolean := false;\n    v_normalized_payment_ref text;\n    v_payload_hash text;\n    v_customer_previous_stage text;\nBEGIN\n    IF p_amount <= 0 THEN\n        RAISE EXCEPTION 'AMOUNT_MUST_BE_POSITIVE';\n    END IF;\n\n    -- Canonicalize payment_reference (trim and uppercase, no reliance on arbitrary memo whitespace)\n    v_normalized_payment_ref := UPPER(TRIM(COALESCE(p_payment_reference, '')));\n\n    -- Strict company derivation from company_bank_accounts (no arbitrary tenant fallback)\n    SELECT company_id INTO v_company_id\n    FROM public.company_bank_accounts\n    WHERE provider = p_provider AND provider_account = p_provider_account\n    LIMIT 1;\n\n    IF v_company_id IS NULL THEN\n        RAISE EXCEPTION 'UNKNOWN_PROVIDER_ACCOUNT: % - %', p_provider, p_provider_account;\n    END IF;\n\n    -- Concurrency & Idempotency: Advisory lock per provider event reference\n    -- Section 1: Lock scoped strictly to company_id + provider + provider_ref\n    PERFORM pg_advisory_xact_lock(hashtext(v_company_id::text || ':PAYMENT:' || p_provider || ':' || p_provider_ref));\n\n    -- Deterministic request fingerprint binding full logical payload\n    v_payload_hash := encode(sha256(\n        (v_company_id::text || '|' ||\n         p_provider || '|' ||\n         p_provider_account || '|' ||\n         p_provider_ref || '|' ||\n         p_amount::text || '|' ||\n         v_normalized_payment_ref || '|' ||\n         to_char(p_occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')\n        )::bytea\n    ), 'hex');\n\n    -- Check if existing payment transaction exists for company_id, provider, and provider_ref\n    SELECT * INTO v_existing_tx\n    FROM public.payment_transactions\n    WHERE company_id = v_company_id\n      AND provider = p_provider\n      AND provider_ref = p_provider_ref\n    LIMIT 1;\n\n    IF v_existing_tx.id IS NOT NULL THEN\n        -- Section 1: Full logical payload duplicate validation\n        -- Reject if amount, provider_account, payment_reference, company, or payload_hash changed\n        IF v_existing_tx.company_id <> v_company_id\n           OR v_existing_tx.provider_account <> p_provider_account\n           OR v_existing_tx.amount <> p_amount\n           OR COALESCE(v_existing_tx.payment_reference, '') <> v_normalized_payment_ref\n           OR (v_existing_tx.payload_hash IS NOT NULL AND v_existing_tx.payload_hash <> v_payload_hash) THEN\n            RAISE EXCEPTION 'PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD';\n        END IF;\n\n        RETURN jsonb_build_object(\n            'status', 'ALREADY_PROCESSED',\n            'transactionId', v_existing_tx.id,\n            'provider_ref', p_provider_ref,\n            'orderId', v_existing_tx.matched_order_id\n        );\n    END IF;\n\n    -- Look up Order by payment_reference strictly scoped to v_company_id\n    SELECT * INTO v_order\n    FROM public.orders\n    WHERE payment_reference = v_normalized_payment_ref AND company_id = v_company_id\n    FOR UPDATE;\n\n    IF v_order.id IS NOT NULL THEN\n        -- Insert matched transaction with logical fingerprint and payment reference\n        INSERT INTO public.payment_transactions (\n            company_id, provider, provider_account, provider_ref, amount, occurred_at, transfer_content,\n            matched_order_id, match_confidence, status, payload_hash, payment_reference\n        ) VALUES (\n            v_company_id, p_provider, p_provider_account, p_provider_ref, p_amount, p_occurred_at, p_transfer_content,\n            v_order.id, 1.0, 'MATCHED', v_payload_hash, v_normalized_payment_ref\n        ) RETURNING id INTO v_tx_id;\n\n        -- Update finance_summaries atomically\n        INSERT INTO public.finance_summaries (order_id, company_id, contract_value, collected_amount, receivable_amount)\n        VALUES (v_order.id, v_company_id, v_order.final_amount, p_amount, GREATEST(v_order.final_amount - p_amount, 0))\n        ON CONFLICT (order_id) DO UPDATE \n        SET \n            collected_amount = public.finance_summaries.collected_amount + EXCLUDED.collected_amount,\n            receivable_amount = GREATEST(public.finance_summaries.contract_value - (public.finance_summaries.collected_amount + EXCLUDED.collected_amount), 0),\n            updated_at = now();\n\n        -- Calculate cumulative collected amount\n        SELECT collected_amount INTO v_collected_amount \n        FROM public.finance_summaries WHERE order_id = v_order.id;\n\n        -- Retrieve required deposit from pricing policy conditions\n        SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount\n        INTO v_required_deposit\n        FROM public.price_calculations pc\n        JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id\n        WHERE pc.id = v_order.price_calculation_id;\n\n        IF v_required_deposit IS NULL THEN\n            RAISE EXCEPTION 'POLICY_CONFIGURATION_ERROR';\n        END IF;\n\n        IF v_collected_amount >= v_required_deposit THEN\n            v_deposit_threshold_reached := true;\n            UPDATE public.orders\n            SET \n                deposit_status = 'DEPOSIT_CONFIRMED',\n                order_status = 'DEPOSIT_CONFIRMED',\n                updated_at = now()\n            WHERE id = v_order.id;\n\n            -- Capture customer previous stage with row lock before updating\n            SELECT stage INTO v_customer_previous_stage\n            FROM public.customers\n            WHERE id = v_order.customer_id AND company_id = v_company_id\n            FOR UPDATE;\n\n            -- Update customer stage to DEPOSIT_CONFIRMED only if in earlier stage\n            IF v_customer_previous_stage IN ('LEAD_NEW', 'LEAD', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'NEGOTIATING', 'ORDER_CREATED') THEN\n                UPDATE public.customers\n                SET stage = 'DEPOSIT_CONFIRMED', updated_at = now()\n                WHERE id = v_order.customer_id;\n\n                INSERT INTO public.customer_stage_histories (\n                    company_id, customer_id, from_stage, to_stage, actor_type, changed_by_user_id, reason\n                ) VALUES (\n                    v_company_id, v_order.customer_id, v_customer_previous_stage, 'DEPOSIT_CONFIRMED', 'SYSTEM', NULL, 'Webhook deposit payment confirmed'\n                );\n            END IF;\n        ELSE\n            UPDATE public.orders\n            SET deposit_status = 'DEPOSIT_PENDING', updated_at = now()\n            WHERE id = v_order.id;\n        END IF;\n\n        RETURN jsonb_build_object(\n            'status', 'MATCHED',\n            'orderId', v_order.id,\n            'transactionId', v_tx_id,\n            'depositConfirmed', v_deposit_threshold_reached,\n            'collectedAmount', v_collected_amount,\n            'requiredDeposit', v_required_deposit\n        );\n    ELSE\n        -- If order not found, insert as MANUAL_REVIEW_REQUIRED with 0 match confidence\n        INSERT INTO public.payment_transactions (\n            company_id, provider, provider_account, provider_ref, amount, occurred_at, transfer_content,\n            matched_order_id, match_confidence, status, payload_hash, payment_reference\n        ) VALUES (\n            v_company_id, p_provider, p_provider_account, p_provider_ref, p_amount, p_occurred_at, p_transfer_content,\n            NULL, 0, 'MANUAL_REVIEW_REQUIRED', v_payload_hash, v_normalized_payment_ref\n        ) RETURNING id INTO v_tx_id;\n\n        RETURN jsonb_build_object('status', 'MANUAL_REVIEW_REQUIRED', 'transactionId', v_tx_id);\n    END IF;\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "save_price_calculation_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.save_price_calculation_rpc(uuid,uuid,uuid,uuid,text,jsonb,numeric,text,jsonb)",
+        "name": "save_price_calculation_rpc",
+        "file": "20260929220002_commercial_atomic_rpcs.sql",
+        "line": 6,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 326
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 313
+          },
+          {
+            "name": "p_customer_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 350
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 336
+          },
+          {
+            "name": "p_survey_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 372
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 360
+          },
+          {
+            "name": "p_pricing_policy_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 402
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 382
+          },
+          {
+            "name": "p_policy_version",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 429
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 412
+          },
+          {
+            "name": "p_input_data",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 452
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 439
+          },
+          {
+            "name": "p_amount",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "pg_catalog"
+                  }
+                },
+                {
+                  "String": {
+                    "sval": "numeric"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 472
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 463
+          },
+          {
+            "name": "p_status",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 494
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 485
+          },
+          {
+            "name": "p_missing_fields",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "jsonb"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 521
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "TypeCast": {
+                "arg": {
+                  "A_Const": {
+                    "sval": {
+                      "sval": "[]"
+                    },
+                    "location": 535
+                  }
+                },
+                "typeName": {
+                  "names": [
+                    {
+                      "String": {
+                        "sval": "jsonb"
+                      }
+                    }
+                  ],
+                  "typemod": -1,
+                  "location": 541
+                },
+                "location": 539
+              }
+            },
+            "location": 504
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_calc_id uuid;\nBEGIN\n    -- Validate status & amount CHECK constraint invariant\n    IF p_status = 'NEED_INFO' AND p_amount IS NOT NULL THEN\n        RAISE EXCEPTION 'CHECK_VIOLATION: NEED_INFO must have NULL amount';\n    END IF;\n    IF p_status <> 'NEED_INFO' AND p_amount IS NULL THEN\n        RAISE EXCEPTION 'CHECK_VIOLATION: CALCULATED status must have valid amount';\n    END IF;\n\n    -- Validate customer belongs to company\n    IF NOT EXISTS (SELECT 1 FROM public.customers WHERE id = p_customer_id AND company_id = p_company_id) THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Customer does not belong to company';\n    END IF;\n\n    -- Validate survey if provided: must belong to same company and customer\n    IF p_survey_id IS NOT NULL THEN\n        IF NOT EXISTS (\n            SELECT 1 FROM public.surveys\n            WHERE id = p_survey_id AND company_id = p_company_id AND customer_id = p_customer_id\n        ) THEN\n            RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Survey does not belong to company and customer';\n        END IF;\n    END IF;\n\n    -- Validate pricing policy belongs to company, version matches, and is ACTIVE\n    IF NOT EXISTS (\n        SELECT 1 FROM public.pricing_policies \n        WHERE id = p_pricing_policy_id AND company_id = p_company_id AND version = p_policy_version AND status = 'ACTIVE'\n    ) THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Active pricing policy not found or version mismatch';\n    END IF;\n\n    INSERT INTO public.price_calculations (\n        company_id,\n        customer_id,\n        survey_id,\n        pricing_policy_id,\n        policy_version,\n        input_data,\n        amount,\n        status,\n        missing_fields\n    ) VALUES (\n        p_company_id,\n        p_customer_id,\n        p_survey_id,\n        p_pricing_policy_id,\n        p_policy_version,\n        p_input_data,\n        p_amount,\n        p_status,\n        COALESCE(p_missing_fields, '[]'::jsonb)\n    ) RETURNING id INTO v_calc_id;\n\n    RETURN jsonb_build_object('id', v_calc_id, 'status', p_status, 'amount', p_amount);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "start_installation_work_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.start_installation_work_atomic(uuid,uuid,uuid)",
+        "name": "start_installation_work_atomic",
+        "file": "20261004180001_installation_product_journey.sql",
+        "line": 227,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6444
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6431
+          },
+          {
+            "name": "p_installation_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6470
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6452
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 6489
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 6478
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n  i public.installations;\n  a public.appointments;\n  r text;\nBEGIN\n  r := public.operations_actor(p_company_id, p_actor_id, ARRAY['TECHNICIAN']);\n\n  SELECT * INTO i FROM public.installations\n  WHERE company_id = p_company_id AND id = p_installation_id\n  FOR UPDATE;\n\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  SELECT * INTO a FROM public.appointments\n  WHERE company_id = p_company_id AND id = i.appointment_id\n  FOR UPDATE;\n\n  IF NOT FOUND OR a.type <> 'INSTALLATION' THEN\n    RAISE EXCEPTION 'RESOURCE_NOT_FOUND';\n  END IF;\n\n  IF a.assignee_id <> p_actor_id THEN\n    RAISE EXCEPTION 'PERMISSION_DENIED';\n  END IF;\n\n  IF a.status = 'IN_PROGRESS' THEN\n    RETURN jsonb_build_object('success', true, 'idempotent', true);\n  END IF;\n\n  IF a.status <> 'ACCEPTED' THEN\n    RAISE EXCEPTION 'INVALID_STATE_TRANSITION';\n  END IF;\n\n  UPDATE public.appointments\n  SET status = 'IN_PROGRESS',\n      updated_at = now()\n  WHERE id = a.id;\n\n  PERFORM public.operations_audit(\n    p_company_id,\n    p_actor_id,\n    'START_INSTALLATION_WORK',\n    'appointments',\n    a.id,\n    jsonb_build_object('installation_id', i.id, 'from_status', 'ACCEPTED', 'to_status', 'IN_PROGRESS')\n  );\n\n  RETURN jsonb_build_object('success', true, 'idempotent', false);\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "update_order_deposit_rpc",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+        "name": "update_order_deposit_rpc",
+        "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+        "line": 247,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 8803
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 8790
+          },
+          {
+            "name": "p_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 8824
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 8813
+          },
+          {
+            "name": "p_actor_user_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 8850
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 8834
+          },
+          {
+            "name": "p_deposit_amount",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "pg_catalog"
+                  }
+                },
+                {
+                  "String": {
+                    "sval": "numeric"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 8877
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 8860
+          },
+          {
+            "name": "p_idempotency_key",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 8908
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 8890
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE\n    v_order public.orders%ROWTYPE;\n    v_existing_tx public.payment_transactions%ROWTYPE;\n    v_tx_id uuid;\n    v_collected_amount numeric;\n    v_required_deposit numeric;\n    v_deposit_threshold_reached boolean := false;\n    v_payload_hash text;\n    v_customer_previous_stage text;\nBEGIN\n    IF p_deposit_amount <= 0 THEN\n        RAISE EXCEPTION 'Deposit amount must be greater than 0';\n    END IF;\n\n    -- Validate actor is BOSS_ADMIN in company\n    IF NOT EXISTS (\n        SELECT 1 FROM public.company_members cm\n        JOIN public.user_profiles up ON cm.user_id = up.id\n        WHERE cm.company_id = p_company_id\n          AND cm.user_id = p_actor_user_id\n          AND cm.status = 'ACTIVE'\n          AND up.status = 'ACTIVE'\n          AND cm.role = 'BOSS_ADMIN'\n    ) THEN\n        RAISE EXCEPTION 'UNAUTHORIZED_BOSS_REQUIRED';\n    END IF;\n\n    -- Concurrency: Advisory lock per (company_id, idempotency_key)\n    PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || ':MANUAL:' || p_idempotency_key));\n\n    -- Lock Order strictly scoped to company\n    SELECT * INTO v_order\n    FROM public.orders\n    WHERE id = p_order_id AND company_id = p_company_id\n    FOR UPDATE;\n\n    IF v_order.id IS NULL THEN\n        RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Order not found';\n    END IF;\n\n    -- Check if idempotency key was already used\n    SELECT * INTO v_existing_tx\n    FROM public.payment_transactions\n    WHERE company_id = p_company_id AND provider = 'MANUAL' AND provider_ref = p_idempotency_key;\n\n    IF v_existing_tx.id IS NOT NULL THEN\n        -- Section 2: Idempotency must strictly bind to matched_order_id and amount\n        IF v_existing_tx.matched_order_id IS DISTINCT FROM p_order_id OR v_existing_tx.amount <> p_deposit_amount THEN\n            RAISE EXCEPTION 'PAYMENT_IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD';\n        END IF;\n\n        SELECT collected_amount INTO v_collected_amount \n        FROM public.finance_summaries WHERE order_id = p_order_id;\n\n        SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount\n        INTO v_required_deposit\n        FROM public.price_calculations pc\n        JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id\n        WHERE pc.id = v_order.price_calculation_id;\n\n        RETURN jsonb_build_object(\n            'success', true,\n            'status', 'ALREADY_PROCESSED',\n            'orderId', v_existing_tx.matched_order_id,\n            'transactionId', v_existing_tx.id,\n            'depositConfirmed', (v_order.deposit_status IN ('CONFIRMED', 'DEPOSIT_CONFIRMED')),\n            'collectedAmount', COALESCE(v_collected_amount, 0),\n            'requiredDeposit', v_required_deposit\n        );\n    END IF;\n\n    -- Compute deterministic payload hash for manual transaction\n    v_payload_hash := encode(sha256(\n        (p_company_id::text || ':MANUAL:' || p_idempotency_key || ':' || p_order_id::text || ':' || p_deposit_amount::text)::bytea\n    ), 'hex');\n\n    -- Insert manual transaction\n    INSERT INTO public.payment_transactions (\n        company_id, provider, provider_account, provider_ref, amount, occurred_at, transfer_content,\n        matched_order_id, match_confidence, status, payload_hash, payment_reference\n    ) VALUES (\n        p_company_id, 'MANUAL', 'MANUAL_CASH', p_idempotency_key, p_deposit_amount, now(), 'MANUAL DEPOSIT CONFIRMATION',\n        v_order.id, 1.0, 'MATCHED', v_payload_hash, v_order.payment_reference\n    ) RETURNING id INTO v_tx_id;\n\n    -- Update finance_summaries\n    INSERT INTO public.finance_summaries (order_id, company_id, contract_value, collected_amount, receivable_amount)\n    VALUES (v_order.id, p_company_id, v_order.final_amount, p_deposit_amount, GREATEST(v_order.final_amount - p_deposit_amount, 0))\n    ON CONFLICT (order_id) DO UPDATE \n    SET \n        collected_amount = public.finance_summaries.collected_amount + EXCLUDED.collected_amount,\n        receivable_amount = GREATEST(public.finance_summaries.contract_value - (public.finance_summaries.collected_amount + EXCLUDED.collected_amount), 0),\n        updated_at = now();\n\n    SELECT collected_amount INTO v_collected_amount \n    FROM public.finance_summaries WHERE order_id = p_order_id;\n\n    SELECT (pp.conditions->>'deposit_percentage')::numeric / 100 * v_order.final_amount\n    INTO v_required_deposit\n    FROM public.price_calculations pc\n    JOIN public.pricing_policies pp ON pc.pricing_policy_id = pp.id\n    WHERE pc.id = v_order.price_calculation_id;\n\n    IF v_required_deposit IS NULL THEN\n        RAISE EXCEPTION 'POLICY_CONFIGURATION_ERROR';\n    END IF;\n\n    IF v_collected_amount >= v_required_deposit THEN\n        v_deposit_threshold_reached := true;\n        UPDATE public.orders\n        SET \n            deposit_status = 'DEPOSIT_CONFIRMED',\n            order_status = 'DEPOSIT_CONFIRMED',\n            updated_at = now()\n        WHERE id = p_order_id;\n\n        -- Capture customer previous stage with row lock before updating\n        SELECT stage INTO v_customer_previous_stage\n        FROM public.customers\n        WHERE id = v_order.customer_id AND company_id = p_company_id\n        FOR UPDATE;\n\n        -- Update customer stage to DEPOSIT_CONFIRMED only if in earlier stage\n        IF v_customer_previous_stage IN ('LEAD_NEW', 'LEAD', 'SURVEY_SCHEDULED', 'SURVEY_COMPLETED', 'PRICE_CALCULATED', 'PRICE_OFFERED', 'NEGOTIATING', 'ORDER_CREATED') THEN\n            UPDATE public.customers\n            SET stage = 'DEPOSIT_CONFIRMED', updated_at = now()\n            WHERE id = v_order.customer_id;\n\n            INSERT INTO public.customer_stage_histories (\n                company_id, customer_id, from_stage, to_stage, actor_type, changed_by_user_id, reason\n            ) VALUES (\n                p_company_id, v_order.customer_id, v_customer_previous_stage, 'DEPOSIT_CONFIRMED', 'USER', p_actor_user_id, 'Manual deposit confirmed by Boss Admin'\n            );\n        END IF;\n    ELSE\n        UPDATE public.orders\n        SET deposit_status = 'DEPOSIT_PENDING', updated_at = now()\n        WHERE id = p_order_id;\n    END IF;\n\n    -- Mandatory audit log\n    INSERT INTO public.audit_logs (company_id, user_id, action, resource_type, resource_id, customer_id, result, metadata)\n    VALUES (\n        p_company_id, p_actor_user_id, 'MANUAL_DEPOSIT_CONFIRMED', 'orders', p_order_id, v_order.customer_id, 'SUCCESS',\n        jsonb_build_object('amount', p_deposit_amount, 'collected_amount', v_collected_amount, 'required_deposit', v_required_deposit)\n    );\n\n    RETURN jsonb_build_object(\n        'success', true,\n        'status', 'MATCHED',\n        'orderId', p_order_id,\n        'transactionId', v_tx_id,\n        'depositConfirmed', v_deposit_threshold_reached,\n        'collectedAmount', v_collected_amount,\n        'requiredDeposit', v_required_deposit\n    );\nEND;\n",
+        "replaces": true
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "update_production_progress_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+        "name": "update_production_progress_atomic",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 61,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4448
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4435
+          },
+          {
+            "name": "p_production_order_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4475
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4453
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4491
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4480
+          },
+          {
+            "name": "p_status",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 4505
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 4496
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE p public.production_orders;\nBEGIN\n PERFORM public.operations_actor(p_company_id,p_actor_id,ARRAY['BOSS_ADMIN']);\n SELECT * INTO p FROM public.production_orders WHERE company_id=p_company_id AND id=p_production_order_id FOR UPDATE;\n IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n IF p_status IS NULL OR p_status NOT IN ('RELEASED_TO_FACTORY','IN_PRODUCTION','QC_IN_PROGRESS') OR NOT (\n (p.status='PENDING_SPECS' AND p_status='RELEASED_TO_FACTORY') OR\n (p.status IN ('RELEASED_TO_FACTORY','QC_IN_PROGRESS','QC_FAILED','READY_FOR_DISPATCH') AND p_status='IN_PRODUCTION') OR\n (p.status='IN_PRODUCTION' AND p_status='QC_IN_PROGRESS')) THEN RAISE EXCEPTION 'INVALID_STATE_TRANSITION'; END IF;\n UPDATE public.production_orders SET status=p_status,qc_status=CASE WHEN p_status='IN_PRODUCTION' THEN 'PENDING' ELSE qc_status END,updated_at=now() WHERE id=p.id;\n PERFORM public.operations_audit(p_company_id,p_actor_id,'UPDATE_PRODUCTION_PROGRESS','production_orders',p.id,jsonb_build_object('from_status',p.status,'to_status',p_status));\nEND ",
+        "replaces": false
+      }
+    ],
+    "callers_before_removal": []
+  },
+  {
+    "name": "update_warranty_status_atomic",
+    "pre_removal_definitions": [
+      {
+        "signature": "public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+        "name": "update_warranty_status_atomic",
+        "file": "20260928000001_operations_p0_hardening.sql",
+        "line": 160,
+        "parameters": [
+          {
+            "name": "p_company_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14067
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14054
+          },
+          {
+            "name": "p_ticket_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14084
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14072
+          },
+          {
+            "name": "p_actor_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14100
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14089
+          },
+          {
+            "name": "p_actor_role",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14118
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14105
+          },
+          {
+            "name": "p_operation",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14135
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "location": 14123
+          },
+          {
+            "name": "p_status",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14149
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 14162
+              }
+            },
+            "location": 14140
+          },
+          {
+            "name": "p_technician_id",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "uuid"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14183
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 14196
+              }
+            },
+            "location": 14167
+          },
+          {
+            "name": "p_notes",
+            "argType": {
+              "names": [
+                {
+                  "String": {
+                    "sval": "text"
+                  }
+                }
+              ],
+              "typemod": -1,
+              "location": 14209
+            },
+            "mode": "FUNC_PARAM_DEFAULT",
+            "defexpr": {
+              "A_Const": {
+                "isnull": true,
+                "location": 14222
+              }
+            },
+            "location": 14201
+          }
+        ],
+        "language": "plpgsql",
+        "body": "\nDECLARE t public.warranty_tickets; r text; next_status text; allowed jsonb := '{\"OPEN\":[\"CANCELLED\"],\"ASSIGNED\":[\"IN_PROGRESS\",\"OPEN\",\"CANCELLED\"],\"IN_PROGRESS\":[\"RESOLVED\",\"FAILED\"],\"RESOLVED\":[\"CLOSED\"],\"REOPENED\":[\"IN_PROGRESS\"]}';\nBEGIN\n r := public.operations_actor(p_company_id,p_actor_id,ARRAY['BOSS_ADMIN','TECHNICIAN','SALE']);\n IF r IS DISTINCT FROM p_actor_role THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n SELECT * INTO t FROM public.warranty_tickets WHERE company_id=p_company_id AND id=p_ticket_id FOR UPDATE;\n IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n IF r='TECHNICIAN' AND t.assigned_to IS DISTINCT FROM p_actor_id THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n IF p_operation='assign' THEN\n  IF r<>'BOSS_ADMIN' THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n  IF t.status NOT IN ('OPEN','REOPENED','ASSIGNED') THEN RAISE EXCEPTION 'INVALID_STATE_TRANSITION'; END IF;\n  PERFORM public.operations_actor(p_company_id,p_technician_id,ARRAY['TECHNICIAN']);\n  next_status := 'ASSIGNED';\n ELSIF p_operation='reopen' THEN\n  IF r NOT IN ('BOSS_ADMIN','SALE') THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n  IF t.status NOT IN ('RESOLVED','CLOSED') OR NULLIF(btrim(p_notes),'') IS NULL THEN RAISE EXCEPTION 'INVALID_STATE_TRANSITION'; END IF;\n  next_status := 'REOPENED';\n ELSIF p_operation='update' THEN\n  IF r NOT IN ('BOSS_ADMIN','TECHNICIAN') THEN RAISE EXCEPTION 'PERMISSION_DENIED'; END IF;\n  IF NOT COALESCE((allowed->t.status) ? p_status,false) THEN RAISE EXCEPTION 'INVALID_STATE_TRANSITION'; END IF;\n  next_status := p_status;\n ELSE RAISE EXCEPTION 'INVALID_INPUT'; END IF;\n UPDATE public.warranty_tickets SET status=next_status,\n assigned_to=CASE WHEN p_operation='assign' THEN p_technician_id WHEN next_status='OPEN' THEN NULL ELSE assigned_to END,\n resolved_at=CASE WHEN next_status='RESOLVED' THEN now() WHEN next_status='REOPENED' THEN NULL ELSE resolved_at END,\n notes=CASE WHEN p_operation='reopen' THEN concat_ws(E'\\n',notes,'REOPEN: '||p_notes) ELSE COALESCE(p_notes,notes) END,updated_at=now() WHERE id=t.id;\n PERFORM public.operations_audit(p_company_id,p_actor_id,'WARRANTY_'||upper(p_operation),'warranty_tickets',t.id,jsonb_build_object('from_status',t.status,'to_status',next_status));\nEND ",
+        "replaces": false
+      }
+    ],
+    "callers_before_removal": []
+  }
+]

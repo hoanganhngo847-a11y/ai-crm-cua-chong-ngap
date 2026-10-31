@@ -1,0 +1,336 @@
+[
+  {
+    "oid": 19158,
+    "name": "begin_survey_photo_operation",
+    "signature": "begin_survey_photo_operation(uuid,uuid)",
+    "arguments": "p_appointment_id uuid, p_actor_id uuid",
+    "result": "uuid",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "556888d37c1269298764b3b236f26ea0",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19320,
+    "name": "complete_installation_atomic",
+    "signature": "complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+    "arguments": "p_company_id uuid, p_installation_id uuid, p_actor_id uuid, p_verified_photos jsonb, p_verified_handover text",
+    "result": "jsonb",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "40fcaf2621220e172bab77d788d73673",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 18751,
+    "name": "complete_survey_atomic",
+    "signature": "complete_survey_atomic(uuid,uuid,jsonb)",
+    "arguments": "p_appointment_id uuid, p_completed_by uuid, p_survey_payload jsonb",
+    "result": "jsonb",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "e74129c80cdf0a3be09ad3e449a9e3f5",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19316,
+    "name": "create_production_order_atomic",
+    "signature": "create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamp with time zone)",
+    "arguments": "p_company_id uuid, p_order_id uuid, p_actor_id uuid, p_specs jsonb, p_materials jsonb, p_deadline timestamp with time zone",
+    "result": "jsonb",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "7c344ea37b88b28978f2b2a0440c25b7",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19159,
+    "name": "end_survey_photo_operation",
+    "signature": "end_survey_photo_operation(uuid,uuid)",
+    "arguments": "p_appointment_id uuid, p_token uuid",
+    "result": "void",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "183bb6902909a37c6255ec4e1be54d3f",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 18583,
+    "name": "enforce_appointments_immutability",
+    "signature": "enforce_appointments_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "fd7929f23b0994c762ae88fabd993931",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18595,
+    "name": "enforce_contracts_immutability",
+    "signature": "enforce_contracts_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "8f175475bf910ae8d5ae9f48e93b3e7c",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18597,
+    "name": "enforce_installations_integrity",
+    "signature": "enforce_installations_integrity()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "21e82177776eaafe3680f0850c25c799",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18591,
+    "name": "enforce_orders_immutability",
+    "signature": "enforce_orders_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "2aed68cff550c9d9a02add8d27855b87",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18593,
+    "name": "enforce_payment_facts_immutability",
+    "signature": "enforce_payment_facts_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "1e4f6191414fb6c3d653f5aaf32a9189",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18589,
+    "name": "enforce_price_calculations_immutability",
+    "signature": "enforce_price_calculations_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "1889321960765ae15d9e9a2e0ad8b48c",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18587,
+    "name": "enforce_pricing_policies_immutability",
+    "signature": "enforce_pricing_policies_immutability()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "21214e84616b119be84d222b89187a97",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18585,
+    "name": "enforce_surveys_integrity",
+    "signature": "enforce_surveys_integrity()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "87d52a95327fd6def6dbe7f28c6f6730",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 17702,
+    "name": "generate_order_code",
+    "signature": "generate_order_code()",
+    "arguments": "",
+    "result": "text",
+    "prosecdef": false,
+    "proconfig": null,
+    "anon_execute": true,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "7d61ac502e19584e082fadba54d78ae7",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 19160,
+    "name": "guard_survey_appointment_write",
+    "signature": "guard_survey_appointment_write()",
+    "arguments": "",
+    "result": "trigger",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "5824575515f08dc65854d2194db385e4",
+    "dependency_edges": 1
+  },
+  {
+    "oid": 18632,
+    "name": "is_assigned_technician",
+    "signature": "is_assigned_technician(uuid)",
+    "arguments": "target_appointment_id uuid",
+    "result": "boolean",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": true,
+    "service_execute": true,
+    "definition_md5": "3e2c6bb3c3100d71a58fc1a2f2222ed8",
+    "dependency_edges": 2
+  },
+  {
+    "oid": 19319,
+    "name": "mutate_installation_atomic",
+    "signature": "mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+    "arguments": "p_company_id uuid, p_installation_id uuid, p_actor_id uuid, p_status text DEFAULT NULL::text, p_ref text DEFAULT NULL::text, p_type text DEFAULT NULL::text",
+    "result": "void",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "cf406c74cdb2331e53c51a79b92e4fb1",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19313,
+    "name": "operations_actor",
+    "signature": "operations_actor(uuid,uuid,text[])",
+    "arguments": "p_company uuid, p_actor uuid, p_roles text[]",
+    "result": "text",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "26d244dda9f5bcac067f27166979b8ca",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19314,
+    "name": "operations_audit",
+    "signature": "operations_audit(uuid,uuid,text,text,uuid,jsonb)",
+    "arguments": "p_company uuid, p_actor uuid, p_action text, p_table text, p_id uuid, p_metadata jsonb",
+    "result": "void",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "e6380006c0327b3af5d332c07aae6127",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19315,
+    "name": "operations_evidence_ref",
+    "signature": "operations_evidence_ref(uuid,uuid,text,text)",
+    "arguments": "p_company uuid, p_installation uuid, p_ref text, p_type text",
+    "result": "boolean",
+    "prosecdef": false,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "fe68140e056aa30af26228be33ec3551",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19317,
+    "name": "update_production_progress_atomic",
+    "signature": "update_production_progress_atomic(uuid,uuid,uuid,text)",
+    "arguments": "p_company_id uuid, p_production_order_id uuid, p_actor_id uuid, p_status text",
+    "result": "void",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "15d239250b256ee0cb1d129af0114a9d",
+    "dependency_edges": 0
+  },
+  {
+    "oid": 19321,
+    "name": "update_warranty_status_atomic",
+    "signature": "update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+    "arguments": "p_company_id uuid, p_ticket_id uuid, p_actor_id uuid, p_actor_role text, p_operation text, p_status text DEFAULT NULL::text, p_technician_id uuid DEFAULT NULL::uuid, p_notes text DEFAULT NULL::text",
+    "result": "void",
+    "prosecdef": true,
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "anon_execute": false,
+    "authenticated_execute": false,
+    "service_execute": true,
+    "definition_md5": "ba83388e4bc8b3188cc0c89a323f7358",
+    "dependency_edges": 0
+  }
+]

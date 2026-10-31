@@ -1,0 +1,34 @@
+{
+  "table_name": "survey_photo_operations",
+  "constraints": [
+    {
+      "name": "survey_photo_operations_actor_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (actor_id) REFERENCES user_profiles(id)",
+      "referenced_table": "user_profiles",
+      "referencing_table": "survey_photo_operations"
+    },
+    {
+      "name": "survey_photo_operations_appointment_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (appointment_id) REFERENCES appointments(id)",
+      "referenced_table": "appointments",
+      "referencing_table": "survey_photo_operations"
+    },
+    {
+      "name": "survey_photo_operations_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (appointment_id)",
+      "referenced_table": null,
+      "referencing_table": "survey_photo_operations"
+    }
+  ],
+  "triggers": null,
+  "indexes": [
+    {
+      "name": "survey_photo_operations_pkey",
+      "definition": "CREATE UNIQUE INDEX survey_photo_operations_pkey ON public.survey_photo_operations USING btree (appointment_id)"
+    }
+  ],
+  "policies": null
+}

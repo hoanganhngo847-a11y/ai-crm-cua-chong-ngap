@@ -1,0 +1,117 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "baseline": "0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f",
+  "mode": "Local fixtures and read-only hosted migration inspection; no hosted writes or real Meta leads.",
+  "checks": [
+    {
+      "command": "npm run test:meta-ads",
+      "result": "PASS",
+      "tests": 43
+    },
+    {
+      "command": "npm run test:meta-ads:db",
+      "result": "PASS",
+      "tests": 1,
+      "coverage": "Native PostgreSQL; eight overlapping claims, signed concurrent webhooks, same-phone submissions, tenant isolation, stale owners and partial-failure recovery; resulting schema has no reporting tables/RPC."
+    },
+    {
+      "command": "npm run test:omnichannel",
+      "result": "PASS",
+      "tests": 34
+    },
+    {
+      "command": "npm run test:meta-messenger",
+      "result": "PASS",
+      "tests": 12
+    },
+    {
+      "command": "npm run test:zalo",
+      "result": "PASS",
+      "coverage": "PGlite Zalo/OA/care, group DB, account isolation, worker tests."
+    },
+    {
+      "command": "npm run test:crm",
+      "result": "PASS",
+      "assertions": 94
+    },
+    {
+      "command": "npm run test:inbox",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run test:auth",
+      "result": "PASS",
+      "assertions": 66
+    },
+    {
+      "command": "npm run test:security",
+      "result": "PASS"
+    },
+    {
+      "command": "npx tsx --conditions=react-server --test tests/omnichannel/phone-intake.test.ts tests/inbox/zalo-exact-handoff.test.ts",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run test:migration-integrity",
+      "result": "PASS",
+      "assertions": 17
+    },
+    {
+      "command": "npx tsx --conditions=react-server --test tests/staging/migration-ledger.test.ts tests/staging/migration-security-db.test.ts",
+      "result": "PASS",
+      "tests": 4
+    },
+    {
+      "command": "npm run test:staging-readiness",
+      "result": "PASS",
+      "tests": 13
+    },
+    {
+      "command": "npx tsx --conditions=react-server --test tests/staging/pre-destructive/readiness.test.ts",
+      "result": "PASS",
+      "tests": 3,
+      "note": "Rechecked after final hash refresh."
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run lint -- --ignore-pattern docs/evidence/meta-ads-dependency-audit/**",
+      "result": "PASS",
+      "errors": 0,
+      "warnings": 14
+    },
+    {
+      "command": "npm run build",
+      "result": "PASS",
+      "environment": "Local Supabase fixture values from .github/workflows/verify.yml",
+      "note": "Existing ffmpeg dynamic tracing warnings remain."
+    },
+    {
+      "command": "Built app-paths manifest assertion",
+      "result": "PASS",
+      "coverage": "/admin/facebook and new attribution sync present; report page/API and old sync API absent."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "limitations": [
+    "Default npm run lint also inspects pre-existing untracked docs/evidence/meta-ads-dependency-audit/scan_repository.cjs, which has four no-require-imports errors. That unrelated local audit and all its evidence were preserved and excluded only for the tracked-source lint run; no lint rule/CI configuration was weakened.",
+    "A first build without Supabase env failed at prerender; build passed with the existing local CI fixture configuration.",
+    "No live Meta OAuth/permission or hosted customer-profile acceptance was performed.",
+    "Other CI-only suites remain subject to the pushed-head GitHub checks. This record does not assert those checks passed."
+  ],
+  "safety": {
+    "stagingMigrationsApplied": false,
+    "productionModified": false,
+    "renderDeployed": false,
+    "prMerged": false,
+    "realTestLeadsCreated": false,
+    "legacyBusinessTablesDroppedOnHostedEnvironments": false,
+    "historicalEvidenceRewritten": false
+  }
+}

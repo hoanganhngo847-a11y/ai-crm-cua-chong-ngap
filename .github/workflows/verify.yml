@@ -34,6 +34,11 @@ jobs:
       - run: npm run build:javis-brain
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
+      - run: npx tsx --conditions=react-server --test tests/staging/migration-ledger.test.ts tests/staging/migration-security-db.test.ts
+      - run: npm run test:staging-readiness
+      - run: npm run test:meta-staging-preflight
+      - run: npm run test:selective-ledger
+      - run: npm run test:selective-runtime
       - run: npx tsx --conditions=react-server --test tests/ai-brain/zalo-sla-retry-db.test.ts
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db
@@ -55,6 +60,11 @@ jobs:
       - run: npm run test:meta-deletion:db
       - run: npm run test:integration-gate
       - run: npm run test:fixture-repeatability
+      - run: npm run test:meta-ads
+      - run: npm run test:meta-ads:db
+      - run: npm run test:crm
+      - run: npm run typecheck
+      - run: npm run lint
       - run: npm run test:omnichannel
       - run: npm run test:omnichannel:db
       - run: npm run test:voice

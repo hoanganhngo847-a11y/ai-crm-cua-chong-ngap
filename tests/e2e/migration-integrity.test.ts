@@ -303,6 +303,37 @@ withTempGitFixture(({ dir }) => {
   testPass('Git guard: missing baseline fails closed');
 });
 
+// PR #139's one reviewed unapplied rename is allowed; its SQL and the
+// production-applied funnel must remain byte-identical to the reviewed inputs.
+withTempGitFixture(({ dir, migrationsDir }) => {
+  const oldName = '20261028130000_remove_messenger_pending_sale_gate_and_enable_pages.sql';
+  const newName = '20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql';
+  const funnelName = '20261028130000_customer_funnel_six_stages.sql';
+  const replacement = fs.readFileSync(path.resolve('supabase/migrations', newName), 'utf8');
+  const original = replacement.replace('-- Migration: 20261028130001_', '-- Migration: 20261028130000_');
+  const funnel = fs.readFileSync(path.resolve('supabase/migrations', funnelName), 'utf8');
+  fs.writeFileSync(path.join(migrationsDir, oldName), original);
+  fs.writeFileSync(path.join(migrationsDir, funnelName), funnel);
+  execFileSync('git', ['add', '.'], { cwd: dir });
+  execFileSync('git', ['commit', '-m', 'baseline collision with applied funnel'], { cwd: dir });
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: dir });
+  fs.unlinkSync(path.join(migrationsDir, oldName));
+  fs.writeFileSync(path.join(migrationsDir, newName), replacement);
+  assert.equal(verifyMigrationGitGuard({ cwd: dir }).valid, true);
+  testPass('Git guard: reviewed unapplied duplicate-version rename allowed with frozen SQL');
+  fs.appendFileSync(path.join(migrationsDir, newName), '-- tampered body');
+  assert.equal(verifyMigrationGitGuard({ cwd: dir }).valid, false);
+  testPass('Git guard: SQL mutation within reviewed rename rejected');
+  fs.writeFileSync(path.join(migrationsDir, newName), replacement);
+  fs.appendFileSync(path.join(migrationsDir, funnelName), '-- tampered applied migration');
+  assert.equal(verifyMigrationGitGuard({ cwd: dir }).valid, false);
+  testPass('Git guard: applied funnel mutation within rename rejected');
+  fs.writeFileSync(path.join(migrationsDir, funnelName), funnel);
+  fs.unlinkSync(path.join(migrationsDir, newName));
+  assert.equal(verifyMigrationGitGuard({ cwd: dir }).valid, false);
+  testPass('Git guard: deletion without reviewed replacement rejected');
+});
+
 console.log('\n================================================================');
 console.log(`MIGRATION INTEGRITY TEST RESULTS: ${passCount} PASSED, 0 FAILED`);
 console.log('================================================================\n');

@@ -869,3 +869,19 @@ test('performs initial bounded 24h backfill when folder has no checkpoint', asyn
         },
     );
 });
+
+test('missing outbound intake RPC fails closed without manual table writes or checkpoint advancement', async () => {
+    const { client, calls } = fakeClient((name) => name === 'han_ingest_outbound'
+        ? { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.han_ingest_outbound' } }
+        : { data: null, error: null });
+    await withFetch(url => url.pathname.endsWith('/conversations')
+        ? jsonResponse({ data: [{ id: 't_missing_rpc', updated_time: '2026-10-27T08:50:00Z', participants: { data: [{ id: CUSTOMER_A }, { id: PAGE_A }] } }] })
+        : jsonResponse({ data: [{ id: 'm_missing_rpc', from: { id: PAGE_A }, message: 'Page reply', created_time: '2026-10-27T08:51:00Z' }] }), async () => {
+        const result = await syncFacebookPages({ lookbackMinutes: 60, pages: [PAGE_A], folders: ['inbox'] }, { client, now: new Date('2026-10-27T09:00:00Z') });
+        assert.equal(result.ok, false);
+        assert.equal(result.pages[0].messages_ingested, 0);
+        assert.equal(result.pages[0].messages_skipped, 1);
+        assert.ok(result.pages[0].errors.some(error => error.includes('ATOMIC_RPC_UNAVAILABLE')));
+        assert.equal(calls.filter(call => call.name === 'facebook_set_sync_checkpoint').length, 0);
+    });
+});

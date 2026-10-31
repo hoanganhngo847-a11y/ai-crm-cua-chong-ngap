@@ -4,7 +4,7 @@ import { getActorContext } from '../../../lib/auth/context';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { BarChart3, Bot, PhoneCall, Key, ArrowRight } from 'lucide-react';
+import { BarChart3, Bot, PhoneCall, Key, ArrowRight, Megaphone } from 'lucide-react';
 
 export default async function AdminDashboardPage() {
   const actor = await getActorContext();
@@ -128,6 +128,32 @@ export default async function AdminDashboardPage() {
             <span>Mở AI Pipeline</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
+        </Card>
+
+        <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5 border border-blue-200">
+              <Megaphone className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-text-primary">Meta Ads Integration &amp; Attribution</h2>
+                <Badge variant="success">Active</Badge>
+              </div>
+              <p className="text-xs text-text-secondary mt-1 max-w-2xl leading-relaxed">
+                Kết nối Facebook Pages và tài khoản quảng cáo để xác định chiến dịch tạo ra từng lượt đăng ký của khách hàng.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-start md:self-auto">
+            <Link
+              href="/admin/facebook"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover text-xs font-medium transition"
+            >
+              <span>Cấu hình Meta</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </Card>
 
         <Card className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-strong transition-colors">

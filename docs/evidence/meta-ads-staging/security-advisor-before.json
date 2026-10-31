@@ -1,0 +1,522 @@
+{
+  "result": {
+    "lints": [
+      {
+        "name": "rls_enabled_no_policy",
+        "title": "RLS Enabled No Policy",
+        "level": "INFO",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects cases where row level security (RLS) has been enabled on a table but no RLS policies have been created.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy",
+        "count": 16,
+        "findings": [
+          {
+            "detail": "Table \\`private.call_transcripts\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "call_transcripts",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.customer_private_contacts\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "customer_private_contacts",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.han_intake_events\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "han_intake_events",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.han_outbox\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "han_outbox",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.han_rate_buckets\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "han_rate_buckets",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.han_receipts\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "han_receipts",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`private.interaction_raw_contents\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "interaction_raw_contents",
+              "type": "table",
+              "schema": "private"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.openai_realtime_events\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "openai_realtime_events",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.operations_outbox\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "operations_outbox",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.outbound_deliveries\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "outbound_deliveries",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.survey_photo_operations\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "survey_photo_operations",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.voice_call_intakes\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "voice_call_intakes",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.voice_dispatch_commands\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "voice_dispatch_commands",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.voice_media_jobs\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "voice_media_jobs",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.voice_provider_integrations\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "voice_provider_integrations",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Table \\`public.voice_webhook_events\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "voice_webhook_events",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      },
+      {
+        "name": "security_definer_view",
+        "title": "Security Definer View",
+        "level": "ERROR",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects views defined with the SECURITY DEFINER property. These views enforce Postgres permissions and row level security policies (RLS) of the view creator, rather than that of the querying user",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0010_security_definer_view",
+        "count": 1,
+        "findings": [
+          {
+            "detail": "View \\`public.safe_staff_directory\\` is defined with the SECURITY DEFINER property",
+            "metadata": {
+              "name": "safe_staff_directory",
+              "type": "view",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      },
+      {
+        "name": "function_search_path_mutable",
+        "title": "Function Search Path Mutable",
+        "level": "WARN",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects functions where the search_path parameter is not set.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable",
+        "count": 19,
+        "findings": [
+          {
+            "detail": "Function \\`public.generate_customer_code\\` has a role mutable search_path",
+            "metadata": {
+              "name": "generate_customer_code",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_strict_append_only\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_strict_append_only",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.generate_order_code\\` has a role mutable search_path",
+            "metadata": {
+              "name": "generate_order_code",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.update_updated_at_column\\` has a role mutable search_path",
+            "metadata": {
+              "name": "update_updated_at_column",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_contracts_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_contracts_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.prevent_tenant_mutation\\` has a role mutable search_path",
+            "metadata": {
+              "name": "prevent_tenant_mutation",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_user_profiles_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_user_profiles_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_company_members_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_company_members_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_customers_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_customers_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_cpc_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_cpc_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_appointments_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_appointments_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_surveys_integrity\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_surveys_integrity",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_pricing_policies_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_pricing_policies_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_price_calculations_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_price_calculations_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_orders_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_orders_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_payment_facts_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_payment_facts_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_installations_integrity\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_installations_integrity",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.enforce_care_deliveries_immutability\\` has a role mutable search_path",
+            "metadata": {
+              "name": "enforce_care_deliveries_immutability",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function \\`public.prevent_user_profile_status_mutation\\` has a role mutable search_path",
+            "metadata": {
+              "name": "prevent_user_profile_status_mutation",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      },
+      {
+        "name": "extension_in_public",
+        "title": "Extension in Public",
+        "level": "WARN",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects extensions installed in the \\`public\\` schema.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public",
+        "count": 1,
+        "findings": [
+          {
+            "detail": "Extension \\`pg_trgm\\` is installed in the public schema. Move it to another schema.",
+            "metadata": {
+              "name": "pg_trgm",
+              "type": "extension",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      },
+      {
+        "name": "anon_security_definer_function_executable",
+        "title": "Public Can Execute SECURITY DEFINER Function",
+        "level": "WARN",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects `SECURITY DEFINER` functions that are callable without signing in. Revoke `EXECUTE`, switch the function to `SECURITY INVOKER`, or move it out of your exposed API schema if it is not meant to be public.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable",
+        "count": 1,
+        "findings": [
+          {
+            "detail": "Function `public.handle_new_user()` can be executed by the `anon` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/handle_new_user`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "handle_new_user",
+              "schema": "public",
+              "language": "plpgsql",
+              "arguments": "",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      },
+      {
+        "name": "authenticated_security_definer_function_executable",
+        "title": "Signed-In Users Can Execute SECURITY DEFINER Function",
+        "level": "WARN",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects `SECURITY DEFINER` functions that are callable by signed-in users. Revoke `EXECUTE`, switch the function to `SECURITY INVOKER`, or move it out of your exposed API schema if signed-in users should not call it.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable",
+        "count": 8,
+        "findings": [
+          {
+            "detail": "Function `public.activate_sales_style_profile(p_profile_id uuid)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/activate_sales_style_profile`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "activate_sales_style_profile",
+              "schema": "public",
+              "language": "plpgsql",
+              "arguments": "p_profile_id uuid",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.get_company_analytics_daily_series(p_company_id uuid, p_from timestamp with time zone, p_to timestamp with time zone)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/get_company_analytics_daily_series`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "get_company_analytics_daily_series",
+              "schema": "public",
+              "language": "plpgsql",
+              "arguments": "p_company_id uuid, p_from timestamp with time zone, p_to timestamp with time zone",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.get_company_analytics_overview(p_company_id uuid, p_from timestamp with time zone, p_to timestamp with time zone)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/get_company_analytics_overview`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "get_company_analytics_overview",
+              "schema": "public",
+              "language": "plpgsql",
+              "arguments": "p_company_id uuid, p_from timestamp with time zone, p_to timestamp with time zone",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.handle_new_user()` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/handle_new_user`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "handle_new_user",
+              "schema": "public",
+              "language": "plpgsql",
+              "arguments": "",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.has_company_role(target_company_id uuid, required_role text)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/has_company_role`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "has_company_role",
+              "schema": "public",
+              "language": "sql",
+              "arguments": "target_company_id uuid, required_role text",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.is_active_member(target_company_id uuid)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/is_active_member`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "is_active_member",
+              "schema": "public",
+              "language": "sql",
+              "arguments": "target_company_id uuid",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.is_assigned_technician(target_appointment_id uuid)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/is_assigned_technician`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "is_assigned_technician",
+              "schema": "public",
+              "language": "sql",
+              "arguments": "target_appointment_id uuid",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          },
+          {
+            "detail": "Function `public.is_self_membership(target_member_id uuid)` can be executed by the `authenticated` role as a `SECURITY DEFINER` function via `/rest/v1/rpc/is_self_membership`. Revoke `EXECUTE` or switch it to `SECURITY INVOKER` if that is not intentional.",
+            "metadata": {
+              "name": "is_self_membership",
+              "schema": "public",
+              "language": "sql",
+              "arguments": "target_member_id uuid",
+              "security_definer": true
+            },
+            "observed_at": "2026-10-30T08:58:57.977Z"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+[
+  {
+    "name": "appointments",
+    "exact_rows": 0
+  },
+  {
+    "name": "contracts",
+    "exact_rows": 0
+  },
+  {
+    "name": "finance_summaries",
+    "exact_rows": 0
+  },
+  {
+    "name": "installations",
+    "exact_rows": 0
+  },
+  {
+    "name": "operations_outbox",
+    "exact_rows": 0
+  },
+  {
+    "name": "orders",
+    "exact_rows": 0
+  },
+  {
+    "name": "payment_transactions",
+    "exact_rows": 0
+  },
+  {
+    "name": "price_calculations",
+    "exact_rows": 0
+  },
+  {
+    "name": "pricing_policies",
+    "exact_rows": 0
+  },
+  {
+    "name": "production_orders",
+    "exact_rows": 0
+  },
+  {
+    "name": "survey_photo_operations",
+    "exact_rows": 0
+  },
+  {
+    "name": "surveys",
+    "exact_rows": 0
+  },
+  {
+    "name": "warranty_tickets",
+    "exact_rows": 0
+  }
+]

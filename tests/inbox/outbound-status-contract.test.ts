@@ -23,7 +23,7 @@ async function main() {
     await db.query(
       `INSERT INTO conversations(id, customer_id, company_id, channel, status, external_conversation_id)
        VALUES($1, $2, $3, 'FACEBOOK', 'OPEN', $4)`,
-      [conversation, customer, company, `ext-${randomUUID()}`]
+      [conversation, customer, company, `987654321012345:88${Date.now()}`]
     );
 
     const statuses = [

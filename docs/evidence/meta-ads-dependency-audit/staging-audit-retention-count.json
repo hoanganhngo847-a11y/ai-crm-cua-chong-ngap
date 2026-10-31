@@ -1,0 +1,9 @@
+{
+  "query": "SELECT count(*) AS legacy_resource_audit_rows FROM public.audit_logs WHERE lower(resource_type) IN ('appointment','appointments','survey','surveys','installation','installations','warranty_ticket','warranty_tickets','production_order','production_orders','contract','contracts','payment_transaction','payment_transactions','operations_outbox','finance_summary','finance_summaries','order','orders','price_calculation','price_calculations','pricing_policy','pricing_policies','company_bank_account','company_bank_accounts');",
+  "result": [
+    {
+      "legacy_resource_audit_rows": 0
+    }
+  ],
+  "limitation": "Count checks named legacy resource types only; free-form metadata, external exports, backups and other labels are not covered."
+}

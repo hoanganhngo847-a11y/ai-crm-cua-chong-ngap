@@ -1,0 +1,46 @@
+{
+  "project_id": "qmhfmgkymjgoevwmkidm",
+  "audit_date": "2026-10-30",
+  "groups": [
+    {
+      "name": "unindexed_foreign_keys",
+      "count": 47,
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys"
+    },
+    {
+      "name": "auth_rls_initplan",
+      "count": 6,
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0003_auth_rls_initplan"
+    },
+    {
+      "name": "unused_index",
+      "count": 53,
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0005_unused_index"
+    },
+    {
+      "name": "multiple_permissive_policies",
+      "count": 34,
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0006_multiple_permissive_policies"
+    },
+    {
+      "name": "duplicate_index",
+      "count": 1,
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0009_duplicate_index",
+      "findings": [
+        {
+          "detail": "Table \\`public.calls\\` has identical indexes {idx_calls_provider_call,uq_calls_tenant_provider_call}. Drop all except one of them",
+          "metadata": {
+            "name": "calls",
+            "type": "table",
+            "schema": "public",
+            "indexes": [
+              "idx_calls_provider_call",
+              "uq_calls_tenant_provider_call"
+            ]
+          },
+          "observed_at": "2026-10-30T09:06:20.510Z"
+        }
+      ]
+    }
+  ]
+}

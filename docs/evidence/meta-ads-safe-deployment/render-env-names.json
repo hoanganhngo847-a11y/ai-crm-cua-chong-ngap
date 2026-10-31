@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-10-30",
+  "serviceId": "srv-dbi2f3etlv9c738lkum0",
+  "method": "Read-only Render API GET; only keys retained. Values discarded in process, never printed/persisted. MCP has no read-env operation.",
+  "keys": [
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY"
+  ]
+}

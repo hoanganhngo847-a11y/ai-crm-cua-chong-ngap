@@ -1,0 +1,118 @@
+{
+  "table_name": "contracts",
+  "constraints": [
+    {
+      "name": "contracts_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "contracts_contract_value_check",
+      "type": "c",
+      "definition": "CHECK (contract_value >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "contracts_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "contracts_revision_no_check",
+      "type": "c",
+      "definition": "CHECK (revision_no >= 1)",
+      "referenced_table": null,
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "contracts_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['GENERATED'::text, 'SENT_TO_CUSTOMER'::text, 'SIGNED'::text, 'REJECTED'::text, 'SUPERSEDED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "fk_contracts_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "contracts"
+    },
+    {
+      "name": "uq_contracts_order_revision",
+      "type": "u",
+      "definition": "UNIQUE (order_id, revision_no)",
+      "referenced_table": null,
+      "referencing_table": "contracts"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_contracts_immutability",
+      "function": "enforce_contracts_immutability()",
+      "definition": "CREATE TRIGGER trg_contracts_immutability BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION enforce_contracts_immutability()"
+    },
+    {
+      "name": "trg_tenant_mutation_contracts",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_contracts BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_contracts",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_contracts BEFORE UPDATE ON contracts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "contracts_pkey",
+      "definition": "CREATE UNIQUE INDEX contracts_pkey ON public.contracts USING btree (id)"
+    },
+    {
+      "name": "idx_contracts_status",
+      "definition": "CREATE INDEX idx_contracts_status ON public.contracts USING btree (company_id, status)"
+    },
+    {
+      "name": "uq_contracts_order_current",
+      "definition": "CREATE UNIQUE INDEX uq_contracts_order_current ON public.contracts USING btree (order_id) WHERE (is_current = true)"
+    },
+    {
+      "name": "uq_contracts_order_revision",
+      "definition": "CREATE UNIQUE INDEX uq_contracts_order_revision ON public.contracts USING btree (order_id, revision_no)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "contracts_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "contracts_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "contracts_update_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    }
+  ]
+}

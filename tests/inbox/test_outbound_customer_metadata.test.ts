@@ -72,7 +72,7 @@ async function main() {
         customerA,
         JSON.stringify({
           provider: 'facebook_browser',
-          page_id: 'page_123',
+          page_id: '987654321012345',
           page_name: 'Antigravity Shop',
           customer_fb_id: 'fb_user_456',
           external_conversation_id: 'ext-fb-conv-a',
@@ -90,7 +90,7 @@ async function main() {
         customerB,
         JSON.stringify({
           provider: 'facebook_browser',
-          page_id: 'page_999',
+          page_id: '987654321012346',
           page_name: 'Other Shop',
           customer_fb_id: 'fb_user_999',
           external_conversation_id: 'ext-fb-conv-b',
@@ -134,7 +134,7 @@ async function main() {
 
     assert.equal(deliveryMeta.customer_name, 'Nguyễn Văn A Canonical', 'Must resolve canonical customer name from public.customers');
     assert.notEqual(deliveryMeta.customer_name, 'ATTACKER_INJECTED_NAME', 'Must never use untrusted customer_name from metadata');
-    assert.equal(deliveryMeta.page_id, 'page_123');
+    assert.equal(deliveryMeta.page_id, '987654321012345');
     assert.equal(deliveryMeta.page_name, 'Antigravity Shop');
     assert.equal(deliveryMeta.customer_fb_id, 'fb_user_456');
     assert.equal(deliveryMeta.external_conversation_id, 'ext-fb-conv-a');
