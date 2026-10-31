@@ -91,7 +91,7 @@ async function provisionFixture(): Promise<void> {
           company_id: FIXTURE_COMPANY_A_ID,
           customer_id: FIXTURE_CUSTOMER_A_ID,
           channel: 'FACEBOOK',
-          external_conversation_id: 'ext-fb-live-a',
+          external_conversation_id: '987654321012345:880000000000001',
           status: 'OPEN',
         },
         {

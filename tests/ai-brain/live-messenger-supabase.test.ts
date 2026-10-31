@@ -350,7 +350,18 @@ test('Real Supabase Native: Dispatch guard null/NaN/threshold/source/time/lease/
   runDockerPsql(`UPDATE public.conversations SET ai_mode = 'ACTIVE' WHERE id = '${convId}'::uuid;`);
 
   // C. Strict numeric Page:PSID check
-  runDockerPsql(`UPDATE public.conversations SET external_conversation_id = '${numericPageId}:user-non-numeric' WHERE id = '${convId}'::uuid;`);
+  // Local-only malformed-data fixture: the historical canary seeder rejects
+  // a NULL Page before this negative dispatch test can run. Suspend ONLY that
+  // seed trigger while constructing the bad row, then restore it atomically
+  // BEFORE invoking the unchanged dispatch/security assertions below.
+  runDockerPsql(`BEGIN;
+    ALTER TABLE public.conversations DISABLE TRIGGER trg_seed_messenger_pages_canary;
+    UPDATE public.conversations SET external_conversation_id = '${numericPageId}:user-non-numeric' WHERE id = '${convId}'::uuid;
+    ALTER TABLE public.conversations ENABLE TRIGGER trg_seed_messenger_pages_canary;
+    COMMIT;`);
+  assert.match(runDockerPsql(`SELECT 'CANARY_TRIGGER_RESTORED' WHERE EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgrelid='public.conversations'::regclass
+      AND tgname='trg_seed_messenger_pages_canary' AND tgenabled='O');`), /CANARY_TRIGGER_RESTORED/);
   const { data: fenceNonNumericPsid } = await serviceClient.rpc('start_ai_messenger_live_dispatch', {
     p_delivery_id: delivery.id,
     p_lock_token: lockToken,

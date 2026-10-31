@@ -106,7 +106,7 @@ async function seedTestData(client: SupabaseClient) {
     company_id: TEST_COMPANY_ID_2,
     customer_id: TEST_CUSTOMER_ID,
     channel: 'FACEBOOK',
-    external_conversation_id: 'fb-conv-test-001',
+    external_conversation_id: '987654321012345:880000000000031',
     status: 'OPEN',
     unread_count: 0,
   });

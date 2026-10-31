@@ -238,7 +238,7 @@ async function setupDatabaseFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'ext_style_a',
+      external_conversation_id: '987654321012345:880000000000011',
       status: 'OPEN',
     },
     {
