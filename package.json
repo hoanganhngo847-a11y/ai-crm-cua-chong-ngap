@@ -83,7 +83,9 @@
     "test:customer-360:db": "tsx --conditions=react-server --test tests/customer-360/database.test.ts",
     "test:campaigns": "tsx --conditions=react-server --test tests/campaigns/runtime.test.ts",
     "test:campaigns:db": "tsx --conditions=react-server --test tests/campaigns/database.test.ts && tsx --conditions=react-server --test tests/campaigns/authoring-disabled.test.ts",
-    "test:meta-ads:db": "tsx --conditions=react-server --test tests/omnichannel/meta_ads_db.integration.test.ts"
+    "test:meta-ads:db": "tsx --conditions=react-server --test tests/omnichannel/meta_ads_db.integration.test.ts",
+    "test:selective-runtime": "tsx --conditions=react-server --test tests/staging/selective-runtime.test.ts",
+    "meta-ads:execute-selective-release": "tsx --conditions=react-server scripts/meta-ads/selective-runtime.ts"
   },
   "dependencies": {
     "@google/genai": "2.30.0",

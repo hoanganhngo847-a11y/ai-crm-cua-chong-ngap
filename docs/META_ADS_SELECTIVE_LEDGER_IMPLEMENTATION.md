@@ -278,3 +278,8 @@ Because `supabase start` in CI launches PostgreSQL 17.11 (configured via `major_
 ### Final Verdict: **BLOCKED**
 Hosted deployment to Supabase Staging (`qmhfmgkymjgoevwmkidm`) remains **BLOCKED**.
 All 5 review issues have been fully resolved, implemented, and proven with 100% passing tests. Execution on hosted infrastructure must remain blocked until the physical backup is taken and project owner approval is received.
+
+
+## 11. Runtime-path correction and superseding evidence
+
+The earlier description of TypeScript target/version checks as already wired into a database execution path was overstated at commit `cfae1d7`: that code generated SQL and exposed standalone helpers, but did not invoke those helpers as part of a runtime executor. The correction, guarded execution entrypoint, recovery semantics, test evidence and explicit limitations are documented in [META_ADS_SELECTIVE_RUNTIME_REMEDIATION.md](META_ADS_SELECTIVE_RUNTIME_REMEDIATION.md). That remediation document supersedes any conflicting runtime-wiring claims above. Hosted execution remains BLOCKED.
