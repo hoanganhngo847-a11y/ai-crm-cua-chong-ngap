@@ -8,15 +8,17 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
 import { inspectTransactionEnvelope, sqlSha256 } from '../../scripts/meta-ads/ledger-readiness';
+import { assertAllowedCatalogDiff, catalogObjects, legacyObservableProbe } from './meta-21-compatibility';
+import { prepareMeta21Package } from '../../scripts/meta-ads/prepare-21-prefix-package';
 
 const output = 'docs/evidence/meta-ads-safe-deployment';
 const project = readFileSync('supabase/config.toml','utf8').match(/^project_id\s*=\s*"([\w-]+)"/m)?.[1];
 assert.ok(project);
 const container = `supabase_db_${project}`;
 const prefix = `crm_safe_${randomUUID().replaceAll('-','')}`;
-const databases = ['prefix','full','meta'].map(s=>`${prefix}_${s}`);
+const databases = ['prefix','full','meta','bundle'].map(s=>`${prefix}_${s}`);
 function local(db: string) {
-    assert.ok(db==='postgres' || new RegExp(`^${prefix}_(prefix|full|meta)$`).test(db), 'disposable local databases only');
+    assert.ok(db==='postgres' || new RegExp(`^${prefix}_(prefix|full|meta|bundle)$`).test(db), 'disposable local databases only');
 }
 function sql(db:string,query:string) {
     local(db);
@@ -76,7 +78,7 @@ function probe(db:string,body:string) {
     // Every case, including failed DML and function definitions, rolls back.
     return JSON.parse(sql(db,`BEGIN;
       CREATE TEMP TABLE fixture_result(value jsonb);
-      DO $fixture$ DECLARE v jsonb; token uuid; c uuid; i uuid; detail text; context text;
+      DO $fixture$ DECLARE v jsonb; first_result jsonb; token uuid; c uuid; i uuid; detail text; context text;
       BEGIN
         INSERT INTO public.companies(id,name,status) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Local preflight fixture','ACTIVE');
         ${body}
@@ -100,8 +102,23 @@ const lead=`
     PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
     PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',token,'PROCESSED');
     v:=jsonb_build_object('ingest',v,'campaign',(SELECT campaign_name_snapshot FROM public.lead_attribution_touchpoints WHERE meta_leadgen_id='88001'),'status',(SELECT status FROM private.meta_leadgen_events WHERE leadgen_id='88001'));`;
+const leadPair=lead+`
+    first_result:=v;
+    INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','act_synthetic','campaign_b','Campaign B','ACTIVE');
+    INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','act_synthetic','campaign_b','ad_b','Ad B','ACTIVE');
+    v:=public.claim_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','7777777777777777','88002'); token:=(v->>'claim_token')::uuid;
+    v:=public.ingest_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',token,
+      '{"name":"Same phone second form","phone":"+843000000011","content":"Second form","payload":{"crm_lead_ads":true}}');
+    c:=(v->>'customer_id')::uuid; i:=(v->>'interaction_id')::uuid;
+    PERFORM public.record_lead_attribution_touchpoint(p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,p_meta_ad_id=>'ad_b',p_meta_leadgen_id=>'88002');
+    PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
+    PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',token,'PROCESSED');
+    v:=jsonb_build_object('same_customer',c=(first_result->'ingest'->>'customer_id')::uuid,'duplicate',v->'is_duplicate_phone',
+      'events',(SELECT jsonb_agg(jsonb_build_object('lead_id',meta_leadgen_id,'campaign',campaign_name_snapshot,'duplicate',is_duplicate_phone) ORDER BY meta_leadgen_id) FROM public.lead_attribution_touchpoints),
+      'replay',public.claim_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','7777777777777777','88002'),
+      'conversations',(SELECT count(*) FROM public.conversations),'outbox',(SELECT count(*) FROM private.han_outbox));`;
 
-test('exact staging prefix, full chain and Meta-only shortcut on disposable PostgreSQL',()=>{
+test('exact staging prefix, full-chain regression, isolated Meta catalog and atomic package on disposable PostgreSQL',()=>{
     assert.equal(inventory.migrations.length,121,'the reviewed snapshot contains exactly 121 files');
     assert.ok(files.length>=121);
     for(const source of inventory.migrations) {
@@ -110,7 +127,12 @@ test('exact staging prefix, full chain and Meta-only shortcut on disposable Post
             assert.match(source.file,/^202610301[01]0000_meta_ads_/);
             assert.equal(source.sha256,remediation.previousSha256,'retain the original audit snapshot and its exact hash');
         }
-        assert.equal(sqlSha256(readFileSync(`supabase/migrations/${source.file}`,'utf8')),remediation?.sha256||source.sha256);
+        const compatibility=currentManifest.prefix21Compatibility.sources.find((s:{file:string})=>s.file===source.file);
+        if(compatibility) {
+            assert.match(source.file,/^20261030\d{6}_meta_ads_/);
+            assert.equal(compatibility.previousSha256,remediation?.sha256||source.sha256);
+        }
+        assert.equal(sqlSha256(readFileSync(`supabase/migrations/${source.file}`,'utf8')),compatibility?.sha256||remediation?.sha256||source.sha256);
     }
     assert.equal(historical.migration_history.length,21);
     assert.equal(inventory.pending_count,100);
@@ -144,7 +166,12 @@ test('exact staging prefix, full chain and Meta-only shortcut on disposable Post
 
         const fullRuns=[];
         const losses=[];
+        const sharedDefinitions=()=>catalogObjects(sql,databases[1]).filter(o=>
+            ['public.han_ingest','public.open_response_sla_window','public.seed_messenger_pages_canary'].includes(o.owner)||
+            (o.kind==='trigger'&&o.owner==='public.conversations'&&o.identity.includes('canary')));
+        let fullSharedBefore:ReturnType<typeof sharedDefinitions>|undefined;
         for(const file of files) {
+            if(file==='20261030090000_meta_ads_lead_attribution.sql') fullSharedBefore=sharedDefinitions();
             let syntheticSeed:any;
             if(file==='20261029160000_remove_legacy_flood_barrier_schema.sql') {
                 sql(databases[1],`INSERT INTO public.companies(id,name,status) VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','Synthetic removal fixture','ACTIVE');
@@ -173,26 +200,107 @@ test('exact staging prefix, full chain and Meta-only shortcut on disposable Post
         assert.equal(result.tests.B.meta.ok,true);
         assert.equal(result.tests.B.meta.result.status,'PROCESSED');
         assert.equal(result.tests.B.meta.result.campaign,'Synthetic campaign');
+        assert.ok(fullSharedBefore?.length);
+        assert.deepEqual(sharedDefinitions(),fullSharedBefore,'full-chain shared ingest, SLA, canary definitions/comments/grants and trigger flags are unchanged by Meta');
 
         for(const file of files.slice(0,21)) assert.equal(apply(databases[2],file).status,'APPLIED_LOCAL_ONLY');
-        const beforeMeta=objects(databases[2]);
+        assert.deepEqual(catalog(databases[2]),remote,'the second exact prefix also matches captured schema/RLS/effective grants');
+        // These rows record the SQL just executed above in this disposable DB;
+        // no remote ledger is copied, repaired, or given invented gap entries.
+        sql(databases[2],`CREATE SCHEMA supabase_migrations;
+          CREATE TABLE supabase_migrations.schema_migrations(version text PRIMARY KEY,name text,statements text[]);`);
+        for(const [index,file] of files.slice(0,21).entries()) {
+            const recorded=historical.migration_history[index];
+            sql(databases[2],`INSERT INTO supabase_migrations.schema_migrations VALUES(${q(recorded.version)},${q(recorded.name)},ARRAY[${q(readFileSync('supabase/migrations/'+file,'utf8'))}]);`);
+        }
+        const ledger=sql(databases[2],'SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m;');
+        const beforeMeta=catalogObjects(sql,databases[2]);
+        const legacyBefore=legacyObservableProbe(sql,databases[2]);
         const metaFiles:string[]=inventory.migrations.map((m:{file:string})=>m.file).filter((f:string)=>/^20261030\d{6}_meta_ads_/.test(f));
         assert.equal(metaFiles.length,5);
         const metaRuns=metaFiles.map(file=>apply(databases[2],file));
-        const afterMeta=objects(databases[2]);
+        const afterMeta=catalogObjects(sql,databases[2]);
+        const catalogDiff=assertAllowedCatalogDiff(beforeMeta,afterMeta);
+        for(const forbidden of [
+            {kind:'function',identity:'public.open_response_sla_window(uuid,uuid,uuid)',owner:'public.open_response_sla_window'},
+            {kind:'function',identity:'public.seed_messenger_pages_canary()',owner:'public.seed_messenger_pages_canary'},
+            {kind:'relation',identity:'public.ai_brain_live_settings',owner:'public.ai_brain_live_settings'},
+            {kind:'function',identity:'public.zalo_ingest()',owner:'public.zalo_ingest'},
+            {kind:'function',identity:'public.record_quality_check_atomic()',owner:'public.record_quality_check_atomic'},
+            {kind:'policy',identity:'storage.objects.forbidden',owner:'storage.objects'},
+            {kind:'column',identity:'public.customers.stage',owner:'public.customers'},
+            {kind:'relation',identity:'public.contracts',owner:'public.contracts'},
+            {kind:'type',identity:'public.customer_stage',owner:'public.customer_stage'},
+        ]) {
+            const injected=afterMeta.filter(o=>o.kind!==forbidden.kind||o.identity!==forbidden.identity);
+            injected.push({...forbidden,definition:'UNAPPROVED CHANGE'});
+            assert.throws(()=>assertAllowedCatalogDiff(beforeMeta,injected),/Forbidden catalog change/);
+        }
+        const legacyAfter=legacyObservableProbe(sql,databases[2]);
+        assert.deepEqual(legacyAfter,legacyBefore,'identical Messenger/Website payloads, row sets, SLA, outbound effects and authorization');
+        assert.equal(sql(databases[2],'SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m;'),ledger,'all 21 genuinely executed ledger rows stay byte-identical; no 95 gap entries');
         result.tests.C={migrations:metaRuns,watched:watched(databases[2]),catalog:catalog(databases[2]),messenger:probe(databases[2],han('FACEBOOK','7777777777777777:9999999999')),website:probe(databases[2],han('WEBSITE',null)),meta:probe(databases[2],lead),
-            latentCanaryProbe:probe(databases[2],`CREATE TRIGGER preflight_canary AFTER INSERT ON public.conversations FOR EACH ROW EXECUTE FUNCTION public.seed_messenger_pages_canary(); ${han('FACEBOOK','7777777777777777:9999999999')}`),
-            objectsChanged:Object.keys(beforeMeta).filter(k=>afterMeta[k]!==beforeMeta[k]),unsupportedHistory:'No ledger entry is written by these local probes. Successful CREATE does not authorize skipping 95 other pending canonical files.'};
+            catalogDiff,legacyBefore,legacyAfter,ledgerUnchanged:true,pair:probe(databases[2],leadPair),
+            unsupportedHistory:'Compatibility does not authorize skipping canonical history. Package ledger integration remains an explicit deployment gate.'};
         assert.ok(metaRuns.every(r=>r.status==='APPLIED_LOCAL_ONLY'),JSON.stringify(metaRuns));
-        assert.equal(result.tests.C.watched.seed_functions,1);
-        assert.equal(result.tests.C.watched.seed_triggers,0,'creating trigger function does not create a trigger');
+        assert.equal(result.tests.C.watched.seed_functions,0);
+        assert.equal(result.tests.C.watched.seed_triggers,0,'Meta creates neither canary function nor trigger');
         assert.equal(result.tests.C.watched.canary_table,null);
         assert.equal(result.tests.C.meta.ok,true);
         assert.equal(result.tests.C.meta.result.status,'PROCESSED');
         assert.equal(result.tests.C.meta.result.campaign,'Synthetic campaign');
+        assert.equal(result.tests.C.pair.ok,true);
+        assert.equal(result.tests.C.pair.customer_count,1);
+        assert.equal(result.tests.C.pair.interaction_count,2);
+        assert.equal(result.tests.C.pair.result.same_customer,true);
+        assert.equal(result.tests.C.pair.result.duplicate,true);
+        assert.deepEqual(result.tests.C.pair.result.events,[
+            {lead_id:'88001',campaign:'Synthetic campaign',duplicate:false},
+            {lead_id:'88002',campaign:'Campaign B',duplicate:true},
+        ]);
+        assert.equal(result.tests.C.pair.result.replay.status,'ALREADY_PROCESSED');
+        assert.equal(result.tests.C.pair.result.conversations,0);
+        assert.equal(result.tests.C.pair.result.outbox,0);
         assert.equal(result.tests.A.messenger.sla_count,0);
-        assert.equal(result.tests.C.messenger.sla_count,1,'the Meta-only shortcut changes the shared Messenger SLA path');
-        assert.equal(result.tests.C.latentCanaryProbe.ok,false,'the missing canary prerequisites remain latent until a trigger is attached; probe rolls back');
+        assert.equal(result.tests.C.messenger.sla_count,0,'Meta preserves the exact prefix Messenger SLA behavior');
+        assert.deepEqual(legacyBefore.tables['public.response_sla_windows'],legacyAfter.tables['public.response_sla_windows']);
+        if(process.env.META_21_EVIDENCE==='1') writeFileSync('docs/evidence/meta-ads-21-prefix/compatibility.json',JSON.stringify({referenceCommit:'3bc50257883957f05cd1fedbd8f57358e058dcee',prefixCatalog:localCatalog,afterCatalog:result.tests.C.catalog,
+            catalogDiff:catalogDiff.map(c=>({key:c.key,before:c.before?{kind:c.before.kind,owner:c.before.owner,sha256:sqlSha256(c.before.definition)}:null,
+                after:c.after?{kind:c.after.kind,owner:c.after.owner,sha256:sqlSha256(c.after.definition)}:null})),
+            legacyBefore,legacyAfter,ledgerUnchanged:true,fullChainSharedDefinitionsUnchanged:true,meta:result.tests.C.meta,pair:result.tests.C.pair},null,2)+'\n');
+        const pack=prepareMeta21Package();
+        assert.deepEqual(JSON.parse(readFileSync('docs/evidence/meta-ads-21-prefix/package.json','utf8')),pack.manifest,'the checked-in package hashes and expected object list must remain current');
+        assert.equal(pack.manifest.executionAuthorized,false);
+        assert.equal(pack.manifest.status,'BLOCKED','local compatibility cannot authorize unsupported hosted ledger integration');
+        for(const file of files.slice(0,21)) assert.equal(apply(databases[3],file).status,'APPLIED_LOCAL_ONLY');
+        sql(databases[3],`CREATE SCHEMA supabase_migrations;
+          CREATE TABLE supabase_migrations.schema_migrations(version text PRIMARY KEY,name text,statements text[]);`);
+        for(const [index,file] of files.slice(0,21).entries()) {
+            const recorded=historical.migration_history[index];
+            sql(databases[3],`INSERT INTO supabase_migrations.schema_migrations VALUES(${q(recorded.version)},${q(recorded.name)},ARRAY[${q(readFileSync('supabase/migrations/'+file,'utf8'))}]);`);
+        }
+        // Both precondition drift and a forbidden postcondition change must
+        // roll back before any Meta DDL can become durable.
+        const failedBundle=(source:string,code:string)=>{
+            assert.throws(()=>sql(databases[3],source),(error:unknown)=>{
+                assert.ok(error&&typeof error==='object'&&'stderr' in error);
+                assert.ok(String(error.stderr).includes(code),String(error.stderr));return true;
+            });
+            assert.equal(sql(databases[3],"SELECT to_regclass('public.meta_ad_accounts') IS NULL;"),'t');
+        };
+        sql(databases[3],"UPDATE supabase_migrations.schema_migrations SET name='drift' WHERE name='initial_schema';");
+        failedBundle(pack.sql,'META_21_LEDGER_DRIFT');
+        sql(databases[3],"UPDATE supabase_migrations.schema_migrations SET name='initial_schema' WHERE name='drift';");
+        sql(databases[3],"CREATE FUNCTION public.unapproved_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1';");
+        failedBundle(pack.sql,'META_21_SCHEMA_OR_ACL_DRIFT');
+        sql(databases[3],'DROP FUNCTION public.unapproved_probe();');
+        failedBundle(pack.sql.replace(pack.postconditions,"CREATE FUNCTION public.unapproved_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1';\n"+pack.postconditions),'META_21_POST_SCHEMA_OR_ACL_MISMATCH');
+        assert.equal(sql(databases[3],"SELECT to_regprocedure('public.unapproved_probe()') IS NULL;"),'t');
+        assert.match(sql(databases[3],pack.sql),/META_21_POSTCONDITIONS_VERIFIED/);
+        assert.deepEqual(catalog(databases[3]),result.tests.C.catalog);
+        assert.equal(sql(databases[3],'SELECT count(*) FROM supabase_migrations.schema_migrations;'),'21');
+        result.tests.D={atomicBundle:true,preconditionDriftRollback:true,postconditionRollback:true,canonicalLedgerRows:21,bundleSha256:pack.manifest.bundleSha256};
+        if(process.env.META_21_EVIDENCE==='1') writeFileSync('docs/evidence/meta-ads-21-prefix/package-validation.json',JSON.stringify(result.tests.D,null,2)+'\n');
     } finally {
         result.completedAt=new Date().toISOString();
         result.databasesRemoved=[];

@@ -492,8 +492,7 @@ test('TEST 10: Messenger and Website keep their exact prior semantics while lead
             )) AS result;
         `);
         const msgResult = (msg.rows[0] as { result: { interaction_id: string; phone_match_status: string; is_duplicate_phone: boolean } }).result;
-        assert.equal(msgResult.phone_match_status, 'CONFLICT');
-        assert.equal(msgResult.is_duplicate_phone, true);
+        assert.deepEqual(Object.keys(msgResult).sort(), ['interaction_id', 'status'], 'Messenger keeps its original return contract, without Meta verdict fields');
         assert.equal(
             (await one(db, `SELECT customer_id AS o FROM public.interactions WHERE company_id='${company}' AND id=${q(msgResult.interaction_id)}`)).o,
             messengerCust,
@@ -525,8 +524,8 @@ test('TEST 10: Messenger and Website keep their exact prior semantics while lead
             phoneOwner,
             'website intake never silently binds to the phone owner',
         );
-        assert.equal(webResult.phone_match_status, 'CONFLICT');
-        assert.equal(webResult.is_duplicate_phone, true);
+        assert.deepEqual(Object.keys(webResult).sort(), ['interaction_id', 'status'], 'Website keeps its original return contract, without Meta verdict fields');
+        assert.equal((await one(db, `SELECT status AS s FROM private.han_intake_events WHERE company_id='${company}' AND event_key='web-lead-key-1'`)).s, 'IDENTITY_REVIEW');
         assert.equal(
             Number((await one(db, `SELECT count(*) AS c FROM private.customer_private_contacts WHERE company_id='${company}'`)).c),
             1,

@@ -43,387 +43,102 @@ ALTER TABLE private.meta_leadgen_events
     ADD COLUMN IF NOT EXISTS phone_match_status text,
     ADD COLUMN IF NOT EXISTS is_duplicate_phone boolean;
 
--- 3. han_ingest: duplicate-phone customer resolution (Rule C).
---    Messenger and Website semantics are unchanged: customer identity still comes
---    from the channel external_id. Phone-based reuse applies ONLY to Lead Ads
---    intake identities (page:leadgen:<id>), each of which is unique per submission.
-CREATE OR REPLACE FUNCTION public.han_ingest(
-    p_company uuid,
-    p_channel text,
-    p_external text,
-    p_key text,
-    p_name text,
-    p_phone text,
-    p_content text,
-    p_safe text,
-    p_safe_status text,
-    p_occurred timestamptz,
-    p_payload jsonb
-)
-    RETURNS jsonb
-    LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
+-- 3. Dedicated Lead Ads intake. The RPC itself plus the fenced lead event is
+-- the discriminator; shared han_ingest remains byte-for-byte untouched.
+-- A form submission is not a Messenger thread/PSID: no conversation, identity,
+-- care response, SLA or AI/canary configuration is created by this path.
+CREATE FUNCTION public.ingest_meta_leadgen_event(
+    p_company_id uuid, p_leadgen_id text, p_claim_token uuid, p_ingest jsonb
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
-  v_customer uuid;
-  v_phone_customer uuid;
-  v_phone_matches integer := 0;
-  v_phone_ambiguous boolean := false;
-  v_phone_status text := 'NO_PHONE';
-  v_phone_dup boolean := false;
-  v_leadgen boolean := false;
-  v_conversation uuid;
-  v_interaction uuid;
-  v_existing private.han_intake_events%ROWTYPE;
-  v_contact text;
-  v_review boolean := false;
+    v_event private.meta_leadgen_events%ROWTYPE;
+    v_existing private.han_intake_events%ROWTYPE;
+    v_args jsonb; v_payload jsonb; v_key text;
+    v_name text; v_phone text; v_content text;
+    v_customer uuid; v_interaction uuid;
+    v_matches integer := 0;
+    v_phone_status text; v_duplicate boolean;
 BEGIN
-  IF p_channel IS NULL OR p_channel NOT IN ('FACEBOOK', 'WEBSITE')
-    OR p_safe_status IS NULL OR p_safe_status NOT IN ('SUCCEEDED', 'FAILED')
-    OR (p_channel = 'FACEBOOK' AND (p_external IS NULL OR (
-        p_external !~ '^[0-9]+:[0-9]+$' AND NOT (
-            p_external ~ '^[0-9]+:leadgen:[0-9]+$' AND p_key=p_external AND EXISTS (
-                SELECT 1 FROM private.meta_leadgen_events e WHERE e.company_id=p_company
-                    AND e.page_id=split_part(p_external,':',1) AND e.leadgen_id=split_part(p_external,':',3)
-                    AND e.status='PROCESSING' AND e.lease_until>clock_timestamp()
-            )
-        )
-    )))
-    OR (p_channel = 'WEBSITE' AND p_external IS NOT NULL)
-    OR p_key IS NULL OR length(p_key) = 0
-    OR p_content IS NULL OR p_name IS NULL
-    OR length(p_external) > 250
-    OR length(p_key) > 500
-    OR length(p_content) > 10000
-    OR length(p_name) > 100
-    OR (p_safe_status = 'FAILED' AND p_safe IS NOT NULL)
-    OR (p_safe_status = 'SUCCEEDED' AND p_safe IS NULL)
-    OR (
-      p_phone IS NOT NULL
-      AND p_phone !~ '^\+[1-9][0-9]{7,14}$'
-    )
-    OR NOT EXISTS (
-      SELECT 1 FROM public.companies
-      WHERE id = p_company AND status = 'ACTIVE'
-    )
-  THEN
-    RAISE EXCEPTION 'INVALID_REQUEST';
-  END IF;
-
-  v_leadgen := p_channel = 'FACEBOOK' AND p_external ~ '^[0-9]+:leadgen:[0-9]+$';
-
-  PERFORM pg_advisory_xact_lock(
-    hashtextextended('han-intake:' || p_company::text, 0)
-  );
-
-  SELECT * INTO v_existing
-  FROM private.han_intake_events
-  WHERE company_id = p_company
-    AND channel = p_channel
-    AND event_key = p_key;
-
-  IF FOUND THEN
-    IF v_existing.external_identity IS DISTINCT FROM p_external
-      OR v_existing.payload->>'content' IS DISTINCT FROM p_content
-      OR v_existing.payload->>'phone' IS DISTINCT FROM p_phone
-      OR v_existing.payload->>'name' IS DISTINCT FROM p_name
-      OR (p_channel = 'WEBSITE' AND v_existing.payload->'source' IS DISTINCT FROM p_payload)
-    THEN
-      RAISE EXCEPTION 'IDEMPOTENCY_CONFLICT';
-    END IF;
-
-    RETURN jsonb_build_object(
-      'status', v_existing.status,
-      'interaction_id', v_existing.interaction_id
-    );
-  END IF;
-
-  INSERT INTO private.han_intake_events
-  VALUES (
-    p_company,
-    p_channel,
-    p_key,
-    p_external,
-    jsonb_build_object(
-      'source', p_payload,
-      'content', p_content,
-      'phone', p_phone,
-      'name', p_name,
-      'occurred_at', p_occurred
-    ),
-    'RECEIVED',
-    NULL,
-    now()
-  );
-
-  SELECT customer_id INTO v_customer
-  FROM public.identities
-  WHERE company_id = p_company
-    AND channel = p_channel
-    AND external_id = p_external
-    AND p_channel = 'FACEBOOK';
-
-  -- Rule B/C: count canonical phone owners in THIS tenant only (exact match,
-  -- never partial). More than one owner is an ambiguous situation that requires
-  -- manual duplicate resolution (Rule C CASE 3); never pick arbitrarily.
-  IF p_phone IS NOT NULL THEN
-    SELECT COUNT(*) INTO v_phone_matches
-    FROM private.customer_private_contacts
-    WHERE company_id = p_company
-      AND normalized_phone = p_phone;
-
-    IF v_phone_matches = 1 THEN
-      SELECT customer_id INTO v_phone_customer
-      FROM private.customer_private_contacts
-      WHERE company_id = p_company
-        AND normalized_phone = p_phone;
-    ELSIF v_phone_matches > 1 THEN
-      v_phone_ambiguous := true;
-    END IF;
-  END IF;
-
-  -- Rule C CASE 2: a Lead Ads submission whose canonical phone has exactly one
-  -- owner reuses that CRM customer instead of creating a second profile.
-  -- Applied only for leadgen intake identities; Messenger/Website keep their
-  -- established external-identity semantics.
-  IF v_customer IS NULL AND v_phone_customer IS NOT NULL AND v_leadgen THEN
-    v_customer := v_phone_customer;
-  END IF;
-
-  IF v_customer IS NOT NULL THEN
-    SELECT normalized_phone INTO v_contact
-    FROM private.customer_private_contacts
-    WHERE company_id = p_company
-      AND customer_id = v_customer;
-  END IF;
-
-  -- Danh tính mâu thuẫn: giữ tin, không tự gộp/sửa liên hệ.
-  IF (
-    v_phone_customer IS NOT NULL
-    AND v_customer IS DISTINCT FROM v_phone_customer
-  ) OR (
-    v_phone_ambiguous
-  ) OR (
-    v_contact IS NOT NULL
-    AND p_phone IS NOT NULL
-    AND v_contact <> p_phone
-  ) THEN
-    v_review := true;
-    UPDATE private.han_intake_events
-    SET status = 'IDENTITY_REVIEW'
-    WHERE company_id = p_company
-      AND channel = p_channel
-      AND event_key = p_key;
-  END IF;
-
-  IF v_customer IS NULL THEN
-    INSERT INTO public.customers (
-      company_id, name, source, stage
-    )
-    VALUES (
-      p_company, p_name, p_channel, 'LEAD_NEW'
-    )
-    RETURNING id INTO v_customer;
-
-    INSERT INTO public.customer_stage_histories (
-      company_id, customer_id, from_stage,
-      to_stage, actor_type, reason
-    )
-    VALUES (
-      p_company, v_customer, NULL,
-      'LEAD_NEW', 'SYSTEM', 'OMNICHANNEL_INTAKE'
-    );
-  END IF;
-
-  -- Rule C CASE 1/2: report the phone match verdict without ever returning
-  -- (or logging) the phone number itself.
-  v_phone_status := CASE
-    WHEN p_phone IS NULL THEN 'NO_PHONE'
-    WHEN v_phone_ambiguous THEN 'AMBIGUOUS_MULTIPLE'
-    WHEN v_phone_customer IS NOT NULL
-      AND v_customer IS DISTINCT FROM v_phone_customer THEN 'CONFLICT'
-    WHEN v_phone_customer IS NOT NULL THEN 'MATCHED_EXISTING'
-    ELSE 'NEW_PHONE'
-  END;
-  v_phone_dup := v_phone_status IN ('MATCHED_EXISTING', 'AMBIGUOUS_MULTIPLE', 'CONFLICT');
-
-  -- Website submissions are intake events, not persistent person identities.
-  IF v_review THEN
-    INSERT INTO public.audit_logs (
-      company_id, action, resource_type, resource_id, customer_id, result
-    ) VALUES (
-      p_company, 'OMNICHANNEL_IDENTITY_REVIEW', 'Customer',
-      v_customer, v_customer, 'SUCCESS'
-    );
-  END IF;
-
-  IF p_channel = 'FACEBOOK' THEN
-    INSERT INTO public.identities (
-      company_id, customer_id, channel,
-      external_id, verified
-    )
-    VALUES (
-      p_company, v_customer, p_channel,
-      p_external, false
-    )
-    ON CONFLICT (company_id, channel, external_id)
-    DO NOTHING;
-  END IF;
-
-  -- Ambiguous ownership (CASE 3) never adds another phone binding: an operator
-  -- resolves the duplicate first, exactly one owner remains.
-  IF p_phone IS NOT NULL
-    AND NOT v_phone_ambiguous
-    AND v_phone_customer IS NULL
-    AND v_contact IS NULL
-  THEN
-    INSERT INTO private.customer_private_contacts (
-      company_id, customer_id,
-      normalized_phone, raw_phone, is_verified
-    )
-    VALUES (
-      p_company, v_customer, p_phone, p_phone, false
-    );
-  END IF;
-
-  IF p_channel = 'FACEBOOK' THEN
-    INSERT INTO public.conversations (
-      company_id, customer_id, channel,
-      external_conversation_id,
-      last_message_at, unread_count
-    )
-    VALUES (
-      p_company, v_customer, 'FACEBOOK',
-      p_external, p_occurred, 1
-    )
-    ON CONFLICT (
-      company_id, channel, external_conversation_id
-    )
-    DO UPDATE SET
-      last_message_at = greatest(
-        public.conversations.last_message_at,
-        excluded.last_message_at
-      ),
-      unread_count = public.conversations.unread_count + 1
-    RETURNING id INTO v_conversation;
-  END IF;
-
-  INSERT INTO public.interactions (
-    company_id, customer_id, conversation_id,
-    channel, type, direction,
-    sanitized_content, sanitization_status,
-    sanitized_at, sanitizer_version,
-    external_ref, actor_type, created_at
-  )
-  VALUES (
-    p_company, v_customer, v_conversation,
-    p_channel, 'MESSAGE', 'INBOUND',
-    p_safe, p_safe_status,
-    CASE WHEN p_safe_status = 'SUCCEEDED' THEN now() END,
-    'han-bounded-v2',
-    p_key, 'CUSTOMER', p_occurred
-  )
-  RETURNING id INTO v_interaction;
-
-  INSERT INTO private.interaction_raw_contents (
-    interaction_id, company_id, raw_content, raw_payload
-  )
-  VALUES (
-    v_interaction, p_company, p_content, p_payload
-  );
-
-  UPDATE private.han_intake_events
-  SET
-    status = CASE
-      WHEN status = 'IDENTITY_REVIEW' THEN status
-      ELSE 'PROCESSED'
-    END,
-    interaction_id = v_interaction
-  WHERE company_id = p_company
-    AND channel = p_channel
-    AND event_key = p_key;
-
-  -- Quy ước: phản hồi cho lượt chăm sóc gần nhất trong 7 ngày.
-  IF p_channel = 'FACEBOOK' THEN
-    UPDATE public.care_deliveries
-    SET responded_at = p_occurred, status = 'RESPONDED'
-    WHERE id = (
-      SELECT d.id
-      FROM public.care_deliveries d
-      JOIN private.han_outbox o ON o.care_delivery_id = d.id
-      WHERE d.company_id = p_company
-        AND d.customer_id = v_customer
-        AND d.channel = 'FACEBOOK'
-        AND o.conversation_id = v_conversation
-        AND d.sent_at <= p_occurred
-        AND d.sent_at > p_occurred - interval '7 days'
-        AND d.status IN (
-          'SENT', 'DELIVERED', 'READ',
-          'RESPONDED', 'CONVERTED_TO_SALE'
-        )
-      ORDER BY d.sent_at DESC
-      LIMIT 1
-    )
-    AND responded_at IS NULL
-    AND status <> 'CONVERTED_TO_SALE';
-  END IF;
-
-  -- TV9 SLA WIRING: Atomically open or reuse Response SLA window for Facebook inbound message
-  IF p_channel = 'FACEBOOK' AND p_external ~ '^[0-9]+:[0-9]+$' AND v_conversation IS NOT NULL THEN
-    PERFORM public.open_response_sla_window(
-      p_company,
-      v_conversation,
-      v_interaction
-    );
-  END IF;
-
-  RETURN jsonb_build_object(
-    'status', 'ACCEPTED',
-    'interaction_id', v_interaction,
-    'phone_match_status', v_phone_status,
-    'is_duplicate_phone', v_phone_dup
-  );
-END;
-$$;
-
-COMMENT ON FUNCTION public.han_ingest(uuid, text, text, text, text, text, text, text, text, timestamptz, jsonb)
-  IS 'Ingests omnichannel inbound events. Lead Ads submissions with a canonical phone that exactly matches one tenant customer reuse that customer (Rule C CASE 2); ambiguous multi-owner phones are flagged for manual duplicate resolution (CASE 3); missing or invalid phones are preserved without identity (CASE 4). Messenger and Website semantics are unchanged.';
-
--- The ACL on this function is preserved from previous forward migrations
--- (EXECUTE for service_role only; revoked from PUBLIC, anon, authenticated).
-
--- 3b. ingest_meta_leadgen_event: persist the phone match verdict alongside the
---     intake checkpoint so a durable retry replays the exact same verdict
---     without re-running or refetching anything from Meta.
-CREATE OR REPLACE FUNCTION public.ingest_meta_leadgen_event(p_company_id uuid,p_leadgen_id text,p_claim_token uuid,p_ingest jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-DECLARE v_event private.meta_leadgen_events%ROWTYPE; v_args jsonb; v_result jsonb; v_customer uuid;
-BEGIN
-    SELECT * INTO v_event FROM private.meta_leadgen_events WHERE company_id=p_company_id AND leadgen_id=p_leadgen_id FOR UPDATE;
-    IF NOT FOUND OR v_event.status<>'PROCESSING' OR v_event.claim_token IS DISTINCT FROM p_claim_token
-        OR v_event.lease_until<=clock_timestamp() OR p_claim_token IS NULL THEN RAISE EXCEPTION 'LEADGEN_LEASE_LOST'; END IF;
+    SELECT * INTO v_event FROM private.meta_leadgen_events
+        WHERE company_id=p_company_id AND leadgen_id=p_leadgen_id FOR UPDATE;
+    IF NOT FOUND OR v_event.status<>'PROCESSING'
+        OR v_event.claim_token IS DISTINCT FROM p_claim_token OR p_claim_token IS NULL
+        OR v_event.lease_until IS NULL OR v_event.lease_until<=clock_timestamp()
+    THEN RAISE EXCEPTION 'LEADGEN_LEASE_LOST'; END IF;
     IF v_event.interaction_id IS NOT NULL THEN
         RETURN jsonb_build_object('interaction_id',v_event.interaction_id,'customer_id',v_event.customer_id,
             'phone_match_status',v_event.phone_match_status,'is_duplicate_phone',v_event.is_duplicate_phone);
     END IF;
     v_args := COALESCE(v_event.ingest_args,p_ingest);
     IF v_args IS NULL THEN RAISE EXCEPTION 'MISSING_INGEST_ARGS'; END IF;
-    v_result := public.han_ingest(p_company_id,'FACEBOOK',v_event.page_id||':leadgen:'||p_leadgen_id,
-        v_event.page_id||':leadgen:'||p_leadgen_id,v_args->>'name',v_args->>'phone',v_args->>'content',
-        v_args->>'content','SUCCEEDED',v_event.occurred_at,v_args->'payload');
-    IF v_result IS NULL OR (v_result->>'interaction_id') IS NULL
-        OR (v_result->>'phone_match_status') IS NULL THEN
+    v_name:=v_args->>'name'; v_phone:=v_args->>'phone'; v_content:=v_args->>'content';
+    v_key:=v_event.page_id||':leadgen:'||p_leadgen_id;
+    IF jsonb_typeof(v_args) IS DISTINCT FROM 'object'
+        OR v_name IS NULL OR length(v_name)>100
+        OR v_content IS NULL OR length(v_content)>10000
+        OR v_event.page_id !~ '^[0-9]+$' OR p_leadgen_id !~ '^[0-9]+$' OR length(v_key)>250
+        OR (v_phone IS NOT NULL AND v_phone !~ '^\+[1-9][0-9]{7,14}$')
+        OR (v_args ? 'payload' AND jsonb_typeof(v_args->'payload') IS DISTINCT FROM 'object')
+        OR NOT EXISTS (SELECT 1 FROM public.companies WHERE id=p_company_id AND status='ACTIVE')
+    THEN RAISE EXCEPTION 'INVALID_REQUEST'; END IF;
+    v_payload:=COALESCE(v_args->'payload','{}'::jsonb)||jsonb_build_object('crm_lead_ads',true);
+
+    -- Same tenant lock as existing ingestion, so phone admission cannot race
+    -- another Lead Ads or Messenger/Website admission in this company.
+    PERFORM pg_advisory_xact_lock(hashtextextended('han-intake:'||p_company_id::text,0));
+    SELECT * INTO v_existing FROM private.han_intake_events
+        WHERE company_id=p_company_id AND channel='FACEBOOK' AND event_key=v_key;
+    IF FOUND THEN
+        IF v_existing.external_identity IS DISTINCT FROM v_key
+            OR v_existing.payload->>'name' IS DISTINCT FROM v_name
+            OR v_existing.payload->>'phone' IS DISTINCT FROM v_phone
+            OR v_existing.payload->>'content' IS DISTINCT FROM v_content
+        THEN RAISE EXCEPTION 'IDEMPOTENCY_CONFLICT'; END IF;
+        -- Successful writes below checkpoint both records in the same transaction.
+        -- An orphan intake row is not proof of successful lead ingestion.
         RAISE EXCEPTION 'LEADGEN_INTAKE_INCOMPLETE';
     END IF;
-    SELECT i.customer_id INTO STRICT v_customer FROM public.interactions i
-        WHERE i.id=(v_result->>'interaction_id')::uuid AND i.company_id=p_company_id;
-    UPDATE private.meta_leadgen_events SET ingest_args=v_args, interaction_id=(v_result->>'interaction_id')::uuid,
-        customer_id=v_customer, phone_match_status=v_result->>'phone_match_status',
-        is_duplicate_phone=COALESCE((v_result->>'is_duplicate_phone')::boolean,false),
-        updated_at=clock_timestamp() WHERE id=v_event.id;
-    RETURN v_result||jsonb_build_object('customer_id',v_customer);
-END $$;
+    IF v_phone IS NOT NULL THEN
+        SELECT count(*) INTO v_matches FROM private.customer_private_contacts
+            WHERE company_id=p_company_id AND normalized_phone=v_phone;
+        IF v_matches=1 THEN
+            SELECT customer_id INTO v_customer FROM private.customer_private_contacts
+                WHERE company_id=p_company_id AND normalized_phone=v_phone;
+        END IF;
+    END IF;
+    v_phone_status:=CASE WHEN v_phone IS NULL THEN 'NO_PHONE'
+        WHEN v_matches>1 THEN 'AMBIGUOUS_MULTIPLE'
+        WHEN v_matches=1 THEN 'MATCHED_EXISTING' ELSE 'NEW_PHONE' END;
+    v_duplicate:=v_matches>0;
+    IF v_customer IS NULL THEN
+        INSERT INTO public.customers(company_id,name,source,stage)
+            VALUES(p_company_id,v_name,'FACEBOOK','LEAD_NEW') RETURNING id INTO v_customer;
+        INSERT INTO public.customer_stage_histories(company_id,customer_id,from_stage,to_stage,actor_type,reason)
+            VALUES(p_company_id,v_customer,NULL,'LEAD_NEW','SYSTEM','OMNICHANNEL_INTAKE');
+    END IF;
+    IF v_phone_status='NEW_PHONE' THEN
+        INSERT INTO private.customer_private_contacts(company_id,customer_id,normalized_phone,raw_phone,is_verified)
+            VALUES(p_company_id,v_customer,v_phone,v_phone,false);
+    ELSIF v_phone_status='AMBIGUOUS_MULTIPLE' THEN
+        INSERT INTO public.audit_logs(company_id,action,resource_type,resource_id,customer_id,result)
+            VALUES(p_company_id,'OMNICHANNEL_IDENTITY_REVIEW','Customer',v_customer,v_customer,'SUCCESS');
+    END IF;
+    INSERT INTO public.interactions(company_id,customer_id,conversation_id,channel,type,direction,
+        sanitized_content,sanitization_status,sanitized_at,sanitizer_version,external_ref,actor_type,created_at)
+        VALUES(p_company_id,v_customer,NULL,'FACEBOOK','MESSAGE','INBOUND',v_content,'SUCCEEDED',now(),
+            'han-bounded-v2',v_key,'CUSTOMER',v_event.occurred_at) RETURNING id INTO v_interaction;
+    INSERT INTO private.interaction_raw_contents(interaction_id,company_id,raw_content,raw_payload)
+        VALUES(v_interaction,p_company_id,v_content,v_payload);
+    INSERT INTO private.han_intake_events(company_id,channel,event_key,external_identity,payload,status,interaction_id)
+        VALUES(p_company_id,'FACEBOOK',v_key,v_key,
+            jsonb_build_object('source',v_payload,'content',v_content,'phone',v_phone,'name',v_name,'occurred_at',v_event.occurred_at),
+            CASE WHEN v_matches>1 THEN 'IDENTITY_REVIEW' ELSE 'PROCESSED' END,v_interaction);
+    UPDATE private.meta_leadgen_events SET ingest_args=v_args,interaction_id=v_interaction,customer_id=v_customer,
+        phone_match_status=v_phone_status,is_duplicate_phone=v_duplicate,updated_at=clock_timestamp()
+        WHERE id=v_event.id;
+    RETURN jsonb_build_object('status','ACCEPTED','interaction_id',v_interaction,'customer_id',v_customer,
+        'phone_match_status',v_phone_status,'is_duplicate_phone',v_duplicate);
+END; $$;
 REVOKE ALL ON FUNCTION public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb) TO service_role;
 

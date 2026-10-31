@@ -18,12 +18,12 @@
     {
       "file": "20261030110000_meta_ads_final_remediation.sql",
       "previousSha256": "f554d787789a15515bf0b80403d45ec4a3c100ac8365450ecb54d14cb150dbe6",
-      "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479"
+      "sha256": "79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814"
     },
     {
       "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
       "previousSha256": "70b999c50492aecc8c443a6cc92a64e8bc9099c0bc2998447e60510ede7b289a",
-      "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153"
+      "sha256": "54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770"
     }
   ],
   "allSources": [
@@ -731,8 +731,8 @@
     },
     {
       "file": "20261030110000_meta_ads_final_remediation.sql",
-      "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479",
-      "statementCount": 40,
+      "sha256": "79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814",
+      "statementCount": 29,
       "transactionMode": "OUTER"
     },
     {
@@ -749,8 +749,8 @@
     },
     {
       "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
-      "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153",
-      "statementCount": 28,
+      "sha256": "54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770",
+      "statementCount": 26,
       "transactionMode": "OUTER"
     }
   ],
@@ -795,6 +795,22 @@
         "file": "20261030110000_meta_ads_final_remediation.sql",
         "previousSha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
         "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479"
+      }
+    ]
+  },
+  "prefix21Compatibility": {
+    "referenceCommit": "3bc50257883957f05cd1fedbd8f57358e058dcee",
+    "executionAuthorized": false,
+    "sources": [
+      {
+        "file": "20261030110000_meta_ads_final_remediation.sql",
+        "previousSha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479",
+        "sha256": "79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814"
+      },
+      {
+        "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+        "previousSha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153",
+        "sha256": "54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770"
       }
     ]
   }

@@ -1,0 +1,4336 @@
+{
+  "referenceCommit": "3bc50257883957f05cd1fedbd8f57358e058dcee",
+  "prefixCatalog": [
+    {
+      "category": "columns",
+      "object_count": 460,
+      "fingerprint": "9628c8da028e678629c190380d9efb5d"
+    },
+    {
+      "category": "constraints",
+      "object_count": 298,
+      "fingerprint": "e912bdd2add0deb1a097dd81567457c0"
+    },
+    {
+      "category": "function_grants",
+      "object_count": 276,
+      "fingerprint": "eaea5a83dc0aaf7859a6ef9908241f36"
+    },
+    {
+      "category": "functions",
+      "object_count": 92,
+      "fingerprint": "982e28b266370e0537ed24365b1576bd"
+    },
+    {
+      "category": "indexes",
+      "object_count": 154,
+      "fingerprint": "cad7457128356ef2eaa261af0e06a7ad"
+    },
+    {
+      "category": "policies",
+      "object_count": 86,
+      "fingerprint": "aa0f15c44b9701a9e9538b221da0c583"
+    },
+    {
+      "category": "relations",
+      "object_count": 45,
+      "fingerprint": "cd2550814770bef655d1b026b7886909"
+    },
+    {
+      "category": "schema_grants",
+      "object_count": 12,
+      "fingerprint": "9db16a4edb48127e127f564811706054"
+    },
+    {
+      "category": "table_grants",
+      "object_count": 945,
+      "fingerprint": "e772b1219499ec4a90e0b200fd1db806"
+    },
+    {
+      "category": "triggers",
+      "object_count": 63,
+      "fingerprint": "0ed008353955c866921cf3bc8b68b213"
+    }
+  ],
+  "afterCatalog": [
+    {
+      "category": "columns",
+      "object_count": 569,
+      "fingerprint": "6f07edfa6623420f581afca78209d721"
+    },
+    {
+      "category": "constraints",
+      "object_count": 330,
+      "fingerprint": "581e964dc3e41a6ba57e993ac5cf29a8"
+    },
+    {
+      "category": "function_grants",
+      "object_count": 306,
+      "fingerprint": "cd9437a44b1e7ee40df098be9555af64"
+    },
+    {
+      "category": "functions",
+      "object_count": 102,
+      "fingerprint": "1cc24a21d80af1406f599541e7ddfb05"
+    },
+    {
+      "category": "indexes",
+      "object_count": 179,
+      "fingerprint": "0471b08adea53db6efe47c0520ae7b51"
+    },
+    {
+      "category": "policies",
+      "object_count": 91,
+      "fingerprint": "9418cf58c1f59fd935771eed60547554"
+    },
+    {
+      "category": "relations",
+      "object_count": 52,
+      "fingerprint": "79e553f298550d6461552aedf312082b"
+    },
+    {
+      "category": "schema_grants",
+      "object_count": 12,
+      "fingerprint": "9db16a4edb48127e127f564811706054"
+    },
+    {
+      "category": "table_grants",
+      "object_count": 1092,
+      "fingerprint": "ef6ca2c9f33f46db23eaa266784e2ce6"
+    },
+    {
+      "category": "triggers",
+      "object_count": 63,
+      "fingerprint": "0ed008353955c866921cf3bc8b68b213"
+    }
+  ],
+  "catalogDiff": [
+    {
+      "key": "column:private.meta_ad_account_tokens.ad_account_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.encrypted_access_token",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.token_expires_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:private.meta_ad_account_tokens.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.ad_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.claim_token",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.customer_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.error_message",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.form_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.ingest_args",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "5f1ace24c3280ad21b77671fed36a89a7811800149526172c1dfe7b6a0203e98"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.interaction_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.is_duplicate_phone",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "f1af4b73c9fdf3b36ee7127756357ccaae170bd53a7802ecbe2ba4277ed07086"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.leadgen_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.lease_until",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.occurred_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "f8ce82ac196adbb99f6d1824bc251ca03210c8168b988b8b7986e39e10640623"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.page_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.phone_match_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.retry_count",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "342a061119bab7b0ac590764d988b4a9f72687cac8fbdaf7722b010a0357890c"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "73fd3979df6cc2a38a5bfc410c2ab57e40059ac84bdc00c77211dba86d4cdbf7"
+      }
+    },
+    {
+      "key": "column:private.meta_leadgen_events.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.customers.attribution_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "4bd5df09a77a80c556af5417e9522f47f0ec67e9efd91eaf6754762faf2bfbe7"
+      }
+    },
+    {
+      "key": "column:public.customers.first_ad_name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.customers.first_campaign_name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.customers.first_touch_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:public.customers.latest_ad_name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.customers.latest_campaign_name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.customers.latest_touch_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.customers",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.ad_account_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.ad_name_snapshot",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.ad_set_name_snapshot",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.ads_context_data",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "5f1ace24c3280ad21b77671fed36a89a7811800149526172c1dfe7b6a0203e98"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.attribution_method",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "8760d2012370bd63e8a5212b3969af99254ba2b29d19f13fb125c6b6e74e84f0"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.attribution_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "509ddb855bf09b9ae03da09afd9183da639d2e58475e47af0a9e9686662ead01"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.campaign_name_snapshot",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.channel",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.conversation_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.customer_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.fbclid",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.form_name_snapshot",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.interaction_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.is_duplicate_phone",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "f1af4b73c9fdf3b36ee7127756357ccaae170bd53a7802ecbe2ba4277ed07086"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.meta_ad_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.meta_ad_set_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.meta_campaign_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.meta_form_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.meta_leadgen_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.normalized_phone_match_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.occurred_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.page_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.page_name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.referral_source",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.referral_type",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.touchpoint_type",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.utm_campaign",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.utm_content",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.utm_medium",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.utm_source",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.lead_attribution_touchpoints.utm_term",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.account_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "a902cb711a20257d4147cb2c35c10c1b82477f91bbdeca6b465b3222d1b78d6a"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.ad_account_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.currency",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "3fa14bdd79a3d6847b296e2297c6555a4e2efd0d850420485f4448926344b4b6"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.last_synced_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.sync_error",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.sync_lease_token",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "721738c9ff73cd2fb280e7fdef0cda15bbf9a1f9d0af2eb369c35a164f1ad2e3"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.sync_lease_until",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "923afe9d1fc2a6fc534e51d1c0491872fbb0894426fbeaed6320d2d1a85e128c"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.sync_status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "d1ee883bb2223cb83c658b553fd2b941eae35eada780bd6aeaa19d2885e8273b"
+      }
+    },
+    {
+      "key": "column:public.meta_ad_accounts.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.ad_account_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.meta_ad_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.meta_ad_set_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.meta_campaign_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.synced_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_ads.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_ads",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.ad_account_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.meta_campaign_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.synced_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_campaigns.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_campaigns",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.company_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "650fabc9e3215c5c6e39e50b786319b8b77646bc975881bd68bb47f5044d712d"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.created_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "ca4ab6bcd5bb3249ed2acd3bf87efe8a55d31e9ef64bc5b0596edbc011b091a2"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.meta_form_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.name",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.page_id",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "5586072d441e7b304162d02030b390cd9db68e190f14bee183e3ce4e67f13779"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.status",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "ec32883bdba48c0aedc8aff2aff2a37adbdf3c98ae022a4d6a0ce7bd48c84ae4"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.synced_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "column:public.meta_lead_forms.updated_at",
+      "before": null,
+      "after": {
+        "kind": "column",
+        "owner": "public.meta_lead_forms",
+        "sha256": "abe4d721e2fc1c1b5e96113455a6ff24403d11b64ed782b33d6ed6db65ecc140"
+      }
+    },
+    {
+      "key": "constraint:private.meta_ad_account_tokens.meta_ad_account_tokens_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:private.meta_ad_account_tokens.meta_ad_account_tokens_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:private.meta_ad_account_tokens.uq_meta_ad_account_tokens_company_account",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "35166ce3cb689002492fc023946583b20ec3af2701626cd6c98ca306bc9e6720"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.meta_leadgen_events_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.meta_leadgen_events_customer_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "6e5dd6843d63d13544651ef4711d91b47e2454b9754f1f64c8deb2847b91ebc8"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.meta_leadgen_events_interaction_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "1e11341ad2121bcf100ab5bb680014723f4bc3f1a2e2c4348763953592d31169"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.meta_leadgen_events_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.meta_leadgen_events_status_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "df6d5451d9352799d84f2e0299502791e83f33e5272494c4397a007287831248"
+      }
+    },
+    {
+      "key": "constraint:private.meta_leadgen_events.uq_meta_leadgen_company_lead",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "1098c64b69467cf410a283cfd917f45ae4aa7b4e39b1c44a36351f73cd451f1a"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_attribution_method_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "11c963c418660b5e209c521cec96a1c9a1e79e173b2c0856850f4d9b424bd452"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_attribution_status_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "c498e09802d86a93c243a9910dd69e316617b2434f797fd3397efc2423199b62"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_channel_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "48b843ad283fe12f194c2ebb61cc8ff6bb07d144acfd01e7311fb59098d403c2"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_conversation_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "05996e08d9453e706732fc4836763b2f66abc344c781fe36823bb76ec8ba1092"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_customer_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "6e5dd6843d63d13544651ef4711d91b47e2454b9754f1f64c8deb2847b91ebc8"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_interaction_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "1e11341ad2121bcf100ab5bb680014723f4bc3f1a2e2c4348763953592d31169"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.lead_attribution_touchpoints_touchpoint_type_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "d6d7a245b4f13bc70bc18f057ae73fb600a2fd8650e43e8f3638280bb2a3769d"
+      }
+    },
+    {
+      "key": "constraint:public.lead_attribution_touchpoints.rl_phone_match_status",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "6e7a39087bbb5895ea4561ebe2fa076a53e7430baa2f0de2b27d6525aded9152"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ad_accounts.meta_ad_accounts_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ad_accounts.meta_ad_accounts_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ad_accounts.meta_ad_accounts_sync_status_check",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "d66d176ab702d715ac34b2288dae691abad0df490cc2171fe26d7a5ff9c4656f"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ad_accounts.uq_meta_ad_accounts_company_account",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "35166ce3cb689002492fc023946583b20ec3af2701626cd6c98ca306bc9e6720"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ads.meta_ads_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ads",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ads.meta_ads_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ads",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:public.meta_ads.uq_meta_ads_company_ad",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_ads",
+        "sha256": "a7735f49822877d8671598bd345f9368729bfacea8974619dcbc6921d1433e4d"
+      }
+    },
+    {
+      "key": "constraint:public.meta_campaigns.meta_campaigns_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_campaigns",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:public.meta_campaigns.meta_campaigns_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_campaigns",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:public.meta_campaigns.uq_meta_campaigns_company_campaign",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_campaigns",
+        "sha256": "e5859634ae9f25fc7175f5a425fed7cddc3add0b05e2965de8ab6356927dcd60"
+      }
+    },
+    {
+      "key": "constraint:public.meta_lead_forms.meta_lead_forms_company_id_fkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_lead_forms",
+        "sha256": "c1405be2eec271639d6c08029a4764e28ce2d57336a7dabcee420b0008e0b5b4"
+      }
+    },
+    {
+      "key": "constraint:public.meta_lead_forms.meta_lead_forms_pkey",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_lead_forms",
+        "sha256": "ee7e51ec456fcca15bcc704f8a68007522b2a7e970d1f53d418f7c6ac80f662b"
+      }
+    },
+    {
+      "key": "constraint:public.meta_lead_forms.uq_meta_lead_forms_company_form",
+      "before": null,
+      "after": {
+        "kind": "constraint",
+        "owner": "public.meta_lead_forms",
+        "sha256": "31ebad3badebbec97524d54a8aaeaff86eec743755141096101f50067d497a43"
+      }
+    },
+    {
+      "key": "function:public.acquire_meta_ad_account_sync_lease(uuid,text,integer)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.acquire_meta_ad_account_sync_lease",
+        "sha256": "6624b33794b37c67e7150e8a0fa3e999414d8fcc9fa5725b5e6ec748c8051eed"
+      }
+    },
+    {
+      "key": "function:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.claim_meta_leadgen_event",
+        "sha256": "487772086764136660f3bb3269b9dd66981b18a8be3369e5e20a4cbde6950528"
+      }
+    },
+    {
+      "key": "function:public.finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.finalize_meta_leadgen_event",
+        "sha256": "151f05f45181099966b6f6cc3e9006cec97d96134db11d0fc1d8753f91416a8e"
+      }
+    },
+    {
+      "key": "function:public.get_meta_ad_account_token(uuid,text)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.get_meta_ad_account_token",
+        "sha256": "1bc0ca2efc989212631c1070a8263bfd97f4d5ecef06d288b81b697af789776d"
+      }
+    },
+    {
+      "key": "function:public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.ingest_meta_leadgen_event",
+        "sha256": "26791643a7667c3e932b2c0a50bf39ab3716d990e09d34e9ab408434f5fcc1a9"
+      }
+    },
+    {
+      "key": "function:public.mark_lead_attribution_phone_match(uuid,text,text,boolean)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.mark_lead_attribution_phone_match",
+        "sha256": "62dfbb34fda8d1bf62336b89159ecd56a3de018ca0cdc83d70f2e581422467fd"
+      }
+    },
+    {
+      "key": "function:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.record_lead_attribution_touchpoint",
+        "sha256": "a23d9e3511df00fd7a01b1128fd8ba9558517c1627df5d248d48185f11d338ee"
+      }
+    },
+    {
+      "key": "function:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.release_meta_ad_account_sync_lease",
+        "sha256": "95db71f5a546dc917641d863175d62e4d59d7d084d82eb6d9ef11ebb55776283"
+      }
+    },
+    {
+      "key": "function:public.retry_pending_lead_attribution(uuid,integer)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.retry_pending_lead_attribution",
+        "sha256": "92fd883db520da651f7867897f9a9d9f3990cce521279448d7d0ee780542e7cc"
+      }
+    },
+    {
+      "key": "function:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone)",
+      "before": null,
+      "after": {
+        "kind": "function",
+        "owner": "public.store_meta_ad_account_token",
+        "sha256": "7e799d9c7c645161f37e5303a588ec69c13538771273f610ae3a59ecffb412e5"
+      }
+    },
+    {
+      "key": "function_grant:public.acquire_meta_ad_account_sync_lease(uuid,text,integer):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.acquire_meta_ad_account_sync_lease",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.acquire_meta_ad_account_sync_lease(uuid,text,integer):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.acquire_meta_ad_account_sync_lease",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.acquire_meta_ad_account_sync_lease(uuid,text,integer):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.acquire_meta_ad_account_sync_lease",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.claim_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.claim_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.claim_meta_leadgen_event",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.finalize_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.finalize_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.finalize_meta_leadgen_event",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.get_meta_ad_account_token(uuid,text):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.get_meta_ad_account_token",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.get_meta_ad_account_token(uuid,text):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.get_meta_ad_account_token",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.get_meta_ad_account_token(uuid,text):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.get_meta_ad_account_token",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.ingest_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.ingest_meta_leadgen_event",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.ingest_meta_leadgen_event",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.mark_lead_attribution_phone_match(uuid,text,text,boolean):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.mark_lead_attribution_phone_match",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.mark_lead_attribution_phone_match(uuid,text,text,boolean):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.mark_lead_attribution_phone_match",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.mark_lead_attribution_phone_match(uuid,text,text,boolean):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.mark_lead_attribution_phone_match",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.record_lead_attribution_touchpoint",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.record_lead_attribution_touchpoint",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.record_lead_attribution_touchpoint",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.release_meta_ad_account_sync_lease",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.release_meta_ad_account_sync_lease",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.release_meta_ad_account_sync_lease",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.retry_pending_lead_attribution(uuid,integer):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.retry_pending_lead_attribution",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.retry_pending_lead_attribution(uuid,integer):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.retry_pending_lead_attribution",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.retry_pending_lead_attribution(uuid,integer):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.retry_pending_lead_attribution",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "function_grant:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone):anon",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.store_meta_ad_account_token",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone):authenticated",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.store_meta_ad_account_token",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "function_grant:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone):service_role",
+      "before": null,
+      "after": {
+        "kind": "function_grant",
+        "owner": "public.store_meta_ad_account_token",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "index:private.idx_meta_ad_account_tokens_company",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "804fb310f60b313518899bbcbd227d8d1e87ccc09f6c141cf7412d39f64c235c"
+      }
+    },
+    {
+      "key": "index:private.idx_meta_leadgen_events_lookup",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "4391e42c66bb9df44a0d9e2bc019d01b884b6a4eca0143d72c820cdbf84c40e8"
+      }
+    },
+    {
+      "key": "index:private.meta_ad_account_tokens_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "62544bbf9b3200e806c52604b3f36ddcb96aad89134aa19c9ef5cd97ef05bd7e"
+      }
+    },
+    {
+      "key": "index:private.meta_leadgen_events_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "56b6c7fe9b099562feb45871a4a5233f058cca2829b2d447dd4bc0ea5dbc2756"
+      }
+    },
+    {
+      "key": "index:private.uq_meta_ad_account_tokens_company_account",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "b03b140d259ffa8cfb07f660fece80b38ae1bf5df93d176fe8eed079711de857"
+      }
+    },
+    {
+      "key": "index:private.uq_meta_leadgen_company_lead",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fba104deb6fe4d45d12726d532cc69528d30c4fea3478237cefd550bcb8d7529"
+      }
+    },
+    {
+      "key": "index:public.idx_lead_attribution_campaign",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "a130efb170c70c8f087b2ee052f7dfcb1b16e0178e7155594fa4f2bd20dc24e7"
+      }
+    },
+    {
+      "key": "index:public.idx_lead_attribution_customer",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "3ea91c02bc67d616cbeea1cb6ce3f264d5355d528daaeb3440039275b77473ea"
+      }
+    },
+    {
+      "key": "index:public.idx_lead_attribution_occurred",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "54c8534523e22e45dc7c958b7780d555e8ae68573091736f1f1137d7047486e5"
+      }
+    },
+    {
+      "key": "index:public.idx_lead_attribution_pending",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "682f1b3a1eeff32511df6ef3cbf122c84f8cf10506dcae0643b7155e61e3a144"
+      }
+    },
+    {
+      "key": "index:public.idx_meta_ad_accounts_company",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "bc93c3d34338bb49301b9f02bfa16c735061b1bd649e5c3c2a327c4c1ec3ed38"
+      }
+    },
+    {
+      "key": "index:public.idx_meta_ads_company_ad_id",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ads",
+        "sha256": "1fc2b07c762d034caf3c400a783be7dc8e8ead057e6ee2f9b26718d00feffe99"
+      }
+    },
+    {
+      "key": "index:public.idx_meta_ads_company_adset",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ads",
+        "sha256": "934053b144f3030138c24b8bbb86aea4c20a03307bba70f4bf79e997173cbf8e"
+      }
+    },
+    {
+      "key": "index:public.idx_meta_campaigns_company_account",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_campaigns",
+        "sha256": "6a6d2bc07eabc1770946397b3ccbffb7a4f0cfd28fe78a7849a058945c03fd4f"
+      }
+    },
+    {
+      "key": "index:public.idx_meta_lead_forms_company_page",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_lead_forms",
+        "sha256": "91d748a3087ade523b66022091084acf0541eea3d4a3b893acb24b0eb6c1431e"
+      }
+    },
+    {
+      "key": "index:public.lead_attribution_touchpoints_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "d2b58f5763d4ac548a57ab42dbbd379f1ed51d5c008d16167aec6d3ff4801b04"
+      }
+    },
+    {
+      "key": "index:public.meta_ad_accounts_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "6fd8f9ccc3675f28315e297874598fe4ba5d328b0d392d2a6a8bad017a5a6ac7"
+      }
+    },
+    {
+      "key": "index:public.meta_ads_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ads",
+        "sha256": "d4dfc12f32d5580e386bd14f9b2c104bc4c3f476f657d708d0f3952138c6b331"
+      }
+    },
+    {
+      "key": "index:public.meta_campaigns_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_campaigns",
+        "sha256": "78307fcf393350b4624e223d3a693890076bb3c1242008d5bb32082c9d0c870d"
+      }
+    },
+    {
+      "key": "index:public.meta_lead_forms_pkey",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_lead_forms",
+        "sha256": "8d3f9fbfc5b22925af3af8c4f7c0f862c994bd24ad1e13ab9b5596668498861d"
+      }
+    },
+    {
+      "key": "index:public.uq_lead_attribution_leadgen",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "f3d537f5fa4110cbd15c68ad2ae3a9d26e5d3e50920be144b4a5159fc05127ac"
+      }
+    },
+    {
+      "key": "index:public.uq_meta_ad_accounts_company_account",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "8fafc3a2bfadcc5bff1abcc593a24c862cc6607ba32bdbe02c7446f1207eb200"
+      }
+    },
+    {
+      "key": "index:public.uq_meta_ads_company_ad",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_ads",
+        "sha256": "c0dda4d698b17faf479c9af88c227bd214d5bf5716e0f90d12d6332f9d9e9d0f"
+      }
+    },
+    {
+      "key": "index:public.uq_meta_campaigns_company_campaign",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_campaigns",
+        "sha256": "d819ecd326d2ea17e69ed4e354cbcf7d0f8d2e6da385b1c0485d04369d0f0606"
+      }
+    },
+    {
+      "key": "index:public.uq_meta_lead_forms_company_form",
+      "before": null,
+      "after": {
+        "kind": "index",
+        "owner": "public.meta_lead_forms",
+        "sha256": "e1b9915e2612e5904a87b15997e378e82ff4f72b899934262d2e3955b8e83878"
+      }
+    },
+    {
+      "key": "policy:public.lead_attribution_touchpoints.rls_lead_attribution_touchpoints_tenant",
+      "before": null,
+      "after": {
+        "kind": "policy",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "187f488cbba986f0f5e2b0381841d082412c4df06731ca6dae4428cb09c5f532"
+      }
+    },
+    {
+      "key": "policy:public.meta_ad_accounts.rls_meta_ad_accounts_tenant",
+      "before": null,
+      "after": {
+        "kind": "policy",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "187f488cbba986f0f5e2b0381841d082412c4df06731ca6dae4428cb09c5f532"
+      }
+    },
+    {
+      "key": "policy:public.meta_ads.rls_meta_ads_tenant",
+      "before": null,
+      "after": {
+        "kind": "policy",
+        "owner": "public.meta_ads",
+        "sha256": "187f488cbba986f0f5e2b0381841d082412c4df06731ca6dae4428cb09c5f532"
+      }
+    },
+    {
+      "key": "policy:public.meta_campaigns.rls_meta_campaigns_tenant",
+      "before": null,
+      "after": {
+        "kind": "policy",
+        "owner": "public.meta_campaigns",
+        "sha256": "187f488cbba986f0f5e2b0381841d082412c4df06731ca6dae4428cb09c5f532"
+      }
+    },
+    {
+      "key": "policy:public.meta_lead_forms.rls_meta_lead_forms_tenant",
+      "before": null,
+      "after": {
+        "kind": "policy",
+        "owner": "public.meta_lead_forms",
+        "sha256": "187f488cbba986f0f5e2b0381841d082412c4df06731ca6dae4428cb09c5f532"
+      }
+    },
+    {
+      "key": "relation:private.meta_ad_account_tokens",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "11fa44cdadae6917cea9897451bfd8dcf510f3cb8f8c1503262365895a96090d"
+      }
+    },
+    {
+      "key": "relation:private.meta_leadgen_events",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "11fa44cdadae6917cea9897451bfd8dcf510f3cb8f8c1503262365895a96090d"
+      }
+    },
+    {
+      "key": "relation:public.lead_attribution_touchpoints",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "9b43d63d93ae91b889a1b03b799ff9eb263669c6db034b5aa0cf84394dc43bc3"
+      }
+    },
+    {
+      "key": "relation:public.meta_ad_accounts",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "9b43d63d93ae91b889a1b03b799ff9eb263669c6db034b5aa0cf84394dc43bc3"
+      }
+    },
+    {
+      "key": "relation:public.meta_ads",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "public.meta_ads",
+        "sha256": "9b43d63d93ae91b889a1b03b799ff9eb263669c6db034b5aa0cf84394dc43bc3"
+      }
+    },
+    {
+      "key": "relation:public.meta_campaigns",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "public.meta_campaigns",
+        "sha256": "9b43d63d93ae91b889a1b03b799ff9eb263669c6db034b5aa0cf84394dc43bc3"
+      }
+    },
+    {
+      "key": "relation:public.meta_lead_forms",
+      "before": null,
+      "after": {
+        "kind": "relation",
+        "owner": "public.meta_lead_forms",
+        "sha256": "9b43d63d93ae91b889a1b03b799ff9eb263669c6db034b5aa0cf84394dc43bc3"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_ad_account_tokens:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_ad_account_tokens",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:private.meta_leadgen_events:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "private.meta_leadgen_events",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.lead_attribution_touchpoints:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.lead_attribution_touchpoints",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ad_accounts:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ad_accounts",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_ads:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_ads",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_campaigns:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_campaigns",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:anon:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:authenticated:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:DELETE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:INSERT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:REFERENCES",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:SELECT",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:TRIGGER",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:TRUNCATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    },
+    {
+      "key": "table_grant:public.meta_lead_forms:service_role:UPDATE",
+      "before": null,
+      "after": {
+        "kind": "table_grant",
+        "owner": "public.meta_lead_forms",
+        "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+      }
+    }
+  ],
+  "legacyBefore": {
+    "returns": {
+      "anon": {
+        "error": "permission denied for function han_ingest",
+        "sqlstate": "42501"
+      },
+      "authenticated": {
+        "error": "permission denied for function han_ingest",
+        "sqlstate": "42501"
+      },
+      "idempotency-conflict": {
+        "error": "IDEMPOTENCY_CONFLICT",
+        "sqlstate": "P0001"
+      },
+      "invalid-phone": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      },
+      "malformed-identity": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      },
+      "messenger-new": {
+        "interaction_id": "public.interactions:msg-new",
+        "status": "ACCEPTED"
+      },
+      "messenger-phone-conflict": {
+        "interaction_id": "public.interactions:msg-conflict",
+        "status": "ACCEPTED"
+      },
+      "messenger-replay": {
+        "interaction_id": "public.interactions:msg-new",
+        "status": "PROCESSED"
+      },
+      "website-known-phone": {
+        "interaction_id": "public.interactions:web-known",
+        "status": "ACCEPTED"
+      },
+      "website-new": {
+        "interaction_id": "public.interactions:web-new",
+        "status": "ACCEPTED"
+      },
+      "website-replay": {
+        "interaction_id": "public.interactions:web-new",
+        "status": "PROCESSED"
+      },
+      "zalo-on-shared-api": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      }
+    },
+    "tables": {
+      "private.call_transcripts": [],
+      "private.customer_private_contacts": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Phone owner",
+          "id": "private.customer_private_contacts:+843000000011",
+          "is_verified": false,
+          "normalized_phone": "+843000000011",
+          "phone_country_code": "VN",
+          "raw_phone": "+843000000011",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "private.han_intake_events": [
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "msg-conflict",
+          "external_identity": "7777777777777777:1111111111",
+          "interaction_id": "public.interactions:msg-conflict",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Existing Messenger",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": "+843000000011",
+            "source": {}
+          },
+          "status": "IDENTITY_REVIEW"
+        },
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "msg-new",
+          "external_identity": "7777777777777777:9999999999",
+          "interaction_id": "public.interactions:msg-new",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Fresh Messenger",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": null,
+            "source": {}
+          },
+          "status": "PROCESSED"
+        },
+        {
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "web-known",
+          "external_identity": null,
+          "interaction_id": "public.interactions:web-known",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Website known phone",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": "+843000000011",
+            "source": {}
+          },
+          "status": "IDENTITY_REVIEW"
+        },
+        {
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "web-new",
+          "external_identity": null,
+          "interaction_id": "public.interactions:web-new",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Fresh Website",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": null,
+            "source": {}
+          },
+          "status": "PROCESSED"
+        }
+      ],
+      "private.han_outbox": [],
+      "private.han_rate_buckets": [],
+      "private.han_receipts": [],
+      "private.interaction_raw_contents": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:msg-conflict",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:msg-new",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:web-known",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:web-new",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        }
+      ],
+      "public.ai_analyses": [],
+      "public.appointments": [],
+      "public.audit_logs": [
+        {
+          "action": "OMNICHANNEL_IDENTITY_REVIEW",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "id": "public.audit_logs:public.customers:Existing Messenger:OMNICHANNEL_IDENTITY_REVIEW:::",
+          "metadata": {},
+          "resource_id": "public.customers:Existing Messenger",
+          "resource_type": "Customer",
+          "result": "SUCCESS",
+          "user_id": null
+        },
+        {
+          "action": "OMNICHANNEL_IDENTITY_REVIEW",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Website known phone",
+          "id": "public.audit_logs:public.customers:Website known phone:OMNICHANNEL_IDENTITY_REVIEW:::",
+          "metadata": {},
+          "resource_id": "public.customers:Website known phone",
+          "resource_type": "Customer",
+          "result": "SUCCESS",
+          "user_id": null
+        }
+      ],
+      "public.call_attempts": [],
+      "public.calls": [],
+      "public.care_campaigns": [],
+      "public.care_deliveries": [],
+      "public.care_schedules": [],
+      "public.companies": [
+        {
+          "created_at": "<transaction-time>",
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "name": "Legacy compatibility fixture",
+          "status": "ACTIVE",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.company_members": [],
+      "public.contracts": [],
+      "public.conversations": [
+        {
+          "assigned_to": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "external_conversation_id": "7777777777777777:1111111111",
+          "id": "public.conversations:7777777777777777:1111111111",
+          "last_message_at": "2026-10-30T00:00:00+00:00",
+          "status": "OPEN",
+          "unread_count": 1,
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "assigned_to": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Fresh Messenger",
+          "external_conversation_id": "7777777777777777:9999999999",
+          "id": "public.conversations:7777777777777777:9999999999",
+          "last_message_at": "2026-10-30T00:00:00+00:00",
+          "status": "OPEN",
+          "unread_count": 1,
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.customer_stage_histories": [
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Fresh Messenger",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Fresh Messenger:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        },
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Fresh Website",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Fresh Website:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        },
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Website known phone",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Website known phone:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        }
+      ],
+      "public.customers": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800000",
+          "id": "public.customers:Fresh Messenger",
+          "name": "Fresh Messenger",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800001",
+          "id": "public.customers:Website known phone",
+          "name": "Website known phone",
+          "source": "WEBSITE",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800002",
+          "id": "public.customers:Fresh Website",
+          "name": "Fresh Website",
+          "source": "WEBSITE",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-FIXED-M",
+          "id": "public.customers:Existing Messenger",
+          "name": "Existing Messenger",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-FIXED-P",
+          "id": "public.customers:Phone owner",
+          "name": "Phone owner",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.finance_summaries": [],
+      "public.identities": [
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "external_id": "7777777777777777:1111111111",
+          "id": "public.identities:7777777777777777:1111111111",
+          "metadata": {},
+          "updated_at": "<transaction-time>",
+          "verified": false
+        },
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Fresh Messenger",
+          "external_id": "7777777777777777:9999999999",
+          "id": "public.identities:7777777777777777:9999999999",
+          "metadata": {},
+          "updated_at": "<transaction-time>",
+          "verified": false
+        }
+      ],
+      "public.installations": [],
+      "public.interactions": [
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": "public.conversations:7777777777777777:1111111111",
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Existing Messenger",
+          "direction": "INBOUND",
+          "external_ref": "msg-conflict",
+          "id": "public.interactions:msg-conflict",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": "public.conversations:7777777777777777:9999999999",
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Fresh Messenger",
+          "direction": "INBOUND",
+          "external_ref": "msg-new",
+          "id": "public.interactions:msg-new",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": null,
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Fresh Website",
+          "direction": "INBOUND",
+          "external_ref": "web-new",
+          "id": "public.interactions:web-new",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": null,
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Website known phone",
+          "direction": "INBOUND",
+          "external_ref": "web-known",
+          "id": "public.interactions:web-known",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        }
+      ],
+      "public.openai_realtime_events": [],
+      "public.operations_outbox": [],
+      "public.orders": [],
+      "public.outbound_deliveries": [],
+      "public.payment_transactions": [],
+      "public.price_calculations": [],
+      "public.pricing_policies": [],
+      "public.production_orders": [],
+      "public.response_sla_windows": [],
+      "public.sales_style_profiles": [],
+      "public.survey_photo_operations": [],
+      "public.surveys": [],
+      "public.user_profiles": [],
+      "public.voice_call_intakes": [],
+      "public.voice_dispatch_commands": [],
+      "public.voice_media_jobs": [],
+      "public.voice_provider_integrations": [],
+      "public.voice_webhook_events": [],
+      "public.warranty_tickets": []
+    }
+  },
+  "legacyAfter": {
+    "returns": {
+      "anon": {
+        "error": "permission denied for function han_ingest",
+        "sqlstate": "42501"
+      },
+      "authenticated": {
+        "error": "permission denied for function han_ingest",
+        "sqlstate": "42501"
+      },
+      "idempotency-conflict": {
+        "error": "IDEMPOTENCY_CONFLICT",
+        "sqlstate": "P0001"
+      },
+      "invalid-phone": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      },
+      "malformed-identity": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      },
+      "messenger-new": {
+        "interaction_id": "public.interactions:msg-new",
+        "status": "ACCEPTED"
+      },
+      "messenger-phone-conflict": {
+        "interaction_id": "public.interactions:msg-conflict",
+        "status": "ACCEPTED"
+      },
+      "messenger-replay": {
+        "interaction_id": "public.interactions:msg-new",
+        "status": "PROCESSED"
+      },
+      "website-known-phone": {
+        "interaction_id": "public.interactions:web-known",
+        "status": "ACCEPTED"
+      },
+      "website-new": {
+        "interaction_id": "public.interactions:web-new",
+        "status": "ACCEPTED"
+      },
+      "website-replay": {
+        "interaction_id": "public.interactions:web-new",
+        "status": "PROCESSED"
+      },
+      "zalo-on-shared-api": {
+        "error": "INVALID_REQUEST",
+        "sqlstate": "P0001"
+      }
+    },
+    "tables": {
+      "private.call_transcripts": [],
+      "private.customer_private_contacts": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Phone owner",
+          "id": "private.customer_private_contacts:+843000000011",
+          "is_verified": false,
+          "normalized_phone": "+843000000011",
+          "phone_country_code": "VN",
+          "raw_phone": "+843000000011",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "private.han_intake_events": [
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "msg-conflict",
+          "external_identity": "7777777777777777:1111111111",
+          "interaction_id": "public.interactions:msg-conflict",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Existing Messenger",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": "+843000000011",
+            "source": {}
+          },
+          "status": "IDENTITY_REVIEW"
+        },
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "msg-new",
+          "external_identity": "7777777777777777:9999999999",
+          "interaction_id": "public.interactions:msg-new",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Fresh Messenger",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": null,
+            "source": {}
+          },
+          "status": "PROCESSED"
+        },
+        {
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "web-known",
+          "external_identity": null,
+          "interaction_id": "public.interactions:web-known",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Website known phone",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": "+843000000011",
+            "source": {}
+          },
+          "status": "IDENTITY_REVIEW"
+        },
+        {
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "event_key": "web-new",
+          "external_identity": null,
+          "interaction_id": "public.interactions:web-new",
+          "payload": {
+            "content": "Synthetic content",
+            "name": "Fresh Website",
+            "occurred_at": "2026-10-30T00:00:00+00:00",
+            "phone": null,
+            "source": {}
+          },
+          "status": "PROCESSED"
+        }
+      ],
+      "private.han_outbox": [],
+      "private.han_rate_buckets": [],
+      "private.han_receipts": [],
+      "private.interaction_raw_contents": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:msg-conflict",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:msg-new",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:web-known",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "interaction_id": "public.interactions:web-new",
+          "raw_content": "Synthetic content",
+          "raw_payload": {},
+          "source_metadata": {}
+        }
+      ],
+      "public.ai_analyses": [],
+      "public.appointments": [],
+      "public.audit_logs": [
+        {
+          "action": "OMNICHANNEL_IDENTITY_REVIEW",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "id": "public.audit_logs:public.customers:Existing Messenger:OMNICHANNEL_IDENTITY_REVIEW:::",
+          "metadata": {},
+          "resource_id": "public.customers:Existing Messenger",
+          "resource_type": "Customer",
+          "result": "SUCCESS",
+          "user_id": null
+        },
+        {
+          "action": "OMNICHANNEL_IDENTITY_REVIEW",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Website known phone",
+          "id": "public.audit_logs:public.customers:Website known phone:OMNICHANNEL_IDENTITY_REVIEW:::",
+          "metadata": {},
+          "resource_id": "public.customers:Website known phone",
+          "resource_type": "Customer",
+          "result": "SUCCESS",
+          "user_id": null
+        }
+      ],
+      "public.call_attempts": [],
+      "public.calls": [],
+      "public.care_campaigns": [],
+      "public.care_deliveries": [],
+      "public.care_schedules": [],
+      "public.companies": [
+        {
+          "created_at": "<transaction-time>",
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "name": "Legacy compatibility fixture",
+          "status": "ACTIVE",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.company_members": [],
+      "public.contracts": [],
+      "public.conversations": [
+        {
+          "assigned_to": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "external_conversation_id": "7777777777777777:1111111111",
+          "id": "public.conversations:7777777777777777:1111111111",
+          "last_message_at": "2026-10-30T00:00:00+00:00",
+          "status": "OPEN",
+          "unread_count": 1,
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "assigned_to": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Fresh Messenger",
+          "external_conversation_id": "7777777777777777:9999999999",
+          "id": "public.conversations:7777777777777777:9999999999",
+          "last_message_at": "2026-10-30T00:00:00+00:00",
+          "status": "OPEN",
+          "unread_count": 1,
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.customer_stage_histories": [
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Fresh Messenger",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Fresh Messenger:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        },
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Fresh Website",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Fresh Website:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        },
+        {
+          "actor_type": "SYSTEM",
+          "changed_at": "<transaction-time>",
+          "changed_by_user_id": null,
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "customer_id": "public.customers:Website known phone",
+          "from_stage": null,
+          "id": "public.customer_stage_histories:public.customers:Website known phone:::LEAD_NEW:OMNICHANNEL_INTAKE",
+          "reason": "OMNICHANNEL_INTAKE",
+          "source_ref": null,
+          "to_stage": "LEAD_NEW"
+        }
+      ],
+      "public.customers": [
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800000",
+          "id": "public.customers:Fresh Messenger",
+          "name": "Fresh Messenger",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800001",
+          "id": "public.customers:Website known phone",
+          "name": "Website known phone",
+          "source": "WEBSITE",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-800002",
+          "id": "public.customers:Fresh Website",
+          "name": "Fresh Website",
+          "source": "WEBSITE",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-FIXED-M",
+          "id": "public.customers:Existing Messenger",
+          "name": "Existing Messenger",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        },
+        {
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_code": "KH-FIXED-P",
+          "id": "public.customers:Phone owner",
+          "name": "Phone owner",
+          "source": "FACEBOOK",
+          "stage": "LEAD_NEW",
+          "updated_at": "<transaction-time>"
+        }
+      ],
+      "public.finance_summaries": [],
+      "public.identities": [
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Existing Messenger",
+          "external_id": "7777777777777777:1111111111",
+          "id": "public.identities:7777777777777777:1111111111",
+          "metadata": {},
+          "updated_at": "<transaction-time>",
+          "verified": false
+        },
+        {
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "created_at": "<transaction-time>",
+          "customer_id": "public.customers:Fresh Messenger",
+          "external_id": "7777777777777777:9999999999",
+          "id": "public.identities:7777777777777777:9999999999",
+          "metadata": {},
+          "updated_at": "<transaction-time>",
+          "verified": false
+        }
+      ],
+      "public.installations": [],
+      "public.interactions": [
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": "public.conversations:7777777777777777:1111111111",
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Existing Messenger",
+          "direction": "INBOUND",
+          "external_ref": "msg-conflict",
+          "id": "public.interactions:msg-conflict",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "FACEBOOK",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": "public.conversations:7777777777777777:9999999999",
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Fresh Messenger",
+          "direction": "INBOUND",
+          "external_ref": "msg-new",
+          "id": "public.interactions:msg-new",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": null,
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Fresh Website",
+          "direction": "INBOUND",
+          "external_ref": "web-new",
+          "id": "public.interactions:web-new",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        },
+        {
+          "actor_type": "CUSTOMER",
+          "actor_user_id": null,
+          "channel": "WEBSITE",
+          "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "conversation_id": null,
+          "created_at": "2026-10-30T00:00:00+00:00",
+          "customer_id": "public.customers:Website known phone",
+          "direction": "INBOUND",
+          "external_ref": "web-known",
+          "id": "public.interactions:web-known",
+          "sanitization_status": "SUCCEEDED",
+          "sanitized_at": "<transaction-time>",
+          "sanitized_content": "Synthetic content",
+          "sanitizer_version": "han-bounded-v2",
+          "type": "MESSAGE"
+        }
+      ],
+      "public.openai_realtime_events": [],
+      "public.operations_outbox": [],
+      "public.orders": [],
+      "public.outbound_deliveries": [],
+      "public.payment_transactions": [],
+      "public.price_calculations": [],
+      "public.pricing_policies": [],
+      "public.production_orders": [],
+      "public.response_sla_windows": [],
+      "public.sales_style_profiles": [],
+      "public.survey_photo_operations": [],
+      "public.surveys": [],
+      "public.user_profiles": [],
+      "public.voice_call_intakes": [],
+      "public.voice_dispatch_commands": [],
+      "public.voice_media_jobs": [],
+      "public.voice_provider_integrations": [],
+      "public.voice_webhook_events": [],
+      "public.warranty_tickets": []
+    }
+  },
+  "ledgerUnchanged": true,
+  "fullChainSharedDefinitionsUnchanged": true,
+  "meta": {
+    "ok": true,
+    "result": {
+      "ingest": {
+        "status": "ACCEPTED",
+        "customer_id": "b90896d8-a53c-4b2a-89c5-a3e2b9e3c5ce",
+        "interaction_id": "0313feae-72c2-4a94-ba80-8373b7007a6a",
+        "is_duplicate_phone": false,
+        "phone_match_status": "NEW_PHONE"
+      },
+      "status": "PROCESSED",
+      "campaign": "Synthetic campaign"
+    },
+    "sla_count": 0,
+    "customer_count": 1,
+    "interaction_count": 1
+  },
+  "pair": {
+    "ok": true,
+    "result": {
+      "events": [
+        {
+          "lead_id": "88001",
+          "campaign": "Synthetic campaign",
+          "duplicate": false
+        },
+        {
+          "lead_id": "88002",
+          "campaign": "Campaign B",
+          "duplicate": true
+        }
+      ],
+      "outbox": 0,
+      "replay": {
+        "status": "ALREADY_PROCESSED"
+      },
+      "duplicate": true,
+      "conversations": 0,
+      "same_customer": true
+    },
+    "sla_count": 0,
+    "customer_count": 1,
+    "interaction_count": 2
+  }
+}

@@ -81,11 +81,13 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         sql(`UPDATE private.meta_leadgen_events SET lease_until=NULL WHERE leadgen_id='10000';`);
         assert.equal(sql(`SELECT public.finalize_meta_leadgen_event(${q(company)},'10000',${q(reclaimed.claim_token)},'FAILED');`), 'f', 'a missing lease never authorizes finalization');
         assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE leadgen_id='10000';`), 'PROCESSING');
+        assert.throws(()=>sql(`SELECT public.ingest_meta_leadgen_event(${q(company)},'10000',${q(reclaimed.claim_token)},'{}');`),/Command failed/,'a missing lease also denies intake');
 
         const protectedRpcs = [
             'claim_meta_leadgen_event(uuid,text,text,text,text,timestamptz)',
             'finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text)',
             'release_meta_ad_account_sync_lease(uuid,text,uuid,text,text)',
+            'ingest_meta_leadgen_event(uuid,text,uuid,jsonb)',
         ];
         for (const signature of protectedRpcs) {
             for (const role of ['anon', 'authenticated']) {
@@ -155,6 +157,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         process.env.META_APP_SECRET = appSecret;
         process.env.META_PAGE_TEST_TOKEN = 'dummy-page-access-token';
         process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN' }]);
+        sql(`INSERT INTO public.ai_brain_shadow_settings(company_id,channel,enabled) VALUES(${q(company)},'MESSENGER',true);`);
         process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
         process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy-service-key';
         globalThis.fetch = async (input, init) => {
@@ -214,6 +217,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal((await webhook('20001')).status, 200);
         assert.equal(sql(`SELECT count(*) FROM public.ai_brain_live_canary_allowlist WHERE company_id=${q(company)};`), '0', 'Lead IDs must never become Messenger recipients');
         assert.equal(sql(`SELECT count(*) FROM public.response_sla_windows WHERE company_id=${q(company)};`), '0', 'Lead Ads do not open a Messenger reply SLA');
+        for(const table of ['public.conversations','public.identities','public.ai_brain_shadow_runs','public.ai_brain_live_deliveries','public.ai_brain_live_settings','private.han_outbox','public.care_deliveries']) {
+            assert.equal(sql(`SELECT count(*) FROM ${table} WHERE company_id=${q(company)};`),'0',`Lead Ads cannot create messaging/AI side effects in ${table}`);
+        }
         assert.equal(sql(`SELECT count(*) FROM private.han_intake_events WHERE company_id=${q(company)} AND event_key=${q(page+':leadgen:20001')};`), '1');
         assert.equal(sql(`SELECT count(*) FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)} AND meta_leadgen_id='20001';`), '1');
 
