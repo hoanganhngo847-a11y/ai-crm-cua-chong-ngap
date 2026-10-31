@@ -17,7 +17,7 @@ import { inspectTransactionEnvelope, sqlSha256 } from './ledger-readiness';
 export const TARGET_STAGING_PROJECT = 'qmhfmgkymjgoevwmkidm';
 export const TARGET_POSTGRES_VERSION = '17.11';
 export const EXPECTED_CANONICAL_LEDGER_COUNT = 21;
-export const CURRENT_SOURCE_COMMIT = '25e8f21c896fc2acb61f041f464d077c52793271';
+export const CURRENT_SOURCE_COMMIT = 'e51a5989143582af0885ba5ee26644a68b388995';
 
 export const META_SOURCES = [
   '20261030090000_meta_ads_lead_attribution.sql',
@@ -50,7 +50,7 @@ export interface SelectiveExecutorOptions {
   targetProjectRef?: string;
   releaseId?: string;
   sourceCommit?: string;
-  simulatedInjectedError?: 'NONE' | 'WRONG_PROJECT' | 'SOURCE_3' | 'POST_DDL';
+  simulatedInjectedError?: 'NONE' | 'WRONG_PROJECT' | 'SOURCE_3' | 'POST_DDL' | 'WRONG_VERSION';
   sourcesOverride?: { file: string; sql: string }[];
 }
 
@@ -118,6 +118,12 @@ DECLARE
   v_expected_project text := ${quote(TARGET_STAGING_PROJECT)};
   v_release_id text := ${quote(releaseId)};
 BEGIN
+  -- 0. Server version enforcement: Must be PostgreSQL 17.x (baseline target 17.11)
+  IF ${options.simulatedInjectedError === 'WRONG_VERSION' ? 'TRUE' : "current_setting('server_version_num')::integer < 170000 OR current_setting('server_version_num')::integer >= 180000"} THEN
+    RAISE EXCEPTION 'POSTGRES_VERSION_INCOMPATIBLE: Server version % (num: %) does not match required PostgreSQL 17.x baseline (target 17.11)',
+      current_setting('server_version'), current_setting('server_version_num');
+  END IF;
+
   -- 1. Project identity guard
   IF v_target_project IS DISTINCT FROM v_expected_project THEN
     RAISE EXCEPTION 'TARGET_PROJECT_MISMATCH: Target project % does not match expected staging project %', v_target_project, v_expected_project;
@@ -372,8 +378,337 @@ FROM meta_21_rows;
     releaseId,
     sourceCommit,
     expectedLedgerCount: EXPECTED_CANONICAL_LEDGER_COUNT,
-    bundleSha256: sqlSha256(sql),
+    bundleSha256: sqlSha256(sourcesSql),
+    packageSha256: sqlSha256(sql),
     sources,
   };
 }
 
+// ============================================================================
+// 1. TARGET PROJECT & CONNECTION VERIFICATION (FAIL-CLOSED, NO LOGGED SECRETS)
+// ============================================================================
+export interface TargetProjectVerificationResult {
+  verified: boolean;
+  projectRef: string;
+  hostname: string;
+  isLocalTest: boolean;
+  sanitizedConnectionInfo: string;
+}
+
+export function verifyTargetProjectConnection(
+  connectionString: string,
+  options: { allowLocalTest?: boolean; expectedProjectRef?: string } = {}
+): TargetProjectVerificationResult {
+  const expectedRef = options.expectedProjectRef ?? TARGET_STAGING_PROJECT;
+  assert.ok(connectionString, 'Connection string is required');
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(connectionString);
+  } catch {
+    throw new Error('TARGET_VERIFICATION_FAILED: Invalid connection URL format. Zero credentials logged.');
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const username = decodeURIComponent(parsedUrl.username).toLowerCase();
+  // Sanitize connection info without password or secrets
+  const sanitizedInfo = `${username ? `${username.split('.')[0]}@` : ''}${hostname}:${parsedUrl.port || '5432'}${parsedUrl.pathname}`;
+
+  const isLocalHost = ['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(hostname);
+  if (isLocalHost) {
+    if (!options.allowLocalTest) {
+      throw new Error(
+        `TARGET_PROJECT_MISMATCH: Connection to local host ${hostname} is not permitted for hosted staging execution (expected ${expectedRef}).`
+      );
+    }
+    return {
+      verified: true,
+      projectRef: 'local-test-fixture',
+      hostname,
+      isLocalTest: true,
+      sanitizedConnectionInfo: sanitizedInfo,
+    };
+  }
+
+  let detectedRef: string | null = null;
+  // Supabase direct connection format: db.<ref>.supabase.co
+  const hostMatch = hostname.match(/^db\.([a-z0-9_-]+)\.supabase\.co$/);
+  if (hostMatch) {
+    detectedRef = hostMatch[1];
+  } else if (username.includes('.')) {
+    // Supabase pooler format: postgres.<ref>
+    const userParts = username.split('.');
+    detectedRef = userParts[1];
+  }
+
+  if (!detectedRef) {
+    throw new Error(
+      `TARGET_VERIFICATION_FAILED: Could not extract valid Supabase project ref from host or username at ${sanitizedInfo}. Fail closed.`
+    );
+  }
+
+  if (detectedRef !== expectedRef) {
+    throw new Error(
+      `TARGET_PROJECT_MISMATCH: Target project ref ${detectedRef} at ${sanitizedInfo} does not match expected staging project ref ${expectedRef}. Fail closed.`
+    );
+  }
+
+  return {
+    verified: true,
+    projectRef: detectedRef,
+    hostname,
+    isLocalTest: false,
+    sanitizedConnectionInfo: sanitizedInfo,
+  };
+}
+
+// ============================================================================
+// 2. POSTGRESQL VERSION ENFORCEMENT
+// ============================================================================
+export function verifyPostgresServerVersion(serverVersion: string, serverVersionNum: number) {
+  if (serverVersionNum < 170000 || serverVersionNum >= 180000) {
+    throw new Error(
+      `POSTGRES_VERSION_INCOMPATIBLE: Server version ${serverVersion} (num: ${serverVersionNum}) does not match required PostgreSQL 17.x baseline (target ${TARGET_POSTGRES_VERSION}).`
+    );
+  }
+  return true;
+}
+
+// ============================================================================
+// 3. UNCERTAIN COMMIT RECOVERY STATE MACHINE
+// ============================================================================
+export type UncertainRecoveryStatus =
+  | 'COMMITTED_VERIFIED'
+  | 'UNCOMMITTED_CLEAN'
+  | 'CORRUPTED_INCONSISTENT';
+
+export interface ReleaseProbeDetails {
+  registryTableExists: boolean;
+  releaseRecordExists: boolean;
+  executionStatus: string | null;
+  bundleShaMatch: boolean;
+  postconditionsVerified: boolean;
+  metaTablesCount: number;
+  expectedMetaTablesCount: number;
+  canonicalLedgerCount: number;
+  expectedCanonicalLedgerCount: number;
+  fencingActive: boolean;
+}
+
+export interface ReleaseProbeResult {
+  status: UncertainRecoveryStatus;
+  releaseId: string;
+  details: ReleaseProbeDetails;
+  recommendation: 'DO_NOT_RERUN' | 'SAFE_TO_EXECUTE' | 'HALT_AND_INVESTIGATE';
+  diagnosticSummary: string;
+}
+
+export const PROBE_RELEASE_SQL = (releaseId: string) => `
+DO $probe$
+DECLARE
+  v_rec jsonb := NULL;
+  v_reg_exists boolean := false;
+  v_res jsonb;
+BEGIN
+  IF to_regclass('private.selective_feature_releases') IS NOT NULL THEN
+    v_reg_exists := true;
+    EXECUTE 'SELECT row_to_json(r)::jsonb FROM private.selective_feature_releases r WHERE release_id = ' || quote_literal(${quote(releaseId)}) INTO v_rec;
+  END IF;
+  SELECT jsonb_build_object(
+    'registry_table_exists', v_reg_exists,
+    'release_record', v_rec,
+    'meta_tables_count', (
+      SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname IN ('public', 'private')
+        AND c.relname IN ('meta_ad_accounts', 'meta_campaigns', 'meta_ads', 'meta_lead_forms',
+                          'lead_attribution_touchpoints', 'meta_ad_account_tokens', 'meta_leadgen_events')
+    ),
+    'canonical_ledger_count', (
+      SELECT count(*) FROM supabase_migrations.schema_migrations
+    ),
+    'fence_trigger_exists', EXISTS (
+      SELECT 1 FROM pg_trigger WHERE tgname = 'trg_guard_selective_release_ledger'
+    )
+  ) INTO v_res;
+  PERFORM set_config('meta_probe.result', v_res::text, false);
+END $probe$;
+SELECT current_setting('meta_probe.result');
+`;
+
+export function evaluateReleaseProbe(
+  rawProbeResult: {
+    registry_table_exists: boolean;
+    release_record: Record<string, unknown> | null;
+    meta_tables_count: number | string;
+    canonical_ledger_count: number | string;
+    fence_trigger_exists: boolean;
+  },
+  releaseId: string,
+  expectedBundleSha256: string
+): ReleaseProbeResult {
+  const rec = rawProbeResult.release_record;
+  const bundleShaMatch = rec ? rec.bundle_sha256 === expectedBundleSha256 : false;
+  const postconditionsVerified = rec ? rec.postconditions_sha256 === sqlSha256('POSTCONDITIONS_VERIFIED') : false;
+  const executionCompleted = rec ? rec.execution_status === 'COMPLETED' : false;
+
+  const details: ReleaseProbeDetails = {
+    registryTableExists: rawProbeResult.registry_table_exists,
+    releaseRecordExists: rec !== null,
+    executionStatus: rec ? String(rec.execution_status) : null,
+    bundleShaMatch,
+    postconditionsVerified,
+    metaTablesCount: Number(rawProbeResult.meta_tables_count),
+    expectedMetaTablesCount: 7,
+    canonicalLedgerCount: Number(rawProbeResult.canonical_ledger_count),
+    expectedCanonicalLedgerCount: EXPECTED_CANONICAL_LEDGER_COUNT,
+    fencingActive: rawProbeResult.fence_trigger_exists,
+  };
+
+  // Case 1: Release record exists and all conditions match -> COMMITTED_VERIFIED
+  if (
+    details.releaseRecordExists &&
+    executionCompleted &&
+    bundleShaMatch &&
+    postconditionsVerified &&
+    details.metaTablesCount === 7 &&
+    details.canonicalLedgerCount === EXPECTED_CANONICAL_LEDGER_COUNT &&
+    details.fencingActive
+  ) {
+    return {
+      status: 'COMMITTED_VERIFIED',
+      releaseId,
+      details,
+      recommendation: 'DO_NOT_RERUN',
+      diagnosticSummary: `Release ${releaseId} was committed and fully verified. Zero DDL re-execution required.`,
+    };
+  }
+
+  // Case 2: Clean slate (transaction rolled back or never started)
+  if (
+    !details.releaseRecordExists &&
+    details.metaTablesCount === 0 &&
+    details.canonicalLedgerCount === EXPECTED_CANONICAL_LEDGER_COUNT
+  ) {
+    return {
+      status: 'UNCOMMITTED_CLEAN',
+      releaseId,
+      details,
+      recommendation: 'SAFE_TO_EXECUTE',
+      diagnosticSummary: `Release ${releaseId} was not committed. Database is in a clean pre-deployment state. Safe to re-run.`,
+    };
+  }
+
+  // Case 3: Inconsistent or corrupted state -> FAIL CLOSED
+  return {
+    status: 'CORRUPTED_INCONSISTENT',
+    releaseId,
+    details,
+    recommendation: 'HALT_AND_INVESTIGATE',
+    diagnosticSummary: `Release ${releaseId} is in an inconsistent state: releaseRecordExists=${details.releaseRecordExists}, metaTablesCount=${details.metaTablesCount}/7, canonicalLedgerCount=${details.canonicalLedgerCount}/${EXPECTED_CANONICAL_LEDGER_COUNT}, bundleShaMatch=${bundleShaMatch}. Rerunning migrations is BLOCKED.`,
+  };
+}
+
+// ============================================================================
+// 4. CANONICAL RECONCILIATION PACKAGE (DISARMS FENCE & RECORDS META MIGRATIONS)
+// ============================================================================
+export function buildCanonicalReconciliationPackage(options: {
+  releaseId?: string;
+  targetProjectRef?: string;
+} = {}) {
+  const targetProject = options.targetProjectRef ?? TARGET_STAGING_PROJECT;
+  const releaseId = options.releaseId ?? 'meta-ads-20261031-r1';
+
+  // Read the 5 canonical source files and verify their pinned hashes
+  const metaFiles = META_SOURCES.map((file) => {
+    const sql = readFileSync('supabase/migrations/' + file, 'utf8');
+    const sha256 = sqlSha256(sql);
+    assert.equal(sha256, PINNED_SOURCE_HASHES[file], `Pinned hash mismatch for ${file}`);
+    const version = file.slice(0, 14);
+    const name = file.slice(15, -4);
+    return { file, version, name, sql, sha256 };
+  });
+
+  const reconciliationSql = `
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SELECT pg_advisory_xact_lock(hashtextextended('meta-ads-selective-release', 0));
+LOCK TABLE supabase_migrations.schema_migrations IN EXCLUSIVE MODE;
+
+DO $reconcile_preflight$
+BEGIN
+  -- 1. Verify release exists and was COMPLETED
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_tables WHERE schemaname = 'private' AND tablename = 'selective_feature_releases'
+  ) THEN
+    RAISE EXCEPTION 'RECONCILIATION_FAILED: private.selective_feature_releases does not exist';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM private.selective_feature_releases
+    WHERE release_id = ${quote(releaseId)} AND execution_status = 'COMPLETED'
+  ) THEN
+    RAISE EXCEPTION 'RECONCILIATION_FAILED: Release % not found or not in COMPLETED status', ${quote(releaseId)};
+  END IF;
+
+  -- 2. Verify not already reconciled
+  IF EXISTS (
+    SELECT 1 FROM private.selective_feature_releases
+    WHERE release_id = ${quote(releaseId)} AND reconciled_to_canonical
+  ) THEN
+    RAISE EXCEPTION 'ALREADY_RECONCILED: Release % has already been reconciled to canonical', ${quote(releaseId)};
+  END IF;
+
+  -- 3. Verify exactly 21 canonical records currently in ledger
+  IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> ${EXPECTED_CANONICAL_LEDGER_COUNT} THEN
+    RAISE EXCEPTION 'CANONICAL_LEDGER_COUNT_MISMATCH: Expected ${EXPECTED_CANONICAL_LEDGER_COUNT} records before reconciliation, found %',
+      (SELECT count(*) FROM supabase_migrations.schema_migrations);
+  END IF;
+END $reconcile_preflight$;
+
+-- 1. Mark release reconciled in private registry
+UPDATE private.selective_feature_releases
+SET reconciled_to_canonical = true,
+    reconciled_at = clock_timestamp(),
+    recovery_evidence = recovery_evidence || jsonb_build_object(
+      'reconciled', true,
+      'reconciliation_canonical_migrations_added', 5,
+      'reconciliation_timestamp', clock_timestamp()
+    )
+WHERE release_id = ${quote(releaseId)};
+
+-- 2. Disarm ordinary migration writer fence trigger
+DROP TRIGGER IF EXISTS trg_guard_selective_release_ledger ON supabase_migrations.schema_migrations;
+DROP FUNCTION IF EXISTS supabase_migrations.guard_selective_release_ledger();
+
+-- 3. Record the 5 already-executed Meta migrations into canonical schema_migrations
+${metaFiles
+  .map(
+    (m) => `
+INSERT INTO supabase_migrations.schema_migrations (version, name, statements)
+VALUES (${quote(m.version)}, ${quote(m.name)}, ARRAY[${quote(m.sql)}]);`
+  )
+  .join('\n')}
+
+DO $reconcile_postflight$
+BEGIN
+  -- Verify ledger now contains 21 + 5 = 26 records
+  IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> (${EXPECTED_CANONICAL_LEDGER_COUNT} + 5) THEN
+    RAISE EXCEPTION 'RECONCILIATION_POST_COUNT_MISMATCH: Expected 26 canonical ledger records, found %',
+      (SELECT count(*) FROM supabase_migrations.schema_migrations);
+  END IF;
+END $reconcile_postflight$;
+
+SELECT 'META_RECONCILIATION_SUCCESSFUL' AS status,
+       (SELECT count(*) FROM supabase_migrations.schema_migrations) AS total_canonical_records,
+       (SELECT reconciled_to_canonical FROM private.selective_feature_releases WHERE release_id = ${quote(releaseId)}) AS reconciled;
+
+COMMIT;
+`;
+
+  return {
+    sql: reconciliationSql,
+    metaFiles,
+    releaseId,
+    targetProject,
+  };
+}
