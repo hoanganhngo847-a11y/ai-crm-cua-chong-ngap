@@ -144,8 +144,8 @@ async function verifyCanonicalInboxFixture(
   );
   assert.strictEqual(
     row.external_conversation_id,
-    'fb-conv-test-001',
-    `external_conversation_id must be canonical 'fb-conv-test-001' (received '${row.external_conversation_id}').`
+    '987654321012345:880000000000031',
+    `external_conversation_id must be canonical '987654321012345:880000000000031' (received '${row.external_conversation_id}').`
   );
   assert.strictEqual(
     row.status,
@@ -210,7 +210,7 @@ async function main() {
       company_id: TEST_COMPANY_ID_2,
       customer_id: DIRTY_STALE_CUSTOMER_ID, // CORRUPTED: canonical is CANONICAL_CUSTOMER_ID
       channel: 'ZALO', // CORRUPTED: canonical is 'FACEBOOK'
-      external_conversation_id: 'corrupt_stale_ext_id_999', // CORRUPTED: canonical is 'fb-conv-test-001'
+      external_conversation_id: 'corrupt_stale_ext_id_999', // CORRUPTED: canonical is '987654321012345:880000000000031'
       status: 'CLOSED', // CORRUPTED: canonical is 'OPEN'
       unread_count: 42, // CORRUPTED: canonical is 0
     });
