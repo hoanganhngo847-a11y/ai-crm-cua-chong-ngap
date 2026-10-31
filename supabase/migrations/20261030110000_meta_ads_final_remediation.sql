@@ -56,7 +56,8 @@ BEGIN
     SELECT * INTO v_event FROM private.meta_leadgen_events
         WHERE company_id=p_company_id AND leadgen_id=p_leadgen_id FOR UPDATE;
     IF NOT FOUND OR v_event.status<>'PROCESSING' OR v_event.claim_token IS DISTINCT FROM p_claim_token
-        OR v_event.lease_until<=clock_timestamp() OR p_claim_token IS NULL THEN RETURN false; END IF;
+        OR v_event.lease_until IS NULL OR v_event.lease_until<=clock_timestamp()
+        OR p_claim_token IS NULL THEN RETURN false; END IF;
     IF p_status IS NULL OR p_status NOT IN ('PROCESSED','FAILED') THEN RAISE EXCEPTION 'INVALID_FINAL_STATUS'; END IF;
     IF p_status='PROCESSED' AND NOT EXISTS (
         SELECT 1 FROM public.lead_attribution_touchpoints t WHERE t.company_id=p_company_id

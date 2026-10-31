@@ -236,11 +236,11 @@ Trước khi ra quyết định, Chủ sở hữu cần câu trả lời rõ rà
 ### Gói 13: BATCH-13-META-ADS-INTEGRATION (5 mục)
 - **Danh sách ID:** `M117-S008.ALTER1.target1`, `M117-S008.ALTER2.target1`, `M118-S010.target1`, `M118-S014.target1`, `M118-S033.target1`.
 - **Hành động kỹ thuật:**
-  1. Chuyển Access Token tài khoản quảng cáo Facebook vào Vault bí mật, xóa cột token văn bản rõ trên bảng công khai để bảo vệ ngân sách quảng cáo và tránh bị chiếm quyền tài khoản.
+  1. Chuyển nguyên ciphertext Access Token và hạn dùng từ bảng công khai vào bảng riêng `private.meta_ad_account_tokens` (không phải Supabase Vault). Migration khóa hai bảng, dừng và rollback khi nguồn thiếu cột, token có định dạng không hợp lệ, dữ liệu đích xung đột hoặc bản sao thiếu/sai; chỉ xóa hai cột cũ sau khi từng ciphertext và hạn dùng khớp chính xác. Phải xác minh giải mã bằng khóa hiện hành/cũ trước khi triển khai; kiểm tra định dạng SQL không chứng minh ciphertext giải mã được.
   2. Cập nhật hàm tiếp nhận Lead từ Facebook Lead Ads (`claim_meta_leadgen_event` và `finalize_meta_leadgen_event`): Khi phụ huynh điền biểu mẫu trên Facebook, dữ liệu lập tức đổ về CRM, tự động tạo khách hàng mới hoặc cập nhật lịch sử nếu trùng số điện thoại, và gắn nhãn chiến dịch quảng cáo tương ứng.
   3. Giải phóng khóa đồng bộ tài khoản quảng cáo (`release_meta_ad_account_sync_lease`) để tránh xung đột dữ liệu.
 - **Tầm quan trọng:** Đây là mục tiêu chính của nhánh `meta_ads_integration`.
-- **Khuyến nghị:** **REPLACE (CHẤP THUẬN BẮT BUỘC ĐỂ KÍCH HOẠT META ADS)**.
+- **Phạm vi xử lý hiện tại:** Chỉ 5 mục Meta Ads và lỗi CI trực tiếp liên quan, theo [báo cáo safe remediation](META_ADS_SAFE_REMEDIATION_REPORT.md). Không yêu cầu phê duyệt toàn bộ 160 mục, không cấp quyền chạy migration hay deploy staging/production. PR giữ Open + Draft.
 
 ---
 
@@ -256,7 +256,7 @@ Trước khi ra quyết định, Chủ sở hữu cần câu trả lời rõ rà
 2. **Cấu hình Supabase Vault Secrets:** Trước khi kích hoạt Gói 10 (Bộ lập lịch Messenger) và Gói 13 (Meta Ads), kỹ sư vận hành phải nạp đầy đủ các biến môi trường vào Supabase Vault:
    - `ai_brain_live_messenger_endpoint`
    - `ai_brain_live_messenger_cron_secret`
-   - Khóa giải mã Token Meta Ads.
+   - Riêng khóa giải mã Token Meta Ads: dùng secret môi trường server `META_TOKEN_ENCRYPTION_KEY` và khóa cũ `META_PREVIOUS_TOKEN_ENCRYPTION_KEY` khi cần; không nạp khóa vào SQL, Git hoặc gửi ra trình duyệt. Hai secret Messenger trên không phải dependency cấu hình của 5 mục Meta Ads này.
 3. **Sao lưu dữ liệu trước khi chạy:** Thực hiện sao lưu snapshot đầy đủ của cơ sở dữ liệu Staging trước khi bấm chạy bất kỳ gói nào từ Gói 2 đến Gói 13.
 
 ---

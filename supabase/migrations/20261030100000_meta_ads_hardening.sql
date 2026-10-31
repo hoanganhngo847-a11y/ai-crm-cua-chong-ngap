@@ -1,5 +1,7 @@
 -- Migration: 20261030100000_meta_ads_hardening.sql
 -- Description: Token Vault Isolation, SECURITY DEFINER RPC Authorization, Durable Webhook Intake & Reporting Accuracy
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 
 -- Ensure private schema exists
 CREATE SCHEMA IF NOT EXISTS private;
@@ -24,25 +26,63 @@ ALTER TABLE private.meta_ad_account_tokens ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON private.meta_ad_account_tokens FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON private.meta_ad_account_tokens TO service_role;
 
--- Migrate existing tokens from public.meta_ad_accounts into private.meta_ad_account_tokens
+-- Preserve ciphertext bytes; encryption/decryption and key verification belong
+-- to the server/offline verifier, never SQL or a key embedded in a migration.
+-- Freeze both copies until the post-copy comparison AND column removal commit.
+LOCK TABLE public.meta_ad_accounts, private.meta_ad_account_tokens IN ACCESS EXCLUSIVE MODE;
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'meta_ad_accounts' AND column_name = 'access_token'
+    ) <> EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'meta_ad_accounts' AND column_name = 'token_expires_at'
     ) THEN
+        RAISE EXCEPTION 'META_TOKEN_SOURCE_SCHEMA_INCOMPLETE';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'meta_ad_accounts' AND column_name = 'access_token'
+    ) THEN
+        IF EXISTS (
+            SELECT 1 FROM public.meta_ad_accounts
+            WHERE (access_token IS NOT NULL AND access_token !~ '^[A-Za-z0-9_-]{39,}$')
+               OR (access_token IS NULL AND token_expires_at IS NOT NULL)
+        ) THEN
+            RAISE EXCEPTION 'META_TOKEN_SOURCE_REQUIRES_VERIFICATION';
+        END IF;
+        -- Never overwrite an independently populated vault row, including its
+        -- expiry. Operators must resolve a conflict before retrying.
+        IF EXISTS (
+            SELECT 1 FROM public.meta_ad_accounts a
+            JOIN private.meta_ad_account_tokens t USING (company_id, ad_account_id)
+            WHERE a.access_token IS NOT NULL
+              AND (t.encrypted_access_token IS DISTINCT FROM a.access_token
+                   OR t.token_expires_at IS DISTINCT FROM a.token_expires_at)
+        ) THEN
+            RAISE EXCEPTION 'META_TOKEN_VAULT_CONFLICT';
+        END IF;
         INSERT INTO private.meta_ad_account_tokens (company_id, ad_account_id, encrypted_access_token, token_expires_at)
         SELECT company_id, ad_account_id, access_token, token_expires_at
         FROM public.meta_ad_accounts
-        WHERE access_token IS NOT NULL AND access_token <> ''
-        ON CONFLICT (company_id, ad_account_id) DO UPDATE
-            SET encrypted_access_token = EXCLUDED.encrypted_access_token,
-                token_expires_at = EXCLUDED.token_expires_at,
-                updated_at = now();
+        WHERE access_token IS NOT NULL
+        ON CONFLICT (company_id, ad_account_id) DO NOTHING;
+
+        IF EXISTS (
+            SELECT 1 FROM public.meta_ad_accounts a
+            LEFT JOIN private.meta_ad_account_tokens t USING (company_id, ad_account_id)
+            WHERE a.access_token IS NOT NULL
+              AND (t.id IS NULL OR t.encrypted_access_token IS DISTINCT FROM a.access_token
+                   OR t.token_expires_at IS DISTINCT FROM a.token_expires_at)
+        ) THEN
+            RAISE EXCEPTION 'META_TOKEN_COPY_INCOMPLETE';
+        END IF;
     END IF;
 END $$;
 
--- Drop sensitive token columns from public table
+-- Reached only after exact per-account ciphertext AND expiry equality. Any
+-- error rolls back the copy and preserves both old columns and all account rows.
 ALTER TABLE public.meta_ad_accounts
     DROP COLUMN IF EXISTS access_token,
     DROP COLUMN IF EXISTS token_expires_at;
@@ -140,7 +180,7 @@ $$;
 REVOKE ALL ON FUNCTION public.store_meta_ad_account_token FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.store_meta_ad_account_token FROM anon;
 GRANT EXECUTE ON FUNCTION public.store_meta_ad_account_token TO service_role;
-GRANT EXECUTE ON FUNCTION public.store_meta_ad_account_token TO authenticated;
+REVOKE ALL ON FUNCTION public.store_meta_ad_account_token FROM authenticated;
 
 CREATE OR REPLACE FUNCTION public.get_meta_ad_account_token(
     p_company_id uuid,
@@ -178,7 +218,7 @@ $$;
 REVOKE ALL ON FUNCTION public.get_meta_ad_account_token FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_meta_ad_account_token FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_meta_ad_account_token TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_meta_ad_account_token TO authenticated;
+REVOKE ALL ON FUNCTION public.get_meta_ad_account_token FROM authenticated;
 
 -- =============================================================================
 -- 4. DURABLE WEBHOOK CLAIM & FINALIZE RPCS (Priority 3)
@@ -243,6 +283,7 @@ $$;
 
 REVOKE ALL ON FUNCTION public.claim_meta_leadgen_event FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.claim_meta_leadgen_event FROM anon;
+REVOKE ALL ON FUNCTION public.claim_meta_leadgen_event FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_meta_leadgen_event TO service_role;
 
 CREATE OR REPLACE FUNCTION public.finalize_meta_leadgen_event(
@@ -272,6 +313,7 @@ $$;
 
 REVOKE ALL ON FUNCTION public.finalize_meta_leadgen_event FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.finalize_meta_leadgen_event FROM anon;
+REVOKE ALL ON FUNCTION public.finalize_meta_leadgen_event FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.finalize_meta_leadgen_event TO service_role;
 
 -- =============================================================================
@@ -373,7 +415,7 @@ $$;
 REVOKE ALL ON FUNCTION public.release_meta_ad_account_sync_lease FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.release_meta_ad_account_sync_lease FROM anon;
 GRANT EXECUTE ON FUNCTION public.release_meta_ad_account_sync_lease TO service_role;
-GRANT EXECUTE ON FUNCTION public.release_meta_ad_account_sync_lease TO authenticated;
+REVOKE ALL ON FUNCTION public.release_meta_ad_account_sync_lease FROM authenticated;
 
 -- =============================================================================
 -- 6. HARDENED RPC: record_lead_attribution_touchpoint (Priorities 2 & 5)
@@ -627,3 +669,4 @@ REVOKE ALL ON FUNCTION public.record_lead_attribution_touchpoint FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.record_lead_attribution_touchpoint FROM anon;
 GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_lead_attribution_touchpoint TO authenticated;
+COMMIT;

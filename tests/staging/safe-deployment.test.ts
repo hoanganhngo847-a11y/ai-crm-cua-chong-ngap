@@ -28,6 +28,7 @@ const q=(s:string)=>`'${s.replaceAll("'","''")}'`;
 const files=readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')).sort();
 const historical=JSON.parse(readFileSync(`${output}/staging-metadata.json`,'utf8')).data[0].snapshot;
 const inventory=JSON.parse(readFileSync(`${output}/migration-inventory.json`,'utf8'));
+const currentManifest=JSON.parse(readFileSync('docs/evidence/meta-ads-final-scope/migration-manifest.json','utf8'));
 const fingerprint=readFileSync(`${output}/catalog-fingerprint.sql`,'utf8').replace(/;\s*$/,'');
 const catalog=(db:string)=>JSON.parse(sql(db,`SELECT json_agg(t) FROM (${fingerprint}) t;`));
 const objects=(db:string):Record<string,string>=>JSON.parse(sql(db,`SELECT coalesce(jsonb_object_agg(identity,definition),'{}') FROM (
@@ -103,7 +104,14 @@ const lead=`
 test('exact staging prefix, full chain and Meta-only shortcut on disposable PostgreSQL',()=>{
     assert.equal(inventory.migrations.length,121,'the reviewed snapshot contains exactly 121 files');
     assert.ok(files.length>=121);
-    for(const source of inventory.migrations) assert.equal(sqlSha256(readFileSync(`supabase/migrations/${source.file}`,'utf8')),source.sha256);
+    for(const source of inventory.migrations) {
+        const remediation=currentManifest.safeRemediation.sources.find((s:{file:string})=>s.file===source.file);
+        if(remediation) {
+            assert.match(source.file,/^202610301[01]0000_meta_ads_/);
+            assert.equal(source.sha256,remediation.previousSha256,'retain the original audit snapshot and its exact hash');
+        }
+        assert.equal(sqlSha256(readFileSync(`supabase/migrations/${source.file}`,'utf8')),remediation?.sha256||source.sha256);
+    }
     assert.equal(historical.migration_history.length,21);
     assert.equal(inventory.pending_count,100);
     const result:Record<string,any>={sourceCommit:'bdb4ee6b4a42d6e875e96926a6f53c1938f4ccc8',scope:'New disposable local databases only; no remote executor/history writes or real backup.',container,databases,tests:{},migrationFailures:[]};

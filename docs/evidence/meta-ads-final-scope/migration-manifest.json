@@ -13,12 +13,12 @@
     {
       "file": "20261030100000_meta_ads_hardening.sql",
       "previousSha256": "467a791a8b910d31ff19d4b3b3af5a9490d4865ba5b6ef1d0178b45c00424830",
-      "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d"
+      "sha256": "e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657"
     },
     {
       "file": "20261030110000_meta_ads_final_remediation.sql",
       "previousSha256": "f554d787789a15515bf0b80403d45ec4a3c100ac8365450ecb54d14cb150dbe6",
-      "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a"
+      "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479"
     },
     {
       "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
@@ -725,13 +725,13 @@
     },
     {
       "file": "20261030100000_meta_ads_hardening.sql",
-      "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d",
-      "statementCount": 47,
-      "transactionMode": "NONE"
+      "sha256": "e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657",
+      "statementCount": 53,
+      "transactionMode": "OUTER"
     },
     {
       "file": "20261030110000_meta_ads_final_remediation.sql",
-      "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
+      "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479",
       "statementCount": 40,
       "transactionMode": "OUTER"
     },
@@ -775,5 +775,27 @@
       "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
       "sha256": "70b999c50492aecc8c443a6cc92a64e8bc9099c0bc2998447e60510ede7b289a"
     }
-  ]
+  ],
+  "safeRemediation": {
+    "referenceCommit": "012e776ca5258848b421cc8a9b4ed58712a3babe",
+    "executionAuthorized": false,
+    "readOnlyHistoryCheck": {
+      "date": "2026-10-31",
+      "stagingEntries": 21,
+      "demoProductionEntries": 102,
+      "metaMigrationsApplied": 0
+    },
+    "sources": [
+      {
+        "file": "20261030100000_meta_ads_hardening.sql",
+        "previousSha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d",
+        "sha256": "e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657"
+      },
+      {
+        "file": "20261030110000_meta_ads_final_remediation.sql",
+        "previousSha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
+        "sha256": "9de55fcba7cb94746f2c2383112b5df90ea325a5fd499e0c670061ea603a8479"
+      }
+    ]
+  }
 }

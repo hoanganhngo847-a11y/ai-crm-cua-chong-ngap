@@ -9,6 +9,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
 import { POST } from '../../app/api/webhooks/meta/route';
+import { decryptToken, encryptToken } from '../../features/omnichannel/facebook/token-vault';
 
 const config = readFileSync('supabase/config.toml', 'utf8');
 const project = config.match(/^project_id\s*=\s*"([\w-]+)"/m)?.[1];
@@ -77,6 +78,22 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(reclaimed.status, 'CLAIMED');
         assert.notEqual(reclaimed.claim_token, oldToken);
         assert.equal(sql(`SELECT public.finalize_meta_leadgen_event(${q(company)},'10000',${q(oldToken)},'FAILED');`), 'f');
+        sql(`UPDATE private.meta_leadgen_events SET lease_until=NULL WHERE leadgen_id='10000';`);
+        assert.equal(sql(`SELECT public.finalize_meta_leadgen_event(${q(company)},'10000',${q(reclaimed.claim_token)},'FAILED');`), 'f', 'a missing lease never authorizes finalization');
+        assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE leadgen_id='10000';`), 'PROCESSING');
+
+        const protectedRpcs = [
+            'claim_meta_leadgen_event(uuid,text,text,text,text,timestamptz)',
+            'finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text)',
+            'release_meta_ad_account_sync_lease(uuid,text,uuid,text,text)',
+        ];
+        for (const signature of protectedRpcs) {
+            for (const role of ['anon', 'authenticated']) {
+                assert.equal(sql(`SELECT has_function_privilege(${q(role)},${q('public.' + signature)},'EXECUTE');`), 'f', `${role}: ${signature}`);
+            }
+            assert.equal(sql(`SELECT has_function_privilege('service_role',${q('public.' + signature)},'EXECUTE');`), 't');
+        }
+        assert.equal(sql("SELECT to_regprocedure('public.finalize_meta_leadgen_event(uuid,text,text,uuid,uuid,text)') IS NULL;"), 't', 'the unfenced finalizer overload is removed');
 
         // Company membership cannot overwrite evidence or credentials.
         for (const role of ['anon', 'authenticated']) {
@@ -90,6 +107,27 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         }
         sql(`SET ROLE service_role; SELECT public.store_meta_ad_account_token(${q(company)},'act_1','dummy-encrypted');`);
         assert.equal(sql(`SET ROLE service_role; SELECT encrypted_access_token FROM public.get_meta_ad_account_token(${q(company)},'act_1');`), 'dummy-encrypted');
+
+        sql(`INSERT INTO public.meta_ad_accounts(company_id,ad_account_id,name) VALUES (${q(company)},'act_lease','Lease fixture');`);
+        const leaseCall = `SET ROLE service_role; SELECT public.acquire_meta_ad_account_sync_lease(${q(company)},'act_lease',300);`;
+        const leases = await Promise.all(Array.from({ length: 6 }, () => query(leaseCall)));
+        const lease = leases.find(Boolean)!;
+        assert.equal(leases.filter(Boolean).length, 1, 'only one concurrent sync owns the account');
+        const release = (token: string | null, tenant = company, status = 'SUCCESS') => sql(`SET ROLE service_role; SELECT public.release_meta_ad_account_sync_lease(${q(tenant)},'act_lease',${q(token)},${q(status)});`);
+        assert.equal(release(null), 'f');
+        assert.equal(release(randomUUID()), 'f');
+        assert.equal(release(lease, other), 'f');
+        sql(`UPDATE public.meta_ad_accounts SET sync_lease_until=clock_timestamp()-interval '1 second' WHERE ad_account_id='act_lease';`);
+        assert.equal(release(lease), 'f');
+        const newLease = sql(leaseCall);
+        assert.notEqual(newLease, lease);
+        assert.equal(release(lease), 'f', 'stale owner cannot clear the replacement lease');
+        assert.equal(release(newLease, company, 'FAILED'), 't');
+        assert.equal(sql("SELECT last_synced_at IS NULL AND sync_lease_token IS NULL FROM public.meta_ad_accounts WHERE ad_account_id='act_lease';"), 't');
+        const successLease = sql(leaseCall);
+        assert.equal(release(successLease), 't');
+        assert.equal(release(successLease), 'f', 'completed leases cannot be reused');
+        assert.equal(sql("SELECT last_synced_at IS NOT NULL AND sync_status='SUCCESS' FROM public.meta_ad_accounts WHERE ad_account_id='act_lease';"), 't');
 
         const touch = (lead: string, campaign: string | null, name: string, ad: string | null, time: string) =>
             `SELECT public.record_lead_attribution_touchpoint(p_company=>${q(company)},p_customer=>${q(customer)},p_meta_leadgen_id=>${q(lead)},p_meta_campaign_id=>${q(campaign)},p_campaign_name=>${q(name)},p_meta_ad_id=>${q(ad)},p_attribution_status=>'ATTRIBUTED',p_occurred=>${q(time)});`;
@@ -296,6 +334,96 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(phoneSnapshots.attribution_status, 'ATTRIBUTED');
     } finally {
         globalThis.fetch = original;
+        sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
+    }
+});
+
+test('token migration preserves ciphertext, expiry and linked rows; conflicts or incomplete copies roll back', () => {
+    sql(`CREATE DATABASE ${db};`, 'postgres');
+    const oldKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'b'.repeat(64); // synthetic fixture key only
+    try {
+        const hardening = readFileSync('supabase/migrations/20261030100000_meta_ads_hardening.sql', 'utf8');
+        const files = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql') && f < '20261030100000').sort();
+        sql(PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '') + files.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        sql(hardening.slice(0, hardening.indexOf('-- Preserve ciphertext')) + '\nCOMMIT;');
+        const encrypted = encryptToken('EAA_synthetic_existing_connection');
+        const noExpiry = encryptToken('EAA_synthetic_no_expiry');
+        const expiry = '2027-01-01T01:02:03.456Z';
+        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Token migration fixture','ACTIVE');
+            INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'Existing CRM customer','FACEBOOK','LEAD_NEW');
+            INSERT INTO public.meta_ad_accounts(company_id,ad_account_id,name,access_token,token_expires_at) VALUES
+              (${q(company)},'act_existing','Existing link',${q(encrypted)},${q(expiry)}),
+              (${q(company)},'act_null_expiry','Null expiry',${q(noExpiry)},NULL),
+              (${q(company)},'act_no_token','No token',NULL,NULL);`);
+        const accounts = () => sql('SELECT jsonb_agg(to_jsonb(a) ORDER BY ad_account_id) FROM public.meta_ad_accounts a;');
+        const vault = () => sql('SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY ad_account_id),\'[]\') FROM private.meta_ad_account_tokens t;');
+        const crm = sql('SELECT jsonb_agg(to_jsonb(c)) FROM public.customers c;');
+        const failsSafely = (code: string) => {
+            const beforeAccounts = accounts(), beforeVault = vault();
+            assert.throws(() => sql(hardening), (error: unknown) => {
+                assert.ok(error && typeof error === 'object' && 'stderr' in error);
+                assert.ok(String(error.stderr).includes(code));
+                return true;
+            });
+            assert.equal(accounts(), beforeAccounts, 'source columns, tokens, expiries and account rows survive failure');
+            assert.equal(vault(), beforeVault, 'existing vault rows survive failure');
+            assert.equal(sql('SELECT jsonb_agg(to_jsonb(c)) FROM public.customers c;'), crm);
+        };
+        sql('ALTER TABLE public.meta_ad_accounts DROP COLUMN token_expires_at;');
+        failsSafely('META_TOKEN_SOURCE_SCHEMA_INCOMPLETE');
+        sql(`ALTER TABLE public.meta_ad_accounts ADD COLUMN token_expires_at timestamptz;
+             UPDATE public.meta_ad_accounts SET token_expires_at=${q(expiry)} WHERE ad_account_id='act_existing';`);
+        for (const invalid of ['', 'plaintext-token']) {
+            sql(`UPDATE public.meta_ad_accounts SET access_token=${q(invalid)} WHERE ad_account_id='act_existing';`);
+            failsSafely('META_TOKEN_SOURCE_REQUIRES_VERIFICATION');
+        }
+        sql(`UPDATE public.meta_ad_accounts SET access_token=${q(encrypted)} WHERE ad_account_id='act_existing';
+             UPDATE public.meta_ad_accounts SET token_expires_at=${q(expiry)} WHERE ad_account_id='act_no_token';`);
+        failsSafely('META_TOKEN_SOURCE_REQUIRES_VERIFICATION');
+        sql("UPDATE public.meta_ad_accounts SET token_expires_at=NULL WHERE ad_account_id='act_no_token';");
+        sql(`INSERT INTO private.meta_ad_account_tokens(company_id,ad_account_id,encrypted_access_token,token_expires_at)
+             VALUES (${q(company)},'act_existing',${q(noExpiry)},${q(expiry)});`);
+        failsSafely('META_TOKEN_VAULT_CONFLICT');
+        sql(`UPDATE private.meta_ad_account_tokens SET encrypted_access_token=${q(encrypted)},token_expires_at=NULL;`);
+        failsSafely('META_TOKEN_VAULT_CONFLICT');
+        sql(`UPDATE private.meta_ad_account_tokens SET token_expires_at=${q(expiry)};`);
+        // Simulate a trigger silently suppressing one copy: post-copy validation
+        // must detect the gap and roll back, keeping the public columns intact.
+        sql(`CREATE FUNCTION private.fixture_skip_token() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+             CREATE TRIGGER fixture_skip_token BEFORE INSERT ON private.meta_ad_account_tokens FOR EACH ROW EXECUTE FUNCTION private.fixture_skip_token();`);
+        failsSafely('META_TOKEN_COPY_INCOMPLETE');
+        sql('DROP TRIGGER fixture_skip_token ON private.meta_ad_account_tokens; DROP FUNCTION private.fixture_skip_token();');
+        const before = JSON.parse(accounts()).map((a: Record<string, unknown>) => {
+            const { access_token: _token, token_expires_at: _expiry, ...rest } = a;
+            return rest;
+        });
+        sql(hardening);
+        assert.equal(sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='meta_ad_accounts' AND column_name IN ('access_token','token_expires_at');"), '0');
+        const after = JSON.parse(accounts()).map((a: Record<string, unknown>) => {
+            const { sync_lease_until: _until, sync_lease_token: _lease, ...rest } = a;
+            return rest;
+        });
+        assert.deepEqual(after, before, 'all IDs and account linkage metadata are unchanged');
+        assert.equal(sql('SELECT jsonb_agg(to_jsonb(c)) FROM public.customers c;'), crm);
+        const rows = JSON.parse(vault());
+        assert.equal(rows.length, 2);
+        const migrated = rows.find((r: { ad_account_id: string }) => r.ad_account_id === 'act_existing');
+        assert.equal(migrated.encrypted_access_token, encrypted);
+        assert.equal(decryptToken(migrated.encrypted_access_token), 'EAA_synthetic_existing_connection');
+        assert.equal(new Date(migrated.token_expires_at).toISOString(), expiry);
+        const withoutExpiry = rows.find((r: { ad_account_id: string }) => r.ad_account_id === 'act_null_expiry');
+        assert.equal(withoutExpiry.encrypted_access_token, noExpiry);
+        assert.equal(withoutExpiry.token_expires_at, null);
+        assert.equal(decryptToken(withoutExpiry.encrypted_access_token), 'EAA_synthetic_no_expiry');
+        assert.equal(sql("SELECT relrowsecurity FROM pg_class WHERE oid='private.meta_ad_account_tokens'::regclass;"), 't');
+        for (const role of ['anon', 'authenticated']) {
+            assert.equal(sql(`SELECT has_table_privilege(${q(role)},'private.meta_ad_account_tokens','SELECT');`), 'f');
+            assert.equal(sql(`SELECT has_function_privilege(${q(role)},'public.get_meta_ad_account_token(uuid,text)','EXECUTE');`), 'f');
+        }
+    } finally {
+        if (oldKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+        else process.env.META_TOKEN_ENCRYPTION_KEY = oldKey;
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
 });

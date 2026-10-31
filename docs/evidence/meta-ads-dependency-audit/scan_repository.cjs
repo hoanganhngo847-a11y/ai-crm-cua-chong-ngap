@@ -1,9 +1,9 @@
 /* Read-only source scan using TypeScript's parser. Does not import application
  * modules, execute SQL, run workers, or read ignored environment files. */
-const fs = require('node:fs');
-const path = require('node:path');
-const cp = require('node:child_process');
-const ts = require('typescript');
+async function scanRepository() {
+const [fs, path, cp, { default: ts }] = await Promise.all([
+  import('node:fs'), import('node:path'), import('node:child_process'), import('typescript'),
+]);
 const base = __dirname;
 const root = path.resolve(base, '../../..');
 const tables = JSON.parse(fs.readFileSync(path.join(base,'staging-tables.json'),'utf8')).map(x=>x.name);
@@ -78,3 +78,5 @@ const output={typescript_version:ts.version,tracked_files:files.length,binary_fi
 fs.writeFileSync(path.join(base,'repository-references.json'),JSON.stringify(output,null,2)+'\n');
 console.log(JSON.stringify({tracked_files:files.length,literal_target_calls:calls.length,helper_calls:helperCalls.length,dynamic_query_or_rpc_names:dynamicCalls.length,lexical_matches:lexical.length}));
 console.log('Runtime target calls:',calls.filter(c=>!['migration','test','documentation','prior_generated_evidence'].includes(c.group)).map(c=>`${c.file}:${c.line} ${c.method} ${c.target}`));
+}
+scanRepository().catch(error => { console.error(error); process.exitCode = 1; });
