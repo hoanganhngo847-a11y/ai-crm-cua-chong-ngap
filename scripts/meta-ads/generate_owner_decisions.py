@@ -392,3 +392,4 @@ with open(OUT_FILE, 'w', encoding='utf-8') as f:
     json.dump(full_data, f, indent=2, ensure_ascii=False)
 
 print(f'Successfully generated {OUT_FILE} with {len(output_items)} items.')
+

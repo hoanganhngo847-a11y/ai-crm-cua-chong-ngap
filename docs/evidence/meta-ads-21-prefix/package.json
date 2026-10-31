@@ -2,7 +2,7 @@
   "referenceCommit": "3bc50257883957f05cd1fedbd8f57358e058dcee",
   "executionAuthorized": false,
   "status": "BLOCKED",
-  "reason": "SQL compatibility is proven; existing deployment tooling requires a canonical prefix. No selective-release ledger integration is authorized or implemented.",
+  "reason": "SQL compatibility is proven; existing deployment tooling requires a canonical prefix. No selective-release ledger integration is implemented or validated.",
   "canonicalLedgerWrites": 0,
   "unrelatedGapMigrationsExecuted": 0,
   "omittedCanonicalMigrations": 95,

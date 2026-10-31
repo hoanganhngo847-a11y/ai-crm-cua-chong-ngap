@@ -36,8 +36,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });

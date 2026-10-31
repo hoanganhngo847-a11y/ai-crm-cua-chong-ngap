@@ -301,3 +301,4 @@ Chủ sở hữu vui lòng đánh dấu `[X]` vào lựa chọn của mình cho 
 ---
 *Tài liệu kỹ thuật bổ trợ và danh mục chi tiết 178 mục được lưu trữ tại file máy đọc:*  
 `docs/evidence/meta-ads-owner-decisions/decision-register.json`
+

@@ -31,8 +31,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });
@@ -993,7 +995,7 @@ async function runTests() {
       has_function_privilege('service_role', 'public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)', 'EXECUTE') as sr_priv;
   `;
   const privResultRaw = execSync(
-    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${privCheckSql.replace(/"/g, '\\"')}"`,
+    `docker exec -i ${DB_CONTAINER} psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${privCheckSql.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   ).trim();
   const [anonPriv, authPriv, srPriv] = privResultRaw.split(',');
@@ -1008,7 +1010,7 @@ async function runTests() {
       coalesce(to_regprocedure('public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)')::text, 'MISSING') as new_signature;
   `;
   const overloadResultRaw = execSync(
-    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${overloadCheckSql.replace(/"/g, '\\"')}"`,
+    `docker exec -i ${DB_CONTAINER} psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${overloadCheckSql.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   ).trim();
   const [oldOverload, newSignature] = overloadResultRaw.split(',');

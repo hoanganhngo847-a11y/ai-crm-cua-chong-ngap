@@ -165,13 +165,14 @@ async function testIngestRejectsEmptyMessageId(client: SupabaseClient) {
 
 async function testIngestFirstContactCreatesCustomer(client: SupabaseClient) {
   const label = 'ingest_provider_message_atomic first-contact creates customer + conversation + interaction';
-  const uniqueUserId = `fb-first-${Date.now()}`;
+  const uniqueUserId = `81${Date.now()}`;
   const uniqueMsgId = `mid-first-${Date.now()}`;
 
   const { data, error } = await client.rpc('ingest_provider_message_atomic', {
     p_company_id: TEST_COMPANY_ID,
     p_channel: 'FACEBOOK',
     p_external_user_id: uniqueUserId,
+    p_external_conversation_id: `987654321012345:${uniqueUserId}`,
     p_external_ref: uniqueMsgId,
     p_sanitized_content: 'Xin chào, tôi muốn hỏi giá cửa chống ngập',
     p_raw_content: 'Xin chào, tôi muốn hỏi giá cửa chống ngập',
@@ -204,7 +205,7 @@ async function testIngestFirstContactCreatesCustomer(client: SupabaseClient) {
 
 async function testIngestDuplicateMessageIdempotent(client: SupabaseClient) {
   const label = 'ingest_provider_message_atomic duplicate message returns is_duplicate=true';
-  const uniqueUserId = `fb-dup-${Date.now()}`;
+  const uniqueUserId = `82${Date.now()}`;
   const uniqueMsgId = `mid-dup-${Date.now()}`;
 
   // First call
@@ -212,6 +213,7 @@ async function testIngestDuplicateMessageIdempotent(client: SupabaseClient) {
     p_company_id: TEST_COMPANY_ID,
     p_channel: 'FACEBOOK',
     p_external_user_id: uniqueUserId,
+    p_external_conversation_id: `987654321012345:${uniqueUserId}`,
     p_external_ref: uniqueMsgId,
     p_sanitized_content: 'Hello dup test',
     p_raw_content: 'Hello dup test',
@@ -226,6 +228,7 @@ async function testIngestDuplicateMessageIdempotent(client: SupabaseClient) {
     p_company_id: TEST_COMPANY_ID,
     p_channel: 'FACEBOOK',
     p_external_user_id: uniqueUserId,
+    p_external_conversation_id: `987654321012345:${uniqueUserId}`,
     p_external_ref: uniqueMsgId,
     p_sanitized_content: 'Hello dup test',
     p_raw_content: 'Hello dup test',
@@ -251,13 +254,14 @@ async function testIngestDuplicateMessageIdempotent(client: SupabaseClient) {
 
 async function testIngestSanitizationStatusMapping(client: SupabaseClient) {
   const label = 'ingest_provider_message_atomic maps CLEAN → SUCCEEDED in DB';
-  const uniqueUserId = `fb-san-${Date.now()}`;
+  const uniqueUserId = `83${Date.now()}`;
   const uniqueMsgId = `mid-san-${Date.now()}`;
 
   const { data, error } = await client.rpc('ingest_provider_message_atomic', {
     p_company_id: TEST_COMPANY_ID,
     p_channel: 'FACEBOOK',
     p_external_user_id: uniqueUserId,
+    p_external_conversation_id: `987654321012345:${uniqueUserId}`,
     p_external_ref: uniqueMsgId,
     p_sanitized_content: 'Clean content no phone',
     p_raw_content: 'Clean content no phone',
@@ -295,7 +299,7 @@ async function testIngestSanitizationStatusMapping(client: SupabaseClient) {
 
 async function testIngestConcurrentFirstContactCreatesExactlyOneCustomer(client: SupabaseClient) {
   const label = 'ingest_provider_message_atomic concurrent first-contact creates exactly ONE customer';
-  const uniqueUserId = `fb-concurrent-${Date.now()}`;
+  const uniqueUserId = `84${Date.now()}`;
 
   // Fire 3 concurrent inbound requests for the SAME user with DIFFERENT messages
   const promises = [1, 2, 3].map((i) =>
@@ -303,6 +307,7 @@ async function testIngestConcurrentFirstContactCreatesExactlyOneCustomer(client:
       p_company_id: TEST_COMPANY_ID,
       p_channel: 'FACEBOOK',
       p_external_user_id: uniqueUserId,
+      p_external_conversation_id: `987654321012345:${uniqueUserId}`,
       p_external_ref: `mid-concurrent-${Date.now()}-${i}`,
       p_sanitized_content: `Concurrent message ${i}`,
       p_raw_content: `Concurrent message ${i}`,

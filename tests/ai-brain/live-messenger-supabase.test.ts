@@ -29,8 +29,10 @@ const anonClient = createClient(SUPABASE_URL, ANON_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function runDockerPsql(sql: string): string {
-  const cmd = `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -v ON_ERROR_STOP=1`;
+  const cmd = `docker exec -i ${DB_CONTAINER} psql -U postgres -d postgres -v ON_ERROR_STOP=1`;
   return execSync(cmd, { input: sql, encoding: 'utf8' });
 }
 
@@ -867,7 +869,7 @@ test('Real Supabase Native: Lease crossing expiry while waiting on competing row
 
   // Competing session acquires FOR UPDATE lock on conversations for 2 seconds
   const child = spawn('docker', [
-    'exec', '-i', 'supabase_db_ai-crm-cua-chong-ngap',
+    'exec', '-i', DB_CONTAINER,
     'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'
   ]);
   child.stdin.write(`BEGIN;\nSELECT * FROM public.conversations WHERE id = '${convId}' FOR UPDATE;\nSELECT pg_sleep(2);\nCOMMIT;\n`);

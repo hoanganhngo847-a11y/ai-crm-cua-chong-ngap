@@ -78,7 +78,7 @@ SELECT 'META_21_POSTCONDITIONS_VERIFIED' AS status,count(*) AS preserved_legacy_
     const sql='BEGIN;\n'+preconditions+sources.map(s=>`\n-- SOURCE ${s.file} SHA256 ${s.sha256}\n${s.body}\n`).join('')+postconditions+'\nCOMMIT;\n';
     assert.equal(inspectTransactionEnvelope(sql).mode,'OUTER');
     const manifest={referenceCommit:'3bc50257883957f05cd1fedbd8f57358e058dcee',executionAuthorized:false,
-        status:'BLOCKED',reason:'SQL compatibility is proven; existing deployment tooling requires a canonical prefix. No selective-release ledger integration is authorized or implemented.',
+        status:'BLOCKED',reason:'SQL compatibility is proven; existing deployment tooling requires a canonical prefix. No selective-release ledger integration is implemented or validated.',
         canonicalLedgerWrites:0,unrelatedGapMigrationsExecuted:0,omittedCanonicalMigrations:95,
         ledgerStrategy:'Keep the 21 real recorded rows untouched. This is a rehearsal bundle, not a supabase db push input. A separately reviewed selective-release registry and future canonical reconciliation are required before hosted execution.',
         sources:sources.map(({file,sha256})=>({file:'sources/'+file,repositorySource:'supabase/migrations/'+file,sha256})),
