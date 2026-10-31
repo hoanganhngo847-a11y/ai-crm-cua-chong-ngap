@@ -1,5 +1,11 @@
 # Meta Ads staging safe deployment plan
 
+> **SUPERSEDED & RECONCILIATION NOTICE (Updated 31 October 2026)**:
+> 1. **Isolation Completed**: The earlier observation in this report that the unreleased Meta bundle changed Messenger SLA behavior was an artifact of commit `3692bf0`. This was cleanly remediated in commit `3bcc163` / `25e8f21`: all modifications to `han_ingest` and canary functions were completely removed. Messenger SLA windows remain at count 0.
+> 2. **Selective-Release Ledger Engine Implemented**: Strategy (A+B) has now been fully implemented and locally validated via [`scripts/meta-ads/selective-executor.ts`](../scripts/meta-ads/selective-executor.ts) and [`tests/staging/selective-ledger.test.ts`](../tests/staging/selective-ledger.test.ts). See [`docs/META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md`](./META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md) for full architecture and test evidence.
+> 3. **Preservation Invariant**: Exactly 21 canonical ledger records are preserved with 0 writes/deletes. Zero records are fabricated for the 95 canonical gap migrations.
+> 4. **Current Status**: **BLOCKED FOR HOSTED EXECUTION**. The local engine and failure tests pass 100%, but hosted staging execution remains strictly blocked pending physical backup/restore verification and owner sign-off.
+
 Date: 2026-10-30, Asia/Ho_Chi_Minh. Application/migration snapshot:
 `bdb4ee6b4a42d6e875e96926a6f53c1938f4ccc8`.
 Branch: `meta_ads_integration`. [PR #139](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139)

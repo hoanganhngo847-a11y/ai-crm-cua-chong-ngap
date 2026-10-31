@@ -1,5 +1,8 @@
 # Meta Ads: compatibility with the 21-migration staging prefix
 
+> **SELECTIVE LEDGER ENGINE COMPLETED (Updated 31 October 2026)**:
+> The selective-release ledger engine implementing Strategy (A+B) has been completed and locally validated. See [`docs/META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md`](./META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md) for full details on the private registry (`private.selective_feature_releases`), ordinary migration writer fencing (`trg_guard_selective_release_ledger`), and failure test suite results. Hosted execution remains **BLOCKED**.
+
 Reference: PR #139, branch `meta_ads_integration`, previously verified head `3bc50257883957f05cd1fedbd8f57358e058dcee`. Date: 31 October 2026, Asia/Ho_Chi_Minh. Keep the PR **Open + Draft**.
 
 **The corrected five-file SQL bundle passes the exact-prefix isolation tests. Hosted execution remains blocked by selective-release ledger integration and operational acceptance.** No hosted Supabase write, backup, reset, migration, Render/Meta change, real lead, customer message, merge or deployment was performed.
