@@ -1,0 +1,38 @@
+name: Backup & Restore CI (Helpers #1-#6)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/backup/**'
+      - 'tests/backup/**'
+      - '.github/workflows/backup-restore-ci.yml'
+  push:
+    branches: [main, meta_ads_integration, 'integration/*']
+
+permissions:
+  contents: read
+
+jobs:
+  test-backup-helpers:
+    name: Backup Helpers #1-#6 Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Syntax & Lint Check
+        run: |
+          node --check scripts/backup/owner-map.mjs
+          node --check tests/backup/owner-map.test.mjs
+          ./node_modules/.bin/eslint scripts/backup/owner-map.mjs tests/backup/owner-map.test.mjs
+      - name: Run JavaScript Helpers Tests (Helpers #1-#6)
+        run: npm run test:backup:helpers
+      - name: Run Python Safe Extract & Runbook Tests (Helper #4)
+        run: npm run test:backup:python
