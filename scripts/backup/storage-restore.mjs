@@ -143,6 +143,42 @@ export async function fsyncDirectory(dirPath) {
   }
 }
 
+export function createObjectPathCollisionGuard({ caseInsensitive = false } = {}) {
+  const seenExact = new Set();
+  const seenNfc = new Map();
+  const seenLower = new Map();
+
+  return function registerObjectPath(bucketId, objectPath) {
+    const fullKey = `${bucketId}/${objectPath}`;
+
+    if (seenExact.has(fullKey)) {
+      fail('DUPLICATE_OBJECT', `duplicate object path declared in manifest: ${fullKey}`);
+    }
+
+    const nfcKey = `${bucketId}/${objectPath.normalize('NFC')}`;
+    if (seenNfc.has(nfcKey)) {
+      fail(
+        'UNICODE_COLLISION',
+        `Unicode normalization collision detected for object '${fullKey}' (collides with '${seenNfc.get(nfcKey)}')`,
+      );
+    }
+
+    seenExact.add(fullKey);
+    seenNfc.set(nfcKey, fullKey);
+
+    if (caseInsensitive) {
+      const lowerKey = `${bucketId}/${objectPath.toLowerCase()}`;
+      if (seenLower.has(lowerKey)) {
+        fail(
+          'PATH_COLLISION',
+          `case-insensitive path collision detected for object '${fullKey}' (collides with '${seenLower.get(lowerKey)}')`,
+        );
+      }
+      seenLower.set(lowerKey, fullKey);
+    }
+  };
+}
+
 export async function isCaseInsensitiveDir(dirPath) {
   try {
     const parentDir = path.resolve(dirPath);
@@ -1041,6 +1077,7 @@ export async function validateRestoreInputs({
   objectsRoot,
   _localEnvPath = null,
   _keyFile = null,
+  filesystemCaseInsensitive = null,
 }) {
   // 1. Verify and parse buckets.json
   let bStat;
@@ -1156,11 +1193,15 @@ export async function validateRestoreInputs({
     fail('JSON_PARSE_ERROR', `malformed storage-manifest.json: ${err.message}`);
   }
 
-  const caseInsensitive = await isCaseInsensitiveDir(objectsRoot);
+  // null = probe the real destination filesystem. An explicit boolean is an
+  // override for deterministic tests / callers that already know the target
+  // filesystem semantics.
+  const caseInsensitive = filesystemCaseInsensitive === null
+    ? await isCaseInsensitiveDir(objectsRoot)
+    : Boolean(filesystemCaseInsensitive);
+  const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive });
   const validatedObjects = [];
   const seenObjectKeys = new Set();
-  const seenObjectNfc = new Map();
-  const seenObjectLower = new Map();
   const objectsByBucket = new Map();
 
   for (const b of validatedBuckets) {
@@ -1182,29 +1223,8 @@ export async function validateRestoreInputs({
     const objPath = validateObjectPath(obj.path || obj.name);
     const fullKey = `${bId}/${objPath}`;
 
-    if (seenObjectKeys.has(fullKey)) {
-      fail('DUPLICATE_OBJECT', `duplicate object path declared in manifest: ${fullKey}`);
-    }
-    const nfcKey = `${bId}/${objPath.normalize('NFC')}`;
-    if (seenObjectNfc.has(nfcKey)) {
-      fail(
-        'UNICODE_COLLISION',
-        `Unicode normalization collision detected for object '${fullKey}' (collides with '${seenObjectNfc.get(nfcKey)}')`,
-      );
-    }
+    registerObjectPath(bId, objPath);
     seenObjectKeys.add(fullKey);
-    seenObjectNfc.set(nfcKey, fullKey);
-
-    if (caseInsensitive) {
-      const lowerKey = `${bId}/${objPath.toLowerCase()}`;
-      if (seenObjectLower.has(lowerKey)) {
-        fail(
-          'PATH_COLLISION',
-          `case-insensitive path collision detected for object '${fullKey}' (collides with '${seenObjectLower.get(lowerKey)}')`,
-        );
-      }
-      seenObjectLower.set(lowerKey, fullKey);
-    }
 
     if (typeof obj.size !== 'number' || obj.size < 0) {
       fail('IDENTITY_MISMATCH', `invalid size in manifest for object '${fullKey}': ${obj.size}`);
@@ -1362,6 +1382,7 @@ export async function restoreStorage(options = {}) {
     concurrency = DEFAULT_CONCURRENCY,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxRetries = DEFAULT_MAX_RETRIES,
+    filesystemCaseInsensitive = null,
   } = options;
 
   const startTime = Date.now();
@@ -1421,6 +1442,7 @@ export async function restoreStorage(options = {}) {
     objectsRoot: path.resolve(objectsRoot),
     localEnvPath: localEnvPath ? path.resolve(localEnvPath) : null,
     keyFile: keyFile ? path.resolve(keyFile) : null,
+    filesystemCaseInsensitive,
   });
 
   const { buckets, objects, objectsByBucket } = validatedInputs;

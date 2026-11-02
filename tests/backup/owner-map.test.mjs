@@ -1791,15 +1791,62 @@ test('P1-02: validateTargetIsolation rejects omitted dbHost for direct psql exec
 });
 
 test('P1-02: verifyDatabaseTargetIdentity fails closed when target mismatch occurs on remote/unverified target', async () => {
+  let observedCall = null;
+  const identityResponse = JSON.stringify({
+    version_num: 170000,
+    database: 'postgres',
+    rehearsal_sentinel: 'crm-restore-rehearsal',
+    has_marker_table: false,
+    db_comment: '',
+  });
+
   await assert.rejects(
     async () => {
       await verifyDatabaseTargetIdentity({
         dbContainer: 'crm-dumpcheck-test',
         expectedTarget: 'completely-unexpected-target-id',
+        env: {},
+        executeSql: async (call) => {
+          observedCall = call;
+          return { stdout: identityResponse, stderr: '' };
+        },
       });
     },
     (err) => {
       assert.equal(err.code, 'DATABASE_IDENTITY_VERIFICATION_FAILED');
+      assert.match(err.message, /unverified database/);
+      return true;
+    },
+  );
+
+  // The test must reach the database identity query, not fail before it because
+  // a host Docker container happens to be absent on the CI runner.
+  assert.ok(observedCall, 'database identity query was not executed');
+  assert.equal(observedCall.dbContainer, 'crm-dumpcheck-test');
+  assert.match(observedCall.sqlText, /crm\.rehearsal_identity/);
+  assert.match(observedCall.sqlText, /_crm_disposable_test_marker/);
+});
+
+test('P1-02: verifyDatabaseTargetIdentity preserves database execution failures without faking an identity mismatch', async () => {
+  const connectionError = new HelperError(
+    'APPLY_FAILED',
+    'database execution failed with code 1: connection refused',
+  );
+
+  await assert.rejects(
+    async () => {
+      await verifyDatabaseTargetIdentity({
+        dbContainer: 'crm-dumpcheck-test',
+        expectedTarget: 'completely-unexpected-target-id',
+        env: {},
+        executeSql: async () => {
+          throw connectionError;
+        },
+      });
+    },
+    (err) => {
+      assert.equal(err, connectionError);
+      assert.equal(err.code, 'APPLY_FAILED');
       return true;
     },
   );

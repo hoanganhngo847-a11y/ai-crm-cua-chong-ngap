@@ -24,6 +24,7 @@ import {
   validateTargetUrl,
   validateBucketName,
   validateEndpointAndMethod,
+  createObjectPathCollisionGuard,
 } from '../../scripts/backup/storage-restore.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1496,6 +1497,10 @@ LOCAL_SECRET_KEY="${VALID_SB_SECRET}"
           buckets: dataset.bucketsPath,
           manifest: dataset.manifestPath,
           objectsRoot: dataset.objectsRoot,
+          // Deterministic injection of the macOS/Windows case-insensitive
+          // filesystem branch. The CI Linux runner uses a case-sensitive
+          // filesystem, so probing the real filesystem cannot exercise it.
+          filesystemCaseInsensitive: true,
         });
       },
       (err) => {
@@ -1503,6 +1508,60 @@ LOCAL_SECRET_KEY="${VALID_SB_SECRET}"
         return true;
       },
     );
+  });
+
+  // 37a. P2-COLLISION-02: Case-sensitive filesystem behavior is isolated
+  test('P2-COLLISION-02: case-sensitive filesystem allows case-distinct object names without PATH_COLLISION', () => {
+    const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive: false });
+
+    assert.doesNotThrow(() => {
+      registerObjectPath('case-collision-bucket', 'file.txt');
+      registerObjectPath('case-collision-bucket', 'FILE.TXT');
+    });
+  });
+
+  // 37b. P2-COLLISION-03: Case-insensitive collision guard is deterministic
+  test('P2-COLLISION-03: case-insensitive filesystem rejects case-distinct object names with PATH_COLLISION', () => {
+    const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive: true });
+
+    registerObjectPath('case-collision-bucket', 'file.txt');
+    assert.throws(
+      () => registerObjectPath('case-collision-bucket', 'FILE.TXT'),
+      (err) => {
+        assert.equal(err.code, 'PATH_COLLISION');
+        assert.match(err.message, /case-insensitive path collision/);
+        return true;
+      },
+    );
+  });
+
+  // 37c. P2-COLLISION-04: Existing duplicate and NFC protections remain active
+  test('P2-COLLISION-04: collision guard still rejects duplicate and Unicode NFC/NFD collisions in both modes', () => {
+    for (const caseInsensitive of [false, true]) {
+      const duplicateGuard = createObjectPathCollisionGuard({ caseInsensitive });
+      duplicateGuard('case-collision-bucket', 'file.txt');
+      assert.throws(
+        () => duplicateGuard('case-collision-bucket', 'file.txt'),
+        (err) => {
+          assert.equal(err.code, 'DUPLICATE_OBJECT');
+          return true;
+        },
+        `duplicate guard must reject exact duplicates when caseInsensitive=${caseInsensitive}`,
+      );
+
+      const nfcGuard = createObjectPathCollisionGuard({ caseInsensitive });
+      const nfcPath = 'caf\u00e9.txt';
+      const nfdPath = 'cafe\u0301.txt';
+      nfcGuard('case-collision-bucket', nfcPath);
+      assert.throws(
+        () => nfcGuard('case-collision-bucket', nfdPath),
+        (err) => {
+          assert.equal(err.code, 'UNICODE_COLLISION');
+          return true;
+        },
+        `NFC guard must reject normalization collisions when caseInsensitive=${caseInsensitive}`,
+      );
+    }
   });
 
   // 38. P2-BUCKET-01: Bucket configuration mismatch (public setting)

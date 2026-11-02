@@ -13,10 +13,7 @@ import {
   streamObjectBytes,
   validateBucketName,
   validateObjectPath,
-  publishDirectoryNoReplace,
-  publishFileNoReplace,
   rollbackJournal,
-  rollbackJournalSync,
   isCaseInsensitiveDir,
   HelperError,
 } from '../../scripts/backup/storage-export.mjs';
@@ -53,8 +50,91 @@ async function createTempDir(prefix = 'storage-export-test-') {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+async function waitForCondition(predicate, { timeoutMs = 5000, intervalMs = 25 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Condition was not met within ${timeoutMs}ms`);
+}
+
 function sha256Buffer(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function resolveTimeBinary() {
+  const candidates = ['/usr/bin/time', '/bin/time'];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, 'time');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function detectTimeFlavor(timeBinary) {
+  const probe = spawnSync(timeBinary, ['--version'], { encoding: 'utf8' });
+  const output = `${probe.stdout || ''}\n${probe.stderr || ''}`;
+  return /GNU time/i.test(output) ? 'gnu' : 'bsd';
+}
+
+function measurePeakRss(command, args, options = {}) {
+  const timeBinary = resolveTimeBinary();
+  assert.ok(
+    timeBinary,
+    'A time(1) binary is required to measure peak RSS but neither /usr/bin/time nor a PATH time executable exists',
+  );
+
+  const flavor = detectTimeFlavor(timeBinary);
+  const timeArgs = flavor === 'gnu'
+    ? ['-v', command, ...args]
+    : ['-l', command, ...args];
+
+  const res = spawnSync(timeBinary, timeArgs, { encoding: 'utf8', ...options });
+  assert.equal(
+    res.error,
+    undefined,
+    `Unable to execute ${timeBinary} for peak RSS measurement: ${res.error ? res.error.message : 'unknown error'}`,
+  );
+  assert.equal(
+    res.status,
+    0,
+    `Measured command failed (exit ${res.status}): ${res.stderr || res.stdout}`,
+  );
+
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  let peakBytes;
+
+  if (flavor === 'gnu') {
+    // GNU time: "Maximum resident set size (kbytes): 12345"
+    const match = output.match(/Maximum resident set size \(kbytes\):\s*(\d+)/i);
+    assert.ok(
+      match,
+      `Unable to parse GNU time peak RSS output; refusing to skip the memory assertion. Output:\n${output}`,
+    );
+    peakBytes = Number.parseInt(match[1], 10) * 1024;
+  } else {
+    // BSD time: "12345  maximum resident set size" (bytes)
+    const match = output.match(/(\d+)\s+maximum resident set size/i);
+    assert.ok(
+      match,
+      `Unable to parse BSD time peak RSS output; refusing to skip the memory assertion. Output:\n${output}`,
+    );
+    peakBytes = Number.parseInt(match[1], 10);
+  }
+
+  assert.ok(
+    Number.isSafeInteger(peakBytes) && peakBytes > 0,
+    `Invalid peak RSS measurement: ${peakBytes}`,
+  );
+
+  return { peakBytes, flavor, timeBinary, stdout: res.stdout, stderr: res.stderr };
 }
 
 // -----------------------------------------------------------------------------
@@ -712,8 +792,13 @@ describe('storage-export.mjs helper suite', () => {
         { stdio: ['ignore', 'pipe', 'pipe'] },
       );
 
-      // Give it 100ms to start streaming and create temp files
-      await new Promise((r) => setTimeout(r, 100));
+      // Wait until the CLI has installed its signal handlers and created its
+      // staging directory before sending SIGTERM. A fixed sleep is racy on
+      // slower CI runners and can terminate the child before handler setup.
+      await waitForCondition(async () => {
+        const entries = await fsp.readdir(tmp);
+        return entries.some((entry) => entry.startsWith('.out.tmp-'));
+      });
 
       // Send SIGTERM
       child.kill('SIGTERM');
@@ -1408,22 +1493,18 @@ describe('storage-export.mjs helper suite', () => {
       const bucketsPath = path.join(tmp, 'buckets.json');
       const manifestPath = path.join(tmp, 'manifest.json');
 
-      const res = spawnSync('/usr/bin/time', [
-        '-l',
-        process.execPath,
+      const measurement = measurePeakRss(process.execPath, [
         EXPORT_HELPER,
         '--source-dir', sourceDir,
         '--out', outDir,
         '--buckets', bucketsPath,
         '--manifest', manifestPath,
-      ], { encoding: 'utf8' });
+      ]);
 
-      assert.equal(res.status, 0, `CLI failed: ${res.stderr}`);
-      const match = res.stderr.match(/([0-9]+)\s+maximum resident set size/);
-      if (match) {
-        const peakBytes = parseInt(match[1], 10);
-        assert.ok(peakBytes < 160 * 1024 * 1024, `Peak RSS ${peakBytes} exceeds 160 MB limit`);
-      }
+      assert.ok(
+        measurement.peakBytes < 160 * 1024 * 1024,
+        `Peak RSS ${measurement.peakBytes} exceeds 160 MiB limit (measured with ${measurement.flavor} time at ${measurement.timeBinary})`,
+      );
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true });
     }

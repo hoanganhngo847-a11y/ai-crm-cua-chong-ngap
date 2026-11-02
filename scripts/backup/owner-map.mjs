@@ -1498,7 +1498,13 @@ export async function verifyDatabaseTargetIdentity({
   dbName = 'postgres',
   dbUser = 'postgres',
   expectedTarget = DEFAULT_TARGET_IDENTITY,
+  executeSql = executeSqlAgainstDatabase,
+  env = process.env,
 }) {
+  // Re-run the isolation gate before any injected executor is invoked so a
+  // caller-provided executor can never bypass local-only target enforcement.
+  validateTargetIsolation({ dbContainer, dbHost, env });
+
   const sql = `
 SELECT json_build_object(
   'version_num', current_setting('server_version_num')::integer,
@@ -1513,7 +1519,7 @@ SELECT json_build_object(
 )::text;
 `;
 
-  const { stdout } = await executeSqlAgainstDatabase({
+  const { stdout } = await executeSql({
     sqlText: sql,
     dbContainer,
     dbHost,
@@ -1521,6 +1527,7 @@ SELECT json_build_object(
     dbName,
     dbUser,
     tuplesOnly: true,
+    env,
   });
 
   const parsed = JSON.parse(stdout.trim());
