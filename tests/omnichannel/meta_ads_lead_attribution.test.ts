@@ -235,6 +235,11 @@ test('Scenario 2: Valid Lead Ads webhook (leadgen) is received and processed wit
         assert.equal(touchpointCall.args.p_campaign_name, 'Chiến dịch Tuyển sinh Đức Mùa Thu');
         assert.equal(touchpointCall.args.p_ad_name, 'Quảng cáo Du học Mùa Thu 2026');
         assert.equal(touchpointCall.args.p_meta_ad_id, 'ad_autumn_01');
+        assert.equal(
+            touchpointCall.args.p_ads_context_data.creative_snapshot.status,
+            'PENDING_SYNC',
+            'A missing synced ad mapping is explicit and must not block the lead intake',
+        );
     } finally {
         globalThis.fetch = originalFetch;
     }

@@ -8,6 +8,7 @@ import {
 import type { PageBinding } from './binding';
 import { rpc } from './server';
 import { graphVersion } from './graph-api';
+import { fetchMetaAdCreativeSnapshot } from './marketing-sync';
 
 export interface MetaLeadData {
     id: string;
@@ -194,6 +195,12 @@ export async function processLeadAdsChange(
         const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
         const fields = extractLeadFields(leadData.field_data || []);
         const adId = leadData.ad_id || change.adId || null;
+        const creativeSnapshot = adId
+            ? await fetchMetaAdCreativeSnapshot(config.company, adId, {
+                customFetch,
+                captureTiming: 'AT_LEAD_INTAKE',
+            })
+            : null;
         const formId = leadData.form_id || change.formId || null;
         const campaignId = leadData.campaign_id || null;
         const adsetId = leadData.adset_id || change.adgroupId || null;
@@ -217,6 +224,7 @@ export async function processLeadAdsChange(
             p_meta_ad_id: adId, p_ad_name: leadData.ad_name || null, p_meta_form_id: formId,
             p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
             p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
+            p_ads_context_data: creativeSnapshot ? { creative_snapshot: creativeSnapshot } : null,
             p_attribution_status: 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
             p_occurred: claim.occurred_at || change.time,
         });

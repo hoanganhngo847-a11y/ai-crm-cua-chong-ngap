@@ -4,6 +4,45 @@ Date: 2026-10-30 (Asia/Ho_Chi_Minh). Branch: `meta_ads_integration`.
 PR: [#139](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139), Open + Draft.
 Business baseline: `0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f`.
 
+
+## Owner-approved Option B creative attribution addendum (2026-11-03)
+
+This owner-approved addendum supersedes the earlier exclusion of ad creative
+content, but only for customer-level Lead attribution. It does not restore the
+removed advertising dashboard, Insights/performance reporting, spend/click
+metrics, campaign authoring or ad editing.
+
+Each Facebook Lead Ads touchpoint may retain a read-only creative snapshot from
+the Meta Marketing API: Campaign, Ad Set and Ad identity; Creative ID/name;
+primary text, headline/title, description, CTA and destination URL; image or
+video thumbnail/ID; and carousel or dynamic creative assets when Meta returns
+them. Dynamic text and asset variants are stored as independent lists; the CRM
+must not fabricate pairings that Meta did not return.
+
+The snapshot is stored inside the existing
+\`lead_attribution_touchpoints.ads_context_data.creative_snapshot\` JSON object,
+so this scope extension does not add a database migration or alter the selective
+release migration package. The webhook first uses the same-tenant, server-synced
+\`meta_ads\` row to locate the encrypted ad-account token, then performs a
+read-only GET for that ad. Missing ad mappings/tokens or transient API failures
+remain \`PENDING_SYNC\`; missing permissions, removed ads or unavailable creative
+data are shown as \`UNAVAILABLE\`. None of these outcomes blocks durable lead
+intake.
+
+The metadata-only cron/manual sync backfills only missing or pending snapshots.
+A usable snapshot is write-once per touchpoint and is not overwritten by later
+ad edits. A snapshot captured during webhook intake is labelled
+\`AT_LEAD_INTAKE\`. A later backfill is labelled \`BACKFILL\` and the UI explicitly
+warns that it may reflect the current ad version rather than prove the exact
+historical creative shown when the lead was submitted.
+
+Images are rendered only from HTTPS Meta CDN hosts. Destination links are
+HTTPS-only. Video IDs and thumbnails are retained; a playable video URL is not
+invented when Meta does not provide one. Existing \`ads_read\` is the only
+Marketing API permission used; do not silently add campaign-write, reporting,
+or business-management scopes. Messenger AI reply behavior and all other
+omnichannel intake paths remain untouched.
+
 The CRM records which advertising campaigns produced each customer's lead
 submissions. A phone submitted through Campaign A on 15 October, Campaign B on
 30 October and Campaign C later on 30 October belongs to one customer, with three

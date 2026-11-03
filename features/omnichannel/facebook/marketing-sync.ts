@@ -25,6 +25,454 @@ export interface MetaAdDto {
     status: string;
 }
 
+
+export type MetaCreativeCaptureTiming = 'AT_LEAD_INTAKE' | 'BACKFILL';
+
+export interface MetaAdCreativeAssetSnapshot {
+    kind: 'IMAGE' | 'VIDEO';
+    imageUrl?: string;
+    thumbnailUrl?: string;
+    videoId?: string;
+    title?: string;
+    description?: string;
+    primaryText?: string;
+    destinationUrl?: string;
+}
+
+export interface MetaAdCreativeSnapshot {
+    schemaVersion: 1;
+    status: 'AVAILABLE' | 'PARTIAL' | 'PENDING_SYNC' | 'UNAVAILABLE';
+    source: 'META_MARKETING_API' | 'NONE';
+    capturedAt: string;
+    captureTiming: MetaCreativeCaptureTiming;
+    reason?: string;
+    adId: string;
+    adName?: string;
+    campaignId?: string;
+    campaignName?: string;
+    adsetId?: string;
+    adsetName?: string;
+    creativeId?: string;
+    creativeName?: string;
+    storyId?: string;
+    format: 'IMAGE' | 'VIDEO' | 'CAROUSEL' | 'DYNAMIC' | 'UNKNOWN';
+    primaryText?: string;
+    headlines: string[];
+    descriptions: string[];
+    ctaType?: string;
+    destinationUrl?: string;
+    imageUrl?: string;
+    thumbnailUrl?: string;
+    videoId?: string;
+    carouselAssets: MetaAdCreativeAssetSnapshot[];
+    imageAssets: MetaAdCreativeAssetSnapshot[];
+    videoAssets: MetaAdCreativeAssetSnapshot[];
+}
+
+function metaRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function metaText(value: unknown, maxLength = 4000): string | undefined {
+    if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+    const text = String(value).trim();
+    return text ? text.slice(0, maxLength) : undefined;
+}
+
+function safeMetaAssetUrl(value: unknown): string | undefined {
+    const raw = metaText(value, 2048);
+    if (!raw) return undefined;
+    try {
+        const url = new URL(raw);
+        const host = url.hostname.toLowerCase();
+        const allowedHost =
+            host === 'fbcdn.net' || host.endsWith('.fbcdn.net') ||
+            host === 'fbsbx.com' || host.endsWith('.fbsbx.com') ||
+            host === 'facebook.com' || host.endsWith('.facebook.com');
+        if (url.protocol !== 'https:' || !allowedHost || url.username || url.password) return undefined;
+        return url.toString();
+    } catch {
+        return undefined;
+    }
+}
+
+function safeMetaDestinationUrl(value: unknown): string | undefined {
+    const raw = metaText(value, 2048);
+    if (!raw) return undefined;
+    try {
+        const url = new URL(raw);
+        if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+        return url.toString();
+    } catch {
+        return undefined;
+    }
+}
+
+function metaTextVariants(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const values = value.slice(0, 8)
+        .map((item) => metaText(metaRecord(item).text ?? item, 3000))
+        .filter((item): item is string => Boolean(item));
+    return [...new Set(values)];
+}
+
+function uniqueMetaStrings(values: Array<string | undefined>): string[] {
+    return [...new Set(values.filter((value): value is string => Boolean(value)))].slice(0, 8);
+}
+
+/**
+ * Normalize the read-only Marketing API Ad/AdCreative response. Dynamic
+ * creative variants remain separate arrays: we never invent pairings between
+ * bodies, headlines, descriptions, images, videos or carousel assets.
+ */
+export function normalizeMetaAdCreativeSnapshot(
+    payload: unknown,
+    options: { capturedAt?: string; captureTiming?: MetaCreativeCaptureTiming } = {},
+): MetaAdCreativeSnapshot {
+    const ad = metaRecord(payload);
+    const creative = metaRecord(ad.creative);
+    const story = metaRecord(creative.object_story_spec);
+    const linkData = metaRecord(story.link_data);
+    const videoData = metaRecord(story.video_data);
+    const templateData = metaRecord(story.template_data);
+    const linkCta = metaRecord(linkData.call_to_action);
+    const videoCta = metaRecord(videoData.call_to_action);
+    const linkCtaValue = metaRecord(linkCta.value);
+    const videoCtaValue = metaRecord(videoCta.value);
+    const assetFeed = metaRecord(creative.asset_feed_spec);
+    const feedBodies = metaTextVariants(assetFeed.bodies);
+    const feedTitles = metaTextVariants(assetFeed.titles);
+    const feedDescriptions = metaTextVariants(assetFeed.descriptions);
+
+    const imageAssets: MetaAdCreativeAssetSnapshot[] = (Array.isArray(assetFeed.images) ? assetFeed.images : [])
+        .slice(0, 8)
+        .map((item) => {
+            const entry = metaRecord(item);
+            const imageUrl = safeMetaAssetUrl(entry.url) || safeMetaAssetUrl(entry.url_128) || safeMetaAssetUrl(entry.url_256);
+            return imageUrl ? { kind: 'IMAGE' as const, imageUrl } : null;
+        })
+        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+
+    const videoAssets: MetaAdCreativeAssetSnapshot[] = (Array.isArray(assetFeed.videos) ? assetFeed.videos : [])
+        .slice(0, 8)
+        .map((item) => {
+            const entry = metaRecord(item);
+            const videoId = metaText(entry.video_id, 128);
+            const thumbnailUrl = safeMetaAssetUrl(entry.thumbnail_url);
+            return videoId || thumbnailUrl
+                ? { kind: 'VIDEO' as const, ...(videoId ? { videoId } : {}), ...(thumbnailUrl ? { thumbnailUrl } : {}) }
+                : null;
+        })
+        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+
+    const childAttachments = Array.isArray(linkData.child_attachments) ? linkData.child_attachments : [];
+    const carouselAssets: MetaAdCreativeAssetSnapshot[] = childAttachments.slice(0, 10)
+        .map((item) => {
+            const entry = metaRecord(item);
+            const cta = metaRecord(entry.call_to_action);
+            const ctaValue = metaRecord(cta.value);
+            const imageUrl = safeMetaAssetUrl(entry.picture) || safeMetaAssetUrl(entry.image_url);
+            const videoId = metaText(entry.video_id, 128);
+            const title = metaText(entry.name, 500);
+            const description = metaText(entry.description, 1000);
+            const destinationUrl = safeMetaDestinationUrl(entry.link) || safeMetaDestinationUrl(ctaValue.link);
+            if (!imageUrl && !videoId && !title && !description) return null;
+            return {
+                kind: videoId ? 'VIDEO' as const : 'IMAGE' as const,
+                ...(imageUrl ? { imageUrl } : {}),
+                ...(videoId ? { videoId } : {}),
+                ...(title ? { title } : {}),
+                ...(description ? { description } : {}),
+                ...(destinationUrl ? { destinationUrl } : {}),
+            };
+        })
+        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+
+    const primaryText =
+        metaText(linkData.message, 5000) ||
+        metaText(videoData.message, 5000) ||
+        metaText(templateData.message, 5000) ||
+        feedBodies[0];
+
+    const headlines = uniqueMetaStrings([
+        metaText(linkData.name, 500),
+        metaText(videoData.title, 500),
+        metaText(templateData.name, 500),
+        ...feedTitles,
+    ]);
+    const descriptions = uniqueMetaStrings([
+        metaText(linkData.description, 1000),
+        metaText(videoData.description, 1000),
+        ...feedDescriptions,
+    ]);
+
+    const firstFeedLink = Array.isArray(assetFeed.link_urls) ? metaRecord(assetFeed.link_urls[0]) : {};
+    const firstFeedCta = Array.isArray(assetFeed.call_to_action_types) ? metaRecord(assetFeed.call_to_action_types[0]) : {};
+    const imageUrl =
+        safeMetaAssetUrl(creative.image_url) ||
+        safeMetaAssetUrl(linkData.picture) ||
+        safeMetaAssetUrl(videoData.image_url) ||
+        imageAssets[0]?.imageUrl ||
+        carouselAssets[0]?.imageUrl;
+    const videoId =
+        metaText(creative.video_id, 128) ||
+        metaText(videoData.video_id, 128) ||
+        videoAssets[0]?.videoId;
+    const thumbnailUrl =
+        safeMetaAssetUrl(creative.thumbnail_url) ||
+        safeMetaAssetUrl(videoData.image_url) ||
+        videoAssets[0]?.thumbnailUrl ||
+        (videoId ? imageUrl : undefined);
+    const destinationUrl =
+        safeMetaDestinationUrl(linkData.link) ||
+        safeMetaDestinationUrl(linkCtaValue.link) ||
+        safeMetaDestinationUrl(videoCtaValue.link) ||
+        safeMetaDestinationUrl(firstFeedLink.website_url) ||
+        safeMetaDestinationUrl(firstFeedLink.url);
+    const ctaType =
+        metaText(linkCta.type, 100) ||
+        metaText(videoCta.type, 100) ||
+        metaText(firstFeedCta.type, 100) ||
+        metaText(creative.call_to_action_type, 100);
+
+    const hasCreative = Object.keys(creative).length > 0;
+    const hasDisplayContent = Boolean(
+        primaryText || headlines.length || descriptions.length || imageUrl || videoId ||
+        carouselAssets.length || imageAssets.length || videoAssets.length
+    );
+    const format: MetaAdCreativeSnapshot['format'] =
+        carouselAssets.length > 1 ? 'CAROUSEL' :
+        Object.keys(assetFeed).length > 0 ? 'DYNAMIC' :
+        videoId ? 'VIDEO' :
+        imageUrl ? 'IMAGE' : 'UNKNOWN';
+
+    return {
+        schemaVersion: 1,
+        status: !hasCreative ? 'UNAVAILABLE' : hasDisplayContent ? 'AVAILABLE' : 'PARTIAL',
+        source: hasCreative ? 'META_MARKETING_API' : 'NONE',
+        capturedAt: options.capturedAt || new Date().toISOString(),
+        captureTiming: options.captureTiming || 'AT_LEAD_INTAKE',
+        ...(!hasCreative ? { reason: 'CREATIVE_DETAILS_UNAVAILABLE' } : {}),
+        adId: metaText(ad.id, 128) || '',
+        ...(metaText(ad.name, 500) ? { adName: metaText(ad.name, 500) } : {}),
+        ...(metaText(metaRecord(ad.campaign).id ?? ad.campaign_id, 128) ? { campaignId: metaText(metaRecord(ad.campaign).id ?? ad.campaign_id, 128) } : {}),
+        ...(metaText(metaRecord(ad.campaign).name, 500) ? { campaignName: metaText(metaRecord(ad.campaign).name, 500) } : {}),
+        ...(metaText(metaRecord(ad.adset).id ?? ad.adset_id, 128) ? { adsetId: metaText(metaRecord(ad.adset).id ?? ad.adset_id, 128) } : {}),
+        ...(metaText(metaRecord(ad.adset).name, 500) ? { adsetName: metaText(metaRecord(ad.adset).name, 500) } : {}),
+        ...(metaText(creative.id, 128) ? { creativeId: metaText(creative.id, 128) } : {}),
+        ...(metaText(creative.name, 500) ? { creativeName: metaText(creative.name, 500) } : {}),
+        ...(metaText(creative.effective_object_story_id ?? creative.object_story_id, 160) ? { storyId: metaText(creative.effective_object_story_id ?? creative.object_story_id, 160) } : {}),
+        format,
+        ...(primaryText ? { primaryText } : {}),
+        headlines,
+        descriptions,
+        ...(ctaType ? { ctaType } : {}),
+        ...(destinationUrl ? { destinationUrl } : {}),
+        ...(imageUrl ? { imageUrl } : {}),
+        ...(thumbnailUrl ? { thumbnailUrl } : {}),
+        ...(videoId ? { videoId } : {}),
+        carouselAssets,
+        imageAssets,
+        videoAssets,
+    };
+}
+
+function emptyMetaCreativeSnapshot(
+    adId: string,
+    status: 'PENDING_SYNC' | 'UNAVAILABLE',
+    reason: string,
+    captureTiming: MetaCreativeCaptureTiming,
+): MetaAdCreativeSnapshot {
+    return {
+        schemaVersion: 1,
+        status,
+        source: 'NONE',
+        capturedAt: new Date().toISOString(),
+        captureTiming,
+        reason,
+        adId,
+        format: 'UNKNOWN',
+        headlines: [],
+        descriptions: [],
+        carouselAssets: [],
+        imageAssets: [],
+        videoAssets: [],
+    };
+}
+
+/**
+ * Fetch one ad's actual creative through the read-only Marketing API. This is
+ * deliberately best-effort: missing mappings, expired tokens, permissions or
+ * deleted assets never block durable Lead Ads intake.
+ */
+export async function fetchMetaAdCreativeSnapshot(
+    companyId: string,
+    adId: string,
+    options: { customFetch?: typeof fetch; captureTiming?: MetaCreativeCaptureTiming } = {},
+): Promise<MetaAdCreativeSnapshot> {
+    const captureTiming = options.captureTiming || 'AT_LEAD_INTAKE';
+    const pending = (reason: string) => emptyMetaCreativeSnapshot(adId, 'PENDING_SYNC', reason, captureTiming);
+
+    try {
+        const supabase = createAdminClient();
+        const { data: ad, error: adError } = await supabase
+            .from('meta_ads')
+            .select('ad_account_id')
+            .eq('company_id', companyId)
+            .eq('meta_ad_id', adId)
+            .maybeSingle();
+
+        if (adError) return pending('AD_LOOKUP_FAILED');
+        if (!ad?.ad_account_id) return pending('AD_NOT_SYNCED');
+
+        const stored = await supabase.rpc('get_meta_ad_account_token', {
+            p_company_id: companyId,
+            p_ad_account_id: ad.ad_account_id,
+        });
+        if (stored.error) return pending('TOKEN_LOOKUP_FAILED');
+        const tokenRecord = Array.isArray(stored.data) ? stored.data[0] : stored.data;
+        if (!tokenRecord || typeof tokenRecord.encrypted_access_token !== 'string') return pending('TOKEN_UNAVAILABLE');
+        if (tokenRecord.token_expires_at) {
+            const expiresAt = new Date(tokenRecord.token_expires_at).getTime();
+            if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return pending('TOKEN_EXPIRED');
+        }
+
+        let accessToken: string;
+        try {
+            accessToken = decryptToken(tokenRecord.encrypted_access_token);
+        } catch {
+            return pending('TOKEN_DECRYPTION_FAILED');
+        }
+
+        const version = marketingVersion();
+        const fieldSets = [
+            'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
+            'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,image_url,thumbnail_url,video_id}',
+        ];
+        let response: Response | null = null;
+        for (let index = 0; index < fieldSets.length; index++) {
+            const url = new URL('https://graph.facebook.com/' + version + '/' + encodeURIComponent(adId));
+            url.searchParams.set('fields', fieldSets[index]);
+            response = await fetchWithBackoff(
+                url.toString(),
+                { headers: { Authorization: 'Bearer ' + accessToken }, redirect: 'error' },
+                options.customFetch,
+                1,
+                500,
+            );
+            if (response.ok || response.status !== 400 || index === fieldSets.length - 1) break;
+        }
+
+        if (!response?.ok) {
+            const status = response?.status || 0;
+            if (status === 429 || status === 0 || status >= 500) return pending('META_TEMPORARY_FAILURE');
+            if (status === 400 || status === 401 || status === 403 || status === 404) {
+                return emptyMetaCreativeSnapshot(adId, 'UNAVAILABLE', 'META_PERMISSION_OR_CREATIVE_UNAVAILABLE', captureTiming);
+            }
+            return pending('META_CREATIVE_LOOKUP_FAILED');
+        }
+
+        let payload: unknown;
+        try {
+            payload = await response.json();
+        } catch {
+            return pending('META_INVALID_RESPONSE');
+        }
+        const snapshot = normalizeMetaAdCreativeSnapshot(payload, { captureTiming });
+        return snapshot.status === 'UNAVAILABLE'
+            ? { ...snapshot, adId: snapshot.adId || adId, reason: 'META_CREATIVE_NOT_AVAILABLE' }
+            : { ...snapshot, adId: snapshot.adId || adId };
+    } catch {
+        return pending('META_CREATIVE_LOOKUP_FAILED');
+    }
+}
+
+export interface MetaCreativeSnapshotSyncSummary {
+    scanned: number;
+    updated: number;
+    pending: number;
+    unavailable: number;
+    failed: number;
+}
+
+/**
+ * Backfill only missing/pending creative snapshots on existing Lead Ads
+ * touchpoints. Once a usable or terminal snapshot is stored, it is never
+ * overwritten by later edits to the source ad.
+ */
+export async function syncPendingCreativeSnapshots(
+    companyId: string,
+    options: { customFetch?: typeof fetch; limit?: number } = {},
+): Promise<MetaCreativeSnapshotSyncSummary> {
+    const supabase = createAdminClient();
+    const limit = Math.max(1, Math.min(options.limit ?? 25, 100));
+    const scanLimit = Math.max(100, limit * 10);
+    const { data: rows, error } = await supabase
+        .from('lead_attribution_touchpoints')
+        .select('id,meta_ad_id,ads_context_data')
+        .eq('company_id', companyId)
+        .eq('channel', 'FACEBOOK_LEAD_ADS')
+        .not('meta_ad_id', 'is', null)
+        .order('occurred_at', { ascending: true })
+        .limit(scanLimit);
+
+    if (error) throw new Error('CREATIVE_SNAPSHOT_BACKFILL_QUERY_FAILED');
+
+    const candidates = (rows || []).filter((row) => {
+        const existing = metaRecord(metaRecord(row.ads_context_data).creative_snapshot);
+        if (Object.keys(existing).length === 0) return true;
+        return existing.status === 'PENDING_SYNC';
+    }).slice(0, limit);
+
+    const cache = new Map<string, MetaAdCreativeSnapshot>();
+    let updated = 0;
+    let pending = 0;
+    let unavailable = 0;
+    let failed = 0;
+
+    for (const row of candidates) {
+        const adId = metaText(row.meta_ad_id, 128);
+        if (!adId) continue;
+        let snapshot = cache.get(adId);
+        if (!snapshot) {
+            snapshot = await fetchMetaAdCreativeSnapshot(companyId, adId, {
+                customFetch: options.customFetch,
+                captureTiming: 'BACKFILL',
+            });
+            cache.set(adId, snapshot);
+        }
+
+        if (snapshot.status === 'PENDING_SYNC') {
+            pending++;
+            continue;
+        }
+
+        const currentContext = metaRecord(row.ads_context_data);
+        const currentSnapshot = metaRecord(currentContext.creative_snapshot);
+        if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC') continue;
+
+        const { error: updateError } = await supabase
+            .from('lead_attribution_touchpoints')
+            .update({ ads_context_data: { ...currentContext, creative_snapshot: snapshot } })
+            .eq('id', row.id)
+            .eq('company_id', companyId)
+            .eq('channel', 'FACEBOOK_LEAD_ADS')
+            .eq('meta_ad_id', adId);
+
+        if (updateError) {
+            failed++;
+            continue;
+        }
+        updated++;
+        if (snapshot.status === 'UNAVAILABLE') unavailable++;
+    }
+
+    return { scanned: candidates.length, updated, pending, unavailable, failed };
+}
+
+
 export interface MetaLeadFormDto {
     id: string;
     name: string;
@@ -263,6 +711,7 @@ export async function syncCompanyMetaAttribution(
     accountResults: Array<{ adAccountId: string; status: 'SUCCESS' | 'FAILED' | 'SKIPPED'; error?: string }>;
     campaignsCount: number;
     adsCount: number;
+    creativeSnapshotSync: MetaCreativeSnapshotSyncSummary;
     error?: string;
 }> {
     const supabase = createAdminClient();
@@ -328,8 +777,15 @@ export async function syncCompanyMetaAttribution(
     const accountsSynced = accountResults.filter(a => a.status === 'SUCCESS').length;
     const accountsFailed = accountResults.filter(a => a.status === 'FAILED').length;
     const accountsSkipped = accountResults.filter(a => a.status === 'SKIPPED').length;
+    let creativeSnapshotSync: MetaCreativeSnapshotSyncSummary = { scanned: 0, updated: 0, pending: 0, unavailable: 0, failed: 0 };
+    try {
+        creativeSnapshotSync = await syncPendingCreativeSnapshots(companyId, { customFetch: options.customFetch, limit: 25 });
+    } catch {
+        creativeSnapshotSync.failed = 1;
+    }
     return {
         success: accountsSynced > 0 && accountsFailed === 0 && accountsSkipped === 0,
+        creativeSnapshotSync,
         accountsSynced, accountsFailed, accountsSkipped, accountResults,
         campaignsCount, adsCount,
         ...(accountsSynced === 0 && accountResults.length === 0 ? { error: 'NO_AD_ACCOUNTS' } : {}),
