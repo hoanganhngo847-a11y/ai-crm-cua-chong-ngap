@@ -61,6 +61,7 @@ export interface MetaAdCreativeSnapshot {
     descriptions: string[];
     ctaType?: string;
     destinationUrl?: string;
+    previewUrl?: string;
     imageUrl?: string;
     thumbnailUrl?: string;
     videoId?: string;
@@ -104,6 +105,21 @@ function safeMetaDestinationUrl(value: unknown): string | undefined {
     try {
         const url = new URL(raw);
         if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+        return url.toString();
+    } catch {
+        return undefined;
+    }
+}
+
+function safeMetaPreviewUrl(value: unknown): string | undefined {
+    const raw = metaText(value, 2048);
+    if (!raw) return undefined;
+    try {
+        const url = new URL(raw);
+        const host = url.hostname.toLowerCase();
+        if (url.protocol !== 'https:' || !(host === 'facebook.com' || host.endsWith('.facebook.com')) || url.username || url.password) {
+            return undefined;
+        }
         return url.toString();
     } catch {
         return undefined;
@@ -231,6 +247,7 @@ export function normalizeMetaAdCreativeSnapshot(
         safeMetaDestinationUrl(videoCtaValue.link) ||
         safeMetaDestinationUrl(firstFeedLink.website_url) ||
         safeMetaDestinationUrl(firstFeedLink.url);
+    const previewUrl = safeMetaPreviewUrl(ad.preview_shareable_link);
     const ctaType =
         metaText(linkCta.type, 100) ||
         metaText(videoCta.type, 100) ||
@@ -270,6 +287,7 @@ export function normalizeMetaAdCreativeSnapshot(
         descriptions,
         ...(ctaType ? { ctaType } : {}),
         ...(destinationUrl ? { destinationUrl } : {}),
+        ...(previewUrl ? { previewUrl } : {}),
         ...(imageUrl ? { imageUrl } : {}),
         ...(thumbnailUrl ? { thumbnailUrl } : {}),
         ...(videoId ? { videoId } : {}),
@@ -348,8 +366,9 @@ export async function fetchMetaAdCreativeSnapshot(
 
         const version = marketingVersion();
         const fieldSets = [
-            'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
-            'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,image_url,thumbnail_url,video_id}',
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id}',
+            'id,name,preview_shareable_link,campaign_id,adset_id,creative{id,name,object_type,image_url,thumbnail_url,video_id}',
             'id,name,creative{id,name}',
         ];
         let response: Response | null = null;

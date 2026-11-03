@@ -9,6 +9,7 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
     const snapshot = normalizeMetaAdCreativeSnapshot({
         id: 'ad_image_01',
         name: 'Tuyển sinh du học Áo',
+        preview_shareable_link: 'https://www.facebook.com/ads/preview/example',
         campaign: { id: 'campaign_01', name: 'Chiến dịch mùa thu' },
         adset: { id: 'adset_01', name: 'Học sinh lớp 12' },
         creative: {
@@ -40,6 +41,7 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
     assert.equal(snapshot.ctaType, 'SIGN_UP');
     assert.equal(snapshot.destinationUrl, 'https://example.edu.vn/austria');
     assert.equal(snapshot.imageUrl, imageUrl);
+    assert.equal(snapshot.previewUrl, 'https://www.facebook.com/ads/preview/example');
     assert.equal(snapshot.capturedAt, '2026-11-03T10:00:00.000Z');
 });
 
@@ -125,6 +127,7 @@ test('Meta dynamic creative keeps copy and asset variants separate without fabri
 test('Meta creative snapshot rejects insecure and non-Meta media URLs', () => {
     const snapshot = normalizeMetaAdCreativeSnapshot({
         id: 'ad_unsafe_01',
+        preview_shareable_link: 'https://attacker.example/preview',
         creative: {
             id: 'creative_unsafe_01',
             image_url: 'https://attacker.example/image.jpg',
@@ -141,5 +144,6 @@ test('Meta creative snapshot rejects insecure and non-Meta media URLs', () => {
     assert.equal(snapshot.status, 'AVAILABLE');
     assert.equal(snapshot.imageUrl, undefined);
     assert.equal(snapshot.destinationUrl, undefined);
+    assert.equal(snapshot.previewUrl, undefined);
     assert.equal(snapshot.primaryText, 'Nội dung vẫn được giữ');
 });

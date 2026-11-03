@@ -64,6 +64,7 @@ type MetaCreativeSnapshotView = {
   descriptions: string[];
   ctaType?: string;
   destinationUrl?: string;
+  previewUrl?: string;
   imageUrl?: string;
   thumbnailUrl?: string;
   videoId?: string;
@@ -113,6 +114,19 @@ function safeMetaDestination(value: unknown): string | undefined {
   }
 }
 
+function safeMetaPreview(value: unknown): string | undefined {
+  const raw = metaString(value, 2048);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || !(host === 'facebook.com' || host.endsWith('.facebook.com')) || url.username || url.password) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function readMetaCreativeSnapshot(adsContextData: unknown): MetaCreativeSnapshotView | null {
   const context = asMetaRecord(adsContextData);
   const raw = asMetaRecord(context?.creative_snapshot);
@@ -156,6 +170,7 @@ function readMetaCreativeSnapshot(adsContextData: unknown): MetaCreativeSnapshot
     descriptions: readList(raw.descriptions),
     ctaType: metaString(raw.ctaType, 100),
     destinationUrl: safeMetaDestination(raw.destinationUrl),
+    previewUrl: safeMetaPreview(raw.previewUrl),
     imageUrl: safeMetaImageUrl(raw.imageUrl),
     thumbnailUrl: safeMetaImageUrl(raw.thumbnailUrl),
     videoId: metaString(raw.videoId, 128),
@@ -736,6 +751,16 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                                     className="inline-block text-[10px] text-[var(--accent)] underline"
                                   >
                                     Mở trang đích quảng cáo
+                                  </a>
+                                )}
+                                {creativeSnapshot.previewUrl && (
+                                  <a
+                                    href={creativeSnapshot.previewUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-block text-[10px] text-[var(--accent)] underline ml-3"
+                                  >
+                                    Mở bản xem trước quảng cáo Meta
                                   </a>
                                 )}
                                 {creativeSnapshot.videoId && (
