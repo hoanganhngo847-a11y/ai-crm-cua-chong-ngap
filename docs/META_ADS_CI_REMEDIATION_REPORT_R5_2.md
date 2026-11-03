@@ -4,6 +4,7 @@
 **Pull Request:** [#140](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/140)<br/>
 **Branch:** `integration/meta-ads-backup-restore`<br/>
 **Baseline Review SHA:** `7f74235a54add569e29bdc5a34b44946da758a9b`<br/>
+**Remediation Implementation SHA:** `1d3f5fb8f56bafa6a99af907051a18356ac83b6d`<br/>
 **Ngày thực hiện:** 03/11/2026<br/>
 **Trạng thái:** **READY FOR INDEPENDENT REVIEW** (Chờ Independent Reviewer nghiệm thu)
 
@@ -207,7 +208,20 @@ Trả về 3 trạng thái rõ ràng:
 
 ---
 
-## 8. Remaining Risks & Mitigations
+## 8. GitHub Actions Verification Runs
+
+Cả hai quy trình CI trên GitHub Actions đều đã chạy thành công trên commit `1d3f5fb8f56bafa6a99af907051a18356ac83b6d`:
+
+| Workflow | Run ID | Trạng thái | URL |
+|---|---|---|---|
+| **Backup & Restore CI (Helpers #1-#6)** | `41609878927` | **SUCCESS** (2m 17s) | [Run 41609878927](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41609878927) |
+| **Verify** | `41609878879` | **SUCCESS** (12m 24s) | [Run 41609878879](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41609878879) |
+
+Toàn bộ 52 steps của `Verify` workflow bao gồm live integration gate, disposable PostgreSQL 17 start/test/teardown, typecheck, lint, test omnichannel, test voice, build, và `git diff --check` đều đạt SUCCESS.
+
+---
+
+## 9. Remaining Risks & Mitigations
 
 | Rủi ro còn lại | Mức độ | Biện pháp giảm thiểu |
 |---|---|---|
@@ -217,7 +231,7 @@ Trả về 3 trạng thái rõ ràng:
 
 ---
 
-## 9. Danh Sách Kiểm Tra Nghiệm Thu (Acceptance Checklist)
+## 10. Danh Sách Kiểm Tra Nghiệm Thu (Acceptance Checklist)
 
 - [x] Effective Docker context được xác minh đúng theo thứ bậc Docker CLI.
 - [x] Default remote context bị chặn kể cả khi không có `DOCKER_HOST`/`DOCKER_CONTEXT`.
@@ -239,7 +253,7 @@ Trả về 3 trạng thái rõ ràng:
 
 ---
 
-## 10. Kết luận
+## 11. Kết luận
 
 Toàn bộ các finding P1 từ Independent Review đã được khắc phục triệt để với cơ chế kiểm tra effective endpoint fail-closed và container ownership 3 lớp.
 
