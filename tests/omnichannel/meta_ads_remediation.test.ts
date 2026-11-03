@@ -65,7 +65,7 @@ test('all attribution and lead endpoints use independent supported versions and 
         }
         assert.ok(requests.every(u => !/\/(insights|adsets)$/.test(u.pathname)));
         assert.equal(requests.find(u => u.pathname.endsWith('/campaigns'))?.searchParams.get('fields'), 'id,name,status');
-        assert.equal(requests.find(u => u.pathname.endsWith('/ads'))?.searchParams.get('fields'), 'id,name,campaign_id,status');
+        assert.equal(requests.find(u => u.pathname.endsWith('/ads'))?.searchParams.get('fields'), 'id,name,campaign_id,adset_id,status');
         const scopeSource = readFileSync('app/api/facebook/connect/start/route.ts', 'utf8');
         assert.doesNotMatch(scopeSource, /ads_management|pages_manage_ads/);
         assert.match(scopeSource, /ads_read,leads_retrieval/);
@@ -126,7 +126,7 @@ test('metadata sync stores only attribution fields even when Graph returns budge
         assert.equal(init?.method || 'GET', 'GET');
         assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${secret}`);
         assert.ok(!/\/(insights|adsets)$/.test(url.pathname));
-        return Response.json({ data: [{ id: '123', name: 'Campaign A', campaign_id: '456', status: 'ACTIVE',
+        return Response.json({ data: [{ id: '123', name: 'Campaign A', campaign_id: '456', adset_id: '789', status: 'ACTIVE',
             daily_budget: '10000', creative: { body: 'Unused' }, spend: '99', impressions: '1000', clicks: '5' }] });
     };
     try {
@@ -141,6 +141,7 @@ test('metadata sync stores only attribution fields even when Graph returns budge
             }
         }
         assert.equal(writes[1].rows[0].meta_campaign_id, '456');
+        assert.equal(writes[1].rows[0].meta_ad_set_id, '789', 'Ad Set ID is retained from the read-only Ad object');
         assert.equal(writes[2].rows[0].page_id, 'page-a');
     } finally { globalThis.fetch = original; }
 });

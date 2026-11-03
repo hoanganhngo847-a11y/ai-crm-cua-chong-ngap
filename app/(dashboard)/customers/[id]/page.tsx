@@ -50,6 +50,8 @@ type MetaCreativeAssetView = {
 type MetaCreativeSnapshotView = {
   status?: string;
   captureTiming?: string;
+  capturedAt?: string;
+  reason?: string;
   adId?: string;
   adName?: string;
   campaignId?: string;
@@ -60,6 +62,7 @@ type MetaCreativeSnapshotView = {
   creativeName?: string;
   format?: string;
   primaryText?: string;
+  primaryTexts: string[];
   headlines: string[];
   descriptions: string[];
   ctaType?: string;
@@ -71,6 +74,18 @@ type MetaCreativeSnapshotView = {
   carouselAssets: MetaCreativeAssetView[];
   imageAssets: MetaCreativeAssetView[];
   videoAssets: MetaCreativeAssetView[];
+};
+
+
+type MetaRawAttributionView = {
+  campaignId?: string;
+  campaignName?: string;
+  adsetId?: string;
+  adsetName?: string;
+  adId?: string;
+  adName?: string;
+  formId?: string;
+  formName?: string;
 };
 
 function asMetaRecord(value: unknown): Record<string, unknown> | null {
@@ -165,7 +180,12 @@ function readMetaCreativeSnapshot(adsContextData: unknown): MetaCreativeSnapshot
     creativeId: metaString(raw.creativeId, 128),
     creativeName: metaString(raw.creativeName, 500),
     format: metaString(raw.format, 40),
+    capturedAt: metaString(raw.capturedAt, 64),
+    reason: metaString(raw.reason, 120),
     primaryText: metaString(raw.primaryText, 5000),
+    primaryTexts: readList(raw.primaryTexts).length
+      ? readList(raw.primaryTexts)
+      : [metaString(raw.primaryText, 5000)].filter((item): item is string => Boolean(item)),
     headlines: readList(raw.headlines),
     descriptions: readList(raw.descriptions),
     ctaType: metaString(raw.ctaType, 100),
@@ -180,6 +200,68 @@ function readMetaCreativeSnapshot(adsContextData: unknown): MetaCreativeSnapshot
   };
 }
 
+
+
+function readMetaRawAttribution(adsContextData: unknown): MetaRawAttributionView {
+  const context = asMetaRecord(adsContextData);
+  const raw = asMetaRecord(context?.raw_meta);
+  if (!raw) return {};
+  return {
+    campaignId: metaString(raw.campaign_id, 128),
+    campaignName: metaString(raw.campaign_name, 500),
+    adsetId: metaString(raw.adset_id, 128),
+    adsetName: metaString(raw.adset_name, 500),
+    adId: metaString(raw.ad_id, 128),
+    adName: metaString(raw.ad_name, 500),
+    formId: metaString(raw.form_id, 128),
+    formName: metaString(raw.form_name, 500),
+  };
+}
+
+function formatMetaTimestamp(value: string | null | undefined): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function metaCreativeReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'AD_NOT_SYNCED':
+      return 'Chưa có mapping quảng cáo trong tài khoản Meta đã đồng bộ; hệ thống sẽ thử lại.';
+    case 'AD_LOOKUP_FAILED':
+      return 'Chưa tra được quảng cáo trong dữ liệu đồng bộ; chưa thể xác minh Campaign/Ad Set.';
+    case 'TOKEN_LOOKUP_FAILED':
+    case 'TOKEN_UNAVAILABLE':
+      return 'Chưa có token hợp lệ để đọc tài khoản quảng cáo Meta.';
+    case 'TOKEN_EXPIRED':
+    case 'META_TOKEN_INVALID_OR_EXPIRED':
+      return 'Token Meta hết hạn hoặc không hợp lệ; cần kết nối lại tài khoản quảng cáo.';
+    case 'TOKEN_DECRYPTION_FAILED':
+      return 'Không thể sử dụng token Meta đã lưu; cần kiểm tra cấu hình kết nối bảo mật.';
+    case 'META_PERMISSION_DENIED':
+      return 'Meta từ chối quyền đọc quảng cáo/creative; cần kiểm tra quyền đã cấp cho ứng dụng.';
+    case 'META_TEMPORARY_FAILURE':
+      return 'Meta tạm thời lỗi hoặc giới hạn tốc độ; hệ thống sẽ thử đồng bộ lại.';
+    case 'META_INVALID_RESPONSE':
+      return 'Meta trả về dữ liệu không hợp lệ; chưa thể tạo snapshot.';
+    case 'AD_NOT_FOUND_OR_DELETED':
+      return 'Không tìm thấy quảng cáo hoặc quảng cáo không còn khả dụng với quyền hiện tại.';
+    case 'META_CREATIVE_FIELDS_UNAVAILABLE':
+      return 'Meta không cung cấp các trường creative được yêu cầu.';
+    case 'META_CREATIVE_NOT_AVAILABLE':
+      return 'Meta không trả về creative object cho quảng cáo này.';
+    case 'META_CREATIVE_UNAVAILABLE':
+    case 'META_PERMISSION_OR_CREATIVE_UNAVAILABLE':
+      return 'Không lấy được nội dung creative; hiện chưa đủ bằng chứng để kết luận là thiếu quyền hay quảng cáo không còn khả dụng.';
+    default:
+      return 'Chưa lấy được creative từ Meta; thông tin này không được suy đoán.';
+  }
+}
 
 interface CustomerDetailPageProps {
   params: Promise<{ id: string }>;
@@ -235,6 +317,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       touchpoint_type: string;
       channel: string;
       page_name: string | null;
+      page_id: string | null;
+      meta_form_id: string | null;
+      meta_leadgen_id: string | null;
       meta_campaign_id: string | null;
       campaign_name_snapshot: string | null;
       meta_ad_set_id: string | null;
@@ -314,6 +399,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         touchpoint_type: string;
         channel: string;
         page_name: string | null;
+        page_id: string | null;
+        meta_form_id: string | null;
+        meta_leadgen_id: string | null;
         meta_campaign_id: string | null;
         campaign_name_snapshot: string | null;
         meta_ad_set_id: string | null;
@@ -332,7 +420,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       try {
         const { data: tpRows } = await supabase
           .from('lead_attribution_touchpoints')
-          .select('id, touchpoint_type, channel, page_name, meta_campaign_id, campaign_name_snapshot, meta_ad_set_id, ad_set_name_snapshot, meta_ad_id, ad_name_snapshot, form_name_snapshot, ads_context_data, attribution_status, attribution_method, normalized_phone_match_status, is_duplicate_phone, occurred_at')
+          .select('id, touchpoint_type, channel, page_id, page_name, meta_form_id, form_name_snapshot, meta_leadgen_id, meta_campaign_id, campaign_name_snapshot, meta_ad_set_id, ad_set_name_snapshot, meta_ad_id, ad_name_snapshot, ads_context_data, attribution_status, attribution_method, normalized_phone_match_status, is_duplicate_phone, occurred_at')
           .eq('customer_id', id)
           .eq('company_id', actor.companyId)
           .order('occurred_at', { ascending: true });
@@ -588,7 +676,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-secondary)]">Đây là Lead đầu tiên:</span>
                     <span className="font-mono text-[var(--text-secondary)]">
-                      {new Date(firstSubmission.occurred_at).toLocaleDateString('vi-VN')}
+                      {formatMetaTimestamp(firstSubmission.occurred_at)}
                       {firstSubmission.campaign_name_snapshot ? ` • ${firstSubmission.campaign_name_snapshot}` : ''}
                     </span>
                   </div>
@@ -597,7 +685,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-secondary)]">Đây là Lead gần nhất:</span>
                     <span className="font-mono text-[var(--text-secondary)]">
-                      {new Date(latestSubmission.occurred_at).toLocaleDateString('vi-VN')}
+                      {formatMetaTimestamp(latestSubmission.occurred_at)}
                       {latestSubmission.campaign_name_snapshot ? ` • ${latestSubmission.campaign_name_snapshot}` : ''}
                     </span>
                   </div>
@@ -614,22 +702,44 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 <div className="space-y-1.5 max-h-72 overflow-y-auto">
                   {allTouchpoints.map((tp) => {
                     const rowStatus = tp.is_duplicate_phone === true
-                      ? { label: 'Lead trùng SĐT', variant: 'warning' as const }
+                      ? { label: 'Trùng số điện thoại', variant: 'warning' as const }
                       : tp.touchpoint_type === 'FIRST_TOUCH'
-                        ? (tp.attribution_status === 'PENDING_SYNC'
-                          ? { label: 'Lead mới - Chờ chiến dịch', variant: 'info' as const }
-                          : { label: 'Lead đầu tiên', variant: 'success' as const })
-                        : (tp.channel === 'FACEBOOK_LEAD_ADS'
-                          ? { label: 'Lead trùng SĐT', variant: 'warning' as const }
-                          : { label: 'Tương tác gần nhất', variant: 'neutral' as const });
-                    const campaignLabel =
-                      tp.campaign_name_snapshot
-                      || (tp.attribution_status === 'PENDING_SYNC' ? 'Chờ đồng bộ chiến dịch' : '—');
+                        ? { label: 'Lần đăng ký đầu tiên', variant: 'success' as const }
+                        : { label: tp.channel === 'FACEBOOK_LEAD_ADS' ? 'Lần đăng ký tiếp theo' : 'Tương tác gần nhất', variant: 'neutral' as const };
+                    const attributionState = tp.attribution_status === 'ATTRIBUTED'
+                      ? { label: 'Đã đối chiếu', variant: 'success' as const }
+                      : tp.attribution_status === 'INFERRED'
+                        ? { label: 'Đối chiếu gián tiếp', variant: 'info' as const }
+                        : tp.attribution_status === 'PENDING_SYNC'
+                          ? { label: 'Chờ đối chiếu', variant: 'warning' as const }
+                          : { label: 'Không có attribution', variant: 'neutral' as const };
                     const hasMetaAdAttribution = tp.channel === 'FACEBOOK_LEAD_ADS'
                       || (tp.channel === 'FACEBOOK_MESSENGER' && Boolean(tp.meta_ad_id));
                     const creativeSnapshot = hasMetaAdAttribution
                       ? readMetaCreativeSnapshot(tp.ads_context_data)
                       : null;
+                    const rawMeta = hasMetaAdAttribution ? readMetaRawAttribution(tp.ads_context_data) : {};
+                    const creativeAvailable = Boolean(creativeSnapshot && ['AVAILABLE', 'PARTIAL'].includes(creativeSnapshot.status || ''));
+                    const campaignId = tp.meta_campaign_id || (creativeAvailable ? creativeSnapshot?.campaignId : undefined) || rawMeta.campaignId;
+                    const campaignName = tp.campaign_name_snapshot || (creativeAvailable ? creativeSnapshot?.campaignName : undefined) || rawMeta.campaignName;
+                    const campaignIdVerified = Boolean(tp.meta_campaign_id || (creativeAvailable && creativeSnapshot?.campaignId));
+                    const campaignNameVerified = Boolean(tp.campaign_name_snapshot || (creativeAvailable && creativeSnapshot?.campaignName));
+                    const campaignLabel = tp.campaign_name_snapshot || (creativeAvailable ? creativeSnapshot?.campaignName : undefined)
+                      || (tp.attribution_status === 'PENDING_SYNC' ? 'Chờ đối chiếu chiến dịch' : 'Chưa có chiến dịch xác thực');
+                    const adSetId = tp.meta_ad_set_id || (creativeAvailable ? creativeSnapshot?.adsetId : undefined) || rawMeta.adsetId;
+                    const adSetName = tp.ad_set_name_snapshot || (creativeAvailable ? creativeSnapshot?.adsetName : undefined) || rawMeta.adsetName;
+                    const adSetIdVerified = Boolean(tp.meta_ad_set_id || (creativeAvailable && creativeSnapshot?.adsetId));
+                    const adSetNameVerified = Boolean(tp.ad_set_name_snapshot || (creativeAvailable && creativeSnapshot?.adsetName));
+                    const adId = (creativeAvailable ? creativeSnapshot?.adId : undefined) || tp.meta_ad_id || rawMeta.adId;
+                    const adName = tp.ad_name_snapshot || (creativeAvailable ? creativeSnapshot?.adName : undefined) || rawMeta.adName;
+                    const adIdVerified = Boolean(tp.ad_name_snapshot || (creativeAvailable && creativeSnapshot?.adId));
+                    const adNameVerified = Boolean(tp.ad_name_snapshot || (creativeAvailable && creativeSnapshot?.adName));
+                    const formId = tp.meta_form_id || rawMeta.formId;
+                    const formName = tp.form_name_snapshot || rawMeta.formName;
+                    const formNameVerified = Boolean(tp.form_name_snapshot);
+                    const primaryTexts = creativeSnapshot?.primaryTexts?.length
+                      ? creativeSnapshot.primaryTexts
+                      : creativeSnapshot?.primaryText ? [creativeSnapshot.primaryText] : [];
                     const creativeMedia: Array<{ url: string; alt: string }> = [];
                     if (creativeSnapshot?.imageUrl) creativeMedia.push({
                       url: creativeSnapshot.imageUrl,
@@ -637,16 +747,6 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                     });
                     if (creativeSnapshot?.thumbnailUrl && creativeSnapshot.thumbnailUrl !== creativeSnapshot.imageUrl) {
                       creativeMedia.push({ url: creativeSnapshot.thumbnailUrl, alt: 'Thumbnail quảng cáo' });
-                    }
-                    for (const asset of [
-                      ...(creativeSnapshot?.carouselAssets || []),
-                      ...(creativeSnapshot?.imageAssets || []),
-                      ...(creativeSnapshot?.videoAssets || []),
-                    ]) {
-                      const url = asset.imageUrl || asset.thumbnailUrl;
-                      if (url && !creativeMedia.some((item) => item.url === url)) {
-                        creativeMedia.push({ url, alt: asset.title || 'Tài sản quảng cáo Meta' });
-                      }
                     }
                     return (
                       <div
@@ -681,53 +781,139 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                         )}
                         {hasMetaAdAttribution && (
                           <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] space-y-2">
-                            <div className="font-semibold text-text-primary">Mẫu quảng cáo thực tế</div>
-                            {creativeSnapshot?.status === 'PENDING_SYNC' ? (
-                              <div className="text-[10px] text-amber-700">
-                                Đang chờ đồng bộ nội dung quảng cáo từ Meta. Lead và nguồn đăng ký vẫn được lưu bình thường.
-                              </div>
-                            ) : creativeSnapshot?.status === 'UNAVAILABLE' ? (
-                              <div className="text-[10px] text-text-tertiary">
-                                Meta hiện không cung cấp được nội dung hoặc tài sản của quảng cáo này. Kiểm tra quyền ads_read hoặc trạng thái quảng cáo.
-                              </div>
-                            ) : creativeSnapshot ? (
-                              <>
-                                <div className="text-[10px] text-text-secondary space-y-0.5">
-                                  <div>
-                                    Campaign: {creativeSnapshot.campaignName || campaignLabel}
-                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.campaignId || tp.meta_campaign_id || '—'})</span>
-                                  </div>
-                                  <div>
-                                    Ad Set: {creativeSnapshot.adsetName || tp.ad_set_name_snapshot || 'Chưa có dữ liệu'}
-                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.adsetId || tp.meta_ad_set_id || '—'})</span>
-                                  </div>
-                                  <div>
-                                    Ad: {creativeSnapshot.adName || tp.ad_name_snapshot || 'Chưa có dữ liệu'}
-                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.adId || tp.meta_ad_id || '—'})</span>
-                                  </div>
-                                  {creativeSnapshot.creativeName && <div>Creative: {creativeSnapshot.creativeName}</div>}
-                                  {creativeSnapshot.creativeId && <div>Creative ID: <span className="font-mono">{creativeSnapshot.creativeId}</span></div>}
-                                  {creativeSnapshot.format && creativeSnapshot.format !== 'UNKNOWN' && <div>Định dạng: {creativeSnapshot.format}</div>}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-semibold text-text-primary">Nguồn quảng cáo Meta</div>
+                              <Badge variant={attributionState.variant} size="xs">{attributionState.label}</Badge>
+                            </div>
+                            {tp.channel === 'FACEBOOK_LEAD_ADS' && (
+                              <div className="text-[10px] text-text-tertiary space-y-0.5">
+                                <div>
+                                  Page: {tp.page_name || 'Facebook Page'}
+                                  <span className="ml-1 font-mono">({tp.page_id || 'Chưa có Page ID'})</span>
                                 </div>
+                                <div>Thời điểm gửi form: {formatMetaTimestamp(tp.occurred_at)}</div>
+                                <div>
+                                  Form: {formName || 'Chưa có tên Form'}
+                                  <span className="ml-1 font-mono">({formId || 'Chưa có Form ID'})</span>
+                                  {!formNameVerified && formName ? <span className="ml-1 text-amber-700">Tên từ Lead API, chưa đối chiếu</span> : null}
+                                </div>
+                                {tp.meta_leadgen_id && <div>Lead ID: <span className="font-mono">{tp.meta_leadgen_id}</span></div>}
+                              </div>
+                            )}
+                            <div className="text-[10px] text-text-secondary space-y-0.5">
+                              <div>
+                                Campaign: {campaignName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({campaignId || '—'})</span>
+                                {campaignId && <span className="ml-1 text-[9px] text-text-tertiary">{campaignIdVerified ? 'Đã đối chiếu' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {campaignName && !campaignNameVerified && <div className="text-amber-700">Tên Campaign do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              <div>
+                                Ad Set: {adSetName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({adSetId || '—'})</span>
+                                {adSetId && <span className="ml-1 text-[9px] text-text-tertiary">{adSetIdVerified ? 'Đã đối chiếu' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {adSetName && !adSetNameVerified && <div className="text-amber-700">Tên Ad Set do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              <div>
+                                Ad: {adName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({adId || '—'})</span>
+                                {adId && <span className="ml-1 text-[9px] text-text-tertiary">{adIdVerified ? 'Đã đối chiếu qua dữ liệu quảng cáo' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {adName && !adNameVerified && <div className="text-amber-700">Tên Ad do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              {creativeSnapshot?.creativeName && <div>Creative: {creativeSnapshot.creativeName}</div>}
+                              {creativeSnapshot?.creativeId && <div>Creative ID: <span className="font-mono">{creativeSnapshot.creativeId}</span></div>}
+                              {creativeSnapshot?.format && creativeSnapshot.format !== 'UNKNOWN' && <div>Định dạng: {creativeSnapshot.format}</div>}
+                              {creativeSnapshot?.ctaType && <div>CTA: {creativeSnapshot.ctaType}</div>}
+                            </div>
+                            {!campaignId && !adSetId && !adId && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Meta không trả về Campaign ID, Ad Set ID hoặc Ad ID cho lần đăng ký này. Không gán quảng cáo bằng suy đoán.
+                              </div>
+                            )}
+                            {!adId && (campaignId || adSetId) && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Không có Ad ID; chưa thể xác định quảng cáo hoặc creative cụ thể cho lần đăng ký này.
+                              </div>
+                            )}
+                            {creativeSnapshot?.status === 'PENDING_SYNC' && (
+                              <div className="text-[10px] text-amber-700">
+                                Chưa lấy được creative: {metaCreativeReasonLabel(creativeSnapshot.reason)} Lead và touchpoint vẫn được lưu.
+                              </div>
+                            )}
+                            {creativeSnapshot?.status === 'UNAVAILABLE' && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Creative không khả dụng: {metaCreativeReasonLabel(creativeSnapshot.reason)}
+                              </div>
+                            )}
+                            {!creativeSnapshot && adId && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Chưa có snapshot creative cho Ad ID này.
+                              </div>
+                            )}
+                            {creativeSnapshot?.capturedAt && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Snapshot được thu thập lúc {formatMetaTimestamp(creativeSnapshot.capturedAt)}.
+                              </div>
+                            )}
+                            {creativeSnapshot && (
+                              <div className={creativeSnapshot.captureTiming === 'BACKFILL' ? 'text-[10px] text-amber-700' : 'text-[10px] text-text-tertiary'}>
+                                {creativeSnapshot.captureTiming === 'BACKFILL'
+                                  ? 'Snapshot được thu thập sau thời điểm Lead; có thể phản ánh phiên bản quảng cáo tại lúc thu thập, không phải bằng chứng chắc chắn về nội dung khách đã nhìn thấy.'
+                                  : creativeSnapshot.captureTiming === 'AT_LEAD_INTAKE'
+                                    ? 'Snapshot được thu thập trong quá trình tiếp nhận webhook; không chứng minh tuyệt đối đúng tổ hợp quảng cáo đã phân phối cho khách.'
+                                    : 'Không xác định được thời điểm thu thập snapshot; không dùng làm bằng chứng về nội dung đã phân phối.'}
+                              </div>
+                            )}
+                            {creativeAvailable && creativeSnapshot && (
+                              <>
                                 {creativeMedia.length > 0 && (
                                   <div className="grid grid-cols-2 gap-2">
-                                    {creativeMedia.slice(0, 4).map((asset) => (
+                                    {creativeMedia.map((asset) => (
                                       <div key={asset.url} className="overflow-hidden rounded border border-[var(--border-subtle)] bg-[var(--surface-secondary)]">
-                                        <Image
-                                          src={asset.url}
-                                          alt={asset.alt}
-                                          width={640}
-                                          height={360}
-                                          unoptimized
-                                          className="h-24 w-full object-cover"
-                                        />
+                                        <Image src={asset.url} alt={asset.alt} width={640} height={360} unoptimized className="h-24 w-full object-cover" />
                                       </div>
                                     ))}
                                   </div>
                                 )}
-                                {creativeSnapshot.primaryText && (
-                                  <div className="text-[10px] text-text-secondary whitespace-pre-wrap">
-                                    <span className="font-semibold">Nội dung:</span> {creativeSnapshot.primaryText}
+                                {creativeSnapshot.carouselAssets.length > 0 && (
+                                  <div className="space-y-1">
+                                    <div className="font-semibold text-text-secondary">Carousel ({creativeSnapshot.carouselAssets.length} thẻ)</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {creativeSnapshot.carouselAssets.map((asset, index) => (
+                                        <div key={`carousel-${index}`} className="rounded border border-[var(--border-subtle)] p-1.5 space-y-1">
+                                          {(asset.imageUrl || asset.thumbnailUrl) && (
+                                            <Image src={(asset.imageUrl || asset.thumbnailUrl)!} alt={asset.title || 'Thẻ Carousel'} width={640} height={360} unoptimized className="h-20 w-full rounded object-cover" />
+                                          )}
+                                          {asset.title && <div className="font-semibold text-text-primary">{asset.title}</div>}
+                                          {asset.description && <div className="text-text-tertiary">{asset.description}</div>}
+                                          {asset.videoId && <div className="font-mono text-text-tertiary">Video ID: {asset.videoId}</div>}
+                                          {asset.destinationUrl && <a href={asset.destinationUrl} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline">Mở đích thẻ</a>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {creativeSnapshot.format === 'DYNAMIC' && (
+                                  <div className="space-y-1">
+                                    <div className="font-semibold text-text-secondary">Thành phần Dynamic Creative</div>
+                                    <div className="text-[10px] text-amber-700">Các mục dưới đây là tập biến thể Meta cung cấp; không chứng minh tổ hợp cụ thể đã được phân phối cho khách.</div>
+                                    {creativeSnapshot.imageAssets.map((asset, index) => (
+                                      <div key={`dynamic-image-${index}`} className="flex items-center gap-2">
+                                        {asset.imageUrl && <Image src={asset.imageUrl} alt="Ảnh biến thể Dynamic Creative" width={160} height={90} unoptimized className="h-12 w-20 rounded object-cover" />}
+                                        <span className="text-text-tertiary">Ảnh biến thể {index + 1}</span>
+                                      </div>
+                                    ))}
+                                    {creativeSnapshot.videoAssets.map((asset, index) => (
+                                      <div key={`dynamic-video-${index}`} className="flex items-center gap-2">
+                                        {asset.thumbnailUrl && <Image src={asset.thumbnailUrl} alt="Thumbnail video biến thể" width={160} height={90} unoptimized className="h-12 w-20 rounded object-cover" />}
+                                        <span className="text-text-tertiary">Video biến thể {index + 1}{asset.videoId ? ` · ID ${asset.videoId}` : ''}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {primaryTexts.length > 0 && (
+                                  <div className="text-[10px] text-text-secondary space-y-1">
+                                    <span className="font-semibold">{creativeSnapshot.format === 'DYNAMIC' ? 'Các biến thể nội dung chính' : 'Nội dung chính'}:</span>
+                                    {primaryTexts.map((text, index) => <div key={`primary-${index}`} className="whitespace-pre-wrap">{text}</div>)}
                                   </div>
                                 )}
                                 {creativeSnapshot.headlines.length > 0 && (
@@ -740,45 +926,23 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                                     <span className="font-semibold">Mô tả:</span> {creativeSnapshot.descriptions.join(' • ')}
                                   </div>
                                 )}
-                                {creativeSnapshot.ctaType && (
-                                  <div className="text-[10px] text-text-secondary">CTA: {creativeSnapshot.ctaType}</div>
-                                )}
                                 {creativeSnapshot.destinationUrl && (
-                                  <a
-                                    href={creativeSnapshot.destinationUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-block text-[10px] text-[var(--accent)] underline"
-                                  >
+                                  <a href={creativeSnapshot.destinationUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-[10px] text-[var(--accent)] underline">
                                     Mở trang đích quảng cáo
                                   </a>
                                 )}
                                 {creativeSnapshot.previewUrl && (
-                                  <a
-                                    href={creativeSnapshot.previewUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-block text-[10px] text-[var(--accent)] underline ml-3"
-                                  >
+                                  <a href={creativeSnapshot.previewUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-[10px] text-[var(--accent)] underline ml-3">
                                     Mở bản xem trước quảng cáo Meta
                                   </a>
                                 )}
                                 {creativeSnapshot.videoId && (
                                   <div className="text-[10px] text-text-tertiary">Video ID: <span className="font-mono">{creativeSnapshot.videoId}</span></div>
                                 )}
-                                {creativeSnapshot.captureTiming === 'BACKFILL' && (
-                                  <div className="text-[10px] text-amber-700">
-                                    Nội dung được đồng bộ sau thời điểm Lead; có thể là phiên bản quảng cáo hiện tại, không phải bằng chứng chắc chắn về phiên bản lịch sử.
-                                  </div>
-                                )}
                                 {creativeSnapshot.status === 'PARTIAL' && (
                                   <div className="text-[10px] text-text-tertiary">Meta chỉ trả về một phần thông tin creative.</div>
                                 )}
                               </>
-                            ) : (
-                              <div className="text-[10px] text-text-tertiary">
-                                Chưa có bản chụp creative cho Lead này.
-                              </div>
                             )}
                           </div>
                         )}

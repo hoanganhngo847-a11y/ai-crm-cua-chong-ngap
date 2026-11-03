@@ -8,7 +8,7 @@ import {
 import type { PageBinding } from './binding';
 import { rpc } from './server';
 import { graphVersion } from './graph-api';
-import { fetchMetaAdCreativeSnapshot } from './marketing-sync';
+import { fetchMetaAdCreativeSnapshot, type MetaAdCreativeSnapshot } from './marketing-sync';
 
 export interface MetaLeadData {
     id: string;
@@ -164,6 +164,23 @@ export function formatLeadAdsSafeContent(
     return lines.join('\n').slice(0, 5000);
 }
 
+
+function isMetaAdCreativeSnapshot(value: unknown): value is MetaAdCreativeSnapshot {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const snapshot = value as Record<string, unknown>;
+    return (snapshot.schemaVersion === 1 || snapshot.schemaVersion === 2)
+        && typeof snapshot.adId === 'string'
+        && typeof snapshot.capturedAt === 'string'
+        && ['AVAILABLE', 'PARTIAL', 'PENDING_SYNC', 'UNAVAILABLE'].includes(String(snapshot.status))
+        && ['META_MARKETING_API', 'NONE'].includes(String(snapshot.source))
+        && ['AT_LEAD_INTAKE', 'BACKFILL'].includes(String(snapshot.captureTiming))
+        && Array.isArray(snapshot.headlines)
+        && Array.isArray(snapshot.descriptions)
+        && Array.isArray(snapshot.carouselAssets)
+        && Array.isArray(snapshot.imageAssets)
+        && Array.isArray(snapshot.videoAssets);
+}
+
 /**
  * Ingest a Meta Lead Ads event into CRM with attribution touchpoint
  */
@@ -181,7 +198,7 @@ export async function processLeadAdsChange(
     const claim = await rpc('claim_meta_leadgen_event', {
         p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
         p_form_id: change.formId || null, p_ad_id: change.adId || null, p_occurred: change.time,
-    }) as { status?: string; claim_token?: string; occurred_at?: string; ingest_args?: { lead_data?: MetaLeadData } } | null;
+    }) as { status?: string; claim_token?: string; occurred_at?: string; ingest_args?: { lead_data?: MetaLeadData; creative_snapshot?: unknown } } | null;
     if (claim?.status === 'ALREADY_PROCESSED') return { leadgenId: change.leadgenId, status: 'EXISTING' };
     if (claim?.status !== 'CLAIMED' || !claim.claim_token) throw new ChannelError('LEADGEN_CLAIM_UNAVAILABLE', 503);
     const claimToken = claim.claim_token;
@@ -190,15 +207,21 @@ export async function processLeadAdsChange(
         p_claim_token: claimToken, p_status: status, p_error: error || null,
     });
     try {
-        // Reuse the immutable persisted response after partial intake. Changes to
-        // the form/lead in Meta cannot alter han_ingest's idempotency payload.
+        // Reuse the immutable lead response AND creative snapshot after partial
+        // intake. A retry must never replace the ad version first observed for this
+        // submission with a newer version edited in Meta in the meantime.
         const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
         const fields = extractLeadFields(leadData.field_data || []);
         const adId = leadData.ad_id || change.adId || null;
+        const persistedCreativeSnapshot = isMetaAdCreativeSnapshot(claim.ingest_args?.creative_snapshot)
+            ? claim.ingest_args.creative_snapshot
+            : null;
         const creativeSnapshot = adId
-            ? await fetchMetaAdCreativeSnapshot(config.company, adId, {
+            ? persistedCreativeSnapshot || await fetchMetaAdCreativeSnapshot(config.company, adId, {
                 customFetch,
-                captureTiming: 'AT_LEAD_INTAKE',
+                // Existing durable intake without a snapshot is a late capture,
+                // not evidence of the creative served at the original lead time.
+                captureTiming: claim.ingest_args ? 'BACKFILL' : 'AT_LEAD_INTAKE',
                 timeoutMs: 5000,
             })
             : null;
@@ -210,6 +233,7 @@ export async function processLeadAdsChange(
             p_ingest: {
                 name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
                 content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
+                ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
                 payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
                     campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name),
                     crm_phone_detection: { status: fields.phoneStatus } },

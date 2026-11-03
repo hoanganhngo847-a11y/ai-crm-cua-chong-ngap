@@ -40,8 +40,8 @@ function query(value: string): Promise<string> {
         proc.stdin.end(value);
     });
 }
-function webhook(lead: string) {
-    const raw = JSON.stringify({ object: 'page', entry: [{ id: page, changes: [{ field: 'leadgen', value: { leadgen_id: lead, form_id: '123', page_id: page, created_time: 1793318400 } }] }] });
+function webhook(lead: string, adId?: string) {
+    const raw = JSON.stringify({ object: 'page', entry: [{ id: page, changes: [{ field: 'leadgen', value: { leadgen_id: lead, form_id: '123', page_id: page, created_time: 1793318400, ...(adId ? { ad_id: adId } : {}) } }] }] });
     return POST(new Request('http://localhost/api/webhooks/meta', { method: 'POST', body: raw,
         headers: { 'x-hub-signature-256': 'sha256=' + createHmac('sha256', appSecret).update(raw).digest('hex') } }));
 }
@@ -51,6 +51,11 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
     const original = globalThis.fetch;
     let attributionFault = false, finalizeFault = false, claimFault = false, intakeFault = false;
     let graphCalls = 0;
+    let creativeCalls = 0;
+    let creativeText = 'Nội dung tại thời điểm tiếp nhận';
+    const previousTokenKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'b'.repeat(64);
+    const encryptedCreativeToken = encryptToken('EAA_creative_snapshot_test_token');
     let malformedClaim = false, finalizeRpcFault = false;
     let graphGate: Promise<void> | null = null;
     let releaseGraph: (() => void) | undefined;
@@ -64,7 +69,10 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Meta native test','ACTIVE'),(${q(other)},'Other tenant','ACTIVE');
              INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'First touch customer','FACEBOOK','LEAD_NEW');
              INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_1','campaign','Verified campaign','ACTIVE'),(${q(other)},'act_2','foreign','Foreign campaign','ACTIVE');
-             INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status) VALUES (${q(company)},'act_1','campaign','adset','ad','Verified ad','ACTIVE');`);
+             INSERT INTO public.meta_ad_accounts(company_id,ad_account_id,name,currency,account_status) VALUES (${q(company)},'act_snapshot','Snapshot account','VND',1);
+             INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status) VALUES (${q(company)},'act_1','campaign','adset','ad','Verified ad','ACTIVE');
+             INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_snapshot','campaign_snapshot','Verified snapshot campaign','ACTIVE');
+             INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status) VALUES (${q(company)},'act_snapshot','campaign_snapshot','adset_snapshot','ad_snapshot_1','Verified snapshot ad','ACTIVE');`);
 
         // True overlapping transactions on independent PostgreSQL connections.
         const call = `SELECT public.claim_meta_leadgen_event(${q(company)},${q(page)},'10000');`;
@@ -166,6 +174,28 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
                 graphCalls++;
                 if (graphGate) await graphGate;
                 const leadId = url.pathname.split('/').at(-1)!;
+                if (leadId === 'ad_snapshot_1') {
+                    creativeCalls++;
+                    return Response.json({
+                        id: leadId,
+                        name: 'Quảng cáo snapshot',
+                        campaign: { id: 'campaign_snapshot', name: 'Chiến dịch snapshot' },
+                        adset: { id: 'adset_snapshot', name: 'Nhóm quảng cáo snapshot' },
+                        creative: { id: 'creative_snapshot', object_story_spec: { link_data: {
+                            message: creativeText, name: 'Headline snapshot', description: 'Description snapshot',
+                            picture: 'https://scontent.xx.fbcdn.net/v/t45.1600-4/snapshot.jpg',
+                        } } },
+                    });
+                }
+                if (leadId === '20006') {
+                    return Response.json({
+                        id: leadId, created_time: 1793318400, form_id: '123', form_name: 'Snapshot form',
+                        ad_id: 'ad_snapshot_1', ad_name: 'Raw ad', adset_id: 'adset_snapshot',
+                        adset_name: 'Raw ad set', campaign_id: 'campaign_snapshot',
+                        campaign_name: 'Raw campaign',
+                        field_data: [{ name: 'full_name', values: ['Snapshot Lead'] }],
+                    });
+                }
                 // Phone-bearing leads (3xxxx) exercise duplicate-phone history; campaign
                 // identifiers remain unverifiable webhook assertions like production would
                 // return when asset data is not yet synced.
@@ -185,6 +215,16 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
             assert.equal(url.hostname, '127.0.0.1');
             const fn = url.pathname.split('/').at(-1)!;
             const args = JSON.parse(String(init?.body || '{}'));
+            if (url.pathname.endsWith('/meta_ads') && (init?.method || 'GET') === 'GET') {
+                assert.equal(url.searchParams.get('company_id'), `eq.${company}`);
+                assert.equal(url.searchParams.get('meta_ad_id'), 'eq.ad_snapshot_1');
+                return Response.json({ ad_account_id: 'act_snapshot' });
+            }
+            if (fn === 'get_meta_ad_account_token') {
+                assert.equal(args.p_company_id, company);
+                assert.equal(args.p_ad_account_id, 'act_snapshot');
+                return Response.json([{ encrypted_access_token: encryptedCreativeToken, token_expires_at: null }]);
+            }
             if (fn === 'claim_meta_leadgen_event' && malformedClaim) return Response.json([]);
             if (fn === 'finalize_meta_leadgen_event' && args.p_status === 'PROCESSED' && finalizeRpcFault) return Response.json({ message: 'offline' }, { status: 500 });
             if (fn === 'claim_meta_leadgen_event' && claimFault) return Response.json({ message: 'fault' }, { status: 500 });
@@ -243,6 +283,37 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal((await webhook('20005')).status, 503, 'finalization RPC outage must never acknowledge success');
         finalizeRpcFault = false;
         assert.equal((await webhook('20005')).status, 200);
+
+        // Creative evidence is checkpointed with the durable intake. A retry after
+        // the ad is edited must reuse the first snapshot, not fetch the new version.
+        attributionFault = true;
+        creativeText = 'Nội dung tại thời điểm tiếp nhận';
+        assert.equal((await webhook('20006', 'ad_snapshot_1')).status, 503);
+        assert.equal(creativeCalls, 1);
+        assert.equal(
+            sql(`SELECT ingest_args->'creative_snapshot'->>'primaryText' FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20006';`),
+            'Nội dung tại thời điểm tiếp nhận',
+            'the first creative snapshot is persisted with intake arguments',
+        );
+        creativeText = 'Nội dung sau khi quảng cáo được chỉnh sửa';
+        attributionFault = false;
+        const beforeCreativeRetry = graphCalls;
+        assert.equal((await webhook('20006', 'ad_snapshot_1')).status, 200);
+        assert.equal(graphCalls, beforeCreativeRetry, 'retry must not refetch the lead or ad after the snapshot was checkpointed');
+        assert.equal(creativeCalls, 1, 'the newer ad creative must not replace the first snapshot');
+        const persistedCreative = JSON.parse(sql(`SELECT jsonb_build_object(
+            'intake',e.ingest_args->'creative_snapshot',
+            'touchpoint',t.ads_context_data->'creative_snapshot',
+            'adset_id',t.meta_ad_set_id
+          ) FROM private.meta_leadgen_events e
+          JOIN public.lead_attribution_touchpoints t
+            ON t.company_id=e.company_id AND t.meta_leadgen_id=e.leadgen_id
+          WHERE e.company_id=${q(company)} AND e.leadgen_id='20006';`));
+        assert.equal(persistedCreative.intake.primaryText, 'Nội dung tại thời điểm tiếp nhận');
+        assert.equal(persistedCreative.touchpoint.primaryText, 'Nội dung tại thời điểm tiếp nhận');
+        assert.equal(persistedCreative.touchpoint.captureTiming, 'AT_LEAD_INTAKE');
+        assert.ok(persistedCreative.touchpoint.capturedAt, 'snapshot capture time is persisted');
+        assert.equal(persistedCreative.adset_id, 'adset_snapshot', 'Ad Set ID is resolved from the synced Ad object');
 
         intakeFault = true;
         assert.equal((await webhook('20004')).status, 503, 'idempotency conflict is never successful finalization');
@@ -340,6 +411,8 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(phoneSnapshots.attribution_status, 'ATTRIBUTED');
     } finally {
         globalThis.fetch = original;
+        if (previousTokenKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+        else process.env.META_TOKEN_ENCRYPTION_KEY = previousTokenKey;
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
 });

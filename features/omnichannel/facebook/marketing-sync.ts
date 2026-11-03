@@ -22,6 +22,7 @@ export interface MetaAdDto {
     id: string;
     name: string;
     campaign_id: string;
+    adset_id?: string;
     status: string;
 }
 
@@ -40,7 +41,7 @@ export interface MetaAdCreativeAssetSnapshot {
 }
 
 export interface MetaAdCreativeSnapshot {
-    schemaVersion: 1;
+    schemaVersion: 1 | 2;
     status: 'AVAILABLE' | 'PARTIAL' | 'PENDING_SYNC' | 'UNAVAILABLE';
     source: 'META_MARKETING_API' | 'NONE';
     capturedAt: string;
@@ -57,6 +58,7 @@ export interface MetaAdCreativeSnapshot {
     storyId?: string;
     format: 'IMAGE' | 'VIDEO' | 'CAROUSEL' | 'DYNAMIC' | 'UNKNOWN';
     primaryText?: string;
+    primaryTexts?: string[];
     headlines: string[];
     descriptions: string[];
     ctaType?: string;
@@ -206,11 +208,12 @@ export function normalizeMetaAdCreativeSnapshot(
         })
         .filter((item) => item !== null) as MetaAdCreativeAssetSnapshot[];
 
-    const primaryText =
+    const storyPrimaryText =
         metaText(linkData.message, 5000) ||
         metaText(videoData.message, 5000) ||
-        metaText(templateData.message, 5000) ||
-        feedBodies[0];
+        metaText(templateData.message, 5000);
+    const primaryTexts = uniqueMetaStrings([storyPrimaryText, ...feedBodies]);
+    const primaryText = primaryTexts[0];
 
     const headlines = uniqueMetaStrings([
         metaText(linkData.name, 500),
@@ -266,7 +269,7 @@ export function normalizeMetaAdCreativeSnapshot(
         imageUrl ? 'IMAGE' : 'UNKNOWN';
 
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         status: !hasCreative ? 'UNAVAILABLE' : hasDisplayContent ? 'AVAILABLE' : 'PARTIAL',
         source: hasCreative ? 'META_MARKETING_API' : 'NONE',
         capturedAt: options.capturedAt || new Date().toISOString(),
@@ -283,6 +286,7 @@ export function normalizeMetaAdCreativeSnapshot(
         ...(metaText(creative.effective_object_story_id ?? creative.object_story_id, 160) ? { storyId: metaText(creative.effective_object_story_id ?? creative.object_story_id, 160) } : {}),
         format,
         ...(primaryText ? { primaryText } : {}),
+        primaryTexts,
         headlines,
         descriptions,
         ...(ctaType ? { ctaType } : {}),
@@ -304,7 +308,7 @@ function emptyMetaCreativeSnapshot(
     captureTiming: MetaCreativeCaptureTiming,
 ): MetaAdCreativeSnapshot {
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         status,
         source: 'NONE',
         capturedAt: new Date().toISOString(),
@@ -312,12 +316,25 @@ function emptyMetaCreativeSnapshot(
         reason,
         adId,
         format: 'UNKNOWN',
+        primaryTexts: [],
         headlines: [],
         descriptions: [],
         carouselAssets: [],
         imageAssets: [],
         videoAssets: [],
     };
+}
+
+
+async function metaGraphErrorCode(response: Response): Promise<number | null> {
+    try {
+        const payload = metaRecord(await response.clone().json());
+        const error = metaRecord(payload.error);
+        const code = Number(error.code);
+        return Number.isFinite(code) ? code : null;
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -384,14 +401,31 @@ export async function fetchMetaAdCreativeSnapshot(
                 cache: 'no-store',
                 signal: AbortSignal.timeout(timeoutMs),
             });
-            if (response.ok || response.status !== 400 || index === fieldSets.length - 1) break;
+            const errorCode = response.status === 400 ? await metaGraphErrorCode(response) : null;
+            if (
+                response.ok ||
+                response.status !== 400 ||
+                index === fieldSets.length - 1 ||
+                errorCode === 10 ||
+                errorCode === 200 ||
+                errorCode === 190
+            ) break;
         }
 
         if (!response?.ok) {
             const status = response?.status || 0;
+            const errorCode = response ? await metaGraphErrorCode(response) : null;
             if (status === 429 || status === 0 || status >= 500) return pending('META_TEMPORARY_FAILURE');
-            if (status === 400 || status === 401 || status === 403 || status === 404) {
-                return emptyMetaCreativeSnapshot(adId, 'UNAVAILABLE', 'META_PERMISSION_OR_CREATIVE_UNAVAILABLE', captureTiming);
+            if (errorCode === 190 || status === 401) return pending('META_TOKEN_INVALID_OR_EXPIRED');
+            if (errorCode === 10 || errorCode === 200 || status === 403) return pending('META_PERMISSION_DENIED');
+            if (status === 404 || errorCode === 803) {
+                return emptyMetaCreativeSnapshot(adId, 'UNAVAILABLE', 'AD_NOT_FOUND_OR_DELETED', captureTiming);
+            }
+            if (status === 400 && errorCode === 100) {
+                return emptyMetaCreativeSnapshot(adId, 'UNAVAILABLE', 'META_CREATIVE_FIELDS_UNAVAILABLE', captureTiming);
+            }
+            if (status === 400) {
+                return emptyMetaCreativeSnapshot(adId, 'UNAVAILABLE', 'META_CREATIVE_UNAVAILABLE', captureTiming);
             }
             return pending('META_CREATIVE_LOOKUP_FAILED');
         }
@@ -477,18 +511,23 @@ export async function syncPendingCreativeSnapshots(
         const currentSnapshot = metaRecord(currentContext.creative_snapshot);
         if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC') continue;
 
-        const { error: updateError } = await supabase
+        const { data: updatedRows, error: updateError } = await supabase
             .from('lead_attribution_touchpoints')
             .update({ ads_context_data: { ...currentContext, creative_snapshot: snapshot } })
             .eq('id', row.id)
             .eq('company_id', companyId)
-            .eq('channel', 'FACEBOOK_LEAD_ADS')
-            .eq('meta_ad_id', adId);
+            .in('channel', ['FACEBOOK_LEAD_ADS', 'FACEBOOK_MESSENGER'])
+            .eq('meta_ad_id', adId)
+            // Compare-and-set: a usable/terminal snapshot written after the
+            // initial scan must win over this stale backfill result.
+            .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
+            .select('id');
 
         if (updateError) {
             failed++;
             continue;
         }
+        if (!updatedRows?.length) continue;
         updated++;
         if (snapshot.status === 'UNAVAILABLE') unavailable++;
     }
@@ -623,7 +662,7 @@ export async function syncAdsForAccount(
     const version = marketingVersion();
     const formattedId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
     const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(formattedId)}/ads`);
-    url.searchParams.set('fields', 'id,name,campaign_id,status');
+    url.searchParams.set('fields', 'id,name,campaign_id,adset_id,status');
     url.searchParams.set('limit', '50');
 
     const ads = await fetchAllPages<MetaAdDto>(url, accessToken, customFetch);
@@ -634,6 +673,7 @@ export async function syncAdsForAccount(
         company_id: companyId,
         ad_account_id: formattedId,
         meta_campaign_id: a.campaign_id,
+        meta_ad_set_id: a.adset_id || null,
         meta_ad_id: a.id,
         name: a.name || 'Quảng cáo',
         status: (a.status || 'PAUSED').toUpperCase(),

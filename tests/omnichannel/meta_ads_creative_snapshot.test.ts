@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { normalizeMetaAdCreativeSnapshot } from '../../features/omnichannel/facebook/marketing-sync';
+import { encryptToken } from '../../features/omnichannel/facebook/token-vault';
+import { fetchMetaAdCreativeSnapshot, normalizeMetaAdCreativeSnapshot, syncPendingCreativeSnapshots } from '../../features/omnichannel/facebook/marketing-sync';
 
 const imageUrl = 'https://scontent.xx.fbcdn.net/v/t45.1600-4/example.jpg';
 
@@ -121,6 +123,7 @@ test('Meta dynamic creative keeps copy and asset variants separate without fabri
     assert.equal(snapshot.imageAssets.length, 1);
     assert.equal(snapshot.videoAssets.length, 1);
     assert.equal(snapshot.primaryText, 'Nội dung A');
+    assert.deepEqual(snapshot.primaryTexts, ['Nội dung A', 'Nội dung B']);
     assert.equal(snapshot.destinationUrl, 'https://example.edu.vn/dynamic');
 });
 
@@ -146,4 +149,139 @@ test('Meta creative snapshot rejects insecure and non-Meta media URLs', () => {
     assert.equal(snapshot.destinationUrl, undefined);
     assert.equal(snapshot.previewUrl, undefined);
     assert.equal(snapshot.primaryText, 'Nội dung vẫn được giữ');
+});
+
+
+test('creative permission failures remain distinguishable and retryable; deleted ads are terminal', async () => {
+    const originalFetch = globalThis.fetch;
+    const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const previousEncryptionKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy-service-key';
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'c'.repeat(64);
+    const encrypted = encryptToken('EAA_meta_creative_test_token');
+
+    const run = async (status: number, code: number) => {
+        globalThis.fetch = (async (input) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.hostname === '127.0.0.1' && url.pathname.endsWith('/meta_ads')) {
+                return Response.json({ ad_account_id: 'act_test' });
+            }
+            if (url.hostname === '127.0.0.1' && url.pathname.endsWith('/rpc/get_meta_ad_account_token')) {
+                return Response.json([{ encrypted_access_token: encrypted, token_expires_at: null }]);
+            }
+            if (url.hostname === 'graph.facebook.com') {
+                return Response.json({ error: { code } }, { status });
+            }
+            throw new Error('UNEXPECTED_TEST_REQUEST');
+        }) as typeof fetch;
+        return fetchMetaAdCreativeSnapshot('company-test', 'ad-test');
+    };
+
+    try {
+        const permission = await run(403, 200);
+        assert.equal(permission.status, 'PENDING_SYNC');
+        assert.equal(permission.reason, 'META_PERMISSION_DENIED');
+
+        const deleted = await run(404, 803);
+        assert.equal(deleted.status, 'UNAVAILABLE');
+        assert.equal(deleted.reason, 'AD_NOT_FOUND_OR_DELETED');
+    } finally {
+        globalThis.fetch = originalFetch;
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl;
+        if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+        else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+        if (previousEncryptionKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+        else process.env.META_TOKEN_ENCRYPTION_KEY = previousEncryptionKey;
+    }
+});
+
+test('creative backfill uses compare-and-set so stale results cannot overwrite a newer snapshot', async () => {
+    const originalFetch = globalThis.fetch;
+    const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const previousEncryptionKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy-service-key';
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'd'.repeat(64);
+    const encrypted = encryptToken('EAA_meta_backfill_test_token');
+    type BackfillPatch = {
+        ads_context_data?: {
+            raw_meta?: { campaign_id?: string };
+            creative_snapshot?: { captureTiming?: string };
+        };
+    };
+    let patchUrl: URL | null = null;
+    let patchBody: BackfillPatch | null = null;
+
+    globalThis.fetch = (async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.hostname === '127.0.0.1') {
+            if (url.pathname.endsWith('/lead_attribution_touchpoints') && (init?.method || 'GET') === 'GET') {
+                return Response.json([{
+                    id: 'touchpoint-1',
+                    meta_ad_id: 'ad-backfill',
+                    ads_context_data: {
+                        raw_meta: { campaign_id: 'campaign-raw' },
+                        creative_snapshot: {
+                            schemaVersion: 2, status: 'PENDING_SYNC', source: 'NONE',
+                            capturedAt: '2026-11-03T10:00:00.000Z', captureTiming: 'AT_LEAD_INTAKE',
+                            reason: 'AD_NOT_SYNCED', adId: 'ad-backfill', format: 'UNKNOWN',
+                            primaryTexts: [], headlines: [], descriptions: [],
+                            carouselAssets: [], imageAssets: [], videoAssets: [],
+                        },
+                    },
+                }]);
+            }
+            if (url.pathname.endsWith('/meta_ads')) return Response.json({ ad_account_id: 'act_backfill' });
+            if (url.pathname.endsWith('/rpc/get_meta_ad_account_token')) {
+                return Response.json([{ encrypted_access_token: encrypted, token_expires_at: null }]);
+            }
+            if (url.pathname.endsWith('/lead_attribution_touchpoints') && init?.method === 'PATCH') {
+                patchUrl = url;
+                patchBody = JSON.parse(String(init.body || '{}')) as BackfillPatch;
+                // Simulate another worker having written a final snapshot after our scan.
+                return Response.json([]);
+            }
+        }
+        if (url.hostname === 'graph.facebook.com') {
+            return Response.json({
+                id: 'ad-backfill',
+                creative: { id: 'creative-backfill', object_story_spec: { link_data: { message: 'Late creative' } } },
+            });
+        }
+        throw new Error('UNEXPECTED_TEST_REQUEST');
+    }) as typeof fetch;
+
+    try {
+        const summary = await syncPendingCreativeSnapshots('company-test');
+        assert.equal(summary.scanned, 1);
+        assert.equal(summary.updated, 0, 'zero returned rows means a newer snapshot won the compare-and-set');
+        assert.equal(summary.failed, 0);
+        assert.ok(patchUrl, 'backfill attempted a conditional update');
+        const guard = patchUrl!.searchParams.get('or') || '';
+        assert.match(guard, /PENDING_SYNC/);
+        assert.match(guard, /creative_snapshot\.is\.null/);
+        assert.equal(patchBody?.ads_context_data?.raw_meta?.campaign_id, 'campaign-raw', 'raw Meta evidence survives backfill');
+        assert.equal(patchBody?.ads_context_data?.creative_snapshot?.captureTiming, 'BACKFILL');
+    } finally {
+        globalThis.fetch = originalFetch;
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl;
+        if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+        else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+        if (previousEncryptionKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+        else process.env.META_TOKEN_ENCRYPTION_KEY = previousEncryptionKey;
+    }
+});
+
+test('Customer 360 exposes page/form provenance, unverified Meta assertions and full creative evidence', () => {
+    const source = readFileSync('app/(dashboard)/customers/[id]/page.tsx', 'utf8');
+    for (const field of ['page_id', 'meta_form_id', 'meta_leadgen_id', 'raw_meta', 'capturedAt', 'primaryTexts', 'META_PERMISSION_DENIED', 'carouselAssets.map', 'videoAssets.map']) {
+        assert.ok(source.includes(field), `Customer 360 is missing ${field}`);
+    }
+    assert.match(source, /Asia\/Ho_Chi_Minh/);
+    assert.match(source, /không chứng minh tuyệt đối đúng tổ hợp quảng cáo đã phân phối/);
 });
