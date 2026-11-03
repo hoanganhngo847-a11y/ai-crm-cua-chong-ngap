@@ -155,7 +155,8 @@ export function createObjectPathCollisionGuard({ caseInsensitive = false } = {})
       fail('DUPLICATE_OBJECT', `duplicate object path declared in manifest: ${fullKey}`);
     }
 
-    const nfcKey = `${bucketId}/${objectPath.normalize('NFC')}`;
+    const normalizedPath = objectPath.normalize('NFC');
+    const nfcKey = `${bucketId}/${normalizedPath}`;
     if (seenNfc.has(nfcKey)) {
       fail(
         'UNICODE_COLLISION',
@@ -167,7 +168,7 @@ export function createObjectPathCollisionGuard({ caseInsensitive = false } = {})
     seenNfc.set(nfcKey, fullKey);
 
     if (caseInsensitive) {
-      const lowerKey = `${bucketId}/${objectPath.toLowerCase()}`;
+      const lowerKey = `${bucketId}/${normalizedPath.toLowerCase()}`;
       if (seenLower.has(lowerKey)) {
         fail(
           'PATH_COLLISION',
@@ -261,6 +262,66 @@ export function validateBucketName(bucket) {
     fail('INVALID_BUCKET', `bucket name '${bucket}' violates naming policy`);
   }
   return bucket;
+}
+
+// Supabase Storage normalizes bucket MIME restrictions before storing them.
+// Keep the same parser here so restore-time parity compares semantic values,
+// not incidental formatting (case, parameters, duplicate entries).
+const MIME_TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+const MIME_QUOTED_STRING = String.raw`"(?:[\t\x20\x21\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t\x20-\x7e\x80-\xff])*"`;
+const MIME_MEDIA_TYPE = new RegExp(String.raw`^[\t ]*(${MIME_TOKEN})/(${MIME_TOKEN})[\t ]*`);
+const MIME_PARAMETER = new RegExp(
+  String.raw`;[\t ]*(?:${MIME_TOKEN}=(?:${MIME_TOKEN}|${MIME_QUOTED_STRING})[\t ]*)?`,
+  'y',
+);
+
+export function normalizeMimeTypeEntry(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1000) {
+    return null;
+  }
+
+  const match = MIME_MEDIA_TYPE.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const type = match[1].toLowerCase();
+  const subtype = match[2].toLowerCase();
+  if (type.includes('*') || (subtype.includes('*') && subtype !== '*')) {
+    return null;
+  }
+
+  let offset = match[0].length;
+  while (offset < value.length) {
+    MIME_PARAMETER.lastIndex = offset;
+    if (!MIME_PARAMETER.test(value)) {
+      return null;
+    }
+    offset = MIME_PARAMETER.lastIndex;
+  }
+
+  return `${type}/${subtype}`;
+}
+
+export function normalizeAllowedMimeTypes(
+  mimeTypes,
+  { code = 'INVALID_BUCKET', subject = 'allowed_mime_types' } = {},
+) {
+  const normalized = [];
+  const seen = new Set();
+
+  for (const entry of mimeTypes) {
+    const parsed = normalizeMimeTypeEntry(entry);
+    if (parsed === null) {
+      fail(code, `${subject} contains invalid MIME type ${JSON.stringify(entry)}`);
+    }
+    if (!seen.has(parsed)) {
+      seen.add(parsed);
+      normalized.push(parsed);
+    }
+  }
+
+  return normalized;
 }
 
 export function validateObjectPath(rawPath) {
@@ -717,9 +778,9 @@ export class StorageRestoreClient {
     const payload = JSON.stringify({
       id: bucketConfig.id,
       name: bucketConfig.name || bucketConfig.id,
-      public: Boolean(bucketConfig.public),
-      file_size_limit: typeof bucketConfig.file_size_limit === 'number' ? bucketConfig.file_size_limit : null,
-      allowed_mime_types: Array.isArray(bucketConfig.allowed_mime_types) ? bucketConfig.allowed_mime_types : null,
+      public: bucketConfig.public,
+      file_size_limit: bucketConfig.file_size_limit,
+      allowed_mime_types: bucketConfig.allowed_mime_types,
     });
 
     const res = await this.request({
@@ -1147,12 +1208,66 @@ export async function validateRestoreInputs({
       );
     }
 
+    // A. Strict public validation (P2-BUCKET-05)
+    let bucketPublic = false;
+    if (b.public === undefined) {
+      bucketPublic = false;
+    } else if (typeof b.public === 'boolean') {
+      bucketPublic = b.public;
+    } else {
+      fail(
+        'INVALID_BUCKET',
+        `bucket '${bId}' public attribute must be a boolean, got ${b.public === null ? 'null' : typeof b.public}`,
+      );
+    }
+
+    // B. Strict file_size_limit validation (P2-BUCKET-05)
+    let bucketFileSizeLimit = null;
+    if (b.file_size_limit === undefined || b.file_size_limit === null) {
+      bucketFileSizeLimit = null;
+    } else if (
+      typeof b.file_size_limit === 'number' &&
+      Number.isSafeInteger(b.file_size_limit) &&
+      b.file_size_limit >= 0
+    ) {
+      bucketFileSizeLimit = b.file_size_limit;
+    } else {
+      fail(
+        'INVALID_BUCKET',
+        `bucket '${bId}' file_size_limit must be a non-negative integer or null, got ${b.file_size_limit === null ? 'null' : typeof b.file_size_limit}`,
+      );
+    }
+
+    // C. Strict allowed_mime_types validation (P2-BUCKET-05)
+    let bucketAllowedMimes = null;
+    if (b.allowed_mime_types === undefined || b.allowed_mime_types === null) {
+      bucketAllowedMimes = null;
+    } else if (Array.isArray(b.allowed_mime_types)) {
+      bucketAllowedMimes = normalizeAllowedMimeTypes(b.allowed_mime_types, {
+        code: 'INVALID_BUCKET',
+        subject: `bucket '${bId}' allowed_mime_types`,
+      });
+    } else {
+      fail(
+        'INVALID_BUCKET',
+        `bucket '${bId}' allowed_mime_types must be an array of strings or null, got ${typeof b.allowed_mime_types}`,
+      );
+    }
+
+    let bucketName = bId;
+    if (b.name !== undefined && b.name !== null) {
+      if (typeof b.name !== 'string' || b.name.trim().length === 0 || b.name.length >= 101) {
+        fail('INVALID_BUCKET', `bucket '${bId}' name must be a non-empty string shorter than 101 characters`);
+      }
+      bucketName = b.name;
+    }
+
     validatedBuckets.push({
       id: bId,
-      name: b.name || bId,
-      public: Boolean(b.public),
-      file_size_limit: typeof b.file_size_limit === 'number' ? b.file_size_limit : null,
-      allowed_mime_types: Array.isArray(b.allowed_mime_types) ? b.allowed_mime_types : null,
+      name: bucketName,
+      public: bucketPublic,
+      file_size_limit: bucketFileSizeLimit,
+      allowed_mime_types: bucketAllowedMimes,
       type: b.type || 'standard',
       versioning_status: b.versioning_status || 'disabled',
     });
@@ -1363,6 +1478,117 @@ export async function validateRestoreInputs({
 }
 
 // -----------------------------------------------------------------------------
+// Target Bucket Configuration Verification (R5-01, P2-BUCKET-01, P2-BUCKET-05)
+// -----------------------------------------------------------------------------
+
+export function verifyTargetBucketParity(existing, bucket) {
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' returned missing or non-object metadata`,
+    );
+  }
+
+  const hasOwn = (field) => Object.prototype.hasOwnProperty.call(existing, field);
+
+  // 1. Verify id
+  if (typeof existing.id !== 'string' || existing.id !== bucket.id) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' id '${existing.id}' does not match source backup '${bucket.id}'`,
+    );
+  }
+
+  // 2. Verify name
+  if (typeof existing.name !== 'string' || existing.name !== bucket.name) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' name '${existing.name}' does not match source backup '${bucket.name}'`,
+    );
+  }
+
+  // 3. Verify public (Storage API always returns a boolean)
+  if (typeof existing.public !== 'boolean') {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' returned non-boolean public setting: ${JSON.stringify(existing.public)}`,
+    );
+  }
+  if (existing.public !== bucket.public) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' public setting (${existing.public}) does not match source backup (${bucket.public})`,
+    );
+  }
+
+  // 4. Verify file_size_limit. A missing field is incomplete metadata, not
+  // "unlimited"; only an explicit JSON null represents the unrestricted value.
+  if (!hasOwn('file_size_limit')) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' returned incomplete metadata: missing required field 'file_size_limit'`,
+    );
+  }
+  if (
+    existing.file_size_limit !== null &&
+    (typeof existing.file_size_limit !== 'number' ||
+      !Number.isSafeInteger(existing.file_size_limit) ||
+      existing.file_size_limit < 0)
+  ) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' returned invalid file_size_limit: ${JSON.stringify(existing.file_size_limit)}`,
+    );
+  }
+  const sourceFileSizeLimit = bucket.file_size_limit ?? null;
+  const targetFileSizeLimit = existing.file_size_limit;
+  if (targetFileSizeLimit !== sourceFileSizeLimit) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' file_size_limit (${targetFileSizeLimit}) does not match source backup (${sourceFileSizeLimit})`,
+    );
+  }
+
+  // 5. Verify allowed_mime_types. The field is required, but null and [] are
+  // distinct semantic values: null means no restriction, [] is an empty set.
+  if (!hasOwn('allowed_mime_types')) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' returned incomplete metadata: missing required field 'allowed_mime_types'`,
+    );
+  }
+  let targetMimeTypes = null;
+  if (existing.allowed_mime_types !== null) {
+    if (!Array.isArray(existing.allowed_mime_types)) {
+      fail(
+        'BUCKET_CONFIGURATION_MISMATCH',
+        `target bucket '${bucket.id}' returned non-array allowed_mime_types: ${JSON.stringify(existing.allowed_mime_types)}`,
+      );
+    }
+    targetMimeTypes = normalizeAllowedMimeTypes(existing.allowed_mime_types, {
+      code: 'BUCKET_CONFIGURATION_MISMATCH',
+      subject: `target bucket '${bucket.id}' allowed_mime_types`,
+    });
+  }
+  const sourceMimeTypes =
+    bucket.allowed_mime_types === null
+      ? null
+      : normalizeAllowedMimeTypes(bucket.allowed_mime_types, {
+          code: 'BUCKET_CONFIGURATION_MISMATCH',
+          subject: `source bucket '${bucket.id}' allowed_mime_types`,
+        });
+  const canonical = (value) => (value === null ? null : [...value].sort());
+  const canonicalSourceMimes = canonical(sourceMimeTypes);
+  const canonicalTargetMimes = canonical(targetMimeTypes);
+  if (JSON.stringify(canonicalTargetMimes) !== JSON.stringify(canonicalSourceMimes)) {
+    fail(
+      'BUCKET_CONFIGURATION_MISMATCH',
+      `target bucket '${bucket.id}' allowed_mime_types ${JSON.stringify(canonicalTargetMimes)} do not match source backup ${JSON.stringify(canonicalSourceMimes)}`,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Core Storage Restore Operation
 // -----------------------------------------------------------------------------
 
@@ -1530,45 +1756,28 @@ export async function restoreStorage(options = {}) {
     // Check if bucket already exists
     let existing = await client.getBucket(bucket.id);
     if (!existing) {
-      // Create bucket
+      // Create bucket via Storage API
       await client.createBucket(bucket);
+      // R5-01: Read back bucket metadata from Storage API (never rely solely on POST response)
       existing = await client.getBucket(bucket.id);
       if (!existing) {
-        fail('BUCKET_CREATION_FAILED', `failed to verify created bucket '${bucket.id}' on target`);
-      }
-    } else {
-      // Existing bucket configuration reconciliation (P2-BUCKET-01)
-      if (Boolean(existing.public) !== Boolean(bucket.public)) {
         fail(
           'BUCKET_CONFIGURATION_MISMATCH',
-          `existing bucket '${bucket.id}' public setting (${Boolean(existing.public)}) does not match source backup (${Boolean(bucket.public)})`,
+          `target bucket '${bucket.id}' not found after creation verification`,
         );
-      }
-      if (bucket.file_size_limit !== null && existing.file_size_limit !== bucket.file_size_limit) {
-        fail(
-          'BUCKET_CONFIGURATION_MISMATCH',
-          `existing bucket '${bucket.id}' file_size_limit (${existing.file_size_limit}) does not match source backup (${bucket.file_size_limit})`,
-        );
-      }
-      if (bucket.allowed_mime_types !== null) {
-        const srcMimes = Array.isArray(bucket.allowed_mime_types) ? [...bucket.allowed_mime_types].sort() : [];
-        const dstMimes = Array.isArray(existing.allowed_mime_types) ? [...existing.allowed_mime_types].sort() : [];
-        if (srcMimes.join(',') !== dstMimes.join(',')) {
-          fail(
-            'BUCKET_CONFIGURATION_MISMATCH',
-            `existing bucket '${bucket.id}' allowed_mime_types do not match source backup`,
-          );
-        }
       }
     }
+
+    // R5-01: Verify bucket configuration parity (applies equally to existing and newly created buckets)
+    verifyTargetBucketParity(existing, bucket);
 
     reconciledBuckets.push({
       id: bucket.id,
       name: bucket.name,
-      public: Boolean(bucket.public),
+      public: bucket.public,
       file_size_limit: bucket.file_size_limit,
       allowed_mime_types: bucket.allowed_mime_types,
-      targetPublic: Boolean(existing.public),
+      targetPublic: existing.public,
       status: 'restored',
     });
   }

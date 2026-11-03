@@ -1153,9 +1153,16 @@ test('Prohibited SQL injection: rejects DROP, CREATE ROLE, GRANT, REVOKE keyword
 test('Live PostgreSQL 17 integration: full plan -> apply -> verify cycle with live catalog and rollback', async (t) => {
   const container = 'crm-dumpcheck-test';
   const available = await isDockerContainerAvailable(container);
+  const liveRequired = process.env.BACKUP_REQUIRE_LIVE_PG17 === '1' || process.env.CI === 'true';
 
   if (!available) {
-    t.skip(`Docker container '${container}' is not available for live PostgreSQL 17 tests.`);
+    const reason = `Docker container '${container}' is not available for live PostgreSQL 17 tests.`;
+    if (liveRequired) {
+      assert.fail(
+        `${reason} This test is mandatory in CI (BACKUP_REQUIRE_LIVE_PG17=1 or CI=true); refusing to skip.`,
+      );
+    }
+    t.skip(`${reason} Set BACKUP_REQUIRE_LIVE_PG17=1 to make this a hard failure.`);
     return;
   }
 

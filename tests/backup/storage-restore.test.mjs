@@ -56,6 +56,7 @@ class MockStorageServer {
     this.pauseDuringUpload = false;
     this.uploadFailCount = 0;
     this.dropSocketOnUpload = false;
+    this.onGetBucket = null;
     this.server = null;
     this.port = null;
   }
@@ -107,6 +108,19 @@ class MockStorageServer {
       const getBucketMatch = pathname.match(/^\/storage\/v1\/bucket\/([^/]+)$/);
       if (method === 'GET' && getBucketMatch) {
         const bId = decodeURIComponent(getBucketMatch[1]);
+        if (typeof this.onGetBucket === 'function') {
+          const custom = this.onGetBucket(bId, this.buckets.get(bId));
+          if (custom !== undefined) {
+            if (custom === null) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ statusCode: 404, error: 'Not Found', message: 'Bucket not found' }));
+            } else {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(custom));
+            }
+            return;
+          }
+        }
         if (this.buckets.has(bId)) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(this.buckets.get(bId)));
@@ -126,9 +140,9 @@ class MockStorageServer {
           const bucketObj = {
             id: body.id,
             name: body.name || body.id,
-            public: Boolean(body.public),
-            file_size_limit: body.file_size_limit || null,
-            allowed_mime_types: body.allowed_mime_types || null,
+            public: typeof body.public === 'boolean' ? body.public : Boolean(body.public),
+            file_size_limit: body.file_size_limit ?? null,
+            allowed_mime_types: body.allowed_mime_types ?? null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
@@ -909,7 +923,13 @@ describe('storage-restore.mjs helper suite', () => {
     });
 
     // Pre-populate object in mock server
-    mockServer.buckets.set('bucket-test', { id: 'bucket-test', name: 'bucket-test', public: false });
+    mockServer.buckets.set('bucket-test', {
+      id: 'bucket-test',
+      name: 'bucket-test',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: null,
+    });
     mockServer.objects.set('bucket-test/exists.txt', {
       bucket: 'bucket-test',
       path: 'exists.txt',
@@ -1415,7 +1435,13 @@ LOCAL_SECRET_KEY="${VALID_SB_SECRET}"
     });
 
     // Pre-populate destination with conflicting content of same name
-    mockServer.buckets.set('corrupt-ack-bucket', { id: 'corrupt-ack-bucket', name: 'corrupt-ack-bucket', public: false });
+    mockServer.buckets.set('corrupt-ack-bucket', {
+      id: 'corrupt-ack-bucket',
+      name: 'corrupt-ack-bucket',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: null,
+    });
     mockServer.objects.set('corrupt-ack-bucket/conflict.txt', {
       bucket: 'corrupt-ack-bucket',
       path: 'conflict.txt',
@@ -1564,6 +1590,54 @@ LOCAL_SECRET_KEY="${VALID_SB_SECRET}"
     }
   });
 
+  // 37d. P2-COLLISION-05: Unicode NFC/NFD + case-insensitive collision
+  test('P2-COLLISION-05: Unicode NFC/NFD + case-insensitive collision: CAFÉ.TXT (NFC uppercase) and café.txt (NFD lowercase) triggers PATH_COLLISION', () => {
+    const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive: true });
+    const fileA = 'CAF\u00c9.TXT'; // CAFÉ.TXT (NFC uppercase)
+    const fileB = 'cafe\u0301.txt'; // café.txt (NFD lowercase)
+
+    registerObjectPath('case-collision-bucket', fileA);
+    assert.throws(
+      () => registerObjectPath('case-collision-bucket', fileB),
+      (err) => {
+        assert.equal(err.code, 'PATH_COLLISION');
+        assert.match(err.message, /case-insensitive path collision/);
+        return true;
+      },
+      'registerObjectPath must reject Unicode NFC uppercase vs NFD lowercase collision with PATH_COLLISION',
+    );
+  });
+
+  // 37e. P2-COLLISION-06: Reverse input order: NFD lowercase first, then NFC uppercase
+  test('P2-COLLISION-06: Reverse input order: café.txt (NFD lowercase) first, then CAFÉ.TXT (NFC uppercase) triggers PATH_COLLISION', () => {
+    const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive: true });
+    const fileA = 'CAF\u00c9.TXT'; // CAFÉ.TXT (NFC uppercase)
+    const fileB = 'cafe\u0301.txt'; // café.txt (NFD lowercase)
+
+    registerObjectPath('case-collision-bucket', fileB);
+    assert.throws(
+      () => registerObjectPath('case-collision-bucket', fileA),
+      (err) => {
+        assert.equal(err.code, 'PATH_COLLISION');
+        assert.match(err.message, /case-insensitive path collision/);
+        return true;
+      },
+      'registerObjectPath in reverse order must reject Unicode NFD lowercase vs NFC uppercase collision with PATH_COLLISION',
+    );
+  });
+
+  // 37f. P2-COLLISION-07: Case-sensitive filesystem allows CAFÉ.TXT (NFC uppercase) and café.txt (NFD lowercase) without false positive
+  test('P2-COLLISION-07: Case-sensitive filesystem allows CAFÉ.TXT (NFC uppercase) and café.txt (NFD lowercase) without false positive', () => {
+    const registerObjectPath = createObjectPathCollisionGuard({ caseInsensitive: false });
+    const fileA = 'CAF\u00c9.TXT'; // CAFÉ.TXT (NFC uppercase)
+    const fileB = 'cafe\u0301.txt'; // café.txt (NFD lowercase)
+
+    assert.doesNotThrow(() => {
+      registerObjectPath('case-collision-bucket', fileA);
+      registerObjectPath('case-collision-bucket', fileB);
+    }, 'case-sensitive filesystem must not report false positive for case-distinct NFC uppercase and NFD lowercase');
+  });
+
   // 38. P2-BUCKET-01: Bucket configuration mismatch (public setting)
   test('P2-BUCKET-01: fails closed when existing destination bucket has conflicting public setting (FAIL)', async () => {
     const dataset = await createSyntheticDataset(testCaseDir, {
@@ -1657,6 +1731,999 @@ LOCAL_SECRET_KEY="${VALID_SB_SECRET}"
         return true;
       },
     );
+  });
+
+  // 40a. P2-BUCKET-02: An unrestricted source file-size limit must not accept a restricted target
+  test('P2-BUCKET-02: rejects destination file_size_limit when source backup has no limit', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'unlimited-size-bucket', name: 'unlimited-size-bucket', public: false }],
+      files: [],
+    });
+
+    mockServer.buckets.set('unlimited-size-bucket', {
+      id: 'unlimited-size-bucket',
+      name: 'unlimited-size-bucket',
+      public: false,
+      file_size_limit: 1024,
+      allowed_mime_types: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /file_size_limit/);
+        return true;
+      },
+    );
+  });
+
+  // 40b. P2-BUCKET-03: An unrestricted source MIME policy must not accept a restricted target
+  test('P2-BUCKET-03: rejects destination allowed_mime_types when source backup has no MIME restriction', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'unrestricted-mime-bucket', name: 'unrestricted-mime-bucket', public: false }],
+      files: [],
+    });
+
+    mockServer.buckets.set('unrestricted-mime-bucket', {
+      id: 'unrestricted-mime-bucket',
+      name: 'unrestricted-mime-bucket',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: ['image/png'],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40c. P2-BUCKET-04: Null source settings match an explicitly unrestricted destination
+  test('P2-BUCKET-04: accepts explicitly null target metadata when source bucket is unrestricted', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'matching-unrestricted-bucket', name: 'matching-unrestricted-bucket', public: false }],
+      files: [],
+    });
+
+    mockServer.buckets.set('matching-unrestricted-bucket', {
+      id: 'matching-unrestricted-bucket',
+      name: 'matching-unrestricted-bucket',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: null,
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40c-1. P2-BUCKET-04-02: Missing nullable metadata is incomplete, not unrestricted
+  test('P2-BUCKET-04-02: fails closed when target GET omits file_size_limit', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'missing-nullable-limit', name: 'missing-nullable-limit', public: false }],
+      files: [{ bucket: 'missing-nullable-limit', path: 'sensitive.dat', content: 'NEVER_UPLOAD' }],
+    });
+
+    mockServer.buckets.set('missing-nullable-limit', {
+      id: 'missing-nullable-limit',
+      name: 'missing-nullable-limit',
+      public: false,
+      allowed_mime_types: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /file_size_limit/);
+        assert.match(err.message, /missing required field/);
+        return true;
+      },
+    );
+    assert.equal(mockServer.objects.size, 0, 'no objects may be uploaded when metadata is incomplete');
+  });
+
+  // 40c-2. P2-BUCKET-04-03: Missing nullable MIME metadata is incomplete, not unrestricted
+  test('P2-BUCKET-04-03: fails closed when target GET omits allowed_mime_types', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'missing-nullable-mimes', name: 'missing-nullable-mimes', public: false }],
+      files: [{ bucket: 'missing-nullable-mimes', path: 'sensitive.dat', content: 'NEVER_UPLOAD' }],
+    });
+
+    mockServer.buckets.set('missing-nullable-mimes', {
+      id: 'missing-nullable-mimes',
+      name: 'missing-nullable-mimes',
+      public: false,
+      file_size_limit: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /allowed_mime_types/);
+        assert.match(err.message, /missing required field/);
+        return true;
+      },
+    );
+    assert.equal(mockServer.objects.size, 0, 'no objects may be uploaded when metadata is incomplete');
+  });
+
+  // 40c-3. P2-BUCKET-04-04: null (unrestricted) is distinct from [] (empty allow-list)
+  test('P2-BUCKET-04-04: rejects an empty MIME array when source is unrestricted null', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'null-vs-empty-mimes', name: 'null-vs-empty-mimes', public: false }],
+      files: [],
+    });
+
+    mockServer.buckets.set('null-vs-empty-mimes', {
+      id: 'null-vs-empty-mimes',
+      name: 'null-vs-empty-mimes',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40d. P2-BUCKET-05-01: Reject string "false" in public attribute
+  test('P2-BUCKET-05-01: rejects string "false" in public attribute (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-public-false', name: 'invalid-public-false', public: 'false' }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /public/);
+        return true;
+      },
+    );
+  });
+
+  // 40e. P2-BUCKET-05-02: Reject string "true" in public attribute
+  test('P2-BUCKET-05-02: rejects string "true" in public attribute (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-public-true', name: 'invalid-public-true', public: 'true' }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /public/);
+        return true;
+      },
+    );
+  });
+
+  // 40f. P2-BUCKET-05-03: Reject string "1024" in file_size_limit
+  test('P2-BUCKET-05-03: rejects string "1024" in file_size_limit attribute (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-limit-str', name: 'invalid-limit-str', public: false, file_size_limit: '1024' }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /file_size_limit/);
+        return true;
+      },
+    );
+  });
+
+  // 40g. P2-BUCKET-05-04: Reject string in allowed_mime_types
+  test('P2-BUCKET-05-04: rejects string in allowed_mime_types attribute (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-mime-str', name: 'invalid-mime-str', public: false, allowed_mime_types: 'image/png' }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40h. P2-BUCKET-05-05: Reject array containing number
+  test('P2-BUCKET-05-05: rejects allowed_mime_types array containing number (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-mime-num', name: 'invalid-mime-num', public: false, allowed_mime_types: ['image/png', 7] }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40i. P2-BUCKET-05-06: Reject array containing null
+  test('P2-BUCKET-05-06: rejects allowed_mime_types array containing null (fails closed with INVALID_BUCKET)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'invalid-mime-null', name: 'invalid-mime-null', public: false, allowed_mime_types: [null] }],
+      files: [],
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'INVALID_BUCKET');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40j. P2-BUCKET-05-07: Accept public boolean hợp lệ
+  test('P2-BUCKET-05-07: accepts valid boolean public values (true and false)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [
+        { id: 'valid-public-true', name: 'valid-public-true', public: true },
+        { id: 'valid-public-false', name: 'valid-public-false', public: false },
+      ],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 2);
+  });
+
+  // 40k. P2-BUCKET-05-08: Accept file_size_limit null hợp lệ
+  test('P2-BUCKET-05-08: accepts valid file_size_limit null representing unrestricted limit', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [
+        { id: 'valid-limit-null', name: 'valid-limit-null', public: false, file_size_limit: null },
+      ],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40l. P2-BUCKET-05-09: Accept allowed_mime_types array hợp lệ
+  test('P2-BUCKET-05-09: accepts valid allowed_mime_types array of string MIME types', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [
+        {
+          id: 'valid-mimes',
+          name: 'valid-mimes',
+          public: false,
+          allowed_mime_types: ['image/png', 'application/pdf'],
+        },
+      ],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40m. P2-BUCKET-05-10: Accept cấu hình unrestricted hợp lệ
+  test('P2-BUCKET-05-10: accepts valid unrestricted bucket configuration (null limit and null mimes)', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [
+        {
+          id: 'unrestricted-bucket',
+          name: 'unrestricted-bucket',
+          public: false,
+          file_size_limit: null,
+          allowed_mime_types: null,
+        },
+      ],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40n. P2-BUCKET-05-11: Reject target API returning non-boolean public attribute
+  test('P2-BUCKET-05-11: fails closed when target API returns non-boolean public attribute', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'target-invalid-public', name: 'target-invalid-public', public: true }],
+      files: [],
+    });
+
+    mockServer.buckets.set('target-invalid-public', {
+      id: 'target-invalid-public',
+      name: 'target-invalid-public',
+      public: 'false', // string from target API
+      file_size_limit: null,
+      allowed_mime_types: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+  });
+
+  // 40o. P2-BUCKET-05-12: Reject target API returning non-number/non-null file_size_limit
+  test('P2-BUCKET-05-12: fails closed when target API returns non-number/non-null file_size_limit', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'target-invalid-limit', name: 'target-invalid-limit', public: false, file_size_limit: 1024 }],
+      files: [],
+    });
+
+    mockServer.buckets.set('target-invalid-limit', {
+      id: 'target-invalid-limit',
+      name: 'target-invalid-limit',
+      public: false,
+      file_size_limit: '1024', // string from target API
+      allowed_mime_types: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+  });
+
+  // 40p. P2-BUCKET-05-13: Reject target API returning invalid allowed_mime_types format
+  test('P2-BUCKET-05-13: fails closed when target API returns invalid allowed_mime_types format', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'target-invalid-mimes', name: 'target-invalid-mimes', public: false, allowed_mime_types: ['image/png'] }],
+      files: [],
+    });
+
+    mockServer.buckets.set('target-invalid-mimes', {
+      id: 'target-invalid-mimes',
+      name: 'target-invalid-mimes',
+      public: false,
+      file_size_limit: null,
+      allowed_mime_types: 'image/png', // string from target API instead of array
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+  });
+
+  // 40q. P2-BUCKET-06-01: POST creates bucket successfully, but post-create GET returns wrong public setting
+  test('P2-BUCKET-06-01: fails closed when post-create GET returns conflicting public setting', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-wrong-public', name: 'post-create-wrong-public', public: false }],
+      files: [],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined; // pre-create GET 404
+      return { ...current, public: true }; // post-create GET returns conflicting public
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /public/);
+        return true;
+      },
+    );
+  });
+
+  // 40r. P2-BUCKET-06-02: POST creates bucket successfully, but post-create GET returns wrong file_size_limit
+  test('P2-BUCKET-06-02: fails closed when post-create GET returns conflicting file_size_limit', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-wrong-limit', name: 'post-create-wrong-limit', public: false, file_size_limit: 1048576 }],
+      files: [],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, file_size_limit: 2097152 };
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /file_size_limit/);
+        return true;
+      },
+    );
+  });
+
+  // 40s. P2-BUCKET-06-03: POST creates bucket successfully, but post-create GET returns wrong allowed_mime_types
+  test('P2-BUCKET-06-03: fails closed when post-create GET returns conflicting allowed_mime_types', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-wrong-mimes', name: 'post-create-wrong-mimes', public: false, allowed_mime_types: ['image/png'] }],
+      files: [],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, allowed_mime_types: ['image/jpeg'] };
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /allowed_mime_types/);
+        return true;
+      },
+    );
+  });
+
+  // 40t. P2-BUCKET-06-04: POST creates bucket successfully, but post-create GET returns missing metadata or wrong id/name
+  test('P2-BUCKET-06-04: fails closed when post-create GET returns missing metadata or wrong id/name', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-bad-id', name: 'post-create-bad-id', public: false }],
+      files: [],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, id: 'tampered-id' };
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /id/);
+        return true;
+      },
+    );
+  });
+
+  // 40u. P2-BUCKET-06-05: POST creates bucket successfully, and post-create GET returns matching configuration
+  test('P2-BUCKET-06-05: accepts newly created bucket when post-create GET returns matching configuration', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{
+        id: 'post-create-matching',
+        name: 'post-create-matching',
+        public: true,
+        file_size_limit: 5242880,
+        allowed_mime_types: ['application/pdf'],
+      }],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40v. P2-BUCKET-06-06: Ensure no objects are uploaded when bucket verification fails
+  test('P2-BUCKET-06-06: aborts before uploading any objects when post-create verification fails', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'no-upload-bucket', name: 'no-upload-bucket', public: false }],
+      files: [{ bucket: 'no-upload-bucket', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, public: true }; // Trigger post-create failure
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+
+    // Verify ZERO objects were uploaded to mock server
+    assert.equal(mockServer.objects.size, 0, 'no objects must be uploaded when bucket verification fails');
+    const uploadRequests = mockServer.requestLog.filter(
+      (r) => r.method === 'POST' && r.pathname.startsWith('/storage/v1/object/no-upload-bucket'),
+    );
+    assert.equal(uploadRequests.length, 0, 'no upload HTTP requests must be sent');
+  });
+
+  // 40w. P2-BUCKET-06-07: Ensure no success report is created when verification fails
+  test('P2-BUCKET-06-07: does not create report file when bucket verification fails', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'no-report-bucket', name: 'no-report-bucket', public: false }],
+      files: [],
+    });
+    const reportPath = path.join(testCaseDir, 'never-created-report.json');
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, public: true };
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+        report: reportPath,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+
+    // Verify report file does not exist on disk
+    await assert.rejects(
+      () => fsp.access(reportPath),
+      (err) => {
+        assert.equal(err.code, 'ENOENT');
+        return true;
+      },
+    );
+  });
+
+  // 40x. P2-BUCKET-06-08: R5-03: file_size_limit: 0 is accurately preserved through bucket creation and verification
+  test('P2-BUCKET-06-08: preserves file_size_limit: 0 through bucket creation and post-create verification', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'zero-limit-bucket', name: 'zero-limit-bucket', public: false, file_size_limit: 0 }],
+      files: [],
+    });
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+
+    const storedBucket = mockServer.buckets.get('zero-limit-bucket');
+    assert.equal(storedBucket.file_size_limit, 0, 'file_size_limit: 0 must be preserved as number 0, not coerced to null');
+  });
+
+  // 40y. P2-BUCKET-06-09: POST creates bucket successfully, but post-create GET omits name
+  test('P2-BUCKET-06-09: fails closed when post-create GET omits name metadata', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-missing-name', name: 'post-create-missing-name', public: false }],
+      files: [{ bucket: 'post-create-missing-name', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+    const reportPath = path.join(testCaseDir, 'missing-name-report.json');
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined; // pre-create GET 404
+      const metadataWithoutName = { ...current };
+      delete metadataWithoutName.name;
+      return metadataWithoutName;
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+        report: reportPath,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /name 'undefined' does not match/);
+        return true;
+      },
+    );
+
+    assert.equal(mockServer.objects.size, 0, 'no objects must be uploaded when name verification fails');
+    await assert.rejects(
+      () => fsp.access(reportPath),
+      (err) => {
+        assert.equal(err.code, 'ENOENT');
+        return true;
+      },
+    );
+  });
+
+  // 40z. P2-BUCKET-06-10: POST creates bucket successfully, but post-create GET omits public
+  test('P2-BUCKET-06-10: fails closed when post-create GET omits public metadata', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-missing-public', name: 'post-create-missing-public', public: false }],
+      files: [{ bucket: 'post-create-missing-public', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+    const reportPath = path.join(testCaseDir, 'missing-public-report.json');
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined; // pre-create GET 404
+      const metadataWithoutPublic = { ...current };
+      delete metadataWithoutPublic.public;
+      return metadataWithoutPublic;
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+        report: reportPath,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /public setting: undefined/);
+        return true;
+      },
+    );
+
+    assert.equal(mockServer.objects.size, 0, 'no objects must be uploaded when public verification fails');
+    await assert.rejects(
+      () => fsp.access(reportPath),
+      (err) => {
+        assert.equal(err.code, 'ENOENT');
+        return true;
+      },
+    );
+  });
+
+  // 40aa. P2-BUCKET-06-11: POST creates bucket successfully, but post-create GET omits id
+  test('P2-BUCKET-06-11: fails closed when post-create GET omits id metadata', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-missing-id', name: 'post-create-missing-id', public: false }],
+      files: [{ bucket: 'post-create-missing-id', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+    const reportPath = path.join(testCaseDir, 'missing-id-report.json');
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined; // pre-create GET 404
+      const metadataWithoutId = { ...current };
+      delete metadataWithoutId.id;
+      return metadataWithoutId;
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+        report: reportPath,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /id 'undefined' does not match/);
+        return true;
+      },
+    );
+
+    assert.equal(mockServer.objects.size, 0, 'no objects must be uploaded when id verification fails');
+    await assert.rejects(
+      () => fsp.access(reportPath),
+      (err) => {
+        assert.equal(err.code, 'ENOENT');
+        return true;
+      },
+    );
+  });
+
+  // 40ab. P2-BUCKET-06-12: Request sequence must be GET (404) -> POST -> GET, with no object uploads on failure
+  test('P2-BUCKET-06-12: performs POST then independent GET read-back before any object upload', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'sequence-bucket', name: 'sequence-bucket', public: false }],
+      files: [{ bucket: 'sequence-bucket', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined; // pre-create GET 404
+      return { ...current, public: true }; // post-create GET fails parity
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        return true;
+      },
+    );
+
+    const bucketRequests = mockServer.requestLog.filter(
+      (r) => r.pathname === '/storage/v1/bucket' || r.pathname === '/storage/v1/bucket/sequence-bucket',
+    );
+    assert.deepEqual(
+      bucketRequests.map((r) => r.method),
+      ['GET', 'POST', 'GET'],
+      'bucket lifecycle must be GET (404), POST create, then independent GET read-back',
+    );
+    const objectRequests = mockServer.requestLog.filter((r) => r.pathname.includes('/object/'));
+    assert.equal(objectRequests.length, 0, 'no object request may be sent before bucket parity passes');
+    assert.equal(mockServer.objects.size, 0);
+  });
+
+  // 40ac. P2-BUCKET-06-13: MIME lists compare by Storage API semantics, not raw formatting/order
+  test('P2-BUCKET-06-13: accepts target MIME metadata after case folding, de-duplication, and reordering', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{
+        id: 'mime-normalization-bucket',
+        name: 'mime-normalization-bucket',
+        public: false,
+        allowed_mime_types: ['image/png', 'application/pdf'],
+      }],
+      files: [],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return {
+        ...current,
+        allowed_mime_types: ['APPLICATION/PDF', 'IMAGE/PNG', 'IMAGE/PNG'],
+      };
+    };
+
+    const result = await restoreStorage({
+      localEnv: dataset.localEnvPath,
+      buckets: dataset.bucketsPath,
+      manifest: dataset.manifestPath,
+      objectsRoot: dataset.objectsRoot,
+    });
+    assert.equal(result.status, 'success');
+    assert.equal(result.summary.bucketCount, 1);
+  });
+
+  // 40ad. P2-BUCKET-06-14: Name mismatch after POST must fail closed
+  test('P2-BUCKET-06-14: fails closed when post-create GET returns a different bucket name', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'post-create-wrong-name', name: 'post-create-wrong-name', public: false }],
+      files: [{ bucket: 'post-create-wrong-name', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+
+    mockServer.onGetBucket = (bId, current) => {
+      if (!current) return undefined;
+      return { ...current, name: 'tampered-name' };
+    };
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /name 'tampered-name' does not match/);
+        return true;
+      },
+    );
+    assert.equal(mockServer.objects.size, 0);
+  });
+
+  // 40ae. P2-BUCKET-06-15: Existing bucket with incomplete metadata must fail closed
+  test('P2-BUCKET-06-15: fails closed when an existing target bucket omits nullable metadata', async () => {
+    const dataset = await createSyntheticDataset(testCaseDir, {
+      serverPort: mockServer.port,
+      buckets: [{ id: 'existing-incomplete-bucket', name: 'existing-incomplete-bucket', public: false }],
+      files: [{ bucket: 'existing-incomplete-bucket', path: 'sensitive.dat', content: 'SECRET_PAYLOAD_NEVER_UPLOAD' }],
+    });
+
+    mockServer.buckets.set('existing-incomplete-bucket', {
+      id: 'existing-incomplete-bucket',
+      name: 'existing-incomplete-bucket',
+      public: false,
+      allowed_mime_types: null,
+    });
+
+    await assert.rejects(
+      () => restoreStorage({
+        localEnv: dataset.localEnvPath,
+        buckets: dataset.bucketsPath,
+        manifest: dataset.manifestPath,
+        objectsRoot: dataset.objectsRoot,
+      }),
+      (err) => {
+        assert.equal(err.code, 'BUCKET_CONFIGURATION_MISMATCH');
+        assert.match(err.message, /file_size_limit/);
+        assert.match(err.message, /missing required field/);
+        return true;
+      },
+    );
+    assert.equal(mockServer.objects.size, 0);
   });
 
   // 41. P2-SEC-01: Insecure permissions on local.env (mode 0644)
