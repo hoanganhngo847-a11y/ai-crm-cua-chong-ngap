@@ -350,6 +350,7 @@ export async function fetchMetaAdCreativeSnapshot(
         const fieldSets = [
             'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
             'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,image_url,thumbnail_url,video_id}',
+            'id,name,creative{id,name}',
         ];
         let response: Response | null = null;
         const fetchFn = options.customFetch || fetch;

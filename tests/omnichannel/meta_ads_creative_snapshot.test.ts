@@ -32,6 +32,7 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
     assert.equal(snapshot.adName, 'Tuyển sinh du học Áo');
     assert.equal(snapshot.campaignName, 'Chiến dịch mùa thu');
     assert.equal(snapshot.adsetName, 'Học sinh lớp 12');
+    assert.equal(snapshot.adsetId, 'adset_01');
     assert.equal(snapshot.creativeId, 'creative_01');
     assert.equal(snapshot.primaryText, 'Tư vấn học bổng du học Áo');
     assert.deepEqual(snapshot.headlines, ['Đăng ký tư vấn miễn phí']);

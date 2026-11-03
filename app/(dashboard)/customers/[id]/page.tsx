@@ -688,6 +688,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                                     Ad: {creativeSnapshot.adName || tp.ad_name_snapshot || 'Chưa có dữ liệu'}
                                     <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.adId || tp.meta_ad_id || '—'})</span>
                                   </div>
+                                  {creativeSnapshot.creativeName && <div>Creative: {creativeSnapshot.creativeName}</div>}
                                   {creativeSnapshot.creativeId && <div>Creative ID: <span className="font-mono">{creativeSnapshot.creativeId}</span></div>}
                                   {creativeSnapshot.format && creativeSnapshot.format !== 'UNKNOWN' && <div>Định dạng: {creativeSnapshot.format}</div>}
                                 </div>
