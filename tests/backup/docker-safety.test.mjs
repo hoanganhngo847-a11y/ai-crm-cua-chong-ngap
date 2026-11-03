@@ -17,14 +17,24 @@ async function runWithMockDocker(args, { env = {}, initialState = {} } = {}) {
   const dispatcherFile = path.join(tempDir, 'dispatcher.cjs');
   const dockerBin = path.join(tempDir, 'docker');
 
-  await fsp.writeFile(stateFile, JSON.stringify(initialState, null, 2), 'utf8');
+  const effectiveInitialState = {
+    activeContext: 'desktop-linux',
+    contexts: {
+      'desktop-linux': { endpoint: 'unix:///var/run/docker.sock' },
+    },
+    ...initialState,
+  };
+
+  await fsp.writeFile(stateFile, JSON.stringify(effectiveInitialState, null, 2), 'utf8');
   await fsp.writeFile(logFile, '', 'utf8');
 
   // Dispatcher script handling Docker subcommands
   const dispatcherCode = `
+const path = require('path');
 const fs = require('fs');
 const stateFile = process.env.FAKE_DOCKER_STATE_FILE;
 const logFile = process.env.FAKE_DOCKER_LOG_FILE;
+const dockerConfig = process.env.DOCKER_CONFIG;
 
 const args = process.argv.slice(2);
 if (logFile) {
@@ -47,11 +57,59 @@ const cmd = args[0];
 if (cmd === 'context') {
   const sub = args[1];
   if (sub === 'show') {
+    if (state.failContextShow) {
+      process.stderr.write('error getting active context\\n');
+      process.exit(1);
+    }
+    // Check DOCKER_CONFIG/config.json first if available
+    if (dockerConfig) {
+      const cfgPath = path.join(dockerConfig, 'config.json');
+      if (fs.existsSync(cfgPath)) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+          if (cfg.currentContext && typeof cfg.currentContext === 'string') {
+            process.stdout.write(cfg.currentContext.trim() + '\\n');
+            process.exit(0);
+          }
+        } catch (e) {
+          process.stderr.write('error parsing config.json: ' + e.message + '\\n');
+          process.exit(1);
+        }
+      }
+    }
     process.stdout.write((state.activeContext || 'desktop-linux') + '\\n');
     process.exit(0);
   }
   if (sub === 'inspect') {
+    if (state.failContextInspect) {
+      process.stderr.write('error inspecting context\\n');
+      process.exit(1);
+    }
     const name = args[args.length - 1];
+    // Check DOCKER_CONFIG metadata first
+    if (dockerConfig) {
+      const metaDir = path.join(dockerConfig, 'contexts', 'meta');
+      if (fs.existsSync(metaDir)) {
+        try {
+          const entries = fs.readdirSync(metaDir);
+          for (const entry of entries) {
+            const entryPath = path.join(metaDir, entry);
+            let metaFile = null;
+            if (fs.statSync(entryPath).isFile()) metaFile = entryPath;
+            else if (fs.existsSync(path.join(entryPath, 'meta.json'))) metaFile = path.join(entryPath, 'meta.json');
+            if (metaFile) {
+              const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+              if (meta.Name === name && meta.Endpoints?.docker?.Host) {
+                process.stdout.write(meta.Endpoints.docker.Host + '\\n');
+                process.exit(0);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
     if (state.contexts && state.contexts[name]) {
       const ctx = state.contexts[name];
       if (ctx.endpoint !== undefined) {
@@ -64,7 +122,24 @@ if (cmd === 'context') {
   }
 }
 
+if (cmd === 'ps') {
+  if (state.failPs) {
+    process.stderr.write('Error response from daemon: ' + (state.failPsMsg || 'connection refused') + '\\n');
+    process.exit(1);
+  }
+  if (state.containers) {
+    for (const name of Object.keys(state.containers)) {
+      process.stdout.write(name + '\\n');
+    }
+  }
+  process.exit(0);
+}
+
 if (cmd === 'inspect') {
+  if (state.failInspect) {
+    process.stderr.write('Error: ' + (state.failInspectMsg || 'permission denied inspecting container') + '\\n');
+    process.exit(1);
+  }
   const name = args[args.length - 1];
   if (!state.containers || !state.containers[name]) {
     process.stderr.write('Error: No such container: ' + name + '\\n');
@@ -236,29 +311,48 @@ exec node "${dispatcherFile}" "$@"
   return { code, stdout, stderr, commands, finalState };
 }
 
-// -----------------------------------------------------------------------------
-// Nhóm A — Docker Context Guard Regression Tests (A01 - A10)
-// -----------------------------------------------------------------------------
+/**
+ * Creates a temporary DOCKER_CONFIG directory with optional config.json and contexts.
+ */
+async function createDockerConfigFixture({ configJson, contexts = {} } = {}) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'crm-docker-config-test-'));
+  if (configJson !== undefined) {
+    if (typeof configJson === 'string') {
+      await fsp.writeFile(path.join(dir, 'config.json'), configJson, 'utf8');
+    } else {
+      await fsp.writeFile(path.join(dir, 'config.json'), JSON.stringify(configJson, null, 2), 'utf8');
+    }
+  }
+  if (Object.keys(contexts).length > 0) {
+    const metaDir = path.join(dir, 'contexts', 'meta');
+    await fsp.mkdir(metaDir, { recursive: true });
+    for (const [name, ctx] of Object.entries(contexts)) {
+      const meta = {
+        Name: name,
+        Endpoints: {
+          docker: {
+            Host: ctx.endpoint,
+          },
+        },
+      };
+      await fsp.writeFile(path.join(metaDir, `${name}.json`), JSON.stringify(meta, null, 2), 'utf8');
+    }
+  }
+  return dir;
+}
 
-test('A01: Default context là local Unix socket -> PASS', async () => {
-  const result = await runWithMockDocker(['stop'], {
-    env: { DOCKER_HOST: undefined, DOCKER_CONTEXT: undefined },
-    initialState: {
-      activeContext: 'local-desktop',
-      contexts: {
-        'local-desktop': { endpoint: 'unix:///var/run/docker.sock' },
-      },
-    },
-  });
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /not present; nothing to remove/);
-});
+// =============================================================================
+// Nhóm A — Docker Environment Precedence (A01 - A10)
+// DOCKER_CONTEXT > DOCKER_HOST > active/default context
+// =============================================================================
 
-test('A02: Default context là remote SSH -> FAIL CLOSED', async () => {
+test('A01: DOCKER_CONTEXT remote + DOCKER_HOST local -> FAIL CLOSED', async () => {
   const result = await runWithMockDocker(['start'], {
-    env: { DOCKER_HOST: undefined, DOCKER_CONTEXT: undefined },
+    env: {
+      DOCKER_CONTEXT: 'remote-ssh',
+      DOCKER_HOST: 'unix:///var/run/docker.sock',
+    },
     initialState: {
-      activeContext: 'remote-ssh',
       contexts: {
         'remote-ssh': { endpoint: 'ssh://developer@prod-server.corp:22' },
       },
@@ -268,113 +362,448 @@ test('A02: Default context là remote SSH -> FAIL CLOSED', async () => {
   assert.match(result.stderr, /refusing remote Docker endpoint \(ssh:\/\/developer@prod-server.corp:22\)/);
 });
 
-test('A03: Default context là remote TCP -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
-    env: { DOCKER_HOST: undefined, DOCKER_CONTEXT: undefined },
-    initialState: {
-      activeContext: 'remote-tcp',
-      contexts: {
-        'remote-tcp': { endpoint: 'tcp://192.168.1.100:2375' },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/192.168.1.100:2375\)/);
-});
-
-test('A04: DOCKER_CONTEXT trỏ remote SSH -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
+test('A02: DOCKER_CONTEXT local + DOCKER_HOST remote -> Resolve đúng context local', async () => {
+  const result = await runWithMockDocker(['stop'], {
     env: {
-      DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: 'my-remote-box',
-    },
-    initialState: {
-      activeContext: 'local-desktop',
-      contexts: {
-        'local-desktop': { endpoint: 'unix:///var/run/docker.sock' },
-        'my-remote-box': { endpoint: 'ssh://root@box.cloud' },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing remote Docker endpoint \(ssh:\/\/root@box.cloud\)/);
-});
-
-test('A05: DOCKER_HOST trỏ remote TCP -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
-    env: {
-      DOCKER_HOST: 'tcp://10.0.0.5:2376',
       DOCKER_CONTEXT: 'local-desktop',
+      DOCKER_HOST: 'tcp://10.0.0.5:2376',
     },
     initialState: {
-      activeContext: 'local-desktop',
       contexts: {
         'local-desktop': { endpoint: 'unix:///var/run/docker.sock' },
       },
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /not present; nothing to remove/);
+});
+
+test('A03: DOCKER_CONTEXT remote + DOCKER_HOST remote -> FAIL CLOSED', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: {
+      DOCKER_CONTEXT: 'remote-ssh',
+      DOCKER_HOST: 'tcp://10.0.0.5:2376',
+    },
+    initialState: {
+      contexts: {
+        'remote-ssh': { endpoint: 'ssh://developer@prod-server.corp:22' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /refusing remote Docker endpoint \(ssh:\/\/developer@prod-server.corp:22\)/);
+});
+
+test('A04: Chỉ DOCKER_HOST local -> PASS', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    env: {
+      DOCKER_CONTEXT: undefined,
+      DOCKER_HOST: 'unix:///var/run/docker.sock',
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /not present; nothing to remove/);
+});
+
+test('A05: Chỉ DOCKER_HOST remote -> FAIL CLOSED', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: {
+      DOCKER_CONTEXT: undefined,
+      DOCKER_HOST: 'tcp://10.0.0.5:2376',
     },
   });
   assert.equal(result.code, 1);
   assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/10.0.0.5:2376\)/);
 });
 
-test('A06: Context không tồn tại -> FAIL CLOSED', async () => {
+test('A06: Chỉ DOCKER_CONTEXT local -> PASS', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    env: {
+      DOCKER_CONTEXT: 'local-desktop',
+      DOCKER_HOST: undefined,
+    },
+    initialState: {
+      contexts: {
+        'local-desktop': { endpoint: 'unix:///var/run/docker.sock' },
+      },
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /not present; nothing to remove/);
+});
+
+test('A07: Chỉ DOCKER_CONTEXT remote -> FAIL CLOSED', async () => {
   const result = await runWithMockDocker(['start'], {
     env: {
+      DOCKER_CONTEXT: 'remote-ssh',
       DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: 'ghost-context',
+    },
+    initialState: {
+      contexts: {
+        'remote-ssh': { endpoint: 'ssh://developer@prod-server.corp:22' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /refusing remote Docker endpoint \(ssh:\/\/developer@prod-server.corp:22\)/);
+});
+
+test('A08: Không có hai biến, default context local -> PASS', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    env: {
+      DOCKER_CONTEXT: undefined,
+      DOCKER_HOST: undefined,
+    },
+    initialState: {
+      activeContext: 'desktop-linux',
+      contexts: {
+        'desktop-linux': { endpoint: 'unix:///var/run/docker.sock' },
+      },
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /not present; nothing to remove/);
+});
+
+test('A09: Không có hai biến, default context remote -> FAIL CLOSED', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: {
+      DOCKER_CONTEXT: undefined,
+      DOCKER_HOST: undefined,
+    },
+    initialState: {
+      activeContext: 'remote-prod',
+      contexts: {
+        'remote-prod': { endpoint: 'tcp://prod.company.internal:2375' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/prod.company.internal:2375\)/);
+});
+
+test('A10: DOCKER_CONTEXT không tồn tại -> FAIL CLOSED', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: {
+      DOCKER_CONTEXT: 'nonexistent-context-xyz',
+      DOCKER_HOST: undefined,
     },
     initialState: {
       contexts: {},
     },
   });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /unable to inspect endpoint for Docker context 'ghost-context'/);
+  assert.match(result.stderr, /unable to inspect endpoint for Docker context 'nonexistent-context-xyz'/);
 });
 
-test('A07: Không đọc được context endpoint -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
-    env: {
-      DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: 'empty-endpoint-ctx',
-    },
-    initialState: {
-      contexts: {
-        'empty-endpoint-ctx': { endpoint: '' },
-      },
+// =============================================================================
+// Nhóm B — DOCKER_CONFIG Isolation (B01 - B10)
+// =============================================================================
+
+test('B01: HOME local, DOCKER_CONFIG remote -> FAIL CLOSED', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'remote-swarm' },
+    contexts: {
+      'remote-swarm': { endpoint: 'tcp://swarm.corp:2375' },
     },
   });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /endpoint for Docker context 'empty-endpoint-ctx' is empty or unresolvable/);
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        activeContext: 'desktop-local',
+        contexts: {
+          'desktop-local': { endpoint: 'unix:///var/run/docker.sock' },
+        },
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/swarm.corp:2375\)/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
 });
 
-test('A08: DOCKER_HOST/DOCKER_CONTEXT không được khai báo nhưng default context remote -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
-    env: {
-      DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: undefined,
-    },
-    initialState: {
-      activeContext: 'production-swarm',
-      contexts: {
-        'production-swarm': { endpoint: 'tcp://swarm.prod.internal:2375' },
-      },
+test('B02: HOME remote, DOCKER_CONFIG local -> Resolve đúng DOCKER_CONFIG', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'local-isolated' },
+    contexts: {
+      'local-isolated': { endpoint: 'unix:///var/run/isolated.sock' },
     },
   });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/swarm.prod.internal:2375\)/);
+  try {
+    const result = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        activeContext: 'home-remote',
+        contexts: {
+          'home-remote': { endpoint: 'tcp://prod:2375' },
+        },
+      },
+    });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /not present; nothing to remove/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
 });
 
-test('A09: Remote context không được phép chạy docker rm -> PASS', async () => {
+test('B03: DOCKER_CONFIG local có metadata đầy đủ -> PASS', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'valid-local' },
+    contexts: {
+      'valid-local': { endpoint: 'unix:///var/run/docker.sock' },
+    },
+  });
+  try {
+    const result = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(result.code, 0);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B04: DOCKER_CONFIG remote SSH -> FAIL CLOSED', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'remote-ssh' },
+    contexts: {
+      'remote-ssh': { endpoint: 'ssh://root@jumpbox.cloud' },
+    },
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /refusing remote Docker endpoint \(ssh:\/\/root@jumpbox.cloud\)/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B05: DOCKER_CONFIG remote TCP -> FAIL CLOSED', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'remote-tcp' },
+    contexts: {
+      'remote-tcp': { endpoint: 'tcp://10.200.0.1:2375' },
+    },
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /refusing remote Docker endpoint \(tcp:\/\/10.200.0.1:2375\)/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B06: DOCKER_CONFIG thiếu config.json -> Không được fallback HOME để đoán', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: undefined,
+    contexts: {},
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        failContextShow: true, // CLI context show cannot resolve
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unable to determine active Docker context/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B07: DOCKER_CONFIG config.json lỗi JSON -> FAIL CLOSED nếu không thể xác minh', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: '{ invalid corrupted json syntax',
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(result.code, 1);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B08: DOCKER_CONFIG metadata không tồn tại -> FAIL CLOSED', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'unregistered-context' },
+    contexts: {},
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unable to inspect endpoint for Docker context 'unregistered-context'/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B09: DOCKER_CONFIG context không inspect được -> FAIL CLOSED', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'error-context' },
+  });
+  try {
+    const result = await runWithMockDocker(['start'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        failContextInspect: true,
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unable to inspect endpoint for Docker context 'error-context'/);
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test('B10: DOCKER_CONFIG và HOME có currentContext khác nhau -> Chọn đúng DOCKER_CONFIG', async () => {
+  const cfgDir = await createDockerConfigFixture({
+    configJson: { currentContext: 'custom-config-ctx' },
+    contexts: {
+      'custom-config-ctx': { endpoint: 'unix:///var/run/custom.sock' },
+    },
+  });
+  try {
+    const result = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDir,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        activeContext: 'home-ctx',
+        contexts: {
+          'home-ctx': { endpoint: 'tcp://home.remote:2375' },
+        },
+      },
+    });
+    assert.equal(result.code, 0);
+    assert.ok(result.commands.some((c) => c.includes('inspect') && c.includes('custom-config-ctx')));
+    assert.ok(!result.commands.some((c) => c.includes('home-ctx')));
+  } finally {
+    await fsp.rm(cfgDir, { recursive: true, force: true });
+  }
+});
+
+// =============================================================================
+// Nhóm C — Docker Inspect Error & 4-State Verification (C01 - C10)
+// =============================================================================
+
+test('C01: Container thực sự không tồn tại -> NOT_FOUND (status 2)', async () => {
   const result = await runWithMockDocker(['stop'], {
-    env: {
-      DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: undefined,
-    },
     initialState: {
-      activeContext: 'remote-prod',
-      contexts: {
-        'remote-prod': { endpoint: 'ssh://deploy@remote.datacenter' },
+      containers: {
+        'other-container': {},
       },
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /not present; nothing to remove/);
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C02: Docker daemon unavailable -> ERROR (status 3)', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    initialState: {
+      failPs: true,
+      failPsMsg: 'cannot connect to daemon',
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /unable to verify container 'crm-dumpcheck-test' status due to Docker daemon or inspect error/);
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C03: Permission denied -> ERROR (status 3)', async () => {
+  const result = await runWithMockDocker(['start'], {
+    initialState: {
+      failPs: true,
+      failPsMsg: 'permission denied while attempting to connect to the Docker daemon socket',
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /unable to verify container 'crm-dumpcheck-test' status due to Docker daemon or inspect error/);
+  assert.ok(!result.commands.some((c) => c.startsWith('pull') || c.startsWith('run') || c.startsWith('rm')));
+});
+
+test('C04: Docker API error -> ERROR (status 3)', async () => {
+  const result = await runWithMockDocker(['logs'], {
+    initialState: {
+      failPs: true,
+      failPsMsg: 'API error 500: daemon error',
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /unable to verify container 'crm-dumpcheck-test' status due to Docker daemon or inspect error/);
+  assert.ok(!result.commands.some((c) => c.startsWith('logs')));
+});
+
+test('C05: Container tồn tại nhưng inspect thất bại -> ERROR (status 3)', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    initialState: {
+      containers: {
+        'crm-dumpcheck-test': {},
+      },
+      failInspect: true,
+      failInspectMsg: 'failed to inspect container metadata',
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /unable to verify container 'crm-dumpcheck-test' status due to Docker daemon or inspect error/);
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C06: Container có đủ ownership marker -> OWNED (status 0)', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    initialState: {
       containers: {
         'crm-dumpcheck-test': {
           labels: {
@@ -386,204 +815,14 @@ test('A09: Remote context không được phép chạy docker rm -> PASS', async
       },
     },
   });
-  assert.equal(result.code, 1);
-  const rmInvoked = result.commands.some((cmd) => cmd.startsWith('rm'));
-  assert.equal(rmInvoked, false, 'docker rm must not be called when context is remote');
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'container must still exist');
-});
-
-test('A10: Remote context không được phép chạy docker pull/run/exec -> PASS', async () => {
-  const result = await runWithMockDocker(['start'], {
-    env: {
-      DOCKER_HOST: undefined,
-      DOCKER_CONTEXT: undefined,
-    },
-    initialState: {
-      activeContext: 'remote-prod',
-      contexts: {
-        'remote-prod': { endpoint: 'tcp://10.200.0.1:2375' },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  const pullInvoked = result.commands.some((cmd) => cmd.startsWith('pull'));
-  const runInvoked = result.commands.some((cmd) => cmd.startsWith('run'));
-  const execInvoked = result.commands.some((cmd) => cmd.startsWith('exec'));
-  assert.equal(pullInvoked, false, 'docker pull must not be called when context is remote');
-  assert.equal(runInvoked, false, 'docker run must not be called when context is remote');
-  assert.equal(execInvoked, false, 'docker exec must not be called when context is remote');
-});
-
-// -----------------------------------------------------------------------------
-// Nhóm B — Container Ownership Regression Tests (B01 - B10)
-// -----------------------------------------------------------------------------
-
-const VALID_OWNERSHIP_LABELS = {
-  'crm.disposable-test': 'true',
-  'crm.owner': 'ci-postgres17',
-  'crm.purpose': 'pg17-backup-restore-test',
-};
-
-test('B01: Container chưa tồn tại -> Cho phép start', async () => {
-  const result = await runWithMockDocker(['start'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      images: {
-        'public.ecr.aws/supabase/postgres:17.11.0.004': true,
-      },
-      containers: {},
-    },
-  });
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /Container 'crm-dumpcheck-test' does not exist; ready to create/);
-  assert.match(result.stdout, /Disposable marker verified; PostgreSQL 17 target is ready/);
-  const created = result.finalState.containers?.['crm-dumpcheck-test'];
-  assert.ok(created, 'container must be created');
-  assert.equal(created.labels['crm.disposable-test'], 'true');
-  assert.equal(created.labels['crm.owner'], 'ci-postgres17');
-  assert.equal(created.labels['crm.purpose'], 'pg17-backup-restore-test');
-});
-
-test('B02: Container cùng tên nhưng không có ownership label -> Không xóa', async () => {
-  const result = await runWithMockDocker(['start'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: {}, // no labels at all (foreign container)
-        },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing to overwrite or remove foreign container/);
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'foreign container must NOT be deleted');
-  const rmCalls = result.commands.filter((cmd) => cmd.startsWith('rm'));
-  assert.equal(rmCalls.length, 0, 'docker rm must not be called on foreign container');
-});
-
-test('B03: Container có sai ownership label -> Không xóa', async () => {
-  const result = await runWithMockDocker(['start'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: {
-            'crm.disposable-test': 'true',
-            'crm.owner': 'wrong-team',
-            'crm.purpose': 'pg17-backup-restore-test',
-          },
-        },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing to overwrite or remove foreign container/);
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'container with wrong label must NOT be deleted');
-});
-
-test('B04: Container có đúng ownership marker -> Cho phép cleanup theo chính sách', async () => {
-  const result = await runWithMockDocker(['start'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      images: {
-        'public.ecr.aws/supabase/postgres:17.11.0.004': true,
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: { ...VALID_OWNERSHIP_LABELS },
-        },
-      },
-    },
-  });
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /verified with valid ownership markers; removing stale container before recreate/);
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'recreated container must exist');
-});
-
-test('B05: stop container không thuộc script -> Không xóa', async () => {
-  const result = await runWithMockDocker(['stop'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: {
-            'crm.disposable-test': 'false',
-          },
-        },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing to remove foreign container/);
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'foreign container must remain intact');
-  const rmCalls = result.commands.filter((cmd) => cmd.startsWith('rm'));
-  assert.equal(rmCalls.length, 0, 'docker rm must not be called');
-});
-
-test('B06: stop container thuộc script -> Cleanup thành công', async () => {
-  const result = await runWithMockDocker(['stop'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: { ...VALID_OWNERSHIP_LABELS },
-        },
-      },
-    },
-  });
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Removed disposable PostgreSQL container 'crm-dumpcheck-test'/);
-  assert.equal(result.finalState.containers?.['crm-dumpcheck-test'], undefined, 'owned container must be removed');
+  assert.ok(result.commands.some((c) => c.startsWith('rm')));
 });
 
-test('B07: logs container không thuộc script -> Từ chối', async () => {
-  const result = await runWithMockDocker(['logs'], {
+test('C07: Container thiếu ownership marker -> FOREIGN (status 1)', async () => {
+  const result = await runWithMockDocker(['stop'], {
     initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: {
-            'crm.owner': 'some-other-project',
-          },
-        },
-      },
-    },
-  });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing to read logs from container 'crm-dumpcheck-test' without valid ownership markers/);
-  const logCalls = result.commands.filter((cmd) => cmd.startsWith('logs'));
-  assert.equal(logCalls.length, 0, 'docker logs must not be called on foreign container');
-});
-
-test('B08: start khi container không xác định ownership -> FAIL CLOSED', async () => {
-  const result = await runWithMockDocker(['start'], {
-    initialState: {
-      activeContext: 'default',
-      contexts: {
-        default: { endpoint: 'unix:///var/run/docker.sock' },
-      },
       containers: {
         'crm-dumpcheck-test': {
           labels: {
@@ -595,46 +834,112 @@ test('B08: start khi container không xác định ownership -> FAIL CLOSED', as
     },
   });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing to overwrite or remove foreign container/);
-  assert.ok(result.finalState.containers?.['crm-dumpcheck-test'], 'container must be kept intact');
+  assert.match(result.stderr, /exists but lacks valid ownership markers; refusing to remove foreign container/);
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
 });
 
-test('B09: stop chạy với remote Docker context -> Không gọi docker rm', async () => {
+test('C08: start gặp inspect error -> Không pull/run/rm', async () => {
+  const result = await runWithMockDocker(['start'], {
+    initialState: {
+      containers: {
+        'crm-dumpcheck-test': {},
+      },
+      failInspect: true,
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.ok(!result.commands.some((c) => c.startsWith('pull')));
+  assert.ok(!result.commands.some((c) => c.startsWith('run')));
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C09: stop gặp inspect error -> Không rm', async () => {
   const result = await runWithMockDocker(['stop'], {
     initialState: {
-      activeContext: 'remote-env',
-      contexts: {
-        'remote-env': { endpoint: 'tcp://172.16.0.50:2375' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: { ...VALID_OWNERSHIP_LABELS },
-        },
-      },
+      failPs: true,
     },
   });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing remote Docker endpoint/);
-  const rmCalls = result.commands.filter((cmd) => cmd.startsWith('rm'));
-  assert.equal(rmCalls.length, 0, 'docker rm must not be called when context is remote');
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
 });
 
-test('B10: logs chạy với remote Docker context -> Không đọc logs', async () => {
+test('C10: logs gặp inspect error -> Không đọc logs', async () => {
   const result = await runWithMockDocker(['logs'], {
     initialState: {
-      activeContext: 'remote-env',
+      failPs: true,
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.ok(!result.commands.some((c) => c.startsWith('logs')));
+});
+
+// =============================================================================
+// Nhóm D — Zero Remote Side Effects (D01 - D04)
+// =============================================================================
+
+test('D01: start với remote context không gọi pull/run/exec/rm', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: { DOCKER_CONTEXT: 'remote-env' },
+    initialState: {
       contexts: {
-        'remote-env': { endpoint: 'ssh://admin@remote-host' },
-      },
-      containers: {
-        'crm-dumpcheck-test': {
-          labels: { ...VALID_OWNERSHIP_LABELS },
-        },
+        'remote-env': { endpoint: 'tcp://remote:2375' },
       },
     },
   });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /refusing remote Docker endpoint/);
-  const logCalls = result.commands.filter((cmd) => cmd.startsWith('logs'));
-  assert.equal(logCalls.length, 0, 'docker logs must not be called when context is remote');
+  const daemonCalls = result.commands.filter((c) => (
+    c.startsWith('pull') || c.startsWith('run') || c.startsWith('exec') || c.startsWith('rm')
+  ));
+  assert.deepEqual(daemonCalls, []);
+});
+
+test('D02: stop với remote context không gọi rm', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    env: { DOCKER_CONTEXT: 'remote-env' },
+    initialState: {
+      contexts: {
+        'remote-env': { endpoint: 'tcp://remote:2375' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  const rmCalls = result.commands.filter((c) => c.startsWith('rm'));
+  assert.deepEqual(rmCalls, []);
+});
+
+test('D03: logs với remote context không gọi logs', async () => {
+  const result = await runWithMockDocker(['logs'], {
+    env: { DOCKER_CONTEXT: 'remote-env' },
+    initialState: {
+      contexts: {
+        'remote-env': { endpoint: 'tcp://remote:2375' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  const logCalls = result.commands.filter((c) => c.startsWith('logs'));
+  assert.deepEqual(logCalls, []);
+});
+
+test('D04: Zero daemon side effects when effective context is remote', async () => {
+  const result = await runWithMockDocker(['start'], {
+    env: {
+      DOCKER_CONTEXT: 'prod-cluster',
+      DOCKER_HOST: 'unix:///var/run/docker.sock', // Overridden by DOCKER_CONTEXT
+    },
+    initialState: {
+      contexts: {
+        'prod-cluster': { endpoint: 'ssh://ops@prod-cluster.corp' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+
+  // Assert only client config inspection commands were executed
+  for (const cmd of result.commands) {
+    assert.ok(
+      cmd.startsWith('context inspect') || cmd.startsWith('context show'),
+      `unexpected daemon command executed on remote context: ${cmd}`,
+    );
+  }
 });

@@ -35,22 +35,26 @@ die() {
 }
 
 assert_local_docker() {
-  command -v docker >/dev/null 2>&1 || die "docker CLI is not available"
+  command -v docker >/dev/null 2>&1 || die "docker CLI is not available in PATH"
 
   local effective_endpoint=""
   local effective_context=""
 
-  if [[ -n "${DOCKER_HOST:-}" ]]; then
+  # Docker CLI precedence semantics (R5.3 Finding P1-A):
+  # 1. DOCKER_CONTEXT (overrides DOCKER_HOST and active context)
+  # 2. DOCKER_HOST (if DOCKER_CONTEXT is not set or empty)
+  # 3. Active/default Docker context (if neither is set)
+  if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+    effective_context="${DOCKER_CONTEXT}"
+  elif [[ -n "${DOCKER_HOST:-}" ]]; then
     effective_endpoint="${DOCKER_HOST}"
   else
-    if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
-      effective_context="${DOCKER_CONTEXT}"
-    else
-      if ! effective_context="$(docker context show 2>/dev/null)"; then
-        die "unable to determine active Docker context; refusing to continue"
-      fi
+    if ! effective_context="$(docker context show 2>/dev/null)"; then
+      die "unable to determine active Docker context; refusing to continue"
     fi
+  fi
 
+  if [[ -n "${effective_context}" ]]; then
     effective_context="$(printf '%s' "${effective_context}" | tr -d '\r\n')"
 
     [[ -n "${effective_context}" ]] || die "active Docker context name is empty; refusing to continue"
@@ -86,8 +90,27 @@ assert_local_docker() {
 check_container_ownership() {
   local container="$1"
 
-  if ! docker inspect --type container "${container}" >/dev/null 2>&1; then
-    return 2 # not found
+  # Status codes (R5.3 Finding P2):
+  # 0: Container exists AND valid ownership markers verified
+  # 1: Container exists BUT lacks valid ownership markers (foreign / unverified)
+  # 2: Container definitely does NOT exist
+  # 3: Unable to verify container due to Docker daemon, permission, or inspect error
+
+  # Step 1: Query Docker daemon to verify connectivity and list container names
+  local ps_output
+  if ! ps_output="$(docker ps -a --format '{{.Names}}' 2>/dev/null)"; then
+    return 3 # Docker daemon unavailable / permission denied / API error
+  fi
+
+  # Step 2: Exact line match to verify container presence without regex injection
+  if ! printf '%s\n' "${ps_output}" | grep -Fxq -- "${container}"; then
+    return 2 # Container definitely does NOT exist
+  fi
+
+  # Step 3: Container was found in the list; now inspect its configuration
+  local inspect_out
+  if ! inspect_out="$(docker inspect --type container "${container}" 2>/dev/null)"; then
+    return 3 # Container exists in list, but inspect failed
   fi
 
   local l_disposable l_owner l_purpose
@@ -153,8 +176,12 @@ start() {
     docker rm -f "${CONTAINER_NAME}" >/dev/null
   elif [[ "${status}" -eq 1 ]]; then
     die "container '${CONTAINER_NAME}' already exists but lacks valid ownership markers; refusing to overwrite or remove foreign container"
-  else
+  elif [[ "${status}" -eq 2 ]]; then
     log "Container '${CONTAINER_NAME}' does not exist; ready to create."
+  elif [[ "${status}" -eq 3 ]]; then
+    die "unable to verify container '${CONTAINER_NAME}' status due to Docker daemon or inspect error; refusing to continue"
+  else
+    die "unexpected ownership check status '${status}' for container '${CONTAINER_NAME}'"
   fi
 
   if ! ensure_image "${PG_IMAGE}"; then
@@ -250,8 +277,12 @@ stop() {
     log "Removed disposable PostgreSQL container '${CONTAINER_NAME}'."
   elif [[ "${status}" -eq 1 ]]; then
     die "container '${CONTAINER_NAME}' exists but lacks valid ownership markers; refusing to remove foreign container"
-  else
+  elif [[ "${status}" -eq 2 ]]; then
     log "Disposable PostgreSQL container '${CONTAINER_NAME}' not present; nothing to remove."
+  elif [[ "${status}" -eq 3 ]]; then
+    die "unable to verify container '${CONTAINER_NAME}' status due to Docker daemon or inspect error; refusing to clean up"
+  else
+    die "unexpected ownership check status '${status}' for container '${CONTAINER_NAME}'"
   fi
 }
 
@@ -265,8 +296,12 @@ logs() {
     docker logs "${CONTAINER_NAME}" 2>&1 || true
   elif [[ "${status}" -eq 1 ]]; then
     die "refusing to read logs from container '${CONTAINER_NAME}' without valid ownership markers"
-  else
+  elif [[ "${status}" -eq 2 ]]; then
     log "Disposable PostgreSQL container '${CONTAINER_NAME}' not present; no logs to display."
+  elif [[ "${status}" -eq 3 ]]; then
+    die "unable to verify container '${CONTAINER_NAME}' status due to Docker daemon or inspect error; refusing to read logs"
+  else
+    die "unexpected ownership check status '${status}' for container '${CONTAINER_NAME}'"
   fi
 }
 

@@ -1344,8 +1344,37 @@ export function parseAndValidateDockerEndpoint(rawEndpoint) {
 }
 
 /**
- * Resolves the actual daemon endpoint of a Docker context (R2-P1-02).
- * Reads local context metadata or queries CLI inspect without trusting the context name.
+ * Resolves the active Docker config directory root (R5.3 Finding P1-B).
+ * Strictly honors DOCKER_CONFIG if provided, otherwise defaults to HOME/.docker.
+ * Never silently falls back to HOME when DOCKER_CONFIG is specified.
+ */
+export function getDockerConfigRoot(env = process.env) {
+  if (env.DOCKER_CONFIG !== undefined && env.DOCKER_CONFIG !== null) {
+    const trimmed = String(env.DOCKER_CONFIG).trim();
+    if (trimmed.length > 0) {
+      return {
+        path: path.resolve(trimmed),
+        isCustom: true,
+      };
+    }
+  }
+  const homeDir = env.HOME || process.env.HOME || os.homedir();
+  if (!homeDir || typeof homeDir !== 'string' || homeDir.trim().length === 0) {
+    return {
+      path: null,
+      isCustom: false,
+      error: 'NO_HOME_DIR',
+    };
+  }
+  return {
+    path: path.join(homeDir.trim(), '.docker'),
+    isCustom: false,
+  };
+}
+
+/**
+ * Resolves the actual daemon endpoint of a Docker context (R2-P1-02, R5.3 Finding P1-B).
+ * Reads context metadata from the active config root or queries CLI inspect without trusting the context name.
  */
 export function resolveDockerContextEndpoint(contextName, { contextInspector, env = process.env } = {}) {
   if (!contextName || typeof contextName !== 'string') return null;
@@ -1361,17 +1390,36 @@ export function resolveDockerContextEndpoint(contextName, { contextInspector, en
     return contextInspector(trimmed);
   }
 
-  // 1. Try reading ~/.docker/contexts/meta/ directly
+  const configRoot = getDockerConfigRoot(env);
+  if (configRoot.error || !configRoot.path) {
+    return null;
+  }
+
+  if (configRoot.isCustom && !fs.existsSync(configRoot.path)) {
+    return null;
+  }
+
+  // 1. Try reading context metadata from configRoot/contexts/meta/ directly
   try {
-    const homeDir = env.HOME || process.env.HOME || os.homedir();
-    const metaDir = path.join(homeDir, '.docker', 'contexts', 'meta');
+    const metaDir = path.join(configRoot.path, 'contexts', 'meta');
     if (fs.existsSync(metaDir)) {
       const entries = fs.readdirSync(metaDir);
       for (const entry of entries) {
         try {
-          const filePath = path.join(metaDir, entry);
-          if (fs.statSync(filePath).isFile()) {
-            const content = fs.readFileSync(filePath, 'utf8');
+          const entryPath = path.join(metaDir, entry);
+          const stat = fs.statSync(entryPath);
+          let metaFilePath = null;
+          if (stat.isFile()) {
+            metaFilePath = entryPath;
+          } else if (stat.isDirectory()) {
+            const candidate = path.join(entryPath, 'meta.json');
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+              metaFilePath = candidate;
+            }
+          }
+
+          if (metaFilePath) {
+            const content = fs.readFileSync(metaFilePath, 'utf8');
             const data = JSON.parse(content);
             if (data.Name === trimmed && data.Endpoints?.docker?.Host) {
               return data.Endpoints.docker.Host;
@@ -1388,7 +1436,9 @@ export function resolveDockerContextEndpoint(contextName, { contextInspector, en
 
   // 2. Try docker context inspect via CLI with explicit argument separator '--'
   try {
+    const execEnv = { ...process.env, ...env };
     const stdout = execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}', '--', trimmed], {
+      env: execEnv,
       encoding: 'utf8',
       timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -1399,79 +1449,120 @@ export function resolveDockerContextEndpoint(contextName, { contextInspector, en
     // unable to resolve
   }
 
-  // 3. Built-in default context fallback
-  if (trimmed === 'default') {
-    if (fs.existsSync('/var/run/docker.sock')) {
-      return 'unix:///var/run/docker.sock';
-    }
-  }
-
   return null;
 }
 
 /**
- * Resolves the effective Docker endpoint following Docker CLI precedence (R5.2 Finding P1).
+ * Resolves the effective Docker endpoint following Docker CLI precedence (R5.3 Finding P1-A & P1-B).
  * Precedence:
- * 1. DOCKER_HOST environment variable
- * 2. DOCKER_CONTEXT environment variable
- * 3. Default/active context (configured via `docker context use` or config.json or `docker context show`)
+ * 1. DOCKER_CONTEXT environment variable (overrides DOCKER_HOST and active context)
+ * 2. DOCKER_HOST environment variable (if DOCKER_CONTEXT is not set or empty)
+ * 3. Default/active context (configured via DOCKER_CONFIG/config.json, docker context show, or HOME/.docker)
  */
 export function resolveEffectiveDockerEndpoint({ env = process.env, contextInspector, activeContextResolver } = {}) {
-  if (env.DOCKER_HOST && env.DOCKER_HOST.trim().length > 0) {
+  // 1. DOCKER_CONTEXT environment variable (highest precedence in Docker CLI)
+  if (env.DOCKER_CONTEXT !== undefined && env.DOCKER_CONTEXT !== null && String(env.DOCKER_CONTEXT).trim().length > 0) {
+    const contextName = String(env.DOCKER_CONTEXT).trim();
+    if (contextName.startsWith('-') || !/^[a-zA-Z0-9_\-\.]+$/.test(contextName)) {
+      return {
+        source: 'DOCKER_CONTEXT',
+        context: contextName,
+        rawEndpoint: null,
+        error: 'INVALID_CONTEXT_NAME',
+      };
+    }
+    const endpoint = resolveDockerContextEndpoint(contextName, { contextInspector, env });
     return {
-      source: 'DOCKER_HOST',
-      context: null,
-      rawEndpoint: env.DOCKER_HOST.trim(),
+      source: 'DOCKER_CONTEXT',
+      context: contextName,
+      rawEndpoint: endpoint,
     };
   }
 
-  let contextName = (env.DOCKER_CONTEXT && env.DOCKER_CONTEXT.trim().length > 0) ? env.DOCKER_CONTEXT.trim() : null;
+  // 2. DOCKER_HOST environment variable (evaluated only if DOCKER_CONTEXT is not set)
+  if (env.DOCKER_HOST !== undefined && env.DOCKER_HOST !== null && String(env.DOCKER_HOST).trim().length > 0) {
+    return {
+      source: 'DOCKER_HOST',
+      context: null,
+      rawEndpoint: String(env.DOCKER_HOST).trim(),
+    };
+  }
 
-  if (!contextName) {
-    if (typeof activeContextResolver === 'function') {
-      contextName = activeContextResolver();
-    } else {
-      // 1. Try reading ~/.docker/config.json "currentContext"
+  // 3. Active/default context (evaluated when neither DOCKER_CONTEXT nor DOCKER_HOST is set)
+  let contextName = null;
+  if (typeof activeContextResolver === 'function') {
+    contextName = activeContextResolver();
+  } else {
+    const configRoot = getDockerConfigRoot(env);
+    if (configRoot.error || !configRoot.path) {
+      return {
+        source: 'DEFAULT_CONTEXT',
+        context: null,
+        rawEndpoint: null,
+        error: configRoot.error || 'UNRESOLVABLE_CONFIG_ROOT',
+      };
+    }
+
+    if (configRoot.isCustom) {
+      if (!fs.existsSync(configRoot.path)) {
+        return {
+          source: 'DEFAULT_CONTEXT',
+          context: null,
+          rawEndpoint: null,
+          error: 'DOCKER_CONFIG_DIR_NOT_FOUND',
+        };
+      }
+    }
+
+    const configPath = path.join(configRoot.path, 'config.json');
+    if (fs.existsSync(configPath)) {
       try {
-        const homeDir = env.HOME || process.env.HOME || os.homedir();
-        const configPath = path.join(homeDir, '.docker', 'config.json');
-        if (fs.existsSync(configPath)) {
-          const configJson = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-          if (configJson.currentContext && typeof configJson.currentContext === 'string') {
-            contextName = configJson.currentContext.trim();
-          }
+        const rawContent = fs.readFileSync(configPath, 'utf8');
+        const configJson = JSON.parse(rawContent);
+        if (configJson.currentContext && typeof configJson.currentContext === 'string' && configJson.currentContext.trim().length > 0) {
+          contextName = configJson.currentContext.trim();
         }
       } catch {
-        // ignore config read error
+        return {
+          source: 'DEFAULT_CONTEXT',
+          context: null,
+          rawEndpoint: null,
+          error: 'CORRUPTED_DOCKER_CONFIG_JSON',
+        };
       }
+    }
 
-      // 2. Fall back to docker context show via CLI
-      if (!contextName) {
-        try {
-          const stdout = execFileSync('docker', ['context', 'show'], {
-            encoding: 'utf8',
-            timeout: 3000,
-            stdio: ['ignore', 'pipe', 'ignore'],
-          });
-          const trimmed = stdout.trim();
-          if (trimmed.length > 0) {
-            contextName = trimmed;
-          }
-        } catch {
-          // unable to resolve via CLI
+    if (!contextName) {
+      try {
+        const execEnv = { ...process.env, ...env };
+        const stdout = execFileSync('docker', ['context', 'show'], {
+          env: execEnv,
+          encoding: 'utf8',
+          timeout: 3000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const trimmed = stdout.trim();
+        if (trimmed.length > 0) {
+          contextName = trimmed;
         }
+      } catch {
+        // Unable to resolve via CLI
       }
+    }
 
-      // 3. Built-in fallback
-      if (!contextName) {
-        contextName = 'default';
-      }
+    if (!contextName) {
+      return {
+        source: 'DEFAULT_CONTEXT',
+        context: null,
+        rawEndpoint: null,
+        error: 'ACTIVE_CONTEXT_UNRESOLVABLE',
+      };
     }
   }
 
   if (contextName && (contextName.startsWith('-') || !/^[a-zA-Z0-9_\-\.]+$/.test(contextName))) {
     return {
-      source: env.DOCKER_CONTEXT ? 'DOCKER_CONTEXT' : 'DEFAULT_CONTEXT',
+      source: 'DEFAULT_CONTEXT',
       context: contextName,
       rawEndpoint: null,
       error: 'INVALID_CONTEXT_NAME',
@@ -1480,7 +1571,7 @@ export function resolveEffectiveDockerEndpoint({ env = process.env, contextInspe
 
   const endpoint = resolveDockerContextEndpoint(contextName, { contextInspector, env });
   return {
-    source: env.DOCKER_CONTEXT ? 'DOCKER_CONTEXT' : 'DEFAULT_CONTEXT',
+    source: 'DEFAULT_CONTEXT',
     context: contextName,
     rawEndpoint: endpoint,
   };
@@ -1525,51 +1616,38 @@ export function validateTargetIsolation(targetOrOptions) {
     fail('REMOTE_TARGET_BLOCKED', 'PGSERVICE / PGSERVICEFILE connection configuration is blocked for rehearsal isolation security');
   }
 
-  if (env.DOCKER_HOST) {
-    const epResult = parseAndValidateDockerEndpoint(env.DOCKER_HOST);
-    if (!epResult.isLocal) {
-      fail('REMOTE_DOCKER_HOST_BLOCKED', `remote DOCKER_HOST blocked: '${env.DOCKER_HOST}'. Only local Docker daemon is permitted.`);
-    }
-  }
-
-  if (env.DOCKER_CONTEXT) {
-    const contextName = env.DOCKER_CONTEXT.trim();
-    const actualEndpoint = resolveDockerContextEndpoint(contextName, {
-      contextInspector: opts.contextInspector,
+  // Docker endpoint validation (follows Docker CLI precedence: DOCKER_CONTEXT > DOCKER_HOST > active context)
+  if (dbContainer || (env.DOCKER_CONTEXT && env.DOCKER_CONTEXT.trim().length > 0) || (env.DOCKER_HOST && env.DOCKER_HOST.trim().length > 0)) {
+    const effective = resolveEffectiveDockerEndpoint({
       env,
+      contextInspector: opts.contextInspector,
+      activeContextResolver: opts.activeContextResolver,
     });
-    if (!actualEndpoint) {
-      fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify actual endpoint for DOCKER_CONTEXT '${contextName}'. Fail closed.`);
+
+    if (effective.error) {
+      fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify Docker endpoint due to ${effective.error}. Fail closed.`);
     }
-    const epResult = parseAndValidateDockerEndpoint(actualEndpoint);
+
+    if (!effective.rawEndpoint) {
+      const label = effective.source === 'DOCKER_CONTEXT' ? `DOCKER_CONTEXT '${effective.context}'` : (effective.context ? `Docker context '${effective.context}'` : 'Docker daemon');
+      fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify actual endpoint for ${label}. Fail closed.`);
+    }
+
+    const epResult = parseAndValidateDockerEndpoint(effective.rawEndpoint);
     if (!epResult.isLocal) {
-      fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote DOCKER_CONTEXT '${contextName}' blocked: actual endpoint '${actualEndpoint}' is not local. (${epResult.reason})`);
+      if (effective.source === 'DOCKER_HOST') {
+        fail('REMOTE_DOCKER_HOST_BLOCKED', `remote DOCKER_HOST blocked: '${effective.rawEndpoint}'. Only local Docker daemon is permitted. (${epResult.reason})`);
+      } else {
+        fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote Docker context '${effective.context}' blocked: actual endpoint '${effective.rawEndpoint}' is not local. (${epResult.reason})`);
+      }
     }
   }
 
-  // 3. For Docker mode: container must be in approved allowlist and endpoint must be local
+  // 3. For Docker mode: container must be in approved allowlist
   if (dbContainer) {
     if (!APPROVED_CONTAINERS.has(dbContainer)) {
       fail('UNAPPROVED_CONTAINER', `container '${dbContainer}' is not in approved local rehearsal allowlist: ${[...APPROVED_CONTAINERS].join(', ')}`);
     }
-
-    if (!env.DOCKER_HOST && !env.DOCKER_CONTEXT) {
-      const effective = resolveEffectiveDockerEndpoint({
-        env,
-        contextInspector: opts.contextInspector,
-        activeContextResolver: opts.activeContextResolver,
-      });
-
-      if (!effective.rawEndpoint) {
-        fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify effective endpoint for Docker ${effective.context ? `context '${effective.context}'` : 'daemon'}. Fail closed.`);
-      }
-
-      const epResult = parseAndValidateDockerEndpoint(effective.rawEndpoint);
-      if (!epResult.isLocal) {
-        fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote Docker context '${effective.context}' blocked: actual endpoint '${effective.rawEndpoint}' is not local. (${epResult.reason})`);
-      }
-    }
-
     return;
   }
 

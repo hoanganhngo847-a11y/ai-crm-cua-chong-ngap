@@ -25,6 +25,7 @@ import {
   handleVerifyCommand,
   sha256Hex,
   parseAndValidateDockerEndpoint,
+  getDockerConfigRoot,
   resolveDockerContextEndpoint,
   resolveEffectiveDockerEndpoint,
   validateMetadataIdentifier,
@@ -3060,10 +3061,10 @@ test('R3-P3-02: extractRoleNames parses roles array and handles rolname or name 
 });
 
 // -----------------------------------------------------------------------------
-// Round 5.2: Effective Docker Context Guard & Ownership Safety
+// Round 5.3: Effective Docker Context Guard, Precedence & DOCKER_CONFIG Isolation
 // -----------------------------------------------------------------------------
 
-test('R5.2-P1: resolveEffectiveDockerEndpoint respects DOCKER_HOST precedence over context', () => {
+test('R5.3-P1-A: resolveEffectiveDockerEndpoint respects DOCKER_CONTEXT precedence over DOCKER_HOST', () => {
   const effective = resolveEffectiveDockerEndpoint({
     env: {
       DOCKER_HOST: 'unix:///var/run/custom.sock',
@@ -3071,20 +3072,91 @@ test('R5.2-P1: resolveEffectiveDockerEndpoint respects DOCKER_HOST precedence ov
     },
     contextInspector: () => 'tcp://remote:2375',
   });
+  assert.equal(effective.source, 'DOCKER_CONTEXT');
+  assert.equal(effective.context, 'remote-context');
+  assert.equal(effective.rawEndpoint, 'tcp://remote:2375');
+});
+
+test('R5.3-P1-A: resolveEffectiveDockerEndpoint resolves local DOCKER_CONTEXT even if DOCKER_HOST is remote', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {
+      DOCKER_HOST: 'tcp://remote.docker.host:2375',
+      DOCKER_CONTEXT: 'local-box',
+    },
+    contextInspector: () => 'unix:///var/run/local-box.sock',
+  });
+  assert.equal(effective.source, 'DOCKER_CONTEXT');
+  assert.equal(effective.context, 'local-box');
+  assert.equal(effective.rawEndpoint, 'unix:///var/run/local-box.sock');
+});
+
+test('R5.3-P1-A: resolveEffectiveDockerEndpoint uses DOCKER_HOST when DOCKER_CONTEXT is unset', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {
+      DOCKER_HOST: 'unix:///var/run/custom.sock',
+    },
+  });
   assert.equal(effective.source, 'DOCKER_HOST');
   assert.equal(effective.rawEndpoint, 'unix:///var/run/custom.sock');
 });
 
-test('R5.2-P1: resolveEffectiveDockerEndpoint uses DOCKER_CONTEXT when DOCKER_HOST is unset', () => {
+test('R5.3-P1-B: getDockerConfigRoot respects custom DOCKER_CONFIG directory without falling back to HOME', async () => {
+  const tempDir = await createTempDir('docker-config-root-');
+  try {
+    const root = getDockerConfigRoot({
+      DOCKER_CONFIG: tempDir,
+      HOME: '/some/unwanted/home',
+    });
+    assert.equal(root.isCustom, true);
+    assert.equal(root.path, path.resolve(tempDir));
+  } finally {
+    await removeTempDir(tempDir);
+  }
+});
+
+test('R5.3-P1-B: resolveEffectiveDockerEndpoint resolves currentContext from custom DOCKER_CONFIG', async () => {
+  const tempDir = await createTempDir('docker-config-ctx-');
+  try {
+    const configPath = path.join(tempDir, 'config.json');
+    await fsp.writeFile(configPath, JSON.stringify({ currentContext: 'isolated-context' }), 'utf8');
+
+    const effective = resolveEffectiveDockerEndpoint({
+      env: { DOCKER_CONFIG: tempDir },
+      contextInspector: (ctx) => {
+        assert.equal(ctx, 'isolated-context');
+        return 'unix:///var/run/isolated.sock';
+      },
+    });
+    assert.equal(effective.source, 'DEFAULT_CONTEXT');
+    assert.equal(effective.context, 'isolated-context');
+    assert.equal(effective.rawEndpoint, 'unix:///var/run/isolated.sock');
+  } finally {
+    await removeTempDir(tempDir);
+  }
+});
+
+test('R5.3-P1-B: resolveEffectiveDockerEndpoint fails closed when custom DOCKER_CONFIG has corrupted JSON', async () => {
+  const tempDir = await createTempDir('docker-config-corrupt-');
+  try {
+    const configPath = path.join(tempDir, 'config.json');
+    await fsp.writeFile(configPath, '{ invalid json content', 'utf8');
+
+    const effective = resolveEffectiveDockerEndpoint({
+      env: { DOCKER_CONFIG: tempDir },
+    });
+    assert.equal(effective.rawEndpoint, null);
+    assert.equal(effective.error, 'CORRUPTED_DOCKER_CONFIG_JSON');
+  } finally {
+    await removeTempDir(tempDir);
+  }
+});
+
+test('R5.3-P1-B: resolveEffectiveDockerEndpoint fails closed when custom DOCKER_CONFIG directory does not exist', () => {
   const effective = resolveEffectiveDockerEndpoint({
-    env: {
-      DOCKER_CONTEXT: 'custom-local',
-    },
-    contextInspector: (ctx) => `unix:///var/run/${ctx}.sock`,
+    env: { DOCKER_CONFIG: '/nonexistent/custom/docker/config/dir' },
   });
-  assert.equal(effective.source, 'DOCKER_CONTEXT');
-  assert.equal(effective.context, 'custom-local');
-  assert.equal(effective.rawEndpoint, 'unix:///var/run/custom-local.sock');
+  assert.equal(effective.rawEndpoint, null);
+  assert.equal(effective.error, 'DOCKER_CONFIG_DIR_NOT_FOUND');
 });
 
 test('R5.2-P1: resolveEffectiveDockerEndpoint uses active context when neither env var is set', () => {
@@ -3153,5 +3225,5 @@ test('R5.2-P1: isDockerContainerAvailable returns false when default context is 
   assert.equal(avail, false);
 });
 
-// Import the full suite of Group A and Group B regression tests
+// Import the full suite of Group A, B, C, D regression tests
 import './docker-safety.test.mjs';
