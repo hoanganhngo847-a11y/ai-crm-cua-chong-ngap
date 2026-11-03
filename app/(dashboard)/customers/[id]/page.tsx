@@ -227,7 +227,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       meta_ad_id: string | null;
       ad_name_snapshot: string | null;
       form_name_snapshot: string | null;
-      ads_context_data: Record<string, unknown> | null;
+      ads_context_data: unknown;
       attribution_status: string;
       attribution_method: string;
       normalized_phone_match_status: string | null;
@@ -306,7 +306,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         meta_ad_id: string | null;
         ad_name_snapshot: string | null;
         form_name_snapshot: string | null;
-        ads_context_data: Record<string, unknown> | null;
+        ads_context_data: unknown;
         attribution_status: string;
         attribution_method: string;
         normalized_phone_match_status: string | null;
@@ -676,8 +676,18 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                             ) : creativeSnapshot ? (
                               <>
                                 <div className="text-[10px] text-text-secondary space-y-0.5">
-                                  <div>Ad Set: {creativeSnapshot.adsetName || tp.ad_set_name_snapshot || tp.meta_ad_set_id || 'Chưa có dữ liệu'}</div>
-                                  <div>Ad: {creativeSnapshot.adName || tp.ad_name_snapshot || tp.meta_ad_id || 'Chưa có dữ liệu'}</div>
+                                  <div>
+                                    Campaign: {creativeSnapshot.campaignName || campaignLabel}
+                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.campaignId || tp.meta_campaign_id || '—'})</span>
+                                  </div>
+                                  <div>
+                                    Ad Set: {creativeSnapshot.adsetName || tp.ad_set_name_snapshot || 'Chưa có dữ liệu'}
+                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.adsetId || tp.meta_ad_set_id || '—'})</span>
+                                  </div>
+                                  <div>
+                                    Ad: {creativeSnapshot.adName || tp.ad_name_snapshot || 'Chưa có dữ liệu'}
+                                    <span className="ml-1 font-mono text-[9px] text-text-tertiary">({creativeSnapshot.adId || tp.meta_ad_id || '—'})</span>
+                                  </div>
                                   {creativeSnapshot.creativeId && <div>Creative ID: <span className="font-mono">{creativeSnapshot.creativeId}</span></div>}
                                   {creativeSnapshot.format && creativeSnapshot.format !== 'UNKNOWN' && <div>Định dạng: {creativeSnapshot.format}</div>}
                                 </div>

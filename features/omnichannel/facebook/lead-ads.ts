@@ -199,6 +199,7 @@ export async function processLeadAdsChange(
             ? await fetchMetaAdCreativeSnapshot(config.company, adId, {
                 customFetch,
                 captureTiming: 'AT_LEAD_INTAKE',
+                timeoutMs: 5000,
             })
             : null;
         const formId = leadData.form_id || change.formId || null;

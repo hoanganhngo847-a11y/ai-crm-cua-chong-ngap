@@ -310,7 +310,7 @@ function emptyMetaCreativeSnapshot(
 export async function fetchMetaAdCreativeSnapshot(
     companyId: string,
     adId: string,
-    options: { customFetch?: typeof fetch; captureTiming?: MetaCreativeCaptureTiming } = {},
+    options: { customFetch?: typeof fetch; captureTiming?: MetaCreativeCaptureTiming; timeoutMs?: number } = {},
 ): Promise<MetaAdCreativeSnapshot> {
     const captureTiming = options.captureTiming || 'AT_LEAD_INTAKE';
     const pending = (reason: string) => emptyMetaCreativeSnapshot(adId, 'PENDING_SYNC', reason, captureTiming);
@@ -352,16 +352,18 @@ export async function fetchMetaAdCreativeSnapshot(
             'id,name,campaign{id,name},adset{id,name},creative{id,name,object_type,image_url,thumbnail_url,video_id}',
         ];
         let response: Response | null = null;
+        const fetchFn = options.customFetch || fetch;
+        const timeoutMs = Math.max(1000, Math.min(options.timeoutMs ?? 6000, 15000));
         for (let index = 0; index < fieldSets.length; index++) {
             const url = new URL('https://graph.facebook.com/' + version + '/' + encodeURIComponent(adId));
             url.searchParams.set('fields', fieldSets[index]);
-            response = await fetchWithBackoff(
-                url.toString(),
-                { headers: { Authorization: 'Bearer ' + accessToken }, redirect: 'error' },
-                options.customFetch,
-                1,
-                500,
-            );
+            response = await fetchFn(url.toString(), {
+                method: 'GET',
+                headers: { Authorization: 'Bearer ' + accessToken },
+                redirect: 'error',
+                cache: 'no-store',
+                signal: AbortSignal.timeout(timeoutMs),
+            });
             if (response.ok || response.status !== 400 || index === fieldSets.length - 1) break;
         }
 
@@ -404,7 +406,7 @@ export interface MetaCreativeSnapshotSyncSummary {
  */
 export async function syncPendingCreativeSnapshots(
     companyId: string,
-    options: { customFetch?: typeof fetch; limit?: number } = {},
+    options: { customFetch?: typeof fetch; limit?: number; timeoutMs?: number } = {},
 ): Promise<MetaCreativeSnapshotSyncSummary> {
     const supabase = createAdminClient();
     const limit = Math.max(1, Math.min(options.limit ?? 25, 100));
@@ -415,7 +417,8 @@ export async function syncPendingCreativeSnapshots(
         .eq('company_id', companyId)
         .eq('channel', 'FACEBOOK_LEAD_ADS')
         .not('meta_ad_id', 'is', null)
-        .order('occurred_at', { ascending: true })
+        .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
+        .order('occurred_at', { ascending: false })
         .limit(scanLimit);
 
     if (error) throw new Error('CREATIVE_SNAPSHOT_BACKFILL_QUERY_FAILED');
@@ -440,6 +443,7 @@ export async function syncPendingCreativeSnapshots(
             snapshot = await fetchMetaAdCreativeSnapshot(companyId, adId, {
                 customFetch: options.customFetch,
                 captureTiming: 'BACKFILL',
+                timeoutMs: options.timeoutMs ?? 8000,
             });
             cache.set(adId, snapshot);
         }
