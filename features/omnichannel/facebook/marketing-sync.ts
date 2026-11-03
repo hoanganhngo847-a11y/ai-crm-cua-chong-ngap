@@ -153,7 +153,7 @@ export function normalizeMetaAdCreativeSnapshot(
             const imageUrl = safeMetaAssetUrl(entry.url) || safeMetaAssetUrl(entry.url_128) || safeMetaAssetUrl(entry.url_256);
             return imageUrl ? { kind: 'IMAGE' as const, imageUrl } : null;
         })
-        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+        .filter((item) => item !== null) as MetaAdCreativeAssetSnapshot[];
 
     const videoAssets: MetaAdCreativeAssetSnapshot[] = (Array.isArray(assetFeed.videos) ? assetFeed.videos : [])
         .slice(0, 8)
@@ -165,7 +165,7 @@ export function normalizeMetaAdCreativeSnapshot(
                 ? { kind: 'VIDEO' as const, ...(videoId ? { videoId } : {}), ...(thumbnailUrl ? { thumbnailUrl } : {}) }
                 : null;
         })
-        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+        .filter((item) => item !== null) as MetaAdCreativeAssetSnapshot[];
 
     const childAttachments = Array.isArray(linkData.child_attachments) ? linkData.child_attachments : [];
     const carouselAssets: MetaAdCreativeAssetSnapshot[] = childAttachments.slice(0, 10)
@@ -188,7 +188,7 @@ export function normalizeMetaAdCreativeSnapshot(
                 ...(destinationUrl ? { destinationUrl } : {}),
             };
         })
-        .filter((item): item is MetaAdCreativeAssetSnapshot => Boolean(item));
+        .filter((item) => item !== null) as MetaAdCreativeAssetSnapshot[];
 
     const primaryText =
         metaText(linkData.message, 5000) ||
