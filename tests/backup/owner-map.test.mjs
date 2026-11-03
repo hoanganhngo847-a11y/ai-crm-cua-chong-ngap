@@ -26,6 +26,7 @@ import {
   sha256Hex,
   parseAndValidateDockerEndpoint,
   resolveDockerContextEndpoint,
+  resolveEffectiveDockerEndpoint,
   validateMetadataIdentifier,
   validatePlanSqlGrammar,
   quoteIdent,
@@ -90,21 +91,20 @@ function runDockerPsql(container, sql) {
   });
 }
 
-async function isDockerContainerAvailable(containerName) {
-  // Preflight Safety Gate must run BEFORE any Docker invocation (R2-P1-02, R2-P2-02, R3-P2-01)
+async function isDockerContainerAvailable(containerName, opts = {}) {
+  // Preflight Safety Gate must run BEFORE any Docker invocation (R2-P1-02, R2-P2-02, R3-P2-01, R5.2)
   if (!containerName || typeof containerName !== 'string' || !APPROVED_CONTAINERS.has(containerName.trim())) {
     return false;
   }
-  if (process.env.DOCKER_HOST) {
-    const ep = parseAndValidateDockerEndpoint(process.env.DOCKER_HOST);
-    if (!ep.isLocal) return false;
-  }
-  if (process.env.DOCKER_CONTEXT) {
-    const actualEndpoint = resolveDockerContextEndpoint(process.env.DOCKER_CONTEXT);
-    if (!actualEndpoint) return false;
-    const ep = parseAndValidateDockerEndpoint(actualEndpoint);
-    if (!ep.isLocal) return false;
-  }
+  const effective = resolveEffectiveDockerEndpoint({
+    env: process.env,
+    contextInspector: opts.contextInspector,
+    activeContextResolver: opts.activeContextResolver,
+  });
+  if (!effective.rawEndpoint) return false;
+  const ep = parseAndValidateDockerEndpoint(effective.rawEndpoint);
+  if (!ep.isLocal) return false;
+
   try {
     const { stdout } = await runDockerPsql(containerName, 'SELECT 1;');
     return stdout.trim() === '1';
@@ -114,26 +114,24 @@ async function isDockerContainerAvailable(containerName) {
 }
 
 /**
- * Preflight Safety Gate for Live Disposable Test Instance (P1-03, R2-P1-02)
+ * Preflight Safety Gate for Live Disposable Test Instance (P1-03, R2-P1-02, R5.2 Finding P1)
  */
-async function verifyDisposableTestTarget(container, psqlRunner = runDockerPsql) {
-  // 1. Validate Docker daemon environment with rigorous parser
-  if (process.env.DOCKER_HOST) {
-    const ep = parseAndValidateDockerEndpoint(process.env.DOCKER_HOST);
-    if (!ep.isLocal) {
-      throw new HelperError('REMOTE_DOCKER_HOST_BLOCKED', `remote DOCKER_HOST blocked: ${process.env.DOCKER_HOST}`);
-    }
+async function verifyDisposableTestTarget(container, psqlRunner = runDockerPsql, opts = {}) {
+  // 1. Validate Docker daemon environment with rigorous parser (effective endpoint check)
+  const effective = resolveEffectiveDockerEndpoint({
+    env: process.env,
+    contextInspector: opts.contextInspector,
+    activeContextResolver: opts.activeContextResolver,
+  });
+  if (!effective.rawEndpoint) {
+    throw new HelperError('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify actual endpoint for Docker ${effective.context ? `context '${effective.context}'` : 'daemon'}. Fail closed.`);
   }
-
-  if (process.env.DOCKER_CONTEXT) {
-    const actualEndpoint = resolveDockerContextEndpoint(process.env.DOCKER_CONTEXT);
-    if (!actualEndpoint) {
-      throw new HelperError('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify actual endpoint for DOCKER_CONTEXT '${process.env.DOCKER_CONTEXT}'. Fail closed.`);
+  const ep = parseAndValidateDockerEndpoint(effective.rawEndpoint);
+  if (!ep.isLocal) {
+    if (effective.source === 'DOCKER_HOST') {
+      throw new HelperError('REMOTE_DOCKER_HOST_BLOCKED', `remote DOCKER_HOST blocked: ${effective.rawEndpoint}`);
     }
-    const ep = parseAndValidateDockerEndpoint(actualEndpoint);
-    if (!ep.isLocal) {
-      throw new HelperError('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote DOCKER_CONTEXT blocked: ${process.env.DOCKER_CONTEXT}`);
-    }
+    throw new HelperError('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote DOCKER_CONTEXT blocked: ${effective.context || effective.rawEndpoint}`);
   }
 
   // 2. Validate container is approved test instance
@@ -3060,3 +3058,100 @@ test('R3-P3-02: extractRoleNames parses roles array and handles rolname or name 
   assert.ok(set.has('anon'));
   assert.equal(set.size, 3);
 });
+
+// -----------------------------------------------------------------------------
+// Round 5.2: Effective Docker Context Guard & Ownership Safety
+// -----------------------------------------------------------------------------
+
+test('R5.2-P1: resolveEffectiveDockerEndpoint respects DOCKER_HOST precedence over context', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {
+      DOCKER_HOST: 'unix:///var/run/custom.sock',
+      DOCKER_CONTEXT: 'remote-context',
+    },
+    contextInspector: () => 'tcp://remote:2375',
+  });
+  assert.equal(effective.source, 'DOCKER_HOST');
+  assert.equal(effective.rawEndpoint, 'unix:///var/run/custom.sock');
+});
+
+test('R5.2-P1: resolveEffectiveDockerEndpoint uses DOCKER_CONTEXT when DOCKER_HOST is unset', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {
+      DOCKER_CONTEXT: 'custom-local',
+    },
+    contextInspector: (ctx) => `unix:///var/run/${ctx}.sock`,
+  });
+  assert.equal(effective.source, 'DOCKER_CONTEXT');
+  assert.equal(effective.context, 'custom-local');
+  assert.equal(effective.rawEndpoint, 'unix:///var/run/custom-local.sock');
+});
+
+test('R5.2-P1: resolveEffectiveDockerEndpoint uses active context when neither env var is set', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {},
+    activeContextResolver: () => 'production-remote',
+    contextInspector: (ctx) => `ssh://deploy@${ctx}`,
+  });
+  assert.equal(effective.source, 'DEFAULT_CONTEXT');
+  assert.equal(effective.context, 'production-remote');
+  assert.equal(effective.rawEndpoint, 'ssh://deploy@production-remote');
+});
+
+test('R5.2-P1: resolveEffectiveDockerEndpoint rejects flag-like active context name', () => {
+  const effective = resolveEffectiveDockerEndpoint({
+    env: {},
+    activeContextResolver: () => '--rm',
+  });
+  assert.equal(effective.rawEndpoint, null);
+  assert.equal(effective.error, 'INVALID_CONTEXT_NAME');
+});
+
+test('R5.2-P1: validateTargetIsolation blocks remote active context when DOCKER_HOST and DOCKER_CONTEXT are unset', () => {
+  assert.throws(
+    () => {
+      validateTargetIsolation({
+        dbContainer: 'crm-dumpcheck-test',
+        env: {},
+        activeContextResolver: () => 'remote-swarm',
+        contextInspector: () => 'tcp://swarm.corp.net:2375',
+      });
+    },
+    (err) => {
+      assert.equal(err.code, 'REMOTE_DOCKER_CONTEXT_BLOCKED');
+      assert.match(err.message, /remote Docker context 'remote-swarm' blocked/);
+      return true;
+    },
+  );
+});
+
+test('R5.2-P1: verifyDisposableTestTarget fails closed when default context is remote', async () => {
+  await assert.rejects(
+    async () => {
+      await verifyDisposableTestTarget(
+        'crm-dumpcheck-test',
+        async () => { throw new Error('should not reach psqlRunner'); },
+        {
+          activeContextResolver: () => 'prod-cluster',
+          contextInspector: () => 'ssh://root@prod-cluster',
+        },
+      );
+    },
+    (err) => {
+      assert.equal(err.code, 'REMOTE_DOCKER_CONTEXT_BLOCKED');
+      assert.match(err.message, /remote DOCKER_CONTEXT blocked: prod-cluster/);
+      return true;
+    },
+  );
+});
+
+test('R5.2-P1: isDockerContainerAvailable returns false when default context is remote', async () => {
+  const avail = await isDockerContainerAvailable('crm-dumpcheck-test', {
+    activeContextResolver: () => 'prod-cluster',
+    contextInspector: () => 'tcp://prod:2375',
+  });
+  assert.equal(avail, false);
+});
+
+// Import the full suite of Group A and Group B regression tests
+import './docker-safety.test.mjs';

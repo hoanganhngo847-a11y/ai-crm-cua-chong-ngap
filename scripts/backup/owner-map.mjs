@@ -1410,6 +1410,83 @@ export function resolveDockerContextEndpoint(contextName, { contextInspector, en
 }
 
 /**
+ * Resolves the effective Docker endpoint following Docker CLI precedence (R5.2 Finding P1).
+ * Precedence:
+ * 1. DOCKER_HOST environment variable
+ * 2. DOCKER_CONTEXT environment variable
+ * 3. Default/active context (configured via `docker context use` or config.json or `docker context show`)
+ */
+export function resolveEffectiveDockerEndpoint({ env = process.env, contextInspector, activeContextResolver } = {}) {
+  if (env.DOCKER_HOST && env.DOCKER_HOST.trim().length > 0) {
+    return {
+      source: 'DOCKER_HOST',
+      context: null,
+      rawEndpoint: env.DOCKER_HOST.trim(),
+    };
+  }
+
+  let contextName = (env.DOCKER_CONTEXT && env.DOCKER_CONTEXT.trim().length > 0) ? env.DOCKER_CONTEXT.trim() : null;
+
+  if (!contextName) {
+    if (typeof activeContextResolver === 'function') {
+      contextName = activeContextResolver();
+    } else {
+      // 1. Try reading ~/.docker/config.json "currentContext"
+      try {
+        const homeDir = env.HOME || process.env.HOME || os.homedir();
+        const configPath = path.join(homeDir, '.docker', 'config.json');
+        if (fs.existsSync(configPath)) {
+          const configJson = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          if (configJson.currentContext && typeof configJson.currentContext === 'string') {
+            contextName = configJson.currentContext.trim();
+          }
+        }
+      } catch {
+        // ignore config read error
+      }
+
+      // 2. Fall back to docker context show via CLI
+      if (!contextName) {
+        try {
+          const stdout = execFileSync('docker', ['context', 'show'], {
+            encoding: 'utf8',
+            timeout: 3000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+          });
+          const trimmed = stdout.trim();
+          if (trimmed.length > 0) {
+            contextName = trimmed;
+          }
+        } catch {
+          // unable to resolve via CLI
+        }
+      }
+
+      // 3. Built-in fallback
+      if (!contextName) {
+        contextName = 'default';
+      }
+    }
+  }
+
+  if (contextName && (contextName.startsWith('-') || !/^[a-zA-Z0-9_\-\.]+$/.test(contextName))) {
+    return {
+      source: env.DOCKER_CONTEXT ? 'DOCKER_CONTEXT' : 'DEFAULT_CONTEXT',
+      context: contextName,
+      rawEndpoint: null,
+      error: 'INVALID_CONTEXT_NAME',
+    };
+  }
+
+  const endpoint = resolveDockerContextEndpoint(contextName, { contextInspector, env });
+  return {
+    source: env.DOCKER_CONTEXT ? 'DOCKER_CONTEXT' : 'DEFAULT_CONTEXT',
+    context: contextName,
+    rawEndpoint: endpoint,
+  };
+}
+
+/**
  * Enforces local-only database boundaries across container and direct psql modes.
  * Validates inherited PostgreSQL/Docker environment variables and rejects remote targets.
  */
@@ -1470,11 +1547,29 @@ export function validateTargetIsolation(targetOrOptions) {
     }
   }
 
-  // 3. For Docker mode: container must be in approved allowlist
+  // 3. For Docker mode: container must be in approved allowlist and endpoint must be local
   if (dbContainer) {
     if (!APPROVED_CONTAINERS.has(dbContainer)) {
       fail('UNAPPROVED_CONTAINER', `container '${dbContainer}' is not in approved local rehearsal allowlist: ${[...APPROVED_CONTAINERS].join(', ')}`);
     }
+
+    if (!env.DOCKER_HOST && !env.DOCKER_CONTEXT) {
+      const effective = resolveEffectiveDockerEndpoint({
+        env,
+        contextInspector: opts.contextInspector,
+        activeContextResolver: opts.activeContextResolver,
+      });
+
+      if (!effective.rawEndpoint) {
+        fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `unable to verify effective endpoint for Docker ${effective.context ? `context '${effective.context}'` : 'daemon'}. Fail closed.`);
+      }
+
+      const epResult = parseAndValidateDockerEndpoint(effective.rawEndpoint);
+      if (!epResult.isLocal) {
+        fail('REMOTE_DOCKER_CONTEXT_BLOCKED', `remote Docker context '${effective.context}' blocked: actual endpoint '${effective.rawEndpoint}' is not local. (${epResult.reason})`);
+      }
+    }
+
     return;
   }
 
