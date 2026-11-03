@@ -3159,6 +3159,149 @@ test('R5.3-P1-B: resolveEffectiveDockerEndpoint fails closed when custom DOCKER_
   assert.equal(effective.error, 'DOCKER_CONFIG_DIR_NOT_FOUND');
 });
 
+test('R5.4-P1: getDockerConfigRoot normal path', async () => {
+  const tempDir = await createTempDir('docker-cfg-normal-');
+  try {
+    const root = getDockerConfigRoot({ DOCKER_CONFIG: tempDir });
+    assert.equal(root.isCustom, true);
+    assert.equal(root.path, path.resolve(tempDir));
+  } finally {
+    await removeTempDir(tempDir);
+  }
+});
+
+test('R5.4-P1: getDockerConfigRoot with trailing space preserves exact path fidelity without trimming', async () => {
+  const baseDir = await createTempDir('docker-cfg-base-');
+  try {
+    const trailingDir = path.join(baseDir, 'cfg-trailing ');
+    await fsp.mkdir(trailingDir);
+    const root = getDockerConfigRoot({ DOCKER_CONFIG: trailingDir });
+    assert.equal(root.isCustom, true);
+    assert.equal(root.path, trailingDir);
+    assert.ok(root.path.endsWith(' '));
+  } finally {
+    await removeTempDir(baseDir);
+  }
+});
+
+test('R5.4-P1: getDockerConfigRoot with leading space preserves exact path fidelity without trimming', async () => {
+  const baseDir = await createTempDir('docker-cfg-base-');
+  try {
+    const leadingDir = path.join(baseDir, ' cfg-leading');
+    await fsp.mkdir(leadingDir);
+    const root = getDockerConfigRoot({ DOCKER_CONFIG: leadingDir });
+    assert.equal(root.isCustom, true);
+    assert.equal(root.path, leadingDir);
+    assert.ok(path.basename(root.path).startsWith(' '));
+  } finally {
+    await removeTempDir(baseDir);
+  }
+});
+
+test('R5.4-P1: two config directories differing only by whitespace resolve to distinct contexts and endpoints', async () => {
+  const baseDir = await createTempDir('docker-cfg-pair-');
+  try {
+    const dirA = path.join(baseDir, 'cfg-pair');
+    const dirB = path.join(baseDir, 'cfg-pair ');
+    await fsp.mkdir(dirA);
+    await fsp.mkdir(dirB);
+
+    // dirA: context A
+    const metaDirA = path.join(dirA, 'contexts', 'meta');
+    await fsp.mkdir(metaDirA, { recursive: true });
+    await fsp.writeFile(path.join(dirA, 'config.json'), JSON.stringify({ currentContext: 'ctx-a' }), 'utf8');
+    await fsp.writeFile(
+      path.join(metaDirA, 'meta.json'),
+      JSON.stringify({ Name: 'ctx-a', Endpoints: { docker: { Host: 'unix:///var/run/ctx-a.sock' } } }),
+      'utf8'
+    );
+
+    // dirB: context B
+    const metaDirB = path.join(dirB, 'contexts', 'meta');
+    await fsp.mkdir(metaDirB, { recursive: true });
+    await fsp.writeFile(path.join(dirB, 'config.json'), JSON.stringify({ currentContext: 'ctx-b' }), 'utf8');
+    await fsp.writeFile(
+      path.join(metaDirB, 'meta.json'),
+      JSON.stringify({ Name: 'ctx-b', Endpoints: { docker: { Host: 'unix:///var/run/ctx-b.sock' } } }),
+      'utf8'
+    );
+
+    // Resolving with dirA
+    const resA = resolveEffectiveDockerEndpoint({ env: { DOCKER_CONFIG: dirA } });
+    assert.equal(resA.source, 'DEFAULT_CONTEXT');
+    assert.equal(resA.context, 'ctx-a');
+    assert.equal(resA.rawEndpoint, 'unix:///var/run/ctx-a.sock');
+
+    // Resolving with dirB
+    const resB = resolveEffectiveDockerEndpoint({ env: { DOCKER_CONFIG: dirB } });
+    assert.equal(resB.source, 'DEFAULT_CONTEXT');
+    assert.equal(resB.context, 'ctx-b');
+    assert.equal(resB.rawEndpoint, 'unix:///var/run/ctx-b.sock');
+  } finally {
+    await removeTempDir(baseDir);
+  }
+});
+
+test('R5.4-P1: config root does not exist fails closed without fallback to HOME', () => {
+  const nonExistent = '/nonexistent/path/for/docker/config';
+  const root = getDockerConfigRoot({ DOCKER_CONFIG: nonExistent, HOME: '/some/home' });
+  assert.equal(root.isCustom, true);
+  assert.equal(root.path, path.resolve(nonExistent));
+
+  const effective = resolveEffectiveDockerEndpoint({
+    env: { DOCKER_CONFIG: nonExistent, HOME: '/some/home' },
+  });
+  assert.equal(effective.rawEndpoint, null);
+  assert.equal(effective.error, 'DOCKER_CONFIG_DIR_NOT_FOUND');
+});
+
+test('R5.4-P1: DOCKER_CONFIG empty string defaults to HOME/.docker per Docker CLI semantics', () => {
+  const root = getDockerConfigRoot({ DOCKER_CONFIG: '', HOME: '/my/user/home' });
+  assert.equal(root.isCustom, false);
+  assert.equal(root.path, path.join('/my/user/home', '.docker'));
+});
+
+test('R5.4-P1: HOME with spaces in path preserves exact directory without trimming', () => {
+  const homeWithSpace = '/Users/test user name ';
+  const root = getDockerConfigRoot({ DOCKER_CONFIG: '', HOME: homeWithSpace });
+  assert.equal(root.isCustom, false);
+  assert.equal(root.path, path.join(homeWithSpace, '.docker'));
+});
+
+test('R5.4-P1: no fallback to HOME/.docker when DOCKER_CONFIG is specified', async () => {
+  const baseDir = await createTempDir('docker-fallback-check-');
+  try {
+    const fakeHome = path.join(baseDir, 'fake-home');
+    const fakeHomeDocker = path.join(fakeHome, '.docker');
+    const fakeHomeMeta = path.join(fakeHomeDocker, 'contexts', 'meta');
+    await fsp.mkdir(fakeHomeMeta, { recursive: true });
+    await fsp.writeFile(
+      path.join(fakeHomeDocker, 'config.json'),
+      JSON.stringify({ currentContext: 'valid-home-ctx' }),
+      'utf8'
+    );
+    await fsp.writeFile(
+      path.join(fakeHomeMeta, 'meta.json'),
+      JSON.stringify({ Name: 'valid-home-ctx', Endpoints: { docker: { Host: 'unix:///var/run/home.sock' } } }),
+      'utf8'
+    );
+
+    const nonExistentConfig = path.join(baseDir, 'nonexistent-custom-config');
+    const effective = resolveEffectiveDockerEndpoint({
+      env: {
+        DOCKER_CONFIG: nonExistentConfig,
+        HOME: fakeHome,
+      },
+    });
+
+    assert.equal(effective.rawEndpoint, null);
+    assert.equal(effective.error, 'DOCKER_CONFIG_DIR_NOT_FOUND');
+    assert.notEqual(effective.context, 'valid-home-ctx');
+  } finally {
+    await removeTempDir(baseDir);
+  }
+});
+
 test('R5.2-P1: resolveEffectiveDockerEndpoint uses active context when neither env var is set', () => {
   const effective = resolveEffectiveDockerEndpoint({
     env: {},

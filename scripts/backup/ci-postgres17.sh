@@ -37,6 +37,13 @@ die() {
 assert_local_docker() {
   command -v docker >/dev/null 2>&1 || die "docker CLI is not available in PATH"
 
+  # Validate DOCKER_CONFIG directory if specified (R5.4 Finding P1)
+  if [[ -n "${DOCKER_CONFIG:-}" ]]; then
+    if [[ ! -d "${DOCKER_CONFIG}" ]]; then
+      die "specified DOCKER_CONFIG directory '${DOCKER_CONFIG}' does not exist; refusing to continue"
+    fi
+  fi
+
   local effective_endpoint=""
   local effective_context=""
 
@@ -107,24 +114,16 @@ check_container_ownership() {
     return 2 # Container definitely does NOT exist
   fi
 
-  # Step 3: Container was found in the list; now inspect its configuration
-  local inspect_out
-  if ! inspect_out="$(docker inspect --type container "${container}" 2>/dev/null)"; then
-    return 3 # Container exists in list, but inspect failed
+  # Step 3: Container was found in the list; atomically inspect ownership labels (R5.4 Finding P2)
+  local labels_raw
+  if ! labels_raw="$(docker inspect --type container --format '{{index .Config.Labels "crm.disposable-test"}}|{{index .Config.Labels "crm.owner"}}|{{index .Config.Labels "crm.purpose"}}' "${container}" 2>/dev/null)"; then
+    return 3 # Container exists in list, but metadata/label inspect failed -> ERROR (status 3)
   fi
 
-  local l_disposable l_owner l_purpose
-  l_disposable="$(docker inspect --type container --format '{{index .Config.Labels "crm.disposable-test"}}' "${container}" 2>/dev/null || true)"
-  l_owner="$(docker inspect --type container --format '{{index .Config.Labels "crm.owner"}}' "${container}" 2>/dev/null || true)"
-  l_purpose="$(docker inspect --type container --format '{{index .Config.Labels "crm.purpose"}}' "${container}" 2>/dev/null || true)"
+  labels_raw="$(printf '%s' "${labels_raw}" | tr -d '\r\n')"
+  local expected_labels="${LABEL_DISPOSABLE_VALUE}|${LABEL_OWNER_VALUE}|${LABEL_PURPOSE_VALUE}"
 
-  l_disposable="$(printf '%s' "${l_disposable}" | tr -d '\r\n')"
-  l_owner="$(printf '%s' "${l_owner}" | tr -d '\r\n')"
-  l_purpose="$(printf '%s' "${l_purpose}" | tr -d '\r\n')"
-
-  if [[ "${l_disposable}" == "${LABEL_DISPOSABLE_VALUE}" && \
-        "${l_owner}" == "${LABEL_OWNER_VALUE}" && \
-        "${l_purpose}" == "${LABEL_PURPOSE_VALUE}" ]]; then
+  if [[ "${labels_raw}" == "${expected_labels}" ]]; then
     return 0 # verified owned container
   fi
 
@@ -173,7 +172,9 @@ start() {
 
   if [[ "${status}" -eq 0 ]]; then
     log "Existing disposable container '${CONTAINER_NAME}' verified with valid ownership markers; removing stale container before recreate."
-    docker rm -f "${CONTAINER_NAME}" >/dev/null
+    if ! docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1; then
+      die "failed to remove existing disposable container '${CONTAINER_NAME}'; aborting recreate"
+    fi
   elif [[ "${status}" -eq 1 ]]; then
     die "container '${CONTAINER_NAME}' already exists but lacks valid ownership markers; refusing to overwrite or remove foreign container"
   elif [[ "${status}" -eq 2 ]]; then
@@ -273,7 +274,9 @@ stop() {
   check_container_ownership "${CONTAINER_NAME}" || status=$?
 
   if [[ "${status}" -eq 0 ]]; then
-    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    if ! docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1; then
+      die "failed to remove disposable PostgreSQL container '${CONTAINER_NAME}'; cleanup unsuccessful"
+    fi
     log "Removed disposable PostgreSQL container '${CONTAINER_NAME}'."
   elif [[ "${status}" -eq 1 ]]; then
     die "container '${CONTAINER_NAME}' exists but lacks valid ownership markers; refusing to remove foreign container"

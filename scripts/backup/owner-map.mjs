@@ -1344,22 +1344,39 @@ export function parseAndValidateDockerEndpoint(rawEndpoint) {
 }
 
 /**
- * Resolves the active Docker config directory root (R5.3 Finding P1-B).
- * Strictly honors DOCKER_CONFIG if provided, otherwise defaults to HOME/.docker.
+ * Sanitizes and prepares environment variables for Docker CLI child processes.
+ * Ensures properties explicitly set to undefined are pruned rather than passed.
+ */
+function buildDockerExecEnv(env) {
+  const execEnv = { ...process.env, ...env };
+  for (const key of Object.keys(execEnv)) {
+    if (execEnv[key] === undefined) {
+      delete execEnv[key];
+    }
+  }
+  return execEnv;
+}
+
+/**
+ * Resolves the active Docker config directory root (R5.3 Finding P1-B, R5.4 Finding P1).
+ * Strictly honors DOCKER_CONFIG if provided, preserving path fidelity (no trimming of whitespace).
+ * Defaults to HOME/.docker only when DOCKER_CONFIG is unset or empty string.
  * Never silently falls back to HOME when DOCKER_CONFIG is specified.
  */
 export function getDockerConfigRoot(env = process.env) {
   if (env.DOCKER_CONFIG !== undefined && env.DOCKER_CONFIG !== null) {
-    const trimmed = String(env.DOCKER_CONFIG).trim();
-    if (trimmed.length > 0) {
+    const rawConfig = String(env.DOCKER_CONFIG);
+    if (rawConfig !== '') {
       return {
-        path: path.resolve(trimmed),
+        path: path.resolve(rawConfig),
         isCustom: true,
       };
     }
   }
-  const homeDir = env.HOME || process.env.HOME || os.homedir();
-  if (!homeDir || typeof homeDir !== 'string' || homeDir.trim().length === 0) {
+  const homeDir = env.HOME !== undefined && env.HOME !== null && String(env.HOME) !== ''
+    ? String(env.HOME)
+    : (process.env.HOME || os.homedir());
+  if (!homeDir || typeof homeDir !== 'string' || homeDir === '') {
     return {
       path: null,
       isCustom: false,
@@ -1367,7 +1384,7 @@ export function getDockerConfigRoot(env = process.env) {
     };
   }
   return {
-    path: path.join(homeDir.trim(), '.docker'),
+    path: path.join(homeDir, '.docker'),
     isCustom: false,
   };
 }
@@ -1436,7 +1453,7 @@ export function resolveDockerContextEndpoint(contextName, { contextInspector, en
 
   // 2. Try docker context inspect via CLI with explicit argument separator '--'
   try {
-    const execEnv = { ...process.env, ...env };
+    const execEnv = buildDockerExecEnv(env);
     const stdout = execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}', '--', trimmed], {
       env: execEnv,
       encoding: 'utf8',
@@ -1534,7 +1551,7 @@ export function resolveEffectiveDockerEndpoint({ env = process.env, contextInspe
 
     if (!contextName) {
       try {
-        const execEnv = { ...process.env, ...env };
+        const execEnv = buildDockerExecEnv(env);
         const stdout = execFileSync('docker', ['context', 'show'], {
           env: execEnv,
           encoding: 'utf8',

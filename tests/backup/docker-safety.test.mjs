@@ -149,6 +149,19 @@ if (cmd === 'inspect') {
   const formatIdx = args.indexOf('--format');
   const formatStr = formatIdx !== -1 ? args[formatIdx + 1] : '';
 
+  if (state.failLabelInspect && formatIdx !== -1) {
+    process.stderr.write('Error: failed to evaluate format template\\n');
+    process.exit(1);
+  }
+
+  if (formatStr.includes('crm.disposable-test') && formatStr.includes('crm.owner') && formatStr.includes('crm.purpose')) {
+    const l1 = container.labels?.['crm.disposable-test'] || '';
+    const l2 = container.labels?.['crm.owner'] || '';
+    const l3 = container.labels?.['crm.purpose'] || '';
+    process.stdout.write(l1 + '|' + l2 + '|' + l3 + '\\n');
+    process.exit(0);
+  }
+
   if (formatStr.includes('crm.disposable-test')) {
     process.stdout.write((container.labels?.['crm.disposable-test'] || '') + '\\n');
     process.exit(0);
@@ -733,6 +746,118 @@ test('B10: DOCKER_CONFIG và HOME có currentContext khác nhau -> Chọn đúng
   }
 });
 
+test('B11: DOCKER_CONFIG có trailing space -> Giữ nguyên whitespace, CLI và guard dùng đúng config root', async () => {
+  const baseDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'crm-test-cfg-trailing-'));
+  const cfgDirWithSpace = path.join(baseDir, 'custom-cfg ');
+  await fsp.mkdir(cfgDirWithSpace);
+  const metaDir = path.join(cfgDirWithSpace, 'contexts', 'meta');
+  await fsp.mkdir(metaDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(cfgDirWithSpace, 'config.json'),
+    JSON.stringify({ currentContext: 'trailing-space-ctx' }),
+    'utf8'
+  );
+  await fsp.writeFile(
+    path.join(metaDir, 'meta.json'),
+    JSON.stringify({
+      Name: 'trailing-space-ctx',
+      Endpoints: { docker: { Host: 'unix:///var/run/trailing.sock' } },
+    }),
+    'utf8'
+  );
+
+  try {
+    const result = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDirWithSpace,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+      initialState: {
+        activeContext: 'should-not-use-active-fallback',
+      },
+    });
+    assert.equal(result.code, 0);
+    assert.ok(result.commands.some((c) => c.includes('inspect') && c.includes('trailing-space-ctx')));
+  } finally {
+    await fsp.rm(baseDir, { recursive: true, force: true });
+  }
+});
+
+test('B12: Hai config directories khác nhau chỉ bởi khoảng trắng -> Docker CLI và guard resolve đúng thư mục chỉ định', async () => {
+  const baseDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'crm-test-cfg-pair-'));
+  const cfgDirA = path.join(baseDir, 'cfg-dir');
+  const cfgDirB = path.join(baseDir, 'cfg-dir ');
+  await fsp.mkdir(cfgDirA);
+  await fsp.mkdir(cfgDirB);
+
+  // Dir A: remote context
+  const metaDirA = path.join(cfgDirA, 'contexts', 'meta');
+  await fsp.mkdir(metaDirA, { recursive: true });
+  await fsp.writeFile(path.join(cfgDirA, 'config.json'), JSON.stringify({ currentContext: 'remote-ctx-a' }), 'utf8');
+  await fsp.writeFile(
+    path.join(metaDirA, 'meta.json'),
+    JSON.stringify({ Name: 'remote-ctx-a', Endpoints: { docker: { Host: 'tcp://192.168.1.50:2375' } } }),
+    'utf8'
+  );
+
+  // Dir B (with trailing space): local context
+  const metaDirB = path.join(cfgDirB, 'contexts', 'meta');
+  await fsp.mkdir(metaDirB, { recursive: true });
+  await fsp.writeFile(path.join(cfgDirB, 'config.json'), JSON.stringify({ currentContext: 'local-ctx-b' }), 'utf8');
+  await fsp.writeFile(
+    path.join(metaDirB, 'meta.json'),
+    JSON.stringify({ Name: 'local-ctx-b', Endpoints: { docker: { Host: 'unix:///var/run/local-b.sock' } } }),
+    'utf8'
+  );
+
+  try {
+    // 1. Run with cfgDirB (local) -> MUST PASS
+    const resultB = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDirB,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(resultB.code, 0);
+    assert.ok(resultB.commands.some((c) => c.includes('local-ctx-b')));
+
+    // 2. Run with cfgDirA (remote) -> MUST FAIL CLOSED (remote endpoint blocked)
+    const resultA = await runWithMockDocker(['stop'], {
+      env: {
+        DOCKER_CONFIG: cfgDirA,
+        DOCKER_CONTEXT: undefined,
+        DOCKER_HOST: undefined,
+      },
+    });
+    assert.equal(resultA.code, 1);
+    assert.match(resultA.stderr, /refusing remote Docker endpoint/);
+    assert.ok(resultA.commands.some((c) => c.includes('remote-ctx-a')));
+  } finally {
+    await fsp.rm(baseDir, { recursive: true, force: true });
+  }
+});
+
+test('B13: DOCKER_CONFIG chỉ định đường dẫn không tồn tại -> FAIL CLOSED, không fallback sang HOME', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    env: {
+      DOCKER_CONFIG: '/nonexistent/docker/config/directory/xyz',
+      DOCKER_CONTEXT: undefined,
+      DOCKER_HOST: undefined,
+    },
+    initialState: {
+      activeContext: 'home-local-context',
+      contexts: {
+        'home-local-context': { endpoint: 'unix:///var/run/home.sock' },
+      },
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /specified DOCKER_CONFIG directory.*does not exist|unable to determine active Docker context/);
+  assert.ok(!result.commands.some((c) => c.includes('home-local-context')));
+});
+
 // =============================================================================
 // Nhóm C — Docker Inspect Error & 4-State Verification (C01 - C10)
 // =============================================================================
@@ -871,6 +996,69 @@ test('C10: logs gặp inspect error -> Không đọc logs', async () => {
   });
   assert.equal(result.code, 1);
   assert.ok(!result.commands.some((c) => c.startsWith('logs')));
+});
+
+test('C11: Container tồn tại, đủ 3 ownership labels, failRm=true -> stop thất bại, không in Removed, không báo SUCCESS giả', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    initialState: {
+      containers: {
+        'crm-dumpcheck-test': {
+          labels: {
+            'crm.disposable-test': 'true',
+            'crm.owner': 'ci-postgres17',
+            'crm.purpose': 'pg17-backup-restore-test',
+          },
+        },
+      },
+      failRm: true,
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /failed to remove disposable PostgreSQL container 'crm-dumpcheck-test'; cleanup unsuccessful/);
+  assert.doesNotMatch(result.stdout, /Removed disposable PostgreSQL container/);
+  assert.ok(result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C12: Container tồn tại nhưng label inspect thất bại -> ERROR (status 3), không phân loại nhầm FOREIGN (status 1)', async () => {
+  const result = await runWithMockDocker(['stop'], {
+    initialState: {
+      containers: {
+        'crm-dumpcheck-test': {
+          labels: {
+            'crm.disposable-test': 'true',
+            'crm.owner': 'ci-postgres17',
+            'crm.purpose': 'pg17-backup-restore-test',
+          },
+        },
+      },
+      failLabelInspect: true,
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /unable to verify container 'crm-dumpcheck-test' status due to Docker daemon or inspect error; refusing to clean up/);
+  assert.doesNotMatch(result.stderr, /lacks valid ownership markers; refusing to remove foreign container/);
+  assert.ok(!result.commands.some((c) => c.startsWith('rm')));
+});
+
+test('C13: start khi recreate owned container nhưng rm thất bại (failRm=true) -> abort recreate, fail closed', async () => {
+  const result = await runWithMockDocker(['start'], {
+    initialState: {
+      containers: {
+        'crm-dumpcheck-test': {
+          labels: {
+            'crm.disposable-test': 'true',
+            'crm.owner': 'ci-postgres17',
+            'crm.purpose': 'pg17-backup-restore-test',
+          },
+        },
+      },
+      failRm: true,
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /failed to remove existing disposable container 'crm-dumpcheck-test'; aborting recreate/);
+  assert.doesNotMatch(result.stdout, /PostgreSQL 17 target is ready/);
+  assert.ok(!result.commands.some((c) => c.startsWith('run')));
 });
 
 // =============================================================================
