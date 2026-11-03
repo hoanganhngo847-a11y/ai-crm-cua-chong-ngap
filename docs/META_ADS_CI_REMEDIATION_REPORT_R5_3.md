@@ -4,6 +4,8 @@
 **Pull Request:** [#140](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/140)<br/>
 **Branch:** `integration/meta-ads-backup-restore`<br/>
 **Baseline PR Head SHA:** `3c5d02f3e2d361f9bca14f3652264b597066d392`<br/>
+**Remediation Implementation SHA:** `5527b06ae2955faf596e43d952440767428cbff9`<br/>
+**PR Head SHA:** `5527b06ae2955faf596e43d952440767428cbff9`<br/>
 **Ngày thực hiện:** 03/11/2026<br/>
 **Trạng thái:** **READY FOR INDEPENDENT REVIEW** (Chờ Independent Reviewer nghiệm thu)
 
@@ -269,7 +271,19 @@ Toàn bộ 34 kịch bản kiểm thử hành vi thực tế trong [`tests/backu
 
 ---
 
-## 10. Remaining Risks & Mitigations
+## 10. GitHub Actions Verification Runs
+
+Tất cả các workflow trên GitHub Actions cho commit `5527b06ae2955faf596e43d952440767428cbff9` đều đạt **100% SUCCESS**:
+
+| Workflow | Event | Run ID | Thời gian | Trạng thái | URL |
+|---|---|---|---|---|---|
+| **Backup & Restore CI (Helpers)** | `pull_request` | `41622647473` | 2m 21s | **SUCCESS** | [Run 41622647473](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41622647473) |
+| **Verify** | `pull_request` | `41622647491` | 8m 45s | **SUCCESS** | [Run 41622647491](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41622647491) |
+| **Backup & Restore CI (Helpers)** | `push` | `41622639124` | 2m 17s | **SUCCESS** | [Run 41622639124](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41622639124) |
+
+---
+
+## 11. Remaining Risks & Mitigations
 
 | Rủi ro còn lại | Mức độ | Biện pháp giảm thiểu |
 |---|---|---|
@@ -279,7 +293,7 @@ Toàn bộ 34 kịch bản kiểm thử hành vi thực tế trong [`tests/backu
 
 ---
 
-## 11. Danh Sách Kiểm Tra Nghiệm Thu (Acceptance Checklist)
+## 12. Danh Sách Kiểm Tra Nghiệm Thu (Acceptance Checklist)
 
 - [x] Docker CLI precedence chính xác: `DOCKER_CONTEXT > DOCKER_HOST > active/default context`.
 - [x] `DOCKER_CONTEXT` thực sự ghi đè `DOCKER_HOST`.
@@ -307,7 +321,7 @@ Toàn bộ 34 kịch bản kiểm thử hành vi thực tế trong [`tests/backu
 
 ---
 
-## 12. Kết Luận
+## 13. Kết Luận
 
 Toàn bộ các finding P1 và P2 từ Independent Review Round 5.2 đã được khắc phục triệt để và chứng minh bằng thực nghiệm:
 - Đã sửa chuẩn hóa thứ tự ưu tiên Docker CLI.
