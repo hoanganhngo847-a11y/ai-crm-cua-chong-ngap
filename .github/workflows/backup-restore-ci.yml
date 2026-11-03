@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 20
     env:
       BACKUP_REQUIRE_LIVE_PG17: '1'
+      CRM_PG17_FALLBACK_IMAGE: postgres:17
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

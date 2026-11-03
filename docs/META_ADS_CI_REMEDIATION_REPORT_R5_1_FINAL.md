@@ -21,7 +21,7 @@ Round 5.1 đóng các gap P0/P1 còn lại của PR #140:
 
 1. **P0 — Bucket metadata parity:** `restoreStorage` không còn coi “GET thấy bucket” là bằng chứng cấu hình đúng. Sau POST và với bucket đã tồn tại, Helper #5 đọc lại metadata và xác minh đủ năm trường `id`, `name`, `public`, `file_size_limit`, `allowed_mime_types`. Metadata thiếu, sai kiểu, sai giá trị hoặc không đầy đủ đều fail closed với `BUCKET_CONFIGURATION_MISMATCH` trước khi upload bất kỳ object nào.
 2. **P0 — PostgreSQL 17 live integration:** CI không còn xanh nhờ SKIP. Hai workflow `Backup & Restore CI (Helpers #1-#6)` và `Verify` provision một container PostgreSQL 17 disposable, xác minh major version 17, chạy test plan → apply → verify → rollback thật, và fail nếu container không sẵn sàng. Test chỉ được SKIP khi chạy local ngoài CI và không đặt `BACKUP_REQUIRE_LIVE_PG17=1`.
-3. **P1 — CI hardening:** thêm health check, version check, marker verification, diagnostics on failure, teardown `if: always()`, timeout, concurrency guard, `git diff --check`, và local-only Docker guard.
+3. **P1 — CI hardening:** thêm health check, version check, marker verification, diagnostics on failure, teardown `if: always()`, timeout, concurrency guard, `git diff --check`, local-only Docker guard, và cơ chế retry/fallback khi registry image bị rate limit.
 
 **Kết quả thực nghiệm:**
 
@@ -39,11 +39,13 @@ Round 5.1 đóng các gap P0/P1 còn lại của PR #140:
 | Lint | **PASS**, exit 0, 16 warning pre-existing |
 | Build | **PASS**, exit 0 khi dùng đúng env CI |
 | `git diff --check` | **PASS**, exit 0 |
-| GitHub Backup CI (PR) | **SUCCESS** — run `41596680444` |
-| GitHub Verify CI (PR) | **SUCCESS** — run `41596680518` |
-| GitHub Backup CI (push) | **SUCCESS** — run `41596675060` |
+| GitHub Backup CI (PR, code commit) | **SUCCESS** — run `41596680444` |
+| GitHub Verify CI (PR, code commit) | **SUCCESS** — run `41596680518` |
+| GitHub Backup CI (push, code commit) | **SUCCESS** — run `41596675060` |
+| GitHub Backup CI (PR, docs head) | **SUCCESS** — run `41598512729` |
+| GitHub Verify CI (docs head) | **FAIL hạ tầng registry** — run `41598512697`; đã bổ sung retry/fallback, xem §8.5 |
 
-Không có FAIL trong phạm vi backup/restore. Một SKIP duy nhất là negative fixture có chủ đích của Helper #6, không phải test bị bỏ qua.
+Không có FAIL logic/test trong phạm vi backup/restore. Một SKIP duy nhất là negative fixture có chủ đích của Helper #6. Sự cố `toomanyrequests` của ECR Public là lỗi hạ tầng registry, không phải regression, và đã được xử lý bằng retry + fallback image.
 
 ---
 
@@ -101,14 +103,14 @@ Workflow cũ không có timeout phù hợp, không có concurrency guard, không
 
 ## 4. Các File Đã Thay Đổi
 
-### 4.1. Implementation Commit `364d809`
+### 4.1. Implementation + CI Robustness Commits
 
 | Tệp | Loại | Nội dung |
 |---|---|---|
 | `scripts/backup/storage-restore.mjs` | Modified | Strict bucket input validation, MIME normalization, `verifyTargetBucketParity`, read-back sau POST, gate trước object upload |
 | `tests/backup/storage-restore.test.mjs` | Modified | Bổ sung/hoàn thiện regression P2-BUCKET-04/05/06; tổng 85 test Helper #5 |
 | `tests/backup/owner-map.test.mjs` | Modified | Live PostgreSQL 17 test fail thay vì skip khi CI/bắt buộc |
-| `scripts/backup/ci-postgres17.sh` | **New** | Provision/health/version/marker/teardown/log cho PostgreSQL 17 disposable |
+| `scripts/backup/ci-postgres17.sh` | **New** | Provision/health/version/marker/teardown/log cho PostgreSQL 17 disposable; retry pull + fallback `postgres:17` |
 | `.github/workflows/backup-restore-ci.yml` | Modified | Provision PG17, mandatory live gate, diagnostics, teardown, timeout, concurrency, `git diff --check` |
 | `.github/workflows/verify.yml` | Modified | Provision PG17 trước `npm run test:backup`, diagnostics, teardown, mandatory live gate |
 | `package.json` | Modified | `test:backup:python` đặt `SAFE_EXTRACT_EXPORT_HELPER=scripts/backup/storage-export.mjs` |
@@ -124,11 +126,11 @@ Workflow cũ không có timeout phù hợp, không có concurrency guard, không
 ### 4.3. SHA-256 của các tệp thay đổi
 
 ```text
-5556cd08527a8ae43af37611f2dd4044c5d9b02c1fce4d01e7710c6212d884d0  .github/workflows/backup-restore-ci.yml
-c81c8a594eb85812b2013bff5aa76225644d6d7e9a5dedcc89aedb43fd5b2b64  .github/workflows/verify.yml
+e4c523feeb11b8a58c59de17e7788514a4a1449aeb61431085fbf52706287351  .github/workflows/backup-restore-ci.yml
+48e0f8d12e957a439f77a28072c85728b90e3876fe23184a7ea7070c85add0ce  .github/workflows/verify.yml
 5b46041e59342bbd56799c7fddda1ec1b638605a3db3f6746aa197ee4ddf9870  package.json
 84612104ce7cb3516620d39c0a26033f856c0f049082a46846f17b77c10291e6  scripts/backup/storage-restore.mjs
-3aae412639269fa92623c557e4e4134b6a1872cfe1cbcd8da147b92c2ea80a3e  scripts/backup/ci-postgres17.sh
+9b082ddadea9469db8dd6baa405049403554e3074028dbcfa19564b19c5307d0  scripts/backup/ci-postgres17.sh
 ba4e334c5cc26fa84dbc602ce0a8292d39b851ba3cb329df45fde45685ab5bdc  tests/backup/owner-map.test.mjs
 37fcee1cc11ff6dc0cf46b4ee3d28e96dbfda6986a0066b0cf1707d98ed0ce0b  tests/backup/storage-restore.test.mjs
 ```
@@ -203,7 +205,8 @@ const liveRequired =
 ### 5.6. `scripts/backup/ci-postgres17.sh`
 
 - Guard local-only: từ chối `DOCKER_HOST`/`DOCKER_CONTEXT` trỏ remote.
-- Xóa container cũ nếu có, chạy image `public.ecr.aws/supabase/postgres:17.11.0.004`.
+- Xóa container cũ nếu có; dùng image local nếu đã có, nếu không thì pull có retry.
+- Retry pull tối đa 3 lần với backoff 10s/20s; nếu ECR Public trả `toomanyrequests`, fallback sang image chính thức `postgres:17` (vẫn bắt buộc major version 17).
 - `--network none`; không kết nối staging/Production.
 - Chờ Supabase init hand-off `PostgreSQL init process complete; ready for start up.` trước khi probe server cuối.
 - `pg_isready` + `SELECT 1`, kiểm tra `server_version_num` khớp `^17[0-9]{4}$`.
@@ -417,6 +420,43 @@ Ran 4 tests ... OK
 
 `# skipped 1` là negative fixture `nonexistent-container-xyz`; live PostgreSQL 17 test là `ok 32`, không nằm trong skipped.
 
+### 8.5. Sự cố ECR Public rate limit trên docs head `838b3f0`
+
+- `Backup & Restore CI` run [`41598512729`](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41598512729) — **SUCCESS**.
+- `Verify` run [`41598512697`](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41598512697) — step 41 `Start disposable PostgreSQL 17` fail với:
+
+```text
+docker: toomanyrequests: Rate exceeded
+Process completed with exit code 125.
+```
+
+Đây là **rate limit của ECR Public**, không phải lỗi code, test, PostgreSQL hay bucket parity. Toàn bộ step trước đó (gồm `npm ci`, Supabase stack, DB tests) đã SUCCESS. Rerun thủ công đã được hủy sau khi bổ sung biện pháp khắc phục.
+
+**Biện pháp khắc phục đã triển khai:**
+
+1. `ci-postgres17.sh` kiểm tra image local trước; chỉ pull khi cần.
+2. Pull có retry tối đa 3 lần, backoff 10s/20s.
+3. Nếu primary image vẫn không pull được, fallback sang `postgres:17` chính thức.
+4. Cả hai workflow đặt `CRM_PG17_FALLBACK_IMAGE: postgres:17`.
+5. Fallback vẫn bị ràng buộc bởi kiểm tra `server_version_num` major 17 và marker disposable.
+
+**Bằng chứng fallback local:**
+
+```text
+Primary image does-not-exist.invalid/postgres:17 unavailable; falling back to postgres:17
+Using locally available image postgres:17
+PostgreSQL server_version_num=170011
+PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) ...
+Disposable marker verified; PostgreSQL 17 target is ready.
+✔ Live PostgreSQL 17 integration: full plan -> apply -> verify cycle with live catalog and rollback (1662.901834ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+ℹ skipped 0
+```
+
+Kết quả CI cuối cùng cho commit fix được ghi nhận trực tiếp trên PR #140.
+
 ---
 
 ## 9. Security Review
@@ -433,6 +473,7 @@ Ran 4 tests ... OK
 | Không kết nối Staging/Production | Container `--network none`; image disposable; không dùng production credentials | **PASS** |
 | Không dùng remote Docker host | Script từ chối `DOCKER_HOST`/`DOCKER_CONTEXT` không phải local socket | **PASS** (exit 1) |
 | PostgreSQL version enforcement | `server_version_num` phải khớp `^17[0-9]{4}$` | **PASS** — 170011 |
+| Fallback image vẫn đúng PG17 | Fallback `postgres:17` qua cùng version check và marker check | **PASS** — 170011, live test PASS |
 | Target identity/URL allowlist | Không thay đổi guard hiện có; regression Helper #5 PASS | **PASS** |
 | SQL injection / owner map | Helper #6 regression PASS; không nới lỏng identifier validation | **PASS** |
 | Object overwrite protection | Test `--no-upsert` hiện có PASS trong full suite | **PASS** |
@@ -475,6 +516,8 @@ Ran 4 tests ... OK
 | ESLint trên file thay đổi | Không error | 0 |
 | YAML parse hai workflow | Hợp lệ | 0 |
 | `bash -n scripts/backup/ci-postgres17.sh` | Hợp lệ | 0 |
+| Image retry/fallback với primary image không tồn tại | Fallback `postgres:17`, PG 17.11, marker OK | 0 |
+| Live test trên fallback image | Plan → apply → verify → rollback PASS | 0 |
 | Remote Docker guard | Từ chối đúng | 1 (expected) |
 | CI-required live gate thiếu container | Fail đúng, không skip | 1 (expected) |
 | Local live gate thiếu container | Skip có chủ đích | 0 |
@@ -483,9 +526,11 @@ Ran 4 tests ... OK
 
 | Check | Kết quả |
 |---|---|
-| Backup Helpers (#1-#6) — PR | **SUCCESS** |
-| Backup Helpers (#1-#6) — push | **SUCCESS** |
-| Verify `checks` — PR | **SUCCESS** |
+| Backup Helpers (#1-#6) — PR, code commit `364d809` | **SUCCESS** |
+| Backup Helpers (#1-#6) — push, code commit `364d809` | **SUCCESS** |
+| Verify `checks` — PR, code commit `364d809` | **SUCCESS** |
+| Backup Helpers (#1-#6) — PR, docs head `838b3f0` | **SUCCESS** |
+| Verify `checks` — docs head `838b3f0` | **Hạ tầng registry** — retry/fallback added; see §8.5 |
 | Live PostgreSQL 17 integration trong CI | **PASS**, `ok 32` |
 | Plan → Apply → Verify | **PASS** |
 | Rollback integration | **PASS** |
@@ -500,12 +545,11 @@ Ran 4 tests ... OK
 
 ### 11.1. FAIL
 
-**Không có FAIL** trong các suite bắt buộc ở local và trên GitHub Actions.
-
-Các exit 1 dưới đây là **negative test có chủ đích**, không phải regression:
+**Không có FAIL logic/test** trong các suite bắt buộc ở local và trên GitHub Actions. Một CI run của Verify fail do hạ tầng registry (ECR Public rate limit), đã được khắc phục bằng retry/fallback:
 
 | Tình huống | Exit | Kết luận |
 |---|---:|---|
+| Verify docs head `41598512697`: ECR Public `toomanyrequests` | 125 (docker) | **Hạ tầng**, không phải code/test; đã thêm retry + fallback |
 | CI bắt buộc live PG17 nhưng container không có | 1 | Đúng thiết kế — “refusing to skip” |
 | `ci-postgres17.sh` với remote `DOCKER_HOST` | 1 | Đúng thiết kế — từ chối remote Docker |
 | Bản copy cách ly bỏ parity gate, chạy 6 test mới | 1 | Đúng thiết kế — 6/6 test FAIL (RED evidence) |
@@ -544,12 +588,14 @@ Error: Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY.
 |---|---|
 | Baseline trước Round 5.1 | `b0bf2d65c0ee049e1a1a36f10f0aab23c851a06a` |
 | Implementation commit (source/test/CI) | `364d809ad449edd6c665dbe7ee55e4540987e125` |
-| Commit tài liệu FINAL | Tạo ngay sau báo cáo này; xem PR #140 head |
+| Commit tài liệu FINAL | `838b3f0a10884b60543d13c0bcbc8a73bb927374` |
+| CI robustness fix (retry/fallback image) | Commit kế tiếp sau `838b3f0`; xem PR #140 head |
 
 Commit implementation đã push lên `origin/integration/meta-ads-backup-restore`, không force push, không rewrite history.
 
 ```text
 364d809 fix(backup): enforce full bucket parity and live PG17 CI gate
+838b3f0 docs(backup): add Round 5.1 final remediation report
 b0bf2d6 fix(backup): remediate CI failures for helpers #4, #5, and #6
 49811b6 feat(backup): integrate helpers 1-6, contracts, runbook v12, and CI verification
 ```
@@ -577,6 +623,8 @@ Backup & Restore CI (Helpers #1-#6) / Backup Helpers  → SUCCESS (push)
 Verify / checks                                       → SUCCESS
 ```
 
+Trên docs head `838b3f0`, Backup CI vẫn SUCCESS; Verify gặp ECR Public rate limit ở bước pull image. Retry/fallback đã được bổ sung trong commit kế tiếp; kết quả CI cuối cùng của commit fix được ghi nhận trực tiếp trên PR #140.
+
 PR #139 vẫn là Draft và **không bị sửa, không bị merge**. Branch `main` và Production không bị thay đổi.
 
 ---
@@ -594,6 +642,7 @@ PR #139 vẫn là Draft và **không bị sửa, không bị merge**. Branch `ma
 | `npm audit` production dependencies | High/Critical (pre-existing) | 4 production vulnerabilities (3 high, 1 critical); cần ticket riêng, không sửa trong PR này |
 | Staging rehearsal với Supabase Storage thật | Bắt buộc trước Production | Test hiện tại dùng mock Storage API; live PG chỉ bao phủ catalog/owner-map. Cần chạy runbook trên staging theo quy trình |
 | Teardown failure-path trên GitHub Actions | Thấp | Workflow dùng `if: always()`; teardown success-path đã chạy. Chưa mô phỏng một failure giữa chừng trên GitHub để quan sát teardown |
+| ECR Public / Docker Hub rate limit | Thấp | Đã giảm thiểu bằng local-image check, retry 3 lần, fallback `postgres:17`; fallback đã được kiểm chứng local với live test PASS |
 | Node 20 action deprecation warnings | Thấp | `actions/checkout@v4`, `setup-node@v4`, `setup-python@v5` bị runner ép Node 24; không ảnh hưởng kết quả |
 | Independent Review | Bắt buộc | PR chưa được review độc lập; không tự tuyên bố ACCEPTED |
 | Production deployment | Bắt buộc tách bước | Không thực hiện trong PR này; cần release riêng sau nghiệm thu |
@@ -604,7 +653,7 @@ PR #139 vẫn là Draft và **không bị sửa, không bị merge**. Branch `ma
 
 ### 15.1. Kết luận
 
-**PR #140 đạt trạng thái READY FOR INDEPENDENT REVIEW trong phạm vi Backup/Restore Helpers #1–#6.**
+**PR #140 đạt trạng thái READY FOR INDEPENDENT REVIEW trong phạm vi Backup/Restore Helpers #1–#6**, sau khi CI của commit retry/fallback hoàn tất xanh.
 
 Các lý do:
 
@@ -614,6 +663,7 @@ Các lý do:
 - Regression Helpers #1–#6 PASS; Python safe-extract/runbook PASS.
 - Typecheck, lint, build, `git diff --check` PASS trong CI.
 - Security guard cho Docker local-only, version enforcement, object upload gate, report gate đều PASS.
+- CI có retry/fallback khi registry image bị rate limit; fallback vẫn bắt buộc PostgreSQL 17 và đã chạy live test PASS.
 - Không có credential mới, không kết nối Staging/Production, không deploy.
 
 ### 15.2. Điều kiện trước khi Production

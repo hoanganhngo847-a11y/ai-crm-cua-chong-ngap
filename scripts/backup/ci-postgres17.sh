@@ -10,10 +10,13 @@ set -Eeuo pipefail
 
 CONTAINER_NAME="${CRM_PG17_CONTAINER:-crm-dumpcheck-test}"
 PG_IMAGE="${CRM_PG17_IMAGE:-public.ecr.aws/supabase/postgres:17.11.0.004}"
+PG_FALLBACK_IMAGE="${CRM_PG17_FALLBACK_IMAGE:-postgres:17}"
 PG_USER="${CRM_PG17_USER:-supabase_admin}"
 PG_DATABASE="${CRM_PG17_DATABASE:-postgres}"
 PG_PASSWORD="${CRM_PG17_PASSWORD:-localonly}"
 READY_ATTEMPTS="${CRM_PG17_READY_ATTEMPTS:-60}"
+PULL_ATTEMPTS="${CRM_PG17_PULL_ATTEMPTS:-3}"
+PULL_RETRY_DELAY="${CRM_PG17_PULL_RETRY_DELAY:-10}"
 
 log() {
   printf '%s\n' "$*"
@@ -50,10 +53,51 @@ psql_exec() {
     psql -X -qAt -v ON_ERROR_STOP=1 -U "${PG_USER}" -d "${PG_DATABASE}" "$@"
 }
 
+ensure_image() {
+  local image="$1"
+
+  if docker image inspect "${image}" >/dev/null 2>&1; then
+    log "Using locally available image ${image}"
+    return 0
+  fi
+
+  local attempt delay output
+  for attempt in $(seq 1 "${PULL_ATTEMPTS}"); do
+    output="$(mktemp)"
+    log "Pulling ${image} (attempt ${attempt}/${PULL_ATTEMPTS})"
+    if docker pull "${image}" >"${output}" 2>&1; then
+      rm -f "${output}"
+      log "Pulled ${image}"
+      return 0
+    fi
+    tail -n 10 "${output}" >&2 || true
+    rm -f "${output}"
+    if [[ "${attempt}" -lt "${PULL_ATTEMPTS}" ]]; then
+      delay=$((attempt * PULL_RETRY_DELAY))
+      log "Pull failed for ${image}; retrying in ${delay}s"
+      sleep "${delay}"
+    fi
+  done
+
+  return 1
+}
+
 start() {
   assert_local_docker
 
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+
+  if ! ensure_image "${PG_IMAGE}"; then
+    if [[ -n "${PG_FALLBACK_IMAGE}" && "${PG_FALLBACK_IMAGE}" != "${PG_IMAGE}" ]]; then
+      log "Primary image ${PG_IMAGE} unavailable; falling back to ${PG_FALLBACK_IMAGE}"
+      if ! ensure_image "${PG_FALLBACK_IMAGE}"; then
+        die "unable to pull ${PG_IMAGE} or fallback ${PG_FALLBACK_IMAGE}"
+      fi
+      PG_IMAGE="${PG_FALLBACK_IMAGE}"
+    else
+      die "unable to pull PostgreSQL image ${PG_IMAGE}"
+    fi
+  fi
 
   log "Starting disposable PostgreSQL 17 container '${CONTAINER_NAME}' from ${PG_IMAGE}"
   docker run -d \
