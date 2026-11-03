@@ -213,8 +213,7 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
             creative_snapshot?: { captureTiming?: string };
         };
     };
-    let patchUrl: URL | null = null;
-    let patchBody: BackfillPatch | null = null;
+    const patchRequests: Array<{ url: URL; body: BackfillPatch }> = [];
 
     globalThis.fetch = (async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
@@ -240,8 +239,7 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
                 return Response.json([{ encrypted_access_token: encrypted, token_expires_at: null }]);
             }
             if (url.pathname.endsWith('/lead_attribution_touchpoints') && init?.method === 'PATCH') {
-                patchUrl = url;
-                patchBody = JSON.parse(String(init.body || '{}')) as BackfillPatch;
+                patchRequests.push({ url, body: JSON.parse(String(init.body || '{}')) as BackfillPatch });
                 // Simulate another worker having written a final snapshot after our scan.
                 return Response.json([]);
             }
@@ -260,12 +258,13 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
         assert.equal(summary.scanned, 1);
         assert.equal(summary.updated, 0, 'zero returned rows means a newer snapshot won the compare-and-set');
         assert.equal(summary.failed, 0);
-        assert.ok(patchUrl, 'backfill attempted a conditional update');
-        const guard = patchUrl!.searchParams.get('or') || '';
+        const patch = patchRequests[0];
+        assert.ok(patch, 'backfill attempted a conditional update');
+        const guard = patch.url.searchParams.get('or') || '';
         assert.match(guard, /PENDING_SYNC/);
         assert.match(guard, /creative_snapshot\.is\.null/);
-        assert.equal(patchBody?.ads_context_data?.raw_meta?.campaign_id, 'campaign-raw', 'raw Meta evidence survives backfill');
-        assert.equal(patchBody?.ads_context_data?.creative_snapshot?.captureTiming, 'BACKFILL');
+        assert.equal(patch.body.ads_context_data?.raw_meta?.campaign_id, 'campaign-raw', 'raw Meta evidence survives backfill');
+        assert.equal(patch.body.ads_context_data?.creative_snapshot?.captureTiming, 'BACKFILL');
     } finally {
         globalThis.fetch = originalFetch;
         if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
