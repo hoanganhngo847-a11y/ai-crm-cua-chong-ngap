@@ -25,6 +25,7 @@ import {
     promoteFacebookCustomerDisplayName,
 } from '@/features/omnichannel/facebook/profile';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { fetchMetaAdCreativeSnapshot } from '@/features/omnichannel/facebook/marketing-sync';
 
 import {
     binding,
@@ -189,6 +190,17 @@ export async function POST(request: Request) {
 
                             if (interaction?.customer_id) {
                                 const isAd = Boolean(event.referral.adId);
+                                const creativeSnapshot = event.referral.adId
+                                    ? await fetchMetaAdCreativeSnapshot(config.company, event.referral.adId, {
+                                        captureTiming: 'AT_LEAD_INTAKE',
+                                        timeoutMs: 5000,
+                                    })
+                                    : null;
+                                const referralContext = event.referral.adsContextData || {};
+                                const adsContextData = {
+                                    ...referralContext,
+                                    ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
+                                };
                                 await rpc('record_lead_attribution_touchpoint', {
                                     p_company: config.company,
                                     p_customer: interaction.customer_id,
@@ -209,7 +221,7 @@ export async function POST(request: Request) {
                                     p_meta_leadgen_id: null,
                                     p_referral_source: event.referral.source || 'ADS',
                                     p_referral_type: event.referral.type || 'OPEN_THREAD',
-                                    p_ads_context_data: event.referral.adsContextData || null,
+                                    p_ads_context_data: Object.keys(adsContextData).length > 0 ? adsContextData : null,
                                     p_utm_source: null,
                                     p_utm_medium: null,
                                     p_utm_campaign: null,

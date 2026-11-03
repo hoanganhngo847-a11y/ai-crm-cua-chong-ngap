@@ -728,6 +728,11 @@ test('Scenario 9: Click-to-Messenger referral metadata is extracted and recorded
         assert.ok(tpCall, 'record_lead_attribution_touchpoint must be called for Click-to-Messenger');
         assert.equal(tpCall.args.p_channel, 'FACEBOOK_MESSENGER');
         assert.equal(tpCall.args.p_meta_ad_id, 'ad_ctm_999');
+        assert.equal(
+            tpCall.args.p_ads_context_data.creative_snapshot.status,
+            'PENDING_SYNC',
+            'Click-to-Messenger ad attribution remains durable while creative metadata is pending',
+        );
     } finally {
         globalThis.fetch = originalFetch;
     }

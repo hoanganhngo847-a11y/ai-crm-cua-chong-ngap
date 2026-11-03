@@ -416,7 +416,7 @@ export async function syncPendingCreativeSnapshots(
         .from('lead_attribution_touchpoints')
         .select('id,meta_ad_id,ads_context_data')
         .eq('company_id', companyId)
-        .eq('channel', 'FACEBOOK_LEAD_ADS')
+        .in('channel', ['FACEBOOK_LEAD_ADS', 'FACEBOOK_MESSENGER'])
         .not('meta_ad_id', 'is', null)
         .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
         .order('occurred_at', { ascending: false })

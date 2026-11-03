@@ -610,7 +610,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                     const campaignLabel =
                       tp.campaign_name_snapshot
                       || (tp.attribution_status === 'PENDING_SYNC' ? 'Chờ đồng bộ chiến dịch' : '—');
-                    const creativeSnapshot = tp.channel === 'FACEBOOK_LEAD_ADS'
+                    const hasMetaAdAttribution = tp.channel === 'FACEBOOK_LEAD_ADS'
+                      || (tp.channel === 'FACEBOOK_MESSENGER' && Boolean(tp.meta_ad_id));
+                    const creativeSnapshot = hasMetaAdAttribution
                       ? readMetaCreativeSnapshot(tp.ads_context_data)
                       : null;
                     const creativeMedia: Array<{ url: string; alt: string }> = [];
@@ -662,7 +664,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                         {tp.page_name && (
                           <div className="text-[10px] text-text-tertiary">Trang: {tp.page_name}</div>
                         )}
-                        {tp.channel === 'FACEBOOK_LEAD_ADS' && (
+                        {hasMetaAdAttribution && (
                           <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] space-y-2">
                             <div className="font-semibold text-text-primary">Mẫu quảng cáo thực tế</div>
                             {creativeSnapshot?.status === 'PENDING_SYNC' ? (

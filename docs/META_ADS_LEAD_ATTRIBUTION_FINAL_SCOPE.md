@@ -12,8 +12,8 @@ content, but only for customer-level Lead attribution. It does not restore the
 removed advertising dashboard, Insights/performance reporting, spend/click
 metrics, campaign authoring or ad editing.
 
-Each Facebook Lead Ads touchpoint may retain a read-only creative snapshot from
-the Meta Marketing API: Campaign, Ad Set and Ad identity; Creative ID/name;
+Each Facebook Lead Ads or Click-to-Messenger ad-referral touchpoint may retain
+a read-only creative snapshot from the Meta Marketing API: Campaign, Ad Set and Ad identity; Creative ID/name;
 primary text, headline/title, description, CTA and destination URL; image or
 video thumbnail/ID; and carousel or dynamic creative assets when Meta returns
 them. Dynamic text and asset variants are stored as independent lists; the CRM
@@ -29,7 +29,8 @@ remain \`PENDING_SYNC\`; missing permissions, removed ads or unavailable creativ
 data are shown as \`UNAVAILABLE\`. None of these outcomes blocks durable lead
 intake.
 
-The metadata-only cron/manual sync backfills only missing or pending snapshots.
+The metadata-only cron/manual sync backfills only missing or pending snapshots for
+Facebook Lead Ads and Click-to-Messenger ad referrals.
 A usable snapshot is write-once per touchpoint and is not overwritten by later
 ad edits. A snapshot captured during webhook intake is labelled
 \`AT_LEAD_INTAKE\`. A later backfill is labelled \`BACKFILL\` and the UI explicitly
