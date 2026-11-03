@@ -1,18 +1,34 @@
-# Báo Cáo Khắc Phục CI & An Toàn Docker Round 5.4 (Addendum)
+# Báo Cáo Khắc Phục CI & An Toàn Docker Round 5.4 & 5.4.1 (Addendum)
 
 **Dự án:** `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`<br/>
 **Pull Request:** [#140](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/140)<br/>
 **Branch:** `integration/meta-ads-backup-restore`<br/>
 **Base Branch:** `meta_ads_integration`<br/>
-**Baseline PR Head SHA:** `198221970472eb8bc38ccf955d31a8a349c72ad2`<br/>
-**Remediation Implementation SHA:** `ea51dd4ecb1762a4e951be5366181df62a078f2f`<br/>
-**PR Head SHA:** `ea51dd4ecb1762a4e951be5366181df62a078f2f`<br/>
-**GitHub Actions Runs:**
-- Backup & Restore CI (PR): [41630089793](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630089793) (SUCCESS)
-- Verify CI (PR): [41630089794](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630089794) (SUCCESS)
-- Backup & Restore CI (Push): [41630081604](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630081604) (SUCCESS)<br/>
+
+### Lịch Sử Commit & Bằng Chứng CI:
+
+#### Round 5.4 (Baseline History):
+- **Baseline PR Head SHA:** `198221970472eb8bc38ccf955d31a8a349c72ad2`<br/>
+- **Round 5.4 Implementation SHA:** `ea51dd4ecb1762a4e951be5366181df62a078f2f`<br/>
+- **Round 5.4 Reviewed HEAD SHA:** `866e6f5030f18cd7a7d80e491fae7a8d1b379f44`<br/>
+- **GitHub Actions Runs (Round 5.4 on `ea51dd4`):**
+  - Backup & Restore CI (PR): [41630089793](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630089793) (SUCCESS)
+  - Verify CI (PR): [41630089794](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630089794) (SUCCESS)
+  - Backup & Restore CI (Push): [41630081604](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41630081604) (SUCCESS)
+- **GitHub Actions Runs (Round 5.4 on `866e6f5`):**
+  - Backup & Restore CI (PR): [41631914883](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41631914883) (SUCCESS — 356 tests / 355 PASS / 0 FAIL / 1 SKIPPED)
+  - Verify CI (PR): [41631914990](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41631914990) (SUCCESS)
+  - Backup & Restore CI (Push): [41631907715](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41631907715) (SUCCESS)
+
+#### Round 5.4.1 (Current Remediation):
+- **Round 5.4.1 Implementation SHA:** `9ade32015abf957157d62790969fff8efedc877e`<br/>
+- **Round 5.4.1 Commit SHA tested by CI:** `9ade32015abf957157d62790969fff8efedc877e`<br/>
+- **GitHub Actions Runs (Round 5.4.1 on `9ade320`):**
+  - Backup & Restore CI (PR): [41635994421](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635994421) (SUCCESS — 396 tests / 395 PASS / 0 FAIL / 1 SKIPPED; Docker safety: 40/40 PASS)
+  - Verify CI (PR): [41635994329](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635994329) (SUCCESS — 396 tests / 395 PASS / 0 FAIL / 1 SKIPPED; Python: 75/75 PASS)
+  - Backup & Restore CI (Push): [41635985777](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635985777) (SUCCESS)<br/>
 **Ngày thực hiện:** 03/11/2026<br/>
-**Trạng thái kết luận:** **ROUND 5.4 — PASS**
+**Trạng thái kết luận:** **ROUND 5.4.1 — PASS**
 
 ---
 
@@ -194,7 +210,10 @@ Mở rộng bộ test mock CLI lên 40 kịch bản toàn diện (bổ sung B11,
    - `bash -n scripts/backup/ci-postgres17.sh`: **PASS** (exit code 0)
    - `node --check scripts/backup/owner-map.mjs tests/backup/owner-map.test.mjs tests/backup/docker-safety.test.mjs`: **PASS** (exit code 0)
 2. **Toàn bộ helper test suite (`npm run test:backup:helpers`):**
-   - Tổng cộng 356 test cases: **354 PASS**, 0 FAIL, 2 SKIPPED (skippable live pg17 targets).
+   - *Đối chiếu lịch sử Round 5.4:* Báo cáo Round 5.4 trước đây ghi nhận `354 PASS, 0 FAIL, 2 SKIPPED` dựa trên kết quả chạy local khi container PostgreSQL 17 chưa khởi động (khiến test tích hợp live PG17 bị skip cùng với 1 test negative fixture). Khi đối chiếu log GitHub Actions run `41631914883` (nơi step `./scripts/backup/ci-postgres17.sh start` đã khởi động container thành công), kết quả thực tế trên CI là `356 tests: 355 PASS, 0 FAIL, 1 SKIPPED` (chỉ skip duy nhất intentional fixture `nonexistent-container-xyz`).
+   - *Kết quả Round 5.4.1 sau khi tích hợp `docker-safety.test.mjs` (40 tests):*
+     - Chạy local (không có live PG17 container): **396 tests: 394 PASS, 0 FAIL, 2 SKIPPED**.
+     - Chạy trên GitHub Actions CI (có live PG17 container): **396 tests: 395 PASS, 0 FAIL, 1 SKIPPED** (xác minh tại log run `41635994421` và Verify `41635994329`).
 3. **Toàn bộ Python backup test suite (`npm run test:backup:python`):**
    - 75 tests: **75 PASS** (OK trong 5.4s).
 4. **TypeScript Typecheck (`npm run typecheck`):**
@@ -231,4 +250,154 @@ Toàn bộ các finding P1 và P2 từ Independent Review đã được khắc p
 - **Path Fidelity:** Bảo toàn nguyên vẹn ký tự đường dẫn, loại bỏ `.trim()`, đồng bộ hoàn toàn giữa helper và Docker CLI subprocess.
 - **Fail Closed:** Cleanup container thất bại lập tức báo lỗi, không nuốt lỗi; atomic inspect phân biệt rạch ròi ERROR (status 3) và FOREIGN (status 1).
 
-**TRẠNG THÁI CUỐI CÙNG: ROUND 5.4 — PASS**
+**TRẠNG THÁI KẾT LUẬN ROUND 5.4: PASS**
+
+---
+
+## 6. Round 5.4.1 Addendum: Tích Hợp Toàn Bộ Docker Safety Tests vào CI & Đồng Bộ Số Liệu Nghiệm Thu
+
+### 6.1. Finding Ban Đầu Từ Independent Review Round 5.4
+
+Sau khi hoàn thành Round 5.4, Independent Review đã phát hiện 2 vấn đề còn tồn tại:
+1. **Docker Safety Tests chưa được tích hợp vào Automated CI:**
+   - File `tests/backup/docker-safety.test.mjs` (chứa 40 kịch bản kiểm tra an toàn Docker nghiêm ngặt cho Finding P1 và Finding P2) đã được tạo và kiểm thử thành công ở môi trường local nhưng chưa được cấu hình vào script `test:backup:helpers` trong `package.json` và workflow `.github/workflows/backup-restore-ci.yml`.
+   - Kết quả là pipeline GitHub Actions CI không thực thi file test này; các bài test an toàn Docker chưa xuất hiện trong log CI.
+2. **Sai lệch số liệu kiểm thử trong Báo cáo Round 5.4:**
+   - Báo cáo Round 5.4 ghi nhận `354 PASS / 0 FAIL / 2 SKIPPED`.
+   - Independent Review đối chiếu log GitHub Actions run `41631914883` và ghi nhận thực tế: `356 tests / 355 PASS / 0 FAIL / 1 SKIPPED`.
+
+### 6.2. Phân Tích Nguyên Nhân Kỹ Thuật (Root Cause)
+
+1. **Nguyên nhân Docker Safety Tests chưa chạy trên CI:**
+   - Trong Round 5.4, quá trình xác minh cục bộ được thực hiện bằng lệnh chạy trực tiếp `node --test tests/backup/docker-safety.test.mjs`. Kỹ sư tập trung vào việc hoàn thiện mock environment và assertion cho 40 test cases, dẫn đến sơ suất bỏ sót việc cập nhật file `tests/backup/docker-safety.test.mjs` vào script `"test:backup:helpers"` trong `package.json`.
+   - Vì workflow `.github/workflows/backup-restore-ci.yml` gọi `npm run test:backup:helpers`, các test an toàn Docker không được kích hoạt tự động trên GitHub Actions runner.
+2. **Nguyên nhân sai lệch số liệu:**
+   - Trong script `tests/backup/owner-map.test.mjs`, test tích hợp `Live PostgreSQL 17 integration: full plan -> apply -> verify cycle with live catalog and rollback` yêu cầu cờ `BACKUP_REQUIRE_LIVE_PG17=1` và container PostgreSQL 17 đang hoạt động.
+   - Khi chạy ở máy local mà không bật container PG17 qua `./scripts/backup/ci-postgres17.sh start`, test live PG17 bị skip có điều kiện cùng với 1 test negative fixture (`nonexistent-container-xyz`), dẫn đến kết quả local là `354 PASS / 2 SKIPPED`. Số liệu này đã bị ghi nhầm vào báo cáo thay vì lấy từ log của GitHub Actions CI runner (nơi container PG17 được khởi động tự động nên test live PG17 đạt PASS, cho ra kết quả `355 PASS / 1 SKIPPED`).
+
+### 6.3. Chi Tiết Khắc Phục CI (Scope Compliance)
+
+Tuân thủ nghiêm ngặt nguyên tắc **FIX ONLY — NO REFACTOR — NO LOGIC CHANGE**, chỉ thực hiện chỉnh sửa cấu hình CI trong phạm vi cho phép:
+
+1. **Cập nhật `package.json`:**
+   - Thêm `tests/backup/docker-safety.test.mjs` vào cuối script `"test:backup:helpers"`:
+     ```json
+     "test:backup:helpers": "node --test tests/backup/aesgcm-stream.test.mjs tests/backup/offsite-bundle.test.mjs tests/backup/validate-bundle-index-contract.test.mjs tests/backup/storage-export.test.mjs tests/backup/storage-restore.test.mjs tests/backup/owner-map.test.mjs tests/backup/docker-safety.test.mjs"
+     ```
+   - Bảo toàn nguyên vẹn 6 file test helper #1–#6 hiện hành, không gây trùng lặp hay làm mất test.
+2. **Cập nhật `.github/workflows/backup-restore-ci.yml`:**
+   - Bổ sung `node --check tests/backup/docker-safety.test.mjs` và thêm file này vào lệnh `./node_modules/.bin/eslint ...` trong step `Syntax & Lint Check`.
+   - Bổ sung `package.json` vào `pull_request.paths` để đảm bảo mọi thay đổi test runner script đều kích hoạt pipeline kiểm tra.
+3. **Workflow Verify (`.github/workflows/verify.yml`):**
+   - Không cần chỉnh sửa workflow Verify vì step 42 gọi `npm run test:backup` (vốn bao gồm `npm run test:backup:helpers`), do đó tự động kế thừa việc thực thi `tests/backup/docker-safety.test.mjs`.
+4. **Bảo toàn Implementation Logic:**
+   - Không sửa bất kỳ dòng code logic nào trong `scripts/backup/ci-postgres17.sh`, `scripts/backup/owner-map.mjs`, `scripts/backup/storage-restore.mjs`, hay `scripts/backup/storage-export.mjs`.
+   - Không sửa đổi hoặc làm yếu bất kỳ test assertion nào trong `tests/backup/docker-safety.test.mjs` hay `tests/backup/owner-map.test.mjs`.
+
+### 6.4. Các Test Suites & Danh Mục Test Cases Đã Thực Thi
+
+Toàn bộ 40 kịch bản kiểm tra an toàn Docker đã được thực thi và PASS 100% trên cả runner local và GitHub Actions CI:
+
+| Nhóm | Số Test | Nội dung kiểm định an toàn | Kết quả |
+| :--- | :---: | :--- | :---: |
+| **Nhóm A (A01–A10)** | 10 | Docker Precedence: `DOCKER_CONTEXT > DOCKER_HOST > default context`. Xác nhận chặn tuyệt đối khi context/host trỏ remote endpoint. | **10/10 PASS** |
+| **Nhóm B (B01–B13)** | 13 | `DOCKER_CONFIG` Path Fidelity: Bảo toàn nguyên vẹn khoảng trắng đầu/cuối (B11, B12), cấm fallback sang `HOME/.docker` khi `DOCKER_CONFIG` không tồn tại (B06, B13), phân giải context metadata độc lập giữa các config directories. | **13/13 PASS** |
+| **Nhóm C (C01–C13)** | 13 | 4-State Verification & Cleanup Failure: Kiểm tra nhãn sở hữu nguyên tử 1 lệnh (C12), xử lý nghiêm ngặt lỗi xóa container `docker rm -f` (`failRm=true`, C11, C13), phân biệt rạch ròi giữa ERROR (status 3), NOT_FOUND (status 2), FOREIGN (status 1) và OWNED (status 0). | **13/13 PASS** |
+| **Nhóm D (D01–D04)** | 4 | Zero Remote Daemon Side Effects: Đảm bảo zero invocation tới `docker pull`, `docker run`, `docker exec`, `docker rm`, `docker logs` khi context trỏ remote endpoint. | **4/4 PASS** |
+
+Cùng toàn bộ các helper suites cũ:
+- **Helper #1** (`tests/backup/aesgcm-stream.test.mjs`): Authenticated streaming encryption, AAD validation, MAC verification.
+- **Helper #2** (`tests/backup/offsite-bundle.test.mjs`): Deterministic offsite bundle builder & SHA-256 canonicalization.
+- **Helper #3** (`tests/backup/validate-bundle-index-contract.test.mjs`): Schema contract compliance & adversary fixtures.
+- **Helper #4** (`tests/backup/storage-export.test.mjs` & `tests/backup/safe-extract-storage.test.py`): Bucket export & safe tar extraction.
+- **Helper #5** (`tests/backup/storage-restore.test.mjs`): Idempotent Supabase storage restore & bucket parity validation.
+- **Helper #6** (`tests/backup/owner-map.test.mjs`): PostgreSQL catalog query grammar verifier, Docker config isolation, và Live PostgreSQL 17 plan/apply/verify/rollback integration.
+
+### 6.5. Bằng Chứng GitHub Actions CI Thực Tế (Commit `9ade320`)
+
+Bằng chứng truy xuất trực tiếp từ GitHub Actions runs cho commit `9ade32015abf957157d62790969fff8efedc877e`:
+
+#### 1. Backup & Restore CI (PR) — Run ID: [41635994421](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635994421)
+- **Status:** Completed (SUCCESS) — Thời gian chạy: 2m18s
+- **Commit:** `9ade32015abf957157d62790969fff8efedc877e`
+- **Syntax & Lint Check:**
+  ```text
+  node --check tests/backup/docker-safety.test.mjs
+  ./node_modules/.bin/eslint scripts/backup/owner-map.mjs tests/backup/owner-map.test.mjs scripts/backup/storage-restore.mjs tests/backup/storage-restore.test.mjs tests/backup/docker-safety.test.mjs
+  ```
+  -> **PASS (0 errors)**.
+- **Start disposable PostgreSQL 17 (Helper #6):**
+  -> Khởi động thành công PostgreSQL 17.11 container (`crm-dumpcheck-test`), disposable marker verified.
+- **Run JavaScript Helpers Tests (Helpers #1-#6 & Docker Safety):**
+  ```text
+  > node --test tests/backup/aesgcm-stream.test.mjs tests/backup/offsite-bundle.test.mjs tests/backup/validate-bundle-index-contract.test.mjs tests/backup/storage-export.test.mjs tests/backup/storage-restore.test.mjs tests/backup/owner-map.test.mjs tests/backup/docker-safety.test.mjs
+  ...
+  ok 9 - A01: DOCKER_CONTEXT remote + DOCKER_HOST local -> FAIL CLOSED
+  ok 19 - B01: HOME local, DOCKER_CONFIG remote -> FAIL CLOSED
+  ok 31 - B13: DOCKER_CONFIG chỉ định đường dẫn không tồn tại -> FAIL CLOSED, không fallback sang HOME
+  ok 32 - C01: Container thực sự không tồn tại -> NOT_FOUND (status 2)
+  ok 42 - C11: Container tồn tại, đủ 3 ownership labels, failRm=true -> stop thất bại, không in Removed, không báo SUCCESS giả
+  ok 43 - C12: Container tồn tại nhưng label inspect thất bại -> ERROR (status 3), không phân loại nhầm FOREIGN (status 1)
+  ok 44 - C13: start khi recreate owned container nhưng rm thất bại (failRm=true) -> abort recreate, fail closed
+  ok 48 - D04: Zero daemon side effects when effective context is remote
+  ...
+  ok 112 - Live PostgreSQL 17 integration: full plan -> apply -> verify cycle with live catalog and rollback
+  ...
+  # tests 396
+  # suites 17
+  # pass 395
+  # fail 0
+  # cancelled 0
+  # skipped 1
+  # todo 0
+  # duration_ms 37047.463195
+  ```
+- **Run Python Safe Extract & Runbook Tests (Helper #4):**
+  ```text
+  Ran 71 tests in 4.435s — OK
+  Ran 4 tests in 0.483s — OK
+  Tổng: 75/75 PASS
+  ```
+- **Teardown disposable PostgreSQL 17 & Check whitespace errors:**
+  - Teardown: `Removed disposable PostgreSQL container 'crm-dumpcheck-test'.` (SUCCESS)
+  - `git diff --check`: PASS (0 errors)
+
+#### 2. Verify CI (PR) — Run ID: [41635994329](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635994329)
+- **Status:** Completed (SUCCESS) — Thời gian chạy: 12m36s
+- **Commit:** `9ade32015abf957157d62790969fff8efedc877e`
+- **Step 41 (Start disposable PostgreSQL 17):** SUCCESS
+- **Step 42 (Run backup/restore regression tests):**
+  - Thực thi: `npm run test:backup` (bao gồm `test:backup:helpers` và `test:backup:python`)
+  - Kết quả JS: `# tests 396, # pass 395, # fail 0, # skipped 1` (Bao gồm đầy đủ 40/40 tests Docker safety)
+  - Kết quả Python: `Ran 71 tests — OK`, `Ran 4 tests — OK` (Tổng 75 PASS)
+- **Step 44 (Teardown disposable PostgreSQL 17):** SUCCESS
+- **Step 45–52:** CRM tests, typecheck, lint, omnichannel, voice, build, `git diff --check` đều **SUCCESS**.
+
+#### 3. Backup & Restore CI (Push) — Run ID: [41635985777](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/actions/runs/41635985777)
+- **Status:** Completed (SUCCESS)
+- **Commit:** `9ade32015abf957157d62790969fff8efedc877e`
+
+### 6.6. Bảng Đối Chiếu Số Liệu Kiểm Thử Toàn Diện
+
+| Tiêu chí | Round 5.4 (Báo cáo cũ) | Round 5.4 (Log CI `41631914883`) | Round 5.4.1 (Local) | Round 5.4.1 (CI `41635994421` & `41635994329`) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Tổng số JS tests** | 356 | 356 | **396** (+40) | **396** (+40) |
+| **JS PASS** | 354 | 355 | **394** | **395** |
+| **JS FAIL** | 0 | 0 | **0** | **0** |
+| **JS SKIPPED** | 2 | 1 | **2** | **1** |
+| **Test Suites JS** | 17 | 17 | **17** | **17** |
+| **Docker Safety Tests** | *Chỉ chạy local* | *Không có trong CI* | **40/40 PASS** | **40/40 PASS (Trên CI)** |
+| **Live PostgreSQL 17 Integration** | *Bị skip (do chưa bật PG17)* | **PASS** | *Bị skip (chưa bật PG17)* | **PASS (`ok 112`)** |
+| **Negative Fixture (`nonexistent-container-xyz`)** | SKIPPED (Chủ ý) | SKIPPED (Chủ ý) | SKIPPED (Chủ ý) | **SKIPPED (Chủ ý)** |
+| **Python Tests** | 75 PASS | 75 PASS | **75 PASS** | **75 PASS** |
+
+### 6.7. Kết Luận Nghiệm Thu Round 5.4.1
+
+1. **Hoàn tất 100% tích hợp CI:** Toàn bộ 40 test cases của `tests/backup/docker-safety.test.mjs` đã được tích hợp vào automated CI pipeline qua script `test:backup:helpers` và workflow `backup-restore-ci.yml`.
+2. **Khắc phục triệt để sai lệch báo cáo:** Phân tích và làm rõ nguyên nhân số liệu 354 vs 355 PASS trong Round 5.4; cập nhật số liệu mới nhất 396 tests / 395 PASS / 1 SKIPPED trên runner CI có live PostgreSQL 17.
+3. **Bằng chứng GitHub Actions xác thực:** Cả Backup & Restore CI và Verify CI đều đạt **SUCCESS** trên commit `9ade32015abf957157d62790969fff8efedc877e`.
+4. **Không thay đổi logic:** Không sửa logic backup/restore hay Docker safety đã đạt tiêu chuẩn ở Round 5.4.
+
+---
+
+**KẾT LUẬN CUỐI CÙNG: ROUND 5.4.1 — PASS**
