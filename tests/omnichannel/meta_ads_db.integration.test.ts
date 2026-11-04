@@ -343,8 +343,8 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         }
         assert.equal(
             sql(`SELECT count(*) FROM public.customers WHERE company_id=${q(company)};`),
-            '6',
-            'fixture customer + four no-phone leadgen profiles (20001/20002/20003/20005: no identity to dedup by) + ONE phone-owned profile for the four 3000x submissions',
+            '7',
+            'fixture customer + five no-phone leadgen profiles (20001/20002/20003/20005/20006: no identity to dedup by) + ONE phone-owned profile for the four 3000x submissions',
         );
         const phoneTouchpoints = sql(
             `SELECT meta_leadgen_id||'|'||touchpoint_type||'|'||attribution_status||'|'||COALESCE(campaign_name_snapshot,'')||'|'
