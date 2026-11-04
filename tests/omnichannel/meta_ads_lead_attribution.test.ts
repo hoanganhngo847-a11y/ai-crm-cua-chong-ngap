@@ -321,6 +321,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -351,6 +352,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -513,6 +515,7 @@ test('Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and upd
                 p_ad_account_id => 'act_100',
                 p_meta_ad_id => 'ad_berlin_01',
                 p_meta_leadgen_id => 'lg_mapped_01',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_berlin_01","pageId":"page_chd_01","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'UNATTRIBUTED',
                 p_attribution_method => 'AD_LOOKUP'
             );
