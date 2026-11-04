@@ -24,8 +24,7 @@ BEGIN
   FOREACH signature IN ARRAY ARRAY[
     'public.handle_new_user()',
     'public.repair_messenger_external_conversation_id()',
-    'public.seed_du_hoc_messenger_canary()',
-    'public.seed_messenger_pages_canary()'
+    'public.seed_du_hoc_messenger_canary()'
   ] LOOP
     target := to_regprocedure(signature);
     IF target IS NOT NULL THEN
