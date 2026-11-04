@@ -50,6 +50,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
     sql(`CREATE DATABASE ${db};`, 'postgres');
     const original = globalThis.fetch;
     let attributionFault = false, finalizeFault = false, claimFault = false, intakeFault = false;
+    let snapshotAdSetArgument: unknown = undefined;
     let graphCalls = 0;
     let creativeCalls = 0;
     let creativeText = 'Nội dung tại thời điểm tiếp nhận';
@@ -217,6 +218,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
             assert.equal(url.hostname, '127.0.0.1');
             const fn = url.pathname.split('/').at(-1)!;
             const args = JSON.parse(String(init?.body || '{}'));
+            if (fn === 'record_lead_attribution_touchpoint' && args.p_meta_leadgen_id === '20006') {
+                snapshotAdSetArgument = args.p_meta_ad_set_id;
+            }
             if (url.pathname.endsWith('/meta_ads') && (init?.method || 'GET') === 'GET') {
                 assert.equal(url.searchParams.get('company_id'), `eq.${company}`);
                 assert.equal(url.searchParams.get('meta_ad_id'), 'eq.ad_snapshot_1');
@@ -314,6 +318,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(persistedCreative.intake.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.captureTiming, 'AT_LEAD_INTAKE');
+        assert.equal(snapshotAdSetArgument, 'adset_snapshot', 'missing Lead Details Ad Set is recovered from the verified Meta creative response');
         assert.ok(persistedCreative.touchpoint.capturedAt, 'snapshot capture time is persisted');
         assert.equal(persistedCreative.adset_id, 'adset_snapshot', 'Ad Set ID is resolved from the synced Ad object');
 
