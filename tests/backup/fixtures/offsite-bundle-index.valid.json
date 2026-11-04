@@ -1,0 +1,106 @@
+{
+  "format": "crm-offsite-bundle-index/v1",
+  "backupId": "20261101T120000Z-11111111-2222-3333-4444-555555555555",
+  "projectRef": "qmhfmgkymjgoevwmkidm",
+  "createdAt": "2026-11-01T12:05:00.000Z",
+  "destination": {
+    "provider": "supabase-storage",
+    "destinationId": "staging-cold-backup-worm",
+    "bucket": "cold-backups-staging",
+    "prefix": "20261101T120000Z-11111111-2222-3333-4444-555555555555"
+  },
+  "artifacts": [
+    {
+      "path": "db/app.dump.aesgcm",
+      "kind": "encrypted_artifact",
+      "ciphertextSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 1048576,
+      "nonceHex": "0123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/db/app.dump.aesgcm",
+        "immutableVersionId": "v1_0123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "sql/fingerprint.sql.aesgcm",
+      "kind": "encrypted_artifact",
+      "ciphertextSha256": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 2048,
+      "nonceHex": "1123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/sql/fingerprint.sql.aesgcm",
+        "immutableVersionId": "v1_1123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "logs/source.stderr.aesgcm",
+      "kind": "encrypted_artifact",
+      "ciphertextSha256": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 4096,
+      "nonceHex": "2123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/logs/source.stderr.aesgcm",
+        "immutableVersionId": "v1_2123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "future-class/custom.bin.aesgcm",
+      "kind": "encrypted_artifact",
+      "ciphertextSha256": "3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 8192,
+      "nonceHex": "3123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/future-class/custom.bin.aesgcm",
+        "immutableVersionId": "v1_3123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "manifest/backup-manifest.json.aesgcm",
+      "kind": "manifest_envelope",
+      "ciphertextSha256": "4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 16384,
+      "nonceHex": "4123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/manifest/backup-manifest.json.aesgcm",
+        "immutableVersionId": "v1_4123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "manifest/SHA256SUMS",
+      "kind": "checksum_file",
+      "ciphertextSha256": "5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 512,
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/manifest/SHA256SUMS",
+        "immutableVersionId": "v1_5123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    },
+    {
+      "path": "closeout/backup-closeout.json.aesgcm",
+      "kind": "closeout_envelope",
+      "ciphertextSha256": "6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ciphertextBytes": 4096,
+      "nonceHex": "6123456789abcdef01234567",
+      "remote": {
+        "objectKey": "20261101T120000Z-11111111-2222-3333-4444-555555555555/closeout/backup-closeout.json.aesgcm",
+        "immutableVersionId": "v1_6123456789abcdef",
+        "retentionUntil": "2027-11-01T12:00:00.000Z"
+      }
+    }
+  ],
+  "storageRecordProof": {
+    "proofBytesBase64": "eyJmb3JtYXQiOiJjcm0tcmVjZWlwdC1zdG9yYWdlLXJlY29yZC1vYmplY3QtcHJvb2YvdjEiLCJzdGF0dXMiOiJ2ZXJpZmllZCJ9",
+    "proofSha256": "cf61ef51f8e872618657eeadd48bb72037d835bcbe21acb21c973fb93e90415e"
+  },
+  "summary": {
+    "totalArtifacts": 7,
+    "encryptedArtifactCount": 6,
+    "totalCiphertextBytes": 1083904
+  }
+}
