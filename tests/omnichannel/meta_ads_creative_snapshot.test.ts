@@ -257,9 +257,9 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
                     ads_context_data: {
                         raw_meta: { campaign_id: 'campaign-raw' },
                         creative_snapshot: {
-                            schemaVersion: 2, status: 'PENDING_SYNC', source: 'NONE',
+                            schemaVersion: 2, status: 'AVAILABLE', source: 'META_MARKETING_API',
                             capturedAt: '2026-11-03T10:00:00.000Z', captureTiming: 'AT_LEAD_INTAKE',
-                            reason: 'AD_NOT_SYNCED', adId: 'ad-backfill', format: 'UNKNOWN',
+                            adId: 'ad-backfill', format: 'IMAGE',
                             primaryTexts: [], headlines: [], descriptions: [],
                             carouselAssets: [], imageAssets: [], videoAssets: [],
                         },
