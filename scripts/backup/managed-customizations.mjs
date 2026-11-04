@@ -219,6 +219,9 @@ WITH items AS (
   UNION ALL
   SELECT 'column-acl', format('%I.%I.%I', n.nspname, c.relname, a.attname),
          jsonb_build_object(
+           'schema', n.nspname,
+           'table', c.relname,
+           'column', a.attname,
            'aclIsNull', a.attacl IS NULL,
            'aclRaw', a.attacl::text,
            'entries', coalesce((
