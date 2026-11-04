@@ -27,6 +27,7 @@ import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
 import { inspectTransactionEnvelope, sqlSha256 } from '../../scripts/meta-ads/ledger-readiness';
 import {
+  META_SOURCES,
   buildSelectiveExecutorPackage,
   TARGET_STAGING_PROJECT,
   TARGET_POSTGRES_VERSION,
@@ -134,7 +135,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
       assert.equal(reg.source_commit, CURRENT_SOURCE_COMMIT);
       assert.equal(reg.execution_status, 'COMPLETED');
       assert.equal(reg.reconciled_to_canonical, false);
-      assert.equal(reg.sources.length, 5);
+      assert.equal(reg.sources.length, META_SOURCES.length);
 
       // Verify all 5 Meta tables exist
       const metaTables = runSql(
@@ -597,7 +598,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
 
       // Canonical ledger now contains 21 + 5 = 26 records
       const ledgerCount = runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;');
-      assert.equal(ledgerCount, '26', 'Canonical ledger must contain exactly 26 records (21 historical + 5 reconciled Meta migrations)');
+      assert.equal(ledgerCount, String(21 + META_SOURCES.length), 'Canonical ledger must contain the historical prefix plus every reconciled Meta migration');
 
       // Registry reflects reconciled state
       const reg = JSON.parse(
@@ -646,7 +647,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
 
       // Step 5: Verification of invariants post-reconciliation
       // 1. Ledger count is 21 + 5 + 1 = 27
-      assert.equal(runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;'), '27');
+      assert.equal(runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;'), String(22 + META_SOURCES.length));
 
       // 2. Pre-existing business data created during selective period is 100% intact
       const leadCheck = JSON.parse(

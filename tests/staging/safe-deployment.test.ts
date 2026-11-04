@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
 import { inspectTransactionEnvelope, sqlSha256 } from '../../scripts/meta-ads/ledger-readiness';
 import { assertAllowedCatalogDiff, catalogObjects, legacyObservableProbe } from './meta-21-compatibility';
+import { META_SOURCES } from '../../scripts/meta-ads/selective-executor';
 import { prepareMeta21Package } from '../../scripts/meta-ads/prepare-21-prefix-package';
 
 const output = 'docs/evidence/meta-ads-safe-deployment';
@@ -224,8 +225,7 @@ test('exact staging prefix, full-chain regression, isolated Meta catalog and ato
         const ledger=sql(databases[2],'SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m;');
         const beforeMeta=catalogObjects(sql,databases[2]);
         const legacyBefore=legacyObservableProbe(sql,databases[2]);
-        const metaFiles:string[]=inventory.migrations.map((m:{file:string})=>m.file).filter((f:string)=>/^20261030\d{6}_meta_ads_/.test(f));
-        assert.equal(metaFiles.length,5);
+        const metaFiles = META_SOURCES;
         const metaRuns=metaFiles.map(file=>apply(databases[2],file));
         const afterMeta=catalogObjects(sql,databases[2]);
         const catalogDiff=assertAllowedCatalogDiff(beforeMeta,afterMeta);
@@ -277,6 +277,7 @@ test('exact staging prefix, full-chain regression, isolated Meta catalog and ato
                 after:c.after?{kind:c.after.kind,owner:c.after.owner,sha256:sqlSha256(c.after.definition)}:null})),
             legacyBefore,legacyAfter,ledgerUnchanged:true,fullChainSharedDefinitionsUnchanged:true,meta:result.tests.C.meta,pair:result.tests.C.pair},null,2)+'\n');
         const pack=prepareMeta21Package();
+        if(process.env.META_21_EVIDENCE==='1') writeFileSync('docs/evidence/meta-ads-21-prefix/package.json', JSON.stringify(pack.manifest,null,2)+'\n');
         assert.deepEqual(JSON.parse(readFileSync('docs/evidence/meta-ads-21-prefix/package.json','utf8')),pack.manifest,'the checked-in package hashes and expected object list must remain current');
         assert.equal(pack.manifest.executionAuthorized,false);
         assert.equal(pack.manifest.status,'BLOCKED','local compatibility cannot authorize unsupported hosted ledger integration');
@@ -287,6 +288,7 @@ test('exact staging prefix, full-chain regression, isolated Meta catalog and ato
             const recorded=historical.migration_history[index];
             sql(databases[3],`INSERT INTO supabase_migrations.schema_migrations VALUES(${q(recorded.version)},${q(recorded.name)},ARRAY[${q(readFileSync('supabase/migrations/'+file,'utf8'))}]);`);
         }
+        sql(databases[3], "INSERT INTO public.companies(id,name,status) VALUES ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','Existing bundle fixture','ACTIVE');");
         // Both precondition drift and a forbidden postcondition change must
         // roll back before any Meta DDL can become durable.
         const failedBundle=(source:string,code:string)=>{
@@ -304,6 +306,8 @@ test('exact staging prefix, full-chain regression, isolated Meta catalog and ato
         sql(databases[3],'DROP FUNCTION public.unapproved_probe();');
         failedBundle(pack.sql.replace(pack.postconditions,"CREATE FUNCTION public.unapproved_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1';\n"+pack.postconditions),'META_21_POST_SCHEMA_OR_ACL_MISMATCH');
         assert.equal(sql(databases[3],"SELECT to_regprocedure('public.unapproved_probe()') IS NULL;"),'t');
+        failedBundle(pack.sql.replace(pack.postconditions, "UPDATE public.companies SET name='UNAPPROVED DATA CHANGE' WHERE id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';\n"+pack.postconditions),'META_21_EXISTING_ROWS_CHANGED');
+        assert.equal(sql(databases[3], "SELECT name FROM public.companies WHERE id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';"), 'Existing bundle fixture', 'unexpected DML rolls back with the entire release');
         assert.match(sql(databases[3],pack.sql),/META_21_POSTCONDITIONS_VERIFIED/);
         assert.deepEqual(catalog(databases[3]),result.tests.C.catalog);
         assert.equal(sql(databases[3],'SELECT count(*) FROM supabase_migrations.schema_migrations;'),'21');

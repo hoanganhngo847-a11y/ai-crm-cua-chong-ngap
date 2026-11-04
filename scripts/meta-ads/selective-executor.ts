@@ -26,9 +26,14 @@ export const META_SOURCES = [
   '20261030110000_meta_ads_final_remediation.sql',
   '20261030120000_meta_ads_attribution_rpc_security.sql',
   '20261030130000_meta_ads_phone_duplicate_history.sql',
+  '20261104150000_meta_lead_page_binding_guard.sql',
+  '20261104171905_meta_lead_evidence_conflict_guard.sql',
 ] as const;
 
 export const PINNED_SOURCE_HASHES: Record<string, string> = {
+  '20261104150000_meta_lead_page_binding_guard.sql': '402cb115cfcfce4f76619467fdd4f1a9b80f7142f91d0e3385016c345a46fc9f',
+  '20261104171905_meta_lead_evidence_conflict_guard.sql': '8fd392e3745ead995dda5fd961c71fa85d20761c2b2b544b3ffde27e5d1d900e',
+
   '20261030090000_meta_ads_lead_attribution.sql': 'f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a',
   '20261030100000_meta_ads_hardening.sql': 'e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657',
   '20261030110000_meta_ads_final_remediation.sql': '79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814',
@@ -65,7 +70,7 @@ export function buildSelectiveExecutorPackage(options: SelectiveExecutorOptions 
   const recorded = JSON.parse(readFileSync('docs/evidence/meta-ads-safe-deployment/staging-metadata.json', 'utf8')).data[0].snapshot.migration_history;
   assert.equal(recorded.length, EXPECTED_CANONICAL_LEDGER_COUNT, 'Staging snapshot must have 21 migrations');
 
-  // Verify and parse the 5 Meta sources
+  // Verify and parse every pinned Meta source
   const sources = META_SOURCES.map((file) => {
     const override = options.sourcesOverride?.find((s) => s.file === file);
     const sql = override ? override.sql : readFileSync('supabase/migrations/' + file, 'utf8');
@@ -206,7 +211,7 @@ END $checkpoint$;
     if (idx === 2 && simulatedError === 'SOURCE_3') {
       sourcesSql += `\n-- SIMULATED ERROR IN SOURCE 3\nDO $$ BEGIN RAISE EXCEPTION 'SIMULATED_FAILURE_IN_MIGRATION_3'; END $$;\n`;
     }
-    sourcesSql += `\n-- SOURCE [${idx + 1}/5] ${s.file} (SHA256 ${s.sha256})\n${s.body}\n`;
+    sourcesSql += `\n-- SOURCE [${idx + 1}/${sources.length}] ${s.file} (SHA256 ${s.sha256})\n${s.body}\n`;
   }
 
   // 3. Registry & Fencing DDL in the SAME transaction
@@ -620,7 +625,7 @@ export function buildCanonicalReconciliationPackage(options: {
   const targetProject = options.targetProjectRef ?? TARGET_STAGING_PROJECT;
   const releaseId = options.releaseId ?? 'meta-ads-20261031-r1';
 
-  // Read the 5 canonical source files and verify their pinned hashes
+  // Read all canonical source files and verify their pinned hashes
   const metaFiles = META_SOURCES.map((file) => {
     const sql = readFileSync('supabase/migrations/' + file, 'utf8');
     const sha256 = sqlSha256(sql);
@@ -673,7 +678,7 @@ SET reconciled_to_canonical = true,
     reconciled_at = clock_timestamp(),
     recovery_evidence = recovery_evidence || jsonb_build_object(
       'reconciled', true,
-      'reconciliation_canonical_migrations_added', 5,
+      'reconciliation_canonical_migrations_added', ${metaFiles.length},
       'reconciliation_timestamp', clock_timestamp()
     )
 WHERE release_id = ${quote(releaseId)};
@@ -682,7 +687,7 @@ WHERE release_id = ${quote(releaseId)};
 DROP TRIGGER IF EXISTS trg_guard_selective_release_ledger ON supabase_migrations.schema_migrations;
 DROP FUNCTION IF EXISTS supabase_migrations.guard_selective_release_ledger();
 
--- 3. Record the 5 already-executed Meta migrations into canonical schema_migrations
+-- 3. Record all already-executed Meta migrations into canonical schema_migrations
 ${metaFiles
   .map(
     (m) => `
@@ -693,9 +698,9 @@ VALUES (${quote(m.version)}, ${quote(m.name)}, ARRAY[${quote(m.sql)}]);`
 
 DO $reconcile_postflight$
 BEGIN
-  -- Verify ledger now contains 21 + 5 = 26 records
-  IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> (${EXPECTED_CANONICAL_LEDGER_COUNT} + 5) THEN
-    RAISE EXCEPTION 'RECONCILIATION_POST_COUNT_MISMATCH: Expected 26 canonical ledger records, found %',
+  -- Verify the ledger contains the original prefix plus every reconciled source
+  IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> (${EXPECTED_CANONICAL_LEDGER_COUNT} + ${metaFiles.length}) THEN
+    RAISE EXCEPTION 'RECONCILIATION_POST_COUNT_MISMATCH: Expected ${EXPECTED_CANONICAL_LEDGER_COUNT + metaFiles.length} canonical ledger records, found %',
       (SELECT count(*) FROM supabase_migrations.schema_migrations);
   END IF;
 END $reconcile_postflight$;

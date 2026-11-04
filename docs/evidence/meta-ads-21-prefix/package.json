@@ -32,11 +32,21 @@
       "file": "sources/20261030130000_meta_ads_phone_duplicate_history.sql",
       "repositorySource": "supabase/migrations/20261030130000_meta_ads_phone_duplicate_history.sql",
       "sha256": "54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770"
+    },
+    {
+      "file": "sources/20261104150000_meta_lead_page_binding_guard.sql",
+      "repositorySource": "supabase/migrations/20261104150000_meta_lead_page_binding_guard.sql",
+      "sha256": "402cb115cfcfce4f76619467fdd4f1a9b80f7142f91d0e3385016c345a46fc9f"
+    },
+    {
+      "file": "sources/20261104171905_meta_lead_evidence_conflict_guard.sql",
+      "repositorySource": "supabase/migrations/20261104171905_meta_lead_evidence_conflict_guard.sql",
+      "sha256": "8fd392e3745ead995dda5fd961c71fa85d20761c2b2b544b3ffde27e5d1d900e"
     }
   ],
-  "bundleSha256": "a04862ba94fdeab74f9c13ac96168ec75a7658b3e4413daceb6f4dd76bf4484b",
-  "preconditionsSha256": "cd6f3880097287a175f45e33e63c3a0ad6847d8d7231d103e9ecef3d566b7f01",
-  "postconditionsSha256": "0606bec69d643a4c160842bfdaf31f5599b7e9afee9bf02d3d052e402b924ebb",
+  "bundleSha256": "a89a9bb2bad6037011b5a31e9a487dd31630c262bfe89c69a28afaec995576eb",
+  "preconditionsSha256": "27834a8650050e43722af2fdaef5ad881f53df415e47f371fd13ec6905fcd9cc",
+  "postconditionsSha256": "4ad4e228d9639fe995c6f750cf515668dcb6cc169a053c676f329004113e70aa",
   "expectedObjects": [
     "column:private.meta_ad_account_tokens.ad_account_id",
     "column:private.meta_ad_account_tokens.company_id",

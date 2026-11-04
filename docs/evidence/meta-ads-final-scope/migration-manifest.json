@@ -752,6 +752,18 @@
       "sha256": "54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770",
       "statementCount": 26,
       "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261104150000_meta_lead_page_binding_guard.sql",
+      "sha256": "402cb115cfcfce4f76619467fdd4f1a9b80f7142f91d0e3385016c345a46fc9f",
+      "statementCount": 12,
+      "transactionMode": "OUTER"
+    },
+    {
+      "file": "20261104171905_meta_lead_evidence_conflict_guard.sql",
+      "sha256": "8fd392e3745ead995dda5fd961c71fa85d20761c2b2b544b3ffde27e5d1d900e",
+      "statementCount": 12,
+      "transactionMode": "OUTER"
     }
   ],
   "originalMetaSources": [
