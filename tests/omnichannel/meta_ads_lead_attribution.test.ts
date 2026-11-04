@@ -1414,6 +1414,26 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
         assert.equal((wrongPageAfterRetry.rows[0] as any).attribution_status, 'PENDING_SYNC');
         assert.equal((wrongPageAfterRetry.rows[0] as any).meta_campaign_id, null);
 
+        // 20E: A creative response without a Page identifier is also insufficient proof.
+        const missingPage = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                p_company => '${companyId}'::uuid,
+                p_channel => 'FACEBOOK_LEAD_ADS',
+                p_page_id => '1026991374010112',
+                p_meta_ad_id => 'ad_mapped_100',
+                p_meta_leadgen_id => 'lg_missing_page_100',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_mapped_100"}}'::jsonb
+            );
+        `);
+        const missingPageTouchpointId = (missingPage.rows[0] as any).record_lead_attribution_touchpoint;
+        const missingPageRow = await db.query(`
+            SELECT attribution_status, meta_campaign_id, campaign_name_snapshot
+            FROM public.lead_attribution_touchpoints WHERE id = '${missingPageTouchpointId}';
+        `);
+        assert.equal((missingPageRow.rows[0] as any).attribution_status, 'PENDING_SYNC');
+        assert.equal((missingPageRow.rows[0] as any).meta_campaign_id, null);
+        assert.equal((missingPageRow.rows[0] as any).campaign_name_snapshot, null);
+
         const custAfter = await db.query(`
             SELECT first_campaign_name, latest_campaign_name FROM public.customers WHERE id = '${customerId}';
         `);
