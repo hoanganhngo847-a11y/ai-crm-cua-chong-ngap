@@ -170,6 +170,8 @@ function isMetaAdCreativeSnapshot(value: unknown): value is MetaAdCreativeSnapsh
     const snapshot = value as Record<string, unknown>;
     return (snapshot.schemaVersion === 1 || snapshot.schemaVersion === 2)
         && typeof snapshot.adId === 'string'
+        && (snapshot.pageId === undefined || typeof snapshot.pageId === 'string')
+        && (snapshot.pageIdConflict === undefined || typeof snapshot.pageIdConflict === 'boolean')
         && typeof snapshot.capturedAt === 'string'
         && ['AVAILABLE', 'PARTIAL', 'PENDING_SYNC', 'UNAVAILABLE'].includes(String(snapshot.status))
         && ['META_MARKETING_API', 'NONE'].includes(String(snapshot.source))
