@@ -129,17 +129,63 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
       };
 
       assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString:
-              'postgresql://postgres:secret@db.wrongproject.supabase.co:5432/postgres?sslmode=require',
+        () => executeSelectiveRelease({
+          connectionString: 'postgresql://postgres:secret@db.wrongproject.supabase.co:5432/postgres?sslmode=require',
+          runPsql: unusedRunner,
+        }),
+        /TARGET_PROJECT_MISMATCH/
+      );
+      assert.throws(
+        () => executeSelectiveRelease({
+          connectionString: 'postgresql://postgres.' + TARGET_STAGING_PROJECT + ':secret@attacker.example.com:6543/postgres?sslmode=require',
+          runPsql: unusedRunner,
+        }),
+        /TARGET_VERIFICATION_FAILED/
+      );
+      assert.throws(
+        () => executeSelectiveRelease({
+          connectionString: 'postgresql://postgres.' + TARGET_STAGING_PROJECT + ':secret@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require',
+          runPsql: unusedRunner,
+        }),
+        /HOSTED_EXECUTION_BLOCKED/
+      );
+      assert.throws(
+        () => executeSelectiveRelease({
+          connectionString: 'postgresql://postgres:secret@localhost:5432/postgres?sslmode=disable',
+          runPsql: unusedRunner,
+        }),
+        /TARGET_PROJECT_MISMATCH/
+      );
+      assert.equal(calls, 0, 'No query may run after failed target validation or hosted approval');
+    });
 
-            runPsql: unusedRunner,
-          }),
+    await t.test('2. Hosted execution remains blocked without signed approval and physical evidence', () => {
+      let calls = 0;
+      const unusedRunner: PsqlRunner = () => {
+        calls++;
+        return versionResult();
+      };
+      const hostedConn =
+        'postgresql://postgres:secret@db.' +
+        TARGET_STAGING_PROJECT +
+        '.supabase.co:5432/postgres?sslmode=require';
+
+      assert.throws(
+        () => executeSelectiveRelease({ connectionString: hostedConn, runPsql: unusedRunner }),
         /HOSTED_EXECUTION_BLOCKED: A cryptographically signed approval artifact \(crm-owner-approval\/v1\) is strictly required for hosted execution\./
       );
 
-      // 3. Forged / untrusted signature on artifact fails
+      // Legacy boolean flags are ignored and cannot satisfy the signed artifact barrier.
+      assert.throws(
+        () => executeSelectiveRelease(({
+          connectionString: hostedConn,
+          ownerApproved: true,
+          backupRestoreVerified: true,
+          runPsql: unusedRunner,
+        } as any)),
+        /HOSTED_EXECUTION_BLOCKED: A cryptographically signed approval artifact/
+      );
+
       const fakeArtifact: SignedApprovalArtifact = {
         format: 'crm-owner-approval/v1',
         payload: {
@@ -151,7 +197,7 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           releasePackageDigest: '0'.repeat(64),
           backupManifestDigest: '1'.repeat(64),
           backupEvidenceDigest: '2'.repeat(64),
-          approvedWriteGroups: ['crm_leads'],
+          approvedWriteGroups: ['META_ADS_LEAD_ATTRIBUTION'],
           issuedAt: new Date(Date.now() - 60_000).toISOString(),
           expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
           approvalReference: 'ref-forged',
@@ -160,60 +206,53 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
         signature: '0'.repeat(128),
       };
 
-      // 4. Missing backup manifest file blocks
       assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString: hostedConn,
-            approvalArtifact: fakeArtifact,
-            runPsql: unusedRunner,
-          }),
+        () => executeSelectiveRelease({
+          connectionString: hostedConn,
+          approvalArtifact: fakeArtifact,
+          runPsql: unusedRunner,
+        }),
         /HOSTED_EXECUTION_BLOCKED: Actual verified backup manifest/
       );
 
-      // 5. Missing backup evidence file blocks
       const tmpManifest = join(tmpdir(), `test-manifest-${randomUUID()}.json`);
       writeFileSync(tmpManifest, '{"test": 1}');
       try {
         assert.throws(
-          () =>
-            executeSelectiveRelease({
-              connectionString: hostedConn,
-              approvalArtifact: fakeArtifact,
-              backupManifestPath: tmpManifest,
-              runPsql: unusedRunner,
-            }),
+          () => executeSelectiveRelease({
+            connectionString: hostedConn,
+            approvalArtifact: fakeArtifact,
+            backupManifestPath: tmpManifest,
+            runPsql: unusedRunner,
+          }),
           /HOSTED_EXECUTION_BLOCKED: Actual verified backup\/restore evidence/
         );
       } finally {
         try { unlinkSync(tmpManifest); } catch {}
       }
 
-      // 6. Overriding trusted root public key in hosted mode fails closed
       const otherKeypair = generateKeyPairSync('ed25519');
       const otherPubPem = otherKeypair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
       const tmpEv = join(tmpdir(), `test-ev-${randomUUID()}.json`);
-      writeFileSync(tmpEv, '{"test": 2}');
       const tmpMf = join(tmpdir(), `test-mf-${randomUUID()}.json`);
+      writeFileSync(tmpEv, '{"test": 2}');
       writeFileSync(tmpMf, '{"test": 1}');
       try {
         assert.throws(
-          () =>
-            executeSelectiveRelease({
-              connectionString: hostedConn,
-              approvalArtifact: fakeArtifact,
-              backupManifestPath: tmpMf,
-              backupEvidencePath: tmpEv,
-              trustedRootPublicKey: otherPubPem,
-              runPsql: unusedRunner,
-            }),
+          () => executeSelectiveRelease({
+            connectionString: hostedConn,
+            approvalArtifact: fakeArtifact,
+            backupManifestPath: tmpMf,
+            backupEvidencePath: tmpEv,
+            trustedRootPublicKey: otherPubPem,
+            runPsql: unusedRunner,
+          }),
           /HOSTED_EXECUTION_BLOCKED: Overriding the trusted owner root public key is forbidden in hosted execution\./
         );
       } finally {
         try { unlinkSync(tmpEv); } catch {}
         try { unlinkSync(tmpMf); } catch {}
       }
-
       assert.equal(calls, 0, 'No query may run after failed target validation or hosted approval');
     });
 
