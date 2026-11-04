@@ -8,7 +8,21 @@ import {
   CATALOG_COMPARISON_FORMAT,
   extractOwnerMappingDict,
   compareCatalogDetails,
+  validateCatalogSchema,
+  compareStrings,
 } from '../../scripts/backup/catalog-compare.mjs';
+
+function makeCanonicalCatalog(overrides = {}) {
+  return {
+    indexes: [],
+    constraints: [],
+    routines: [],
+    sequences: [],
+    relationComments: [],
+    columnComments: [],
+    ...overrides,
+  };
+}
 
 async function createTempDir(prefix = 'catalog-comp-test-') {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -60,7 +74,7 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('identical source and target returns PASSED with 0 discrepancies', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       indexes: [
         { schema: 'public', table: 'customers', name: 'customers_pkey', definition: 'CREATE UNIQUE INDEX...', valid: true, ready: true, live: true, unique: true, primary: true },
       ],
@@ -76,7 +90,10 @@ test('catalog-compare helper suite', async (t) => {
       relationComments: [
         { schema: 'public', relation: 'customers', comment: 'Customer records' },
       ],
-    };
+      columnComments: [
+        { schema: 'public', relation: 'customers', column: 'id', comment: 'Customer ID' },
+      ],
+    });
 
     const target = JSON.parse(JSON.stringify(source));
     const ownerMap = { postgres: 'postgres' };
@@ -88,17 +105,17 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('normalizes owner using approved owner-map dictionary', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       routines: [
         { schema: 'public', identity: 'public.my_routine()', definition: 'CREATE FUNCTION...', owner: 'source_role', securityDefiner: false, config: null, acl: null, language: 'sql', comment: null },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       routines: [
         { schema: 'public', identity: 'public.my_routine()', definition: 'CREATE FUNCTION...', owner: 'target_role', securityDefiner: false, config: null, acl: null, language: 'sql', comment: null },
       ],
-    };
+    });
 
     // Case 1: Owner map approves source_role -> target_role
     const reportPass = compareCatalogDetails(source, target, { source_role: 'target_role' });
@@ -113,23 +130,23 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('detects index invalidity and sequence is_called mismatch', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', valid: true, ready: true },
+        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: true, ready: true },
       ],
       sequences: [
         { schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: true },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', valid: false, ready: true },
+        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: false, ready: true },
       ],
       sequences: [
         { schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: false },
       ],
-    };
+    });
 
     const report = compareCatalogDetails(source, target, {});
     assert.equal(report.status, 'BLOCKED');
@@ -139,23 +156,23 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('detects all index flags (live, unique, primary) and constraint flags (deferrable, initiallyDeferred)', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', valid: true, ready: true, live: true, unique: true, primary: true },
+        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: true, ready: true, live: true, unique: true, primary: true },
       ],
       constraints: [
-        { schema: 'public', table: 'tbl', name: 'chk', validated: true, deferrable: false, initiallyDeferred: false },
+        { schema: 'public', table: 'tbl', name: 'chk', definition: 'CHECK...', validated: true, deferrable: false, initiallyDeferred: false },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', valid: true, ready: true, live: false, unique: false, primary: false },
+        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: true, ready: true, live: false, unique: false, primary: false },
       ],
       constraints: [
-        { schema: 'public', table: 'tbl', name: 'chk', validated: true, deferrable: true, initiallyDeferred: true },
+        { schema: 'public', table: 'tbl', name: 'chk', definition: 'CHECK...', validated: true, deferrable: true, initiallyDeferred: true },
       ],
-    };
+    });
 
     const report = compareCatalogDetails(source, target, {});
     assert.equal(report.status, 'BLOCKED');
@@ -169,7 +186,7 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('detects routine attribute mismatches (securityDefiner, config, acl, language, comment) and handles null-vs-present', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       routines: [
         {
           schema: 'public',
@@ -183,9 +200,9 @@ test('catalog-compare helper suite', async (t) => {
           comment: null, // null in source
         },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       routines: [
         {
           schema: 'public',
@@ -199,7 +216,7 @@ test('catalog-compare helper suite', async (t) => {
           comment: 'has a comment now', // null-vs-present mismatch!
         },
       ],
-    };
+    });
 
     const report = compareCatalogDetails(source, target, {});
     assert.equal(report.status, 'BLOCKED');
@@ -212,7 +229,7 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('detects missing, extra, and mismatched columnComments and extra relationComments', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       relationComments: [
         { schema: 'public', relation: 'leads', comment: 'Lead records' },
       ],
@@ -220,9 +237,9 @@ test('catalog-compare helper suite', async (t) => {
         { schema: 'public', relation: 'leads', column: 'phone', comment: 'Phone number' },
         { schema: 'public', relation: 'leads', column: 'email', comment: 'Email address' },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       relationComments: [
         { schema: 'public', relation: 'leads', comment: 'Lead records' },
         { schema: 'public', relation: 'extra_table', comment: 'Surprise table' }, // Extra relation comment
@@ -232,7 +249,7 @@ test('catalog-compare helper suite', async (t) => {
         // email is missing in target
         { schema: 'public', relation: 'leads', column: 'extra_col', comment: 'Surprise column' }, // Extra column comment
       ],
-    };
+    });
 
     const report = compareCatalogDetails(source, target, {});
     assert.equal(report.status, 'BLOCKED');
@@ -250,17 +267,17 @@ test('catalog-compare helper suite', async (t) => {
   });
 
   await t.test('detects missing and extra objects in target', () => {
-    const source = {
+    const source = makeCanonicalCatalog({
       constraints: [
-        { schema: 'public', table: 't1', name: 'c1', validated: true },
+        { schema: 'public', table: 't1', name: 'c1', definition: 'CHECK (1=1)', validated: true },
       ],
-    };
+    });
 
-    const target = {
+    const target = makeCanonicalCatalog({
       constraints: [
-        { schema: 'public', table: 't2', name: 'c2', validated: true },
+        { schema: 'public', table: 't2', name: 'c2', definition: 'CHECK (2=2)', validated: true },
       ],
-    };
+    });
 
     const report = compareCatalogDetails(source, target, {});
     assert.equal(report.status, 'BLOCKED');
@@ -278,12 +295,7 @@ test('catalog-compare helper suite', async (t) => {
       const ownerPath = path.join(tempDir, 'owner-map.json');
       const reportPath = path.join(tempDir, 'report.json');
 
-      const data = {
-        indexes: [],
-        constraints: [],
-        routines: [],
-        sequences: [],
-      };
+      const data = makeCanonicalCatalog();
       await fsp.writeFile(srcPath, JSON.stringify(data));
       await fsp.writeFile(tgtPath, JSON.stringify(data));
       await fsp.writeFile(ownerPath, JSON.stringify({}));
@@ -307,6 +319,94 @@ test('catalog-compare helper suite', async (t) => {
     } finally {
       await removeTempDir(tempDir);
     }
+  });
+
+  await t.test('Finding 4 regression: strict catalog schema validation and duplicate detection', () => {
+    const valid = makeCanonicalCatalog();
+
+    // 1. Root not an object
+    assert.throws(() => validateCatalogSchema(null, 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    assert.throws(() => validateCatalogSchema('string', 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    assert.throws(() => validateCatalogSchema([], 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 2. Missing required section
+    const missingIndexes = { ...valid };
+    delete missingIndexes.indexes;
+    assert.throws(() => validateCatalogSchema(missingIndexes, 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 3. Null instead of array
+    const nullRoutines = { ...valid, routines: null };
+    assert.throws(() => validateCatalogSchema(nullRoutines, 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 4. Source and target both missing a section must fail closed, NOT pass
+    const bothMissing = { ...valid };
+    delete bothMissing.sequences;
+    assert.throws(() => compareCatalogDetails(bothMissing, bothMissing, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 5. Target has object with invalid schema
+    const malformedIndex = makeCanonicalCatalog({
+      indexes: [{ schema: 'public', table: 123, name: 'idx' }],
+    });
+    assert.throws(() => validateCatalogSchema(malformedIndex, 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 6. Routine missing definition
+    const missingDefRoutine = makeCanonicalCatalog({
+      routines: [{ identity: 'public.foo()' }],
+    });
+    assert.throws(() => validateCatalogSchema(missingDefRoutine, 'Test'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+
+    // 7. Duplicate index identity
+    const dupIndex = makeCanonicalCatalog({
+      indexes: [
+        { schema: 'public', table: 'users', name: 'users_idx', definition: '...' },
+        { schema: 'public', table: 'users', name: 'users_idx', definition: '...' },
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupIndex, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
+    // 8. Duplicate constraint identity
+    const dupConstraint = makeCanonicalCatalog({
+      constraints: [
+        { schema: 'public', table: 'users', name: 'users_pkey', definition: '...' },
+        { schema: 'public', table: 'users', name: 'users_pkey', definition: '...' },
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupConstraint, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
+    // 9. Duplicate routine identity
+    const dupRoutine = makeCanonicalCatalog({
+      routines: [
+        { identity: 'public.do_work()', definition: '...' },
+        { identity: 'public.do_work()', definition: '...' },
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupRoutine, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
+    // 10. Duplicate relation comment
+    const dupRelComment = makeCanonicalCatalog({
+      relationComments: [
+        { schema: 'public', relation: 'users', comment: 'c1' },
+        { schema: 'public', relation: 'users', comment: 'c2' },
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupRelComment, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
+    // 11. Duplicate column comment
+    const dupColComment = makeCanonicalCatalog({
+      columnComments: [
+        { schema: 'public', relation: 'users', column: 'email', comment: 'c1' },
+        { schema: 'public', relation: 'users', column: 'email', comment: 'c2' },
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupColComment, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
+    // 12. compareStrings fails closed on non-string inputs
+    assert.equal(compareStrings(true, {}), false);
+    assert.equal(compareStrings(123, 123), false);
+    assert.equal(compareStrings(null, null), true);
+    assert.equal(compareStrings(undefined, null), true);
+    assert.equal(compareStrings(null, 'abc'), false);
+    assert.equal(compareStrings(' hello ', 'hello'), true);
   });
 
   await t.test('CLI rejects duplicate JSON keys (parseJsonStrict)', async () => {

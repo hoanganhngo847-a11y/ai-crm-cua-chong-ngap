@@ -19,6 +19,7 @@
  */
 
 import fsp from 'node:fs/promises';
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
@@ -249,6 +250,117 @@ FROM items;
 // Classifier (Strict Fail-Closed)
 // -----------------------------------------------------------------------------
 
+const BASELINE_PATH = new URL('./platform-acl-baseline.json', import.meta.url);
+let platformAclBaseline = null;
+
+export function getPlatformAclBaseline() {
+  if (!platformAclBaseline) {
+    platformAclBaseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
+  }
+  return platformAclBaseline;
+}
+
+export function canonicalEntryKey(entry) {
+  const grantee = entry?.grantee ?? '';
+  const grantor = entry?.grantor ?? '';
+  const priv = entry?.privilegeType ?? '';
+  const grantable = Boolean(entry?.isGrantable);
+  return `${grantee}|${grantor}|${priv}|${grantable}`;
+}
+
+/**
+ * Classifies relation-acl and column-acl using exact per-object platform baseline.
+ * Fails closed on any unauthorized permission, unexpected grant, missing baseline grant,
+ * grant option tampering, non-null column ACL, or unknown relation.
+ */
+export function classifyAclCustomization(item, projectAllowlist = new Set()) {
+  const { kind, identity, details } = item;
+  if (!details || typeof details !== 'object') {
+    return { classification: 'unexplained', reason: 'Malformed ACL details' };
+  }
+
+  // Check allowlist
+  if (projectAllowlist.has(identity) || projectAllowlist.has(`${kind}:${identity}`)) {
+    return { classification: 'project-owned', reason: 'Matched project allowlist' };
+  }
+
+  if (kind === 'column-acl') {
+    // In standard Supabase PostgreSQL baseline, NO column in auth or storage has an explicit ACL (attacl is NULL).
+    // Platform default state is: aclIsNull === true && (!entries || entries.length === 0).
+    const aclIsNull = details.aclIsNull === true;
+    const entries = Array.isArray(details.entries) ? details.entries : [];
+    if (aclIsNull && entries.length === 0) {
+      return { classification: 'platform-default', reason: 'Standard platform column ACL (attacl IS NULL)' };
+    }
+    return {
+      classification: 'unexplained',
+      reason: `Custom column-level ACL present on ${identity} (aclIsNull=${details.aclIsNull}, entries=${entries.length})`,
+    };
+  }
+
+  if (kind === 'relation-acl') {
+    const baseline = getPlatformAclBaseline();
+    const baselineObj = baseline[identity];
+    if (!baselineObj) {
+      return {
+        classification: 'unexplained',
+        reason: `Relation ${identity} is not in platform ACL baseline`,
+      };
+    }
+
+    const actualIsNull = Boolean(details.aclIsNull);
+    const baselineIsNull = Boolean(baselineObj.aclIsNull);
+    if (actualIsNull !== baselineIsNull) {
+      return {
+        classification: 'unexplained',
+        reason: `ACL nullability mismatch on ${identity}: expected aclIsNull=${baselineIsNull}, got ${actualIsNull}`,
+      };
+    }
+
+    const actualEntries = Array.isArray(details.entries) ? details.entries : [];
+    const baselineEntries = Array.isArray(baselineObj.entries) ? baselineObj.entries : [];
+
+    const baselineSet = new Set(baselineEntries.map(canonicalEntryKey));
+    const actualSet = new Set(actualEntries.map(canonicalEntryKey));
+
+    if (actualSet.size !== actualEntries.length) {
+      return {
+        classification: 'unexplained',
+        reason: `Duplicate ACL entries detected on ${identity}`,
+      };
+    }
+
+    // Check for unexpected extra entries (e.g. DELETE granted to authenticated)
+    for (const entry of actualEntries) {
+      const key = canonicalEntryKey(entry);
+      if (!baselineSet.has(key)) {
+        return {
+          classification: 'unexplained',
+          reason: `Unexpected ACL entry '${key}' on ${identity}`,
+        };
+      }
+    }
+
+    // Check for missing baseline entries
+    for (const entry of baselineEntries) {
+      const key = canonicalEntryKey(entry);
+      if (!actualSet.has(key)) {
+        return {
+          classification: 'unexplained',
+          reason: `Missing expected baseline ACL entry '${key}' on ${identity}`,
+        };
+      }
+    }
+
+    return {
+      classification: 'platform-default',
+      reason: 'Exact match with verified platform relation ACL baseline',
+    };
+  }
+
+  return { classification: 'unexplained', reason: `Unknown ACL kind ${kind}` };
+}
+
 /**
  * Classifies an object in managed-customizations.json as:
  * - 'platform-default': Standard Supabase Auth/Storage built-in object
@@ -346,35 +458,7 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
 
     case 'relation-acl':
     case 'column-acl': {
-      const parts = identity.split('.');
-      const schema = parts[0];
-      const table = parts[1];
-      const isPlatformTable =
-        (schema === 'auth' && PLATFORM_AUTH_TABLES.has(table)) ||
-        (schema === 'storage' && PLATFORM_STORAGE_TABLES.has(table));
-
-      if (!isPlatformTable) {
-        return { classification: 'unexplained', reason: `ACL on non-platform relation ${identity}` };
-      }
-
-      const entries = Array.isArray(details.entries)
-        ? details.entries
-        : (Array.isArray(details.acl) ? details.acl : []);
-      for (const entry of entries) {
-        if (!APPROVED_PLATFORM_ROLES.has(entry.grantee)) {
-          return {
-            classification: 'unexplained',
-            reason: `Unapproved non-platform grantee '${entry.grantee}' on ${identity}`,
-          };
-        }
-        if (!APPROVED_PLATFORM_ROLES.has(entry.grantor)) {
-          return {
-            classification: 'unexplained',
-            reason: `Unapproved non-platform grantor '${entry.grantor}' on ${identity}`,
-          };
-        }
-      }
-      return { classification: 'platform-default', reason: 'Standard platform ACL grant on built-in relation' };
+      return classifyAclCustomization(item, projectAllowlist);
     }
   }
 
@@ -618,7 +702,130 @@ export async function handleApplyCommand({ planPath, approvedSha256, target, exe
   return { status: 'APPLIED', planSha256: actualHash };
 }
 
-export async function handleVerifyCommand({ sourcePath, target, reportPath, targetInventoryPath = null, querySql = null }) {
+export function compareStringsStrict(v1, v2) {
+  const isNullish1 = v1 === null || v1 === undefined;
+  const isNullish2 = v2 === null || v2 === undefined;
+  if (isNullish1 && isNullish2) return true;
+  if (isNullish1 !== isNullish2) return false;
+  return String(v1).trim() === String(v2).trim();
+}
+
+export function normalizeRolesArray(roles) {
+  if (!roles) return [];
+  if (Array.isArray(roles)) {
+    return roles.map(r => String(r).toLowerCase()).sort();
+  }
+  return [String(roles).toLowerCase()];
+}
+
+export function normalizeConfigArray(config) {
+  if (!config) return [];
+  if (Array.isArray(config)) {
+    return config.map(c => String(c).trim()).sort();
+  }
+  return [String(config).trim()];
+}
+
+/**
+ * Performs deep, field-by-field verification of a project-owned customization object
+ * against its restored target counterpart.
+ */
+export function deepCompareCustomizationItem(sourceItem, targetItem) {
+  const discrepancies = [];
+  const { kind, identity } = sourceItem;
+  const s = sourceItem.details || {};
+  const t = targetItem.details || {};
+
+  const check = (field, sVal, tVal, reason, customEqual = null) => {
+    const isEq = customEqual ? customEqual(sVal, tVal) : compareStringsStrict(sVal, tVal);
+    if (!isEq) {
+      discrepancies.push({
+        identity,
+        kind,
+        field,
+        sourceValue: sVal ?? null,
+        targetValue: tVal ?? null,
+        reason,
+      });
+    }
+  };
+
+  const checkBool = (field, sVal, tVal, reason) => {
+    const b1 = Boolean(sVal);
+    const b2 = Boolean(tVal);
+    if (b1 !== b2) {
+      discrepancies.push({
+        identity,
+        kind,
+        field,
+        sourceValue: b1,
+        targetValue: b2,
+        reason,
+      });
+    }
+  };
+
+  switch (kind) {
+    case 'policy': {
+      check('permissive', s.permissive, t.permissive, 'Policy permissive mode mismatch', (a, b) => (a ?? '').toUpperCase() === (b ?? '').toUpperCase());
+      check('roles', s.roles, t.roles, 'Policy roles mismatch', (a, b) => JSON.stringify(normalizeRolesArray(a)) === JSON.stringify(normalizeRolesArray(b)));
+      check('command', s.command, t.command, 'Policy command mismatch', (a, b) => (a ?? '').toUpperCase() === (b ?? '').toUpperCase());
+      check('using', s.using, t.using, 'Policy using expression mismatch');
+      check('withCheck', s.withCheck, t.withCheck, 'Policy withCheck expression mismatch');
+      break;
+    }
+
+    case 'index': {
+      check('definition', s.definition, t.definition, 'Index definition mismatch');
+      checkBool('valid', s.valid, t.valid, 'Target index validity mismatch');
+      checkBool('ready', s.ready, t.ready, 'Target index ready state mismatch');
+      checkBool('live', s.live, t.live, 'Target index live state mismatch');
+      checkBool('unique', s.unique, t.unique, 'Target index unique flag mismatch');
+      checkBool('primary', s.primary, t.primary, 'Target index primary flag mismatch');
+      break;
+    }
+
+    case 'trigger': {
+      check('definition', s.definition, t.definition, 'Trigger definition mismatch');
+      check('enabled', s.enabled ?? 'O', t.enabled ?? 'O', 'Trigger enabled state mismatch');
+      check('functionIdentity', s.functionIdentity, t.functionIdentity, 'Trigger function identity mismatch');
+      check('functionDefinition', s.functionDefinition, t.functionDefinition, 'Trigger function definition mismatch');
+      check('functionOwner', s.functionOwner, t.functionOwner, 'Trigger function owner mismatch');
+      checkBool('securityDefiner', s.securityDefiner, t.securityDefiner, 'Trigger function SECURITY DEFINER mismatch');
+      check('functionConfig', s.functionConfig, t.functionConfig, 'Trigger function config mismatch', (a, b) => JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b)));
+      check('functionAcl', s.functionAcl, t.functionAcl, 'Trigger function ACL mismatch');
+      break;
+    }
+
+    case 'routine':
+    case 'procedure': {
+      check('definition', s.definition, t.definition, `${kind} definition mismatch`);
+      check('owner', s.owner, t.owner, `${kind} owner mismatch`);
+      checkBool('securityDefiner', s.securityDefiner, t.securityDefiner, `${kind} SECURITY DEFINER mismatch`);
+      check('config', s.config, t.config, `${kind} config mismatch`, (a, b) => JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b)));
+      check('acl', s.acl, t.acl, `${kind} ACL mismatch`);
+      check('language', s.language, t.language, `${kind} language mismatch`);
+      check('comment', s.comment, t.comment, `${kind} comment mismatch`);
+      break;
+    }
+
+    default: {
+      discrepancies.push({
+        identity,
+        kind,
+        field: 'kind_support',
+        sourceValue: kind,
+        targetValue: kind,
+        reason: `Customization kind '${kind}' is not supported for verification`,
+      });
+      break;
+    }
+  }
+
+  return discrepancies;
+}
+
+export async function handleVerifyCommand({ sourcePath, target, reportPath, targetInventoryPath = null, querySql = null, projectAllowlist = [] }) {
   installSignalHandlers();
 
   if (!sourcePath || typeof sourcePath !== 'string') {
@@ -636,9 +843,15 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
   const rawSource = await fsp.readFile(sourcePath, 'utf8');
   const sourceItems = parseJsonStrict(rawSource, 'INVALID_MANAGED_CUSTOMIZATIONS', 'Source managed customizations');
 
+  if (!Array.isArray(sourceItems)) {
+    fail('INVALID_MANAGED_CUSTOMIZATIONS', 'Source managed customizations must be an array');
+  }
+
+  const allowlistSet = new Set(projectAllowlist);
+
   // Verify project-owned objects
   const projectOwned = sourceItems.filter(item => {
-    const res = classifyManagedCustomization(item);
+    const res = classifyManagedCustomization(item, allowlistSet);
     return res.classification === 'project-owned';
   });
 
@@ -686,8 +899,10 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
     fail('TARGET_EVIDENCE_MISSING', 'Verification requires verified target inventory data array');
   }
 
-  // Check that all project-owned items exist in target and match attributes
+  // 1. Check that all project-owned items exist in target and match all attributes exactly
   const targetMap = new Map(targetItems.map(item => [`${item.kind}:${item.identity}`, item]));
+  const sourceProjectKeySet = new Set(projectOwned.map(item => `${item.kind}:${item.identity}`));
+
   for (const item of projectOwned) {
     const key = `${item.kind}:${item.identity}`;
     const targetObj = targetMap.get(key);
@@ -703,30 +918,35 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
       continue;
     }
 
-    // Deep compare details for policy, index, trigger, routine
-    if (item.kind === 'policy') {
-      const s = item.details || {};
-      const t = targetObj.details || {};
-      if ((s.command ?? '') !== (t.command ?? '')) {
-        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'command', sourceValue: s.command, targetValue: t.command, reason: 'Policy command mismatch' });
+    // Deep compare all required attributes for this object kind
+    const itemDiscrepancies = deepCompareCustomizationItem(item, targetObj);
+    discrepancies.push(...itemDiscrepancies);
+  }
+
+  // 2. Check for extra unexpected project-owned customizations or unexplained objects on target
+  for (const targetItem of targetItems) {
+    const tKey = `${targetItem.kind}:${targetItem.identity}`;
+    const tClass = classifyManagedCustomization(targetItem, allowlistSet);
+    if (tClass.classification === 'project-owned') {
+      if (!sourceProjectKeySet.has(tKey)) {
+        discrepancies.push({
+          identity: targetItem.identity,
+          kind: targetItem.kind,
+          field: 'extra_object',
+          sourceValue: 'missing',
+          targetValue: 'present',
+          reason: `Extra unexpected project-owned ${targetItem.kind} found on target`,
+        });
       }
-      if ((s.using ?? '') !== (t.using ?? '')) {
-        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'using', sourceValue: s.using, targetValue: t.using, reason: 'Policy using expression mismatch' });
-      }
-    } else if (item.kind === 'index') {
-      const t = targetObj.details || {};
-      if (t.valid !== true) {
-        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'valid', sourceValue: true, targetValue: t.valid, reason: 'Target index is invalid' });
-      }
-      if (t.ready !== true) {
-        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'ready', sourceValue: true, targetValue: t.ready, reason: 'Target index is not ready' });
-      }
-    } else if (item.kind === 'trigger') {
-      const s = item.details || {};
-      const t = targetObj.details || {};
-      if ((s.enabled ?? 'O') !== (t.enabled ?? 'O')) {
-        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'enabled', sourceValue: s.enabled, targetValue: t.enabled, reason: 'Trigger enabled state mismatch' });
-      }
+    } else if (tClass.classification === 'unexplained') {
+      discrepancies.push({
+        identity: targetItem.identity,
+        kind: targetItem.kind,
+        field: 'unexplained_object',
+        sourceValue: 'absent',
+        targetValue: 'unexplained',
+        reason: `Target contains unexplained object: ${tClass.reason}`,
+      });
     }
   }
 

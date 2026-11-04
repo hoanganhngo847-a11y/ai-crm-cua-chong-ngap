@@ -1,0 +1,5135 @@
+{
+  "auth.users": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.sessions": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.instances": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.flow_state": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.identities": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.scim_users": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.buckets": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.objects": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": true,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.mfa_factors": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.scim_tokens": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.sso_domains": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.oauth_clients": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.sso_providers": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.migrations": {
+    "entries": [],
+    "aclIsNull": true
+  },
+  "auth.mfa_amr_claims": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.mfa_challenges": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.oauth_consents": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.refresh_tokens": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.saml_providers": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.one_time_tokens": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.audit_log_entries": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.saml_relay_states": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.schema_migrations": {
+    "entries": [
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": true,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.iceberg_tables": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.vector_indexes": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.mfa_recovery_codes": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.buckets_vectors": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.oauth_client_states": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.webauthn_challenges": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.oauth_authorizations": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.webauthn_credentials": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.buckets_analytics": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.refresh_tokens_id_seq": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "USAGE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "USAGE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "USAGE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.iceberg_namespaces": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.custom_oauth_providers": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "auth.mfa_recovery_code_sets": {
+    "entries": [
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "dashboard_user",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "postgres",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_auth_admin",
+        "grantor": "supabase_auth_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.s3_multipart_uploads": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  },
+  "storage.s3_multipart_uploads_parts": {
+    "entries": [
+      {
+        "grantee": "anon",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "authenticated",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "service_role",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "DELETE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "INSERT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "MAINTAIN"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "REFERENCES"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "SELECT"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRIGGER"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "TRUNCATE"
+      },
+      {
+        "grantee": "supabase_storage_admin",
+        "grantor": "supabase_storage_admin",
+        "isGrantable": false,
+        "privilegeType": "UPDATE"
+      }
+    ],
+    "aclIsNull": false
+  }
+}

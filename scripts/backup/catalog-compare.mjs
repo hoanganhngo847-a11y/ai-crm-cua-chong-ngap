@@ -34,6 +34,137 @@ import {
 
 export const CATALOG_COMPARISON_FORMAT = 'crm-catalog-comparison/v1';
 
+export const REQUIRED_CATALOG_SECTIONS = Object.freeze([
+  'indexes',
+  'constraints',
+  'routines',
+  'sequences',
+  'relationComments',
+  'columnComments',
+]);
+
+// -----------------------------------------------------------------------------
+// Catalog Schema & Input Validation (Strict Fail-Closed)
+// -----------------------------------------------------------------------------
+
+export function validateCatalogSchema(catalog, label = 'Catalog') {
+  if (typeof catalog !== 'object' || catalog === null || Array.isArray(catalog)) {
+    fail('INVALID_CATALOG_SCHEMA', `${label} root must be an object`);
+  }
+
+  for (const section of REQUIRED_CATALOG_SECTIONS) {
+    if (!Array.isArray(catalog[section])) {
+      fail('INVALID_CATALOG_SCHEMA', `${label} is missing required array section: '${section}'`);
+    }
+  }
+
+  // 1. indexes
+  const seenIndexes = new Set();
+  for (let i = 0; i < catalog.indexes.length; i++) {
+    const idx = catalog.indexes[i];
+    if (!idx || typeof idx !== 'object' || typeof idx.schema !== 'string' || typeof idx.table !== 'string' || typeof idx.name !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} index at position ${i} has invalid schema (requires string schema, table, name)`);
+    }
+    const key = `${idx.schema}.${idx.table}.${idx.name}`;
+    if (seenIndexes.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate index: '${key}'`);
+    }
+    seenIndexes.add(key);
+  }
+
+  // 2. constraints
+  const seenConstraints = new Set();
+  for (let i = 0; i < catalog.constraints.length; i++) {
+    const con = catalog.constraints[i];
+    if (!con || typeof con !== 'object' || typeof con.schema !== 'string' || typeof con.table !== 'string' || typeof con.name !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} constraint at position ${i} has invalid schema (requires string schema, table, name)`);
+    }
+    const key = `${con.schema}.${con.table}.${con.name}`;
+    if (seenConstraints.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate constraint: '${key}'`);
+    }
+    seenConstraints.add(key);
+  }
+
+  // 3. routines
+  const seenRoutines = new Set();
+  for (let i = 0; i < catalog.routines.length; i++) {
+    const r = catalog.routines[i];
+    if (!r || typeof r !== 'object' || typeof r.identity !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} routine at position ${i} has invalid schema (requires string identity)`);
+    }
+    if (r.definition === undefined || r.definition === null || typeof r.definition !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} routine '${r.identity}' is missing string definition`);
+    }
+    const key = r.identity;
+    if (seenRoutines.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate routine: '${key}'`);
+    }
+    seenRoutines.add(key);
+  }
+
+  // 4. sequences
+  const seenSeqs = new Set();
+  for (let i = 0; i < catalog.sequences.length; i++) {
+    const seq = catalog.sequences[i];
+    if (!seq || typeof seq !== 'object' || typeof seq.schema_name !== 'string' || typeof seq.sequence_name !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} sequence at position ${i} has invalid schema (requires string schema_name, sequence_name)`);
+    }
+    const key = `${seq.schema_name}.${seq.sequence_name}`;
+    if (seenSeqs.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate sequence: '${key}'`);
+    }
+    seenSeqs.add(key);
+  }
+
+  // 5. relationComments
+  const seenRelComments = new Set();
+  for (let i = 0; i < catalog.relationComments.length; i++) {
+    const rc = catalog.relationComments[i];
+    if (!rc || typeof rc !== 'object' || typeof rc.schema !== 'string' || typeof rc.relation !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} relationComment at position ${i} has invalid schema (requires string schema, relation)`);
+    }
+    const key = `${rc.schema}.${rc.relation}`;
+    if (seenRelComments.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate relationComment: '${key}'`);
+    }
+    seenRelComments.add(key);
+  }
+
+  // 6. columnComments
+  const seenColComments = new Set();
+  for (let i = 0; i < catalog.columnComments.length; i++) {
+    const cc = catalog.columnComments[i];
+    if (!cc || typeof cc !== 'object' || typeof cc.schema !== 'string' || typeof cc.relation !== 'string' || typeof cc.column !== 'string') {
+      fail('INVALID_CATALOG_SCHEMA', `${label} columnComment at position ${i} has invalid schema (requires string schema, relation, column)`);
+    }
+    const key = `${cc.schema}.${cc.relation}.${cc.column}`;
+    if (seenColComments.has(key)) {
+      fail('DUPLICATE_CATALOG_ENTRY', `${label} contains duplicate columnComment: '${key}'`);
+    }
+    seenColComments.add(key);
+  }
+}
+
+/**
+ * Strict string comparator:
+ * - Both null/undefined: true
+ * - One null/undefined and other not: false
+ * - Either non-string: false (fails closed, never coerces non-strings to null)
+ * - Both strings: trimmed equality
+ */
+export function compareStrings(val1, val2) {
+  const isNullish1 = val1 === null || val1 === undefined;
+  const isNullish2 = val2 === null || val2 === undefined;
+  if (isNullish1 && isNullish2) return true;
+  if (isNullish1 !== isNullish2) return false;
+
+  if (typeof val1 !== 'string' || typeof val2 !== 'string') {
+    return false;
+  }
+  return val1.trim() === val2.trim();
+}
+
 // -----------------------------------------------------------------------------
 // Helper: Extract Owner Map Dictionary
 // -----------------------------------------------------------------------------
@@ -82,6 +213,10 @@ export function extractOwnerMappingDict(ownerMapJson) {
 // -----------------------------------------------------------------------------
 
 export function compareCatalogDetails(source, target, ownerMapDict) {
+  // Strict schema validation: both catalogs must be objects and contain all required sections with valid schemas
+  validateCatalogSchema(source, 'Source catalog');
+  validateCatalogSchema(target, 'Target catalog');
+
   const discrepancies = [];
 
   // Summary counters
@@ -94,16 +229,9 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     columnComments: { sourceCount: 0, targetCount: 0, matchedCount: 0, discrepancyCount: 0 },
   };
 
-  // Helper for string comparison (handles null/undefined vs string)
-  const compareStrings = (val1, val2) => {
-    const s1 = typeof val1 === 'string' ? val1.trim() : null;
-    const s2 = typeof val2 === 'string' ? val2.trim() : null;
-    return s1 === s2;
-  };
-
   // 1. Compare Indexes
-  const sourceIndexes = Array.isArray(source.indexes) ? source.indexes : [];
-  const targetIndexes = Array.isArray(target.indexes) ? target.indexes : [];
+  const sourceIndexes = source.indexes;
+  const targetIndexes = target.indexes;
   summary.indexes.sourceCount = sourceIndexes.length;
   summary.indexes.targetCount = targetIndexes.length;
 
@@ -222,8 +350,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
   }
 
   // 2. Compare Constraints
-  const sourceConstraints = Array.isArray(source.constraints) ? source.constraints : [];
-  const targetConstraints = Array.isArray(target.constraints) ? target.constraints : [];
+  const sourceConstraints = source.constraints;
+  const targetConstraints = target.constraints;
   summary.constraints.sourceCount = sourceConstraints.length;
   summary.constraints.targetCount = targetConstraints.length;
 
@@ -319,8 +447,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
   }
 
   // 3. Compare Routines (Functions & Procedures)
-  const sourceRoutines = Array.isArray(source.routines) ? source.routines : [];
-  const targetRoutines = Array.isArray(target.routines) ? target.routines : [];
+  const sourceRoutines = source.routines;
+  const targetRoutines = target.routines;
   summary.routines.sourceCount = sourceRoutines.length;
   summary.routines.targetCount = targetRoutines.length;
 
@@ -463,8 +591,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
   }
 
   // 4. Compare Sequences
-  const sourceSequences = Array.isArray(source.sequences) ? source.sequences : [];
-  const targetSequences = Array.isArray(target.sequences) ? target.sequences : [];
+  const sourceSequences = source.sequences;
+  const targetSequences = target.sequences;
   summary.sequences.sourceCount = sourceSequences.length;
   summary.sequences.targetCount = targetSequences.length;
 
@@ -539,8 +667,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
   }
 
   // 5. Compare Relation Comments
-  const sourceRelComments = Array.isArray(source.relationComments) ? source.relationComments : [];
-  const targetRelComments = Array.isArray(target.relationComments) ? target.relationComments : [];
+  const sourceRelComments = source.relationComments;
+  const targetRelComments = target.relationComments;
   summary.relationComments.sourceCount = sourceRelComments.length;
   summary.relationComments.targetCount = targetRelComments.length;
 
@@ -595,8 +723,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
   }
 
   // 6. Compare Column Comments
-  const sourceColComments = Array.isArray(source.columnComments) ? source.columnComments : [];
-  const targetColComments = Array.isArray(target.columnComments) ? target.columnComments : [];
+  const sourceColComments = source.columnComments;
+  const targetColComments = target.columnComments;
   summary.columnComments.sourceCount = sourceColComments.length;
   summary.columnComments.targetCount = targetColComments.length;
 

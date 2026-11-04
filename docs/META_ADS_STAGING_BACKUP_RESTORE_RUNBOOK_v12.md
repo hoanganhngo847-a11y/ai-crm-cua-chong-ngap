@@ -10,7 +10,9 @@
 > **v12 changes:** makes every prerequisite path command substitution explicitly fail closed; checks `find` exit status before interpreting its output; enforces the complete six-entry closeout directory including rejection of directories, FIFOs and other non-regular entries; and validates that `SHA256SUMS` contains exactly five unique approved payload paths before checksum verification. These are documentation/specification changes only; helper and provider behavior remains unproven.
 
 Date: 2026-11-01, Asia/Ho_Chi_Minh. Revision: 12. Source branch: `meta_ads_integration`.
-Source commit reviewed for this runbook: `63710e6`. Staging project:
+Audit baseline commit: `0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f`.
+Immutable snapshot commit: `e51a5989143582af0885ba5ee26644a68b388995`.
+Historical review commit reference: `63710e6` (superseded by audit baseline `0d21bb8` and ledger snapshot `e51a598`). Staging project:
 `qmhfmgkymjgoevwmkidm` (`ai-crm-meta-staging`). PostgreSQL baseline: **17.11**.
 PR [#139](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139)
 must remain **open and unmerged**. Production endpoints, credentials, data and
@@ -191,7 +193,7 @@ Custody rules:
 ## 4. Approval gates (all required before B0)
 
 - [ ] **G1 — Scope:** owner confirms staging project `qmhfmgkymjgoevwmkidm`,
-  source commit `63710e6`, artifact set and exclusion of Production.
+  provenance chain with audit baseline commit `0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f` and immutable snapshot commit `e51a5989143582af0885ba5ee26644a68b388995`, artifact set and exclusion of Production.
 - [ ] **G2 — Window:** maintenance window, write fence, worker/webhook/cron
   pause and external-send fence approved. The owner also signs an ordered
   `approved-write-groups` source record naming every group to re-enable, the
@@ -1732,7 +1734,9 @@ manifest. Example shape (one artifact shown):
     "projectRef": "qmhfmgkymjgoevwmkidm",
     "environment": "staging",
     "branch": "meta_ads_integration",
-    "commitPrefixObserved": "63710e6",
+    "auditBaselineCommit": "0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f",
+    "snapshotCommit": "e51a5989143582af0885ba5ee26644a68b388995",
+    "historicalReviewCommit": "63710e6",
     "commitFullSha": "<full 40-character SHA captured at execution>",
     "serverVersion": "17.11",
     "dumpToolVersion": "17.11"
@@ -3865,7 +3869,7 @@ decrypted values.
 
 ## 1. Identity
 - Source project: qmhfmgkymjgoevwmkidm (staging)
-- Source branch/commit: meta_ads_integration / prefix 63710e6 / full SHA:
+- Source branch/commit: meta_ads_integration / audit baseline 0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f / snapshot e51a5989143582af0885ba5ee26644a68b388995 / current execution SHA:
 - Backup ID / checkpoint UTC:
 - Backup owner / operator:
 - Recovery owner:

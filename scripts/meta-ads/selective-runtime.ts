@@ -8,8 +8,14 @@
  * Hosted execution is blocked until backup/restore evidence and explicit
  * Project Owner approval are supplied by the operator.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHmac, timingSafeEqual, verify } from 'node:crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   buildSelectiveExecutorPackage,
   evaluateReleaseProbe,
@@ -46,6 +52,215 @@ export type PsqlRunner = (
   sql: string,
   mode: PsqlMode
 ) => PsqlRunResult;
+
+export interface OwnerApprovalPayload {
+  projectRef: string;
+  releaseId: string;
+  sourceCommit: string;
+  snapshotCommit: string;
+  migrationHashes: Record<string, string>;
+  releasePackageDigest: string;
+  backupManifestDigest: string;
+  backupEvidenceDigest: string;
+  approvedWriteGroups: string[];
+  issuedAt: string;
+  expiresAt: string;
+  approvalReference: string;
+}
+
+export interface SignedApprovalArtifact {
+  format: 'crm-owner-approval/v1';
+  payload: OwnerApprovalPayload;
+  algorithm: 'ed25519' | 'rsa-sha256';
+  signature: string;
+}
+
+export const TRUSTED_OWNER_ROOT_PUB_PATH = path.resolve(__dirname, 'trusted-owner-root.pub');
+
+export function loadTrustedOwnerRootPublicKey(customPath?: string): string {
+  const rootPath =
+    customPath ||
+    process.env.META_ADS_TRUSTED_OWNER_ROOT_PUBKEY_PATH ||
+    TRUSTED_OWNER_ROOT_PUB_PATH;
+  if (!fs.existsSync(rootPath)) {
+    throw new Error(
+      `HOSTED_EXECUTION_BLOCKED: Trusted owner root public key file not found at ${rootPath}`
+    );
+  }
+  return fs.readFileSync(rootPath, 'utf8').trim();
+}
+
+export function canonicalizeApprovalPayload(payload: OwnerApprovalPayload): string {
+  const sortObject = (obj: unknown): unknown => {
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+    if (Array.isArray(obj)) {
+      return obj.map(sortObject);
+    }
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(obj as Record<string, unknown>).sort()) {
+      sorted[key] = sortObject((obj as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  };
+  return JSON.stringify(sortObject(payload));
+}
+
+export function verifyArtifactSignature(params: {
+  payloadCanonicalString: string;
+  algorithm: 'ed25519' | 'rsa-sha256';
+  signature: string;
+  trustedPublicKeyPem: string;
+}): boolean {
+  const { payloadCanonicalString, algorithm, signature, trustedPublicKeyPem } = params;
+  if (!payloadCanonicalString || !algorithm || !signature || !trustedPublicKeyPem) {
+    return false;
+  }
+
+  try {
+    const isHex = /^[0-9a-fA-F]+$/.test(signature) && signature.length % 2 === 0;
+    const sigBuffer = Buffer.from(signature, isHex ? 'hex' : 'base64');
+    const dataBuffer = Buffer.from(payloadCanonicalString, 'utf8');
+
+    if (algorithm === 'ed25519') {
+      return verify(null, dataBuffer, trustedPublicKeyPem, sigBuffer);
+    } else if (algorithm === 'rsa-sha256') {
+      return verify('sha256', dataBuffer, trustedPublicKeyPem, sigBuffer);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function verifySignedApprovalArtifact(params: {
+  artifact: unknown;
+  trustedRootPublicKey: string;
+  expectedProjectRef: string;
+  expectedReleaseId: string;
+  expectedReleasePackageDigest?: string;
+  expectedMigrationHashes?: Record<string, string>;
+  currentTime?: Date;
+}): { valid: boolean; reason?: string } {
+  const {
+    artifact,
+    trustedRootPublicKey,
+    expectedProjectRef,
+    expectedReleaseId,
+    expectedReleasePackageDigest,
+    expectedMigrationHashes,
+    currentTime,
+  } = params;
+
+  if (typeof artifact !== 'object' || artifact === null) {
+    return { valid: false, reason: 'Artifact must be a JSON object' };
+  }
+  const art = artifact as Partial<SignedApprovalArtifact>;
+
+  if (art.format !== 'crm-owner-approval/v1') {
+    return {
+      valid: false,
+      reason: `Invalid artifact format: expected 'crm-owner-approval/v1', got '${art.format}'`,
+    };
+  }
+
+  if (art.algorithm !== 'ed25519' && art.algorithm !== 'rsa-sha256') {
+    return {
+      valid: false,
+      reason: `Unsupported signing algorithm: '${art.algorithm}' (must be 'ed25519' or 'rsa-sha256')`,
+    };
+  }
+
+  if (typeof art.signature !== 'string' || art.signature.trim().length === 0) {
+    return { valid: false, reason: 'Artifact missing signature string' };
+  }
+
+  const payload = art.payload;
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, reason: 'Artifact payload must be an object' };
+  }
+
+  if (payload.projectRef !== expectedProjectRef) {
+    return {
+      valid: false,
+      reason: `Target project mismatch in approval: expected '${expectedProjectRef}', got '${payload.projectRef}'`,
+    };
+  }
+
+  if (payload.releaseId !== expectedReleaseId) {
+    return {
+      valid: false,
+      reason: `Release ID mismatch in approval: expected '${expectedReleaseId}', got '${payload.releaseId}'`,
+    };
+  }
+
+  const now = currentTime || new Date();
+  const expiresAt = new Date(payload.expiresAt);
+  if (isNaN(expiresAt.getTime()) || now > expiresAt) {
+    return {
+      valid: false,
+      reason: `Approval artifact has expired (expired at ${payload.expiresAt}, current ${now.toISOString()})`,
+    };
+  }
+  const issuedAt = new Date(payload.issuedAt);
+  if (isNaN(issuedAt.getTime()) || issuedAt > now) {
+    return {
+      valid: false,
+      reason: `Approval artifact issued in the future (issued at ${payload.issuedAt}, current ${now.toISOString()})`,
+    };
+  }
+
+  if (!Array.isArray(payload.approvedWriteGroups) || payload.approvedWriteGroups.length === 0) {
+    return { valid: false, reason: 'Approval missing approvedWriteGroups array' };
+  }
+
+  if (!payload.sourceCommit || typeof payload.sourceCommit !== 'string' || !payload.snapshotCommit || typeof payload.snapshotCommit !== 'string') {
+    return { valid: false, reason: 'Approval missing sourceCommit or snapshotCommit' };
+  }
+
+  if (!payload.backupManifestDigest || !payload.backupEvidenceDigest) {
+    return { valid: false, reason: 'Approval missing backupManifestDigest or backupEvidenceDigest' };
+  }
+
+  if (expectedReleasePackageDigest && payload.releasePackageDigest !== expectedReleasePackageDigest) {
+    return {
+      valid: false,
+      reason: `Release package digest mismatch: expected '${expectedReleasePackageDigest}', got '${payload.releasePackageDigest}'`,
+    };
+  }
+
+  if (expectedMigrationHashes) {
+    if (!payload.migrationHashes || typeof payload.migrationHashes !== 'object') {
+      return { valid: false, reason: 'Approval missing migrationHashes dictionary' };
+    }
+    for (const [file, hash] of Object.entries(expectedMigrationHashes)) {
+      if (payload.migrationHashes[file] !== hash) {
+        return {
+          valid: false,
+          reason: `Migration hash mismatch for '${file}': expected '${hash}', got '${payload.migrationHashes[file]}'`,
+        };
+      }
+    }
+  }
+
+  const canonicalString = canonicalizeApprovalPayload(payload as OwnerApprovalPayload);
+  const isValidSig = verifyArtifactSignature({
+    payloadCanonicalString: canonicalString,
+    algorithm: art.algorithm,
+    signature: art.signature,
+    trustedPublicKeyPem: trustedRootPublicKey,
+  });
+
+  if (!isValidSig) {
+    return {
+      valid: false,
+      reason: 'Cryptographic signature verification failed against trusted owner root',
+    };
+  }
+
+  return { valid: true };
+}
 
 export interface HostedExecutionApproval {
   backupRestoreVerified: boolean;
@@ -105,6 +320,9 @@ export interface ExecuteSelectiveReleaseOptions {
   connectionString: string;
   releaseId?: string;
   allowLocalTest?: boolean;
+  approvalArtifact?: SignedApprovalArtifact;
+  approvalArtifactPath?: string;
+  trustedRootPublicKey?: string;
   hostedApproval?: HostedExecutionApproval;
   psqlPath?: string;
   runPsql?: PsqlRunner;
@@ -339,39 +557,88 @@ export function executeSelectiveRelease(
     process.env.META_ADS_OWNER_APPROVAL_SECRET ||
     process.env.META_ADS_OWNER_PUBLIC_KEY;
 
-  if (
-    !connection.isLocalTest &&
-    !(
-      approval?.backupRestoreVerified === true &&
-      approval.ownerApproved === true &&
-      typeof approvalReference === 'string' &&
-      approvalReference.trim().length > 0
-    )
-  ) {
-    throw new Error(
-      'HOSTED_EXECUTION_BLOCKED: A verified physical backup/restore rehearsal and explicit Project Owner approval reference are required.'
-    );
-  }
-
   if (!connection.isLocalTest) {
-    if (!signature || !secretOrKey) {
-      throw new Error(
-        'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature and verification key/secret are required.'
-      );
+    let artifact: SignedApprovalArtifact | null = options.approvalArtifact || null;
+    if (!artifact) {
+      const artifactPath =
+        options.approvalArtifactPath || process.env.META_ADS_APPROVAL_ARTIFACT_PATH;
+      if (artifactPath) {
+        if (!fs.existsSync(artifactPath)) {
+          throw new Error(
+            `HOSTED_EXECUTION_BLOCKED: Approval artifact file not found at ${artifactPath}`
+          );
+        }
+        try {
+          artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+        } catch (e) {
+          throw new Error(
+            `HOSTED_EXECUTION_BLOCKED: Malformed approval artifact JSON: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
     }
-    const isSignatureValid = verifyOwnerApprovalSignature({
-      projectRef: connection.projectRef,
-      releaseId,
-      reference: approvalReference!.trim(),
-      signature,
-      secretOrPublicKey: secretOrKey,
-    });
-    if (!isSignatureValid) {
-      throw new Error(
-        'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature verification failed for target project ' +
-          connection.projectRef +
-          '.'
-      );
+
+    if (artifact) {
+      const pack = buildSelectiveExecutorPackage({
+        targetProjectRef: TARGET_STAGING_PROJECT,
+        releaseId,
+      });
+
+      const expectedMigrationHashes: Record<string, string> = {};
+      for (const src of pack.sources) {
+        expectedMigrationHashes[src.file] = src.sha256;
+      }
+
+      const trustedRoot =
+        options.trustedRootPublicKey || loadTrustedOwnerRootPublicKey();
+
+      const verification = verifySignedApprovalArtifact({
+        artifact,
+        trustedRootPublicKey: trustedRoot,
+        expectedProjectRef: connection.projectRef,
+        expectedReleaseId: releaseId,
+        expectedReleasePackageDigest: pack.bundleSha256,
+        expectedMigrationHashes,
+      });
+
+      if (!verification.valid) {
+        throw new Error(
+          `HOSTED_EXECUTION_BLOCKED: ${verification.reason || 'Cryptographic owner approval signature verification failed'}`
+        );
+      }
+    } else {
+      if (
+        !(
+          approval?.backupRestoreVerified === true &&
+          approval.ownerApproved === true &&
+          typeof approvalReference === 'string' &&
+          approvalReference.trim().length > 0
+        )
+      ) {
+        throw new Error(
+          'HOSTED_EXECUTION_BLOCKED: A verified physical backup/restore rehearsal and explicit Project Owner approval reference are required.'
+        );
+      }
+
+      if (!signature || !secretOrKey) {
+        throw new Error(
+          'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature and verification key/secret are required.'
+        );
+      }
+      const isSignatureValid = verifyOwnerApprovalSignature({
+        projectRef: connection.projectRef,
+        releaseId,
+        reference: approvalReference!.trim(),
+        signature,
+        secretOrPublicKey: secretOrKey,
+      });
+      if (!isSignatureValid) {
+        throw new Error(
+          'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature verification failed for target project ' +
+            connection.projectRef +
+            '.'
+        );
+      }
     }
   }
 
@@ -476,25 +743,43 @@ export function executeSelectiveRelease(
 }
 
 export interface CliArgs {
-  connectionString?: string;
+  approvalArtifactPath?: string;
+  trustedRootPath?: string;
   releaseId?: string;
   allowLocalTest?: boolean;
   backupRestoreVerified?: boolean;
   ownerApproved?: boolean;
   approvalReference?: string;
   ownerSignature?: string;
-  ownerSecret?: string;
-  ownerPublicKey?: string;
 }
 
 export function parseCliArgs(argv: string[]): CliArgs {
   const args: CliArgs = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--connection-string' && i + 1 < argv.length) {
-      args.connectionString = argv[++i];
-    } else if (arg.startsWith('--connection-string=')) {
-      args.connectionString = arg.slice('--connection-string='.length);
+    if (arg === '--connection-string' || arg.startsWith('--connection-string=')) {
+      throw new Error(
+        'INSECURE_ARGUMENT: Passing database connection string via CLI argument is forbidden to prevent credential leakage. Set META_ADS_DATABASE_URL environment variable.'
+      );
+    }
+    if (arg === '--owner-secret' || arg.startsWith('--owner-secret=')) {
+      throw new Error(
+        'INSECURE_ARGUMENT: Passing owner secret via CLI argument is forbidden. Use a signed approval artifact verified against the pinned owner root.'
+      );
+    }
+    if (arg === '--owner-public-key' || arg.startsWith('--owner-public-key=')) {
+      throw new Error(
+        'INSECURE_ARGUMENT: Overriding the owner public key via CLI argument is forbidden. The owner trust root is pinned and independent.'
+      );
+    }
+    if (arg === '--approval-artifact' && i + 1 < argv.length) {
+      args.approvalArtifactPath = argv[++i];
+    } else if (arg.startsWith('--approval-artifact=')) {
+      args.approvalArtifactPath = arg.slice('--approval-artifact='.length);
+    } else if (arg === '--trusted-root' && i + 1 < argv.length) {
+      args.trustedRootPath = argv[++i];
+    } else if (arg.startsWith('--trusted-root=')) {
+      args.trustedRootPath = arg.slice('--trusted-root='.length);
     } else if (arg === '--release-id' && i + 1 < argv.length) {
       args.releaseId = argv[++i];
     } else if (arg.startsWith('--release-id=')) {
@@ -513,14 +798,6 @@ export function parseCliArgs(argv: string[]): CliArgs {
       args.ownerSignature = argv[++i];
     } else if (arg.startsWith('--owner-signature=')) {
       args.ownerSignature = arg.slice('--owner-signature='.length);
-    } else if (arg === '--owner-secret' && i + 1 < argv.length) {
-      args.ownerSecret = argv[++i];
-    } else if (arg.startsWith('--owner-secret=')) {
-      args.ownerSecret = arg.slice('--owner-secret='.length);
-    } else if (arg === '--owner-public-key' && i + 1 < argv.length) {
-      args.ownerPublicKey = argv[++i];
-    } else if (arg.startsWith('--owner-public-key=')) {
-      args.ownerPublicKey = arg.slice('--owner-public-key='.length);
     }
   }
   return args;
@@ -528,9 +805,11 @@ export function parseCliArgs(argv: string[]): CliArgs {
 
 function runCli(): void {
   const cliArgs = parseCliArgs(process.argv.slice(2));
-  const connectionString = cliArgs.connectionString || process.env.META_ADS_DATABASE_URL;
+  const connectionString = process.env.META_ADS_DATABASE_URL;
   if (!connectionString) {
-    throw new Error('META_ADS_DATABASE_URL or --connection-string is required. The value is never printed.');
+    throw new Error(
+      'META_ADS_DATABASE_URL environment variable is required. Database connection URL is never passed via CLI arguments to prevent secret leakage in process lists.'
+    );
   }
 
   const allowLocalTest = cliArgs.allowLocalTest ?? (process.env.META_ADS_ALLOW_LOCAL_TEST === '1');
@@ -539,15 +818,20 @@ function runCli(): void {
   const reference = cliArgs.approvalReference || process.env.META_ADS_OWNER_APPROVAL_REFERENCE || '';
   const signature = cliArgs.ownerSignature || process.env.META_ADS_OWNER_APPROVAL_SIGNATURE;
   const secretOrPublicKey =
-    cliArgs.ownerSecret ||
-    cliArgs.ownerPublicKey ||
     process.env.META_ADS_OWNER_APPROVAL_SECRET ||
     process.env.META_ADS_OWNER_PUBLIC_KEY;
+
+  let trustedRootPublicKey: string | undefined;
+  if (cliArgs.trustedRootPath) {
+    trustedRootPublicKey = loadTrustedOwnerRootPublicKey(cliArgs.trustedRootPath);
+  }
 
   const result = executeSelectiveRelease({
     connectionString,
     releaseId: cliArgs.releaseId || process.env.META_ADS_RELEASE_ID,
     allowLocalTest,
+    approvalArtifactPath: cliArgs.approvalArtifactPath,
+    trustedRootPublicKey,
     hostedApproval: {
       backupRestoreVerified,
       ownerApproved,

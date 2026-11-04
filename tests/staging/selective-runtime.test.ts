@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
@@ -21,9 +21,23 @@ import {
   computeOwnerApprovalHmac,
   verifyOwnerApprovalSignature,
   parseCliArgs,
+  canonicalizeApprovalPayload,
+  verifyArtifactSignature,
+  verifySignedApprovalArtifact,
+  loadTrustedOwnerRootPublicKey,
+  TRUSTED_OWNER_ROOT_PUB_PATH,
 } from '../../scripts/meta-ads/selective-runtime';
-import type { PsqlConnectionConfig, PsqlRunner } from '../../scripts/meta-ads/selective-runtime';
-import { TARGET_STAGING_PROJECT } from '../../scripts/meta-ads/selective-executor';
+import type {
+  PsqlConnectionConfig,
+  PsqlRunner,
+  SignedApprovalArtifact,
+  OwnerApprovalPayload,
+} from '../../scripts/meta-ads/selective-runtime';
+import {
+  TARGET_STAGING_PROJECT,
+  PINNED_SOURCE_HASHES,
+  buildSelectiveExecutorPackage,
+} from '../../scripts/meta-ads/selective-executor';
 
 const project = readFileSync('supabase/config.toml', 'utf8').match(/^project_id\s*=\s*"([\w-]+)"/m)?.[1];
 assert.ok(project);
@@ -289,26 +303,257 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
       // Wrong secret fails
       assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId, reference, signature: sig, secretOrPublicKey: 'wrong_secret' }), false);
 
-      // 2. CLI arguments parser tests
+      // 2. Insecure CLI arguments rejection (Finding 3)
+      assert.throws(
+        () => parseCliArgs(['--connection-string=postgresql://user:pass@localhost:5432/db']),
+        /INSECURE_ARGUMENT.*connection string.*forbidden/
+      );
+      assert.throws(
+        () => parseCliArgs(['--owner-secret=my_secret']),
+        /INSECURE_ARGUMENT.*owner secret.*forbidden/
+      );
+      assert.throws(
+        () => parseCliArgs(['--owner-public-key=key']),
+        /INSECURE_ARGUMENT.*owner public key.*forbidden/
+      );
+
+      // 3. Supported CLI arguments parsing
       const parsed = parseCliArgs([
-        '--connection-string=postgresql://user:pass@localhost:5432/db',
+        '--approval-artifact', '/tmp/approval.json',
+        '--trusted-root=/tmp/root.pub',
         '--allow-local-test',
         '--owner-approved',
         '--backup-restore-verified',
         '--owner-approval-reference', 'test-ref-001',
         '--owner-signature', sig,
-        '--owner-secret', secret,
         '--release-id=custom-rel-99',
       ]);
 
-      assert.equal(parsed.connectionString, 'postgresql://user:pass@localhost:5432/db');
+      assert.equal(parsed.approvalArtifactPath, '/tmp/approval.json');
+      assert.equal(parsed.trustedRootPath, '/tmp/root.pub');
       assert.equal(parsed.allowLocalTest, true);
       assert.equal(parsed.ownerApproved, true);
       assert.equal(parsed.backupRestoreVerified, true);
       assert.equal(parsed.approvalReference, 'test-ref-001');
       assert.equal(parsed.ownerSignature, sig);
-      assert.equal(parsed.ownerSecret, secret);
       assert.equal(parsed.releaseId, 'custom-rel-99');
+    });
+
+    await t.test('2c. Finding 3 regression: Signed Approval Artifact cryptographic verification and independent trust root', () => {
+      // Generate trusted root keypair
+      const trustedKeypair = generateKeyPairSync('ed25519');
+      const trustedPubPem = trustedKeypair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+      const trustedPrivPem = trustedKeypair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+
+      // Generate operator untrusted keypair
+      const operatorKeypair = generateKeyPairSync('ed25519');
+      const operatorPrivPem = operatorKeypair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+
+      const now = new Date();
+      const basePayload: OwnerApprovalPayload = {
+        projectRef: TARGET_STAGING_PROJECT,
+        releaseId: 'test-release-01',
+        sourceCommit: '0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f',
+        snapshotCommit: 'e51a5989143582af0885ba5ee26644a68b388995',
+        migrationHashes: { ...PINNED_SOURCE_HASHES },
+        releasePackageDigest: 'sha256-dummy-package-digest-12345',
+        backupManifestDigest: 'sha256-dummy-manifest-digest-12345',
+        backupEvidenceDigest: 'sha256-dummy-evidence-digest-12345',
+        approvedWriteGroups: ['crm_leads', 'crm_customers', 'omnichannel_messages'],
+        issuedAt: new Date(now.getTime() - 60_000).toISOString(),
+        expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
+        approvalReference: 'ref-owner-approved-runbook-v12-001',
+      };
+
+      const signArtifact = (payload: OwnerApprovalPayload, privPem: string): SignedApprovalArtifact => {
+        const canonical = canonicalizeApprovalPayload(payload);
+        const sig = sign(null, Buffer.from(canonical, 'utf8'), privPem).toString('hex');
+        return {
+          format: 'crm-owner-approval/v1',
+          payload,
+          algorithm: 'ed25519',
+          signature: sig,
+        };
+      };
+
+      // 1. Valid artifact from trusted signer passes
+      const validArtifact = signArtifact(basePayload, trustedPrivPem);
+      const resValid = verifySignedApprovalArtifact({
+        artifact: validArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+        expectedReleasePackageDigest: 'sha256-dummy-package-digest-12345',
+        expectedMigrationHashes: PINNED_SOURCE_HASHES,
+      });
+      assert.equal(resValid.valid, true);
+
+      // 2. Operator-generated keypair signing the artifact fails verification
+      const operatorArtifact = signArtifact(basePayload, operatorPrivPem);
+      const resOperator = verifySignedApprovalArtifact({
+        artifact: operatorArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resOperator.valid, false);
+      assert.match(resOperator.reason!, /Cryptographic signature verification failed/);
+
+      // 3. Tampered public key fails
+      const anotherKeypair = generateKeyPairSync('ed25519');
+      const tamperedPubPem = anotherKeypair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+      const resTamperedPub = verifySignedApprovalArtifact({
+        artifact: validArtifact,
+        trustedRootPublicKey: tamperedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resTamperedPub.valid, false);
+
+      // 4. Tampered signature fails
+      const tamperedSigArtifact: SignedApprovalArtifact = {
+        ...validArtifact,
+        signature: '0'.repeat(128),
+      };
+      const resTamperedSig = verifySignedApprovalArtifact({
+        artifact: tamperedSigArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resTamperedSig.valid, false);
+
+      // 5. Tampered migration hash fails
+      const badHashesPayload = {
+        ...basePayload,
+        migrationHashes: {
+          ...PINNED_SOURCE_HASHES,
+          '20261030090000_meta_ads_lead_attribution.sql': 'tampered_hash_00000',
+        },
+      };
+      const badHashesArtifact = signArtifact(badHashesPayload, trustedPrivPem);
+      const resBadHash = verifySignedApprovalArtifact({
+        artifact: badHashesArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+        expectedMigrationHashes: PINNED_SOURCE_HASHES,
+      });
+      assert.equal(resBadHash.valid, false);
+      assert.match(resBadHash.reason!, /Migration hash mismatch/);
+
+      // 6. Tampered releasePackageDigest fails
+      const resBadPackageDigest = verifySignedApprovalArtifact({
+        artifact: validArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+        expectedReleasePackageDigest: 'sha256-different-digest',
+      });
+      assert.equal(resBadPackageDigest.valid, false);
+      assert.match(resBadPackageDigest.reason!, /Release package digest mismatch/);
+
+      // 7. Project mismatch fails
+      const resBadProject = verifySignedApprovalArtifact({
+        artifact: validArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: 'different_project',
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resBadProject.valid, false);
+      assert.match(resBadProject.reason!, /Target project mismatch/);
+
+      // 8. ReleaseId mismatch fails
+      const resBadRel = verifySignedApprovalArtifact({
+        artifact: validArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'different_rel',
+      });
+      assert.equal(resBadRel.valid, false);
+      assert.match(resBadRel.reason!, /Release ID mismatch/);
+
+      // 9. Expired artifact fails
+      const expiredPayload: OwnerApprovalPayload = {
+        ...basePayload,
+        issuedAt: new Date(now.getTime() - 7_200_000).toISOString(),
+        expiresAt: new Date(now.getTime() - 3_600_000).toISOString(), // expired 1 hour ago
+      };
+      const expiredArtifact = signArtifact(expiredPayload, trustedPrivPem);
+      const resExpired = verifySignedApprovalArtifact({
+        artifact: expiredArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resExpired.valid, false);
+      assert.match(resExpired.reason!, /has expired/);
+
+      // 10. Issued in future fails
+      const futurePayload: OwnerApprovalPayload = {
+        ...basePayload,
+        issuedAt: new Date(now.getTime() + 3_600_000).toISOString(), // issued 1 hour in future
+      };
+      const futureArtifact = signArtifact(futurePayload, trustedPrivPem);
+      const resFuture = verifySignedApprovalArtifact({
+        artifact: futureArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resFuture.valid, false);
+      assert.match(resFuture.reason!, /issued in the future/);
+
+      // 11. Empty approvedWriteGroups fails
+      const emptyScopePayload: OwnerApprovalPayload = {
+        ...basePayload,
+        approvedWriteGroups: [],
+      };
+      const emptyScopeArtifact = signArtifact(emptyScopePayload, trustedPrivPem);
+      const resEmptyScope = verifySignedApprovalArtifact({
+        artifact: emptyScopeArtifact,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resEmptyScope.valid, false);
+      assert.match(resEmptyScope.reason!, /approvedWriteGroups/);
+
+      // 12. Artifact payload tampered after signing fails
+      const tamperedPayloadAfterSigning = JSON.parse(JSON.stringify(validArtifact)) as SignedApprovalArtifact;
+      tamperedPayloadAfterSigning.payload.approvalReference = 'tampered-ref-after-signing';
+      const resTamperedAfter = verifySignedApprovalArtifact({
+        artifact: tamperedPayloadAfterSigning,
+        trustedRootPublicKey: trustedPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resTamperedAfter.valid, false);
+      assert.match(resTamperedAfter.reason!, /Cryptographic signature verification failed/);
+
+      // 13. RSA-SHA256 signature verification works
+      const rsaKeypair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const rsaPubPem = rsaKeypair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+      const rsaPrivPem = rsaKeypair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      const rsaCanonical = canonicalizeApprovalPayload(basePayload);
+      const rsaSig = sign('sha256', Buffer.from(rsaCanonical, 'utf8'), rsaPrivPem).toString('hex');
+      const rsaArtifact: SignedApprovalArtifact = {
+        format: 'crm-owner-approval/v1',
+        payload: basePayload,
+        algorithm: 'rsa-sha256',
+        signature: rsaSig,
+      };
+      const resRsa = verifySignedApprovalArtifact({
+        artifact: rsaArtifact,
+        trustedRootPublicKey: rsaPubPem,
+        expectedProjectRef: TARGET_STAGING_PROJECT,
+        expectedReleaseId: 'test-release-01',
+      });
+      assert.equal(resRsa.valid, true);
+
+      // 14. Pinned trusted root public key file exists and parses
+      const pinnedKey = loadTrustedOwnerRootPublicKey();
+      assert.ok(pinnedKey.includes('BEGIN PUBLIC KEY'));
     });
 
     await t.test('3. PostgreSQL 16 is rejected before the release SQL is sent', () => {

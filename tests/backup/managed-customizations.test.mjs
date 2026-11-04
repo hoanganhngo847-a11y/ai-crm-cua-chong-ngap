@@ -10,6 +10,7 @@ import {
   handlePlanCommand,
   handleApplyCommand,
   handleVerifyCommand,
+  getPlatformAclBaseline,
 } from '../../scripts/backup/managed-customizations.mjs';
 import { sha256Hex } from '../../scripts/backup/owner-map.mjs';
 
@@ -171,55 +172,121 @@ test('managed-customizations helper suite', async (t) => {
     }
   });
 
-  await t.test('fails closed for unauthorized or unexplained relation-acl and column-acl', () => {
-    // Platform default relation with approved role
-    const defaultAcl = {
+  await t.test('Finding 1 regression: exact ACL baseline comparison fails closed on any anomaly', () => {
+    const baseline = getPlatformAclBaseline();
+    const usersBaseline = baseline['auth.users'];
+    assert.ok(usersBaseline, 'auth.users must exist in baseline');
+
+    // 1. ACL chuẩn của platform -> platform-default
+    const standardAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: JSON.parse(JSON.stringify(usersBaseline)),
+    };
+    assert.equal(classifyManagedCustomization(standardAcl).classification, 'platform-default');
+
+    // 2. ACL có thêm DELETE bất thường cấp cho authenticated -> unexplained (FAIL CLOSED)
+    const extraDeleteAcl = {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
-        schema: 'auth',
-        table: 'users',
-        acl: [{ grantee: 'postgres', grantor: 'supabase_admin', privilege: 'SELECT' }],
+        aclIsNull: false,
+        entries: [
+          ...JSON.parse(JSON.stringify(usersBaseline.entries)),
+          { grantee: 'authenticated', grantor: 'supabase_auth_admin', privilegeType: 'DELETE', isGrantable: false },
+        ],
       },
     };
-    assert.equal(classifyManagedCustomization(defaultAcl).classification, 'platform-default');
+    assert.equal(classifyManagedCustomization(extraDeleteAcl).classification, 'unexplained');
 
-    // Platform default relation with unauthorized grantee
-    const rogueAcl = {
+    // 3. ACL có WITH GRANT OPTION bất thường -> unexplained (FAIL CLOSED)
+    const alteredGrantOptionEntries = JSON.parse(JSON.stringify(usersBaseline.entries));
+    alteredGrantOptionEntries[0].isGrantable = true; // Was false in baseline
+    const alteredGrantOptionAcl = {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
-        schema: 'auth',
-        table: 'users',
-        acl: [{ grantee: 'rogue_attacker', grantor: 'supabase_admin', privilege: 'SELECT' }],
+        aclIsNull: false,
+        entries: alteredGrantOptionEntries,
       },
     };
-    assert.equal(classifyManagedCustomization(rogueAcl).classification, 'unexplained');
+    assert.equal(classifyManagedCustomization(alteredGrantOptionAcl).classification, 'unexplained');
 
-    // Non-platform relation acl is unexplained
-    const nonPlatformAcl = {
+    // 4. ACL bị thiếu quyền so với baseline -> unexplained (FAIL CLOSED)
+    const missingPrivEntries = JSON.parse(JSON.stringify(usersBaseline.entries)).slice(1);
+    const missingPrivAcl = {
       kind: 'relation-acl',
-      identity: 'public.crm_leads',
+      identity: 'auth.users',
       details: {
-        schema: 'public',
-        table: 'crm_leads',
-        acl: [{ grantee: 'authenticated', grantor: 'postgres', privilege: 'SELECT' }],
+        aclIsNull: false,
+        entries: missingPrivEntries,
       },
     };
-    assert.equal(classifyManagedCustomization(nonPlatformAcl).classification, 'unexplained');
+    assert.equal(classifyManagedCustomization(missingPrivAcl).classification, 'unexplained');
 
-    // Column ACL with unknown grantee
-    const rogueColAcl = {
+    // 5. ACL có grantor khác -> unexplained (FAIL CLOSED)
+    const alteredGrantorEntries = JSON.parse(JSON.stringify(usersBaseline.entries));
+    alteredGrantorEntries[0].grantor = 'postgres'; // Was supabase_auth_admin
+    const alteredGrantorAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: {
+        aclIsNull: false,
+        entries: alteredGrantorEntries,
+      },
+    };
+    assert.equal(classifyManagedCustomization(alteredGrantorAcl).classification, 'unexplained');
+
+    // 6. ACL NULL so với ACL explicit (aclIsNull mismatch) -> unexplained (FAIL CLOSED)
+    const nullMismatchAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: {
+        aclIsNull: true, // Baseline has false
+        entries: [],
+      },
+    };
+    assert.equal(classifyManagedCustomization(nullMismatchAcl).classification, 'unexplained');
+
+    // 7. ACL có role lạ / attacker -> unexplained (FAIL CLOSED)
+    const rogueRoleAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: {
+        aclIsNull: false,
+        entries: [
+          ...JSON.parse(JSON.stringify(usersBaseline.entries)),
+          { grantee: 'rogue_attacker', grantor: 'supabase_auth_admin', privilegeType: 'SELECT', isGrantable: false },
+        ],
+      },
+    };
+    assert.equal(classifyManagedCustomization(rogueRoleAcl).classification, 'unexplained');
+
+    // 8. Standard platform column ACL (aclIsNull: true, entries: []) -> platform-default
+    const standardColAcl = {
       kind: 'column-acl',
       identity: 'auth.users.email',
       details: {
-        schema: 'auth',
-        table: 'users',
-        column: 'email',
-        acl: [{ grantee: 'unknown_role', grantor: 'supabase_admin', privilege: 'SELECT' }],
+        aclIsNull: true,
+        entries: [],
       },
     };
-    assert.equal(classifyManagedCustomization(rogueColAcl).classification, 'unexplained');
+    assert.equal(classifyManagedCustomization(standardColAcl).classification, 'platform-default');
+
+    // 9. Column ACL with explicit permission -> unexplained (FAIL CLOSED)
+    const explicitColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.email',
+      details: {
+        aclIsNull: false,
+        entries: [{ grantee: 'anon', grantor: 'postgres', privilegeType: 'SELECT', isGrantable: false }],
+      },
+    };
+    assert.equal(classifyManagedCustomization(explicitColAcl).classification, 'unexplained');
+
+    // 10. Allowlisted custom relation ACL -> project-owned
+    const allowlist = new Set(['auth.users']);
+    assert.equal(classifyManagedCustomization(extraDeleteAcl, allowlist).classification, 'project-owned');
   });
 
   await t.test('plan command generates report and handles approved vs blocked plans', async () => {
@@ -398,6 +465,152 @@ test('managed-customizations helper suite', async (t) => {
         },
         (err) => err.code === 'TARGET_EVIDENCE_MISSING'
       );
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  await t.test('Finding 2 regression: deep restore verification mutation tests fail closed on any attribute change', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'source-all.json');
+      const reportPath = path.join(tempDir, 'verify-report.json');
+
+      const canonicalSource = [
+        {
+          kind: 'policy',
+          identity: 'storage.objects:crm_customer_policy',
+          details: {
+            schema: 'storage',
+            table: 'objects',
+            policy: 'crm_customer_policy',
+            permissive: 'PERMISSIVE',
+            roles: ['authenticated', 'service_role'],
+            command: 'ALL',
+            using: '(bucket_id = \'crm_docs\')',
+            withCheck: '(bucket_id = \'crm_docs\')',
+          },
+        },
+        {
+          kind: 'index',
+          identity: 'public.crm_leads:crm_leads_phone_idx',
+          details: {
+            definition: 'CREATE INDEX crm_leads_phone_idx ON public.crm_leads USING btree (phone)',
+            valid: true,
+            ready: true,
+            live: true,
+            unique: false,
+            primary: false,
+          },
+        },
+        {
+          kind: 'trigger',
+          identity: 'public.crm_leads:crm_lead_audit_trg',
+          details: {
+            definition: 'CREATE TRIGGER crm_lead_audit_trg AFTER INSERT ON public.crm_leads FOR EACH ROW EXECUTE FUNCTION crm_log_lead()',
+            enabled: 'O',
+            functionIdentity: 'public.crm_log_lead()',
+            functionDefinition: 'CREATE OR REPLACE FUNCTION public.crm_log_lead() RETURNS trigger AS ...',
+            functionOwner: 'postgres',
+            securityDefiner: true,
+            functionConfig: ['search_path=public,auth'],
+            functionAcl: 'postgres=X/postgres',
+          },
+        },
+        {
+          kind: 'routine',
+          identity: 'public.crm_calculate_score(text)',
+          details: {
+            definition: 'CREATE OR REPLACE FUNCTION public.crm_calculate_score(text) ...',
+            owner: 'postgres',
+            securityDefiner: false,
+            config: ['search_path=public'],
+            acl: 'postgres=X/postgres,authenticated=X/postgres',
+            language: 'plpgsql',
+            comment: 'CRM lead scoring routine',
+          },
+        },
+      ];
+      await fsp.writeFile(sourcePath, JSON.stringify(canonicalSource));
+
+      // Baseline exact match returns PASSED
+      const baselineResult = await handleVerifyCommand({
+        sourcePath,
+        target: 'supabase_db_crm-restore-rehearsal',
+        reportPath,
+        querySql: async () => JSON.stringify(canonicalSource),
+      });
+      assert.equal(baselineResult.status, 'PASSED');
+      assert.equal(baselineResult.report.discrepancyCount, 0);
+
+      // Helper for testing single mutations
+      const verifyMutation = async (mutateFn, expectedField) => {
+        const mutatedTarget = JSON.parse(JSON.stringify(canonicalSource));
+        mutateFn(mutatedTarget);
+        const res = await handleVerifyCommand({
+          sourcePath,
+          target: 'supabase_db_crm-restore-rehearsal',
+          reportPath,
+          querySql: async () => JSON.stringify(mutatedTarget),
+        });
+        assert.equal(res.status, 'BLOCKED', `Mutation for ${expectedField} must result in BLOCKED status`);
+        assert.ok(
+          res.report.discrepancies.some((d) => d.field === expectedField),
+          `Expected discrepancy on field '${expectedField}', found: ${JSON.stringify(res.report.discrepancies)}`
+        );
+      };
+
+      // 1. Policy mutations
+      await verifyMutation((t) => { t[0].details.roles = ['authenticated']; }, 'roles');
+      await verifyMutation((t) => { t[0].details.withCheck = 'false'; }, 'withCheck');
+      await verifyMutation((t) => { t[0].details.using = 'false'; }, 'using');
+      await verifyMutation((t) => { t[0].details.permissive = 'RESTRICTIVE'; }, 'permissive');
+      await verifyMutation((t) => { t[0].details.command = 'SELECT'; }, 'command');
+
+      // 2. Index mutations
+      await verifyMutation((t) => { t[1].details.definition = 'CREATE INDEX ... altered'; }, 'definition');
+      await verifyMutation((t) => { t[1].details.unique = true; }, 'unique');
+      await verifyMutation((t) => { t[1].details.valid = false; }, 'valid');
+      await verifyMutation((t) => { t[1].details.ready = false; }, 'ready');
+      await verifyMutation((t) => { t[1].details.live = false; }, 'live');
+      await verifyMutation((t) => { t[1].details.primary = true; }, 'primary');
+
+      // 3. Trigger mutations
+      await verifyMutation((t) => { t[2].details.definition = 'CREATE TRIGGER altered ...'; }, 'definition');
+      await verifyMutation((t) => { t[2].details.enabled = 'D'; }, 'enabled');
+      await verifyMutation((t) => { t[2].details.functionIdentity = 'public.rogue_func()'; }, 'functionIdentity');
+      await verifyMutation((t) => { t[2].details.functionDefinition = 'CREATE altered body'; }, 'functionDefinition');
+      await verifyMutation((t) => { t[2].details.functionOwner = 'hacker_role'; }, 'functionOwner');
+      await verifyMutation((t) => { t[2].details.securityDefiner = false; }, 'securityDefiner');
+      await verifyMutation((t) => { t[2].details.functionConfig = ['search_path=public']; }, 'functionConfig');
+      await verifyMutation((t) => { t[2].details.functionAcl = 'postgres=X/postgres,anon=X/postgres'; }, 'functionAcl');
+
+      // 4. Routine & Procedure mutations
+      await verifyMutation((t) => { t[3].details.definition = 'CREATE OR REPLACE altered body'; }, 'definition');
+      await verifyMutation((t) => { t[3].details.owner = 'hacker_role'; }, 'owner');
+      await verifyMutation((t) => { t[3].details.securityDefiner = true; }, 'securityDefiner');
+      await verifyMutation((t) => { t[3].details.config = ['search_path=auth']; }, 'config');
+      await verifyMutation((t) => { t[3].details.acl = 'postgres=X/postgres'; }, 'acl');
+      await verifyMutation((t) => { t[3].details.language = 'sql'; }, 'language');
+      await verifyMutation((t) => { t[3].details.comment = 'Altered comment'; }, 'comment');
+
+      // 5. Target has extra unexpected project-owned customization
+      await verifyMutation((t) => {
+        t.push({
+          kind: 'policy',
+          identity: 'storage.objects:crm_extra_unapproved_policy',
+          details: { schema: 'storage', table: 'objects', policy: 'crm_extra_unapproved_policy' },
+        });
+      }, 'extra_object');
+
+      // 6. Target has unexpected unexplained object
+      await verifyMutation((t) => {
+        t.push({
+          kind: 'trigger',
+          identity: 'auth.users:backdoor_trigger',
+          details: { definition: '...', functionOwner: 'attacker' },
+        });
+      }, 'unexplained_object');
     } finally {
       await removeTempDir(tempDir);
     }
