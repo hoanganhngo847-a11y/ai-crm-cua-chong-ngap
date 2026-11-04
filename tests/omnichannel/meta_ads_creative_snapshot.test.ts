@@ -253,6 +253,7 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
             if (url.pathname.endsWith('/lead_attribution_touchpoints') && (init?.method || 'GET') === 'GET') {
                 return Response.json([{
                     id: 'touchpoint-1',
+                    channel: 'FACEBOOK_LEAD_ADS',
                     meta_ad_id: 'ad-backfill',
                     ads_context_data: {
                         raw_meta: { campaign_id: 'campaign-raw' },
