@@ -226,8 +226,18 @@ export async function processLeadAdsChange(
             })
             : null;
         const formId = leadData.form_id || change.formId || null;
-        const campaignId = leadData.campaign_id || null;
-        const adsetId = leadData.adset_id || change.adgroupId || null;
+        // Leadgen retrieval may omit optional campaign/ad-set fields even when
+        // the read-only Marketing API returns them on the exact Ad object.
+        // Only accept this fallback when the snapshot came from Meta itself;
+        // pending/unavailable snapshots must never manufacture attribution.
+        const verifiedCreative = creativeSnapshot?.source === 'META_MARKETING_API'
+            ? creativeSnapshot
+            : null;
+        const campaignId = leadData.campaign_id || verifiedCreative?.campaignId || null;
+        const campaignName = leadData.campaign_name || verifiedCreative?.campaignName || null;
+        const adsetId = leadData.adset_id || verifiedCreative?.adsetId || null;
+        const adsetName = leadData.adset_name || verifiedCreative?.adsetName || null;
+        const adName = leadData.ad_name || verifiedCreative?.adName || null;
         const ingest = await rpc('ingest_meta_leadgen_event', {
             p_company_id: config.company, p_leadgen_id: change.leadgenId, p_claim_token: claimToken,
             p_ingest: {
@@ -244,9 +254,9 @@ export async function processLeadAdsChange(
         const touchpointId = await rpc('record_lead_attribution_touchpoint', {
             p_company: config.company, p_customer: ingest.customer_id, p_interaction: ingest.interaction_id,
             p_channel: 'FACEBOOK_LEAD_ADS', p_page_id: config.page, p_page_name: config.name || null,
-            p_meta_campaign_id: campaignId, p_campaign_name: leadData.campaign_name || null,
-            p_meta_ad_set_id: adsetId, p_ad_set_name: leadData.adset_name || null,
-            p_meta_ad_id: adId, p_ad_name: leadData.ad_name || null, p_meta_form_id: formId,
+            p_meta_campaign_id: campaignId, p_campaign_name: campaignName,
+            p_meta_ad_set_id: adsetId, p_ad_set_name: adsetName,
+            p_meta_ad_id: adId, p_ad_name: adName, p_meta_form_id: formId,
             p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
             p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
             p_ads_context_data: creativeSnapshot ? { creative_snapshot: creativeSnapshot } : null,
