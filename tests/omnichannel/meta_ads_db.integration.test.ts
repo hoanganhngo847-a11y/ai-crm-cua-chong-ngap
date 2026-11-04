@@ -143,7 +143,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         const touch = (lead: string, campaign: string | null, name: string, ad: string | null, time: string) => {
             const pageEvidence = ad ? JSON.stringify({
                 creative_snapshot: {
-                    schemaVersion: 2, source: 'META_MARKETING_API',
+                    schemaVersion: 2, source: 'META_MARKETING_API', captureTiming: 'AT_LEAD_INTAKE',
                     adId: ad, pageId: page, pageIdConflict: false,
                 },
             }) : null;
@@ -341,9 +341,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
 
         // --- Rule C: one customer profile, many attribution events, zero lost history ---
         intakeFault = false;
-        assert.equal((await webhook('30001')).status, 200);
-        assert.equal((await webhook('30002')).status, 200, 'a duplicate-phone lead must reuse the customer, never fail the webhook');
-        const concurrentSubmissions = await Promise.all([webhook('30003'), webhook('30004')]);
+        assert.equal((await webhook('30001', '300_ad')).status, 200);
+        assert.equal((await webhook('30002', '300_ad')).status, 200, 'a duplicate-phone lead must reuse the customer, never fail the webhook');
+        const concurrentSubmissions = await Promise.all([webhook('30003', '300_ad'), webhook('30004', '300_ad')]);
         assert.deepEqual(
             concurrentSubmissions.map((r) => r.status).sort((a, b) => (a ?? 600) - (b ?? 600)),
             [200, 200],
