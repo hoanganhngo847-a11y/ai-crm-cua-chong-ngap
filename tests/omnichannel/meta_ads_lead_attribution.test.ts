@@ -321,7 +321,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -352,7 +352,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -515,7 +515,7 @@ test('Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and upd
                 p_ad_account_id => 'act_100',
                 p_meta_ad_id => 'ad_berlin_01',
                 p_meta_leadgen_id => 'lg_mapped_01',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_berlin_01","pageId":"page_chd_01","pageIdConflict":false}}'::jsonb,
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_berlin_01","pageId":"page_chd_01","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'UNATTRIBUTED',
                 p_attribution_method => 'AD_LOOKUP'
             );
@@ -1325,7 +1325,7 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
                 NULL, NULL,
                 'lg_unknown_999',
                 'LEAD_ADS', 'INSTANT_FORM',
-                '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_completely_unknown_999","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb,
+                '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_completely_unknown_999","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb,
                 NULL, NULL, NULL, NULL, NULL, NULL,
                 'ATTRIBUTED'
             );
@@ -1350,7 +1350,7 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
                 NULL,
                 NULL, NULL,
                 'lg_mapped_100',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_mapped_100","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
             );
         `);
         const tp2 = (tpMappedId.rows[0] as any).record_lead_attribution_touchpoint;
@@ -1381,7 +1381,7 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
                 NULL,
                 NULL, NULL,
                 'lg_mapped_200',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_mapped_200","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_200","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
             );
         `);
 
@@ -1393,7 +1393,7 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
                 p_page_id => '1026991374010112',
                 p_meta_ad_id => 'ad_mapped_100',
                 p_meta_leadgen_id => 'lg_wrong_page_100',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_mapped_100","pageId":"2222222222222222","pageIdConflict":false}}'::jsonb
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100","pageId":"2222222222222222","pageIdConflict":false}}'::jsonb
             );
         `);
         const wrongPageTouchpointId = (wrongPageId.rows[0] as any).record_lead_attribution_touchpoint;
@@ -1422,7 +1422,7 @@ test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch sna
                 p_page_id => '1026991374010112',
                 p_meta_ad_id => 'ad_mapped_100',
                 p_meta_leadgen_id => 'lg_missing_page_100',
-                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_mapped_100"}}'::jsonb
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100"}}'::jsonb
             );
         `);
         const missingPageTouchpointId = (missingPage.rows[0] as any).record_lead_attribution_touchpoint;
