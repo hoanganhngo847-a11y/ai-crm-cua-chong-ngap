@@ -12,6 +12,7 @@ import {
   handleVerifyCommand,
   getPlatformAclBaseline,
   validatePlatformAclBaseline,
+  MANAGED_CUSTOMIZATIONS_QUERY_SQL,
   canonicalEntryKey,
   validateCustomizationDetails,
   deepCompareCustomizationItem,
@@ -286,17 +287,36 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'column-acl',
       identity: 'auth.users.email',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'email',
         aclIsNull: true,
         entries: [],
       },
     };
     assert.equal(classifyManagedCustomization(standardColAcl).classification, 'platform-default');
 
+    // The catalog extractor and classifier must share the same canonical identity fields.
+    assert.match(
+      MANAGED_CUSTOMIZATIONS_QUERY_SQL,
+      /'schema', n\.nspname,\s*'table', c\.relname,\s*'column', a\.attname/,
+    );
+
+    const missingIdentityColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.email',
+      details: { aclIsNull: true, entries: [] },
+    };
+    assert.equal(classifyManagedCustomization(missingIdentityColAcl).classification, 'unexplained');
+
     // 9. Column ACL with explicit permission -> unexplained (FAIL CLOSED)
     const explicitColAcl = {
       kind: 'column-acl',
       identity: 'auth.users.email',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'email',
         aclIsNull: false,
         entries: [{ grantee: 'anon', grantor: 'postgres', privilegeType: 'SELECT', isGrantable: false }],
       },
@@ -308,6 +328,9 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'column-acl',
       identity: 'auth.users.non_existent_column',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'non_existent_column',
         aclIsNull: true,
         entries: [],
       },
