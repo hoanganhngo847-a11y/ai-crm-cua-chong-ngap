@@ -214,7 +214,21 @@ export async function processLeadAdsChange(
         // submission with a newer version edited in Meta in the meantime.
         const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
         const fields = extractLeadFields(leadData.field_data || []);
-        const adId = leadData.ad_id || change.adId || null;
+        const webhookAdId = change.adId || null;
+        const leadDetailsAdId = leadData.ad_id || null;
+        const adIdConflict = Boolean(webhookAdId && leadDetailsAdId && webhookAdId !== leadDetailsAdId);
+        const adId = leadDetailsAdId || webhookAdId;
+        // This module is called by the webhook route only after the request signature
+        // has been verified. Preserve that contemporaneous Page/Ad binding separately
+        // from creative snapshots, which may later be backfilled.
+        const leadgenEventBinding = !adIdConflict && webhookAdId && adId === webhookAdId && change.page === config.page
+            ? {
+                source: 'SIGNED_META_WEBHOOK' as const,
+                leadgenId: change.leadgenId,
+                pageId: config.page,
+                adId: webhookAdId,
+            }
+            : null;
         const persistedCreativeSnapshot = isMetaAdCreativeSnapshot(claim.ingest_args?.creative_snapshot)
             ? claim.ingest_args.creative_snapshot
             : null;
@@ -246,8 +260,11 @@ export async function processLeadAdsChange(
                 name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
                 content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
                 ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
+                ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
+                ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
                 payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
                     campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name),
+                    ...(adIdConflict ? { crm_lead_ad_id_conflict: true } : {}),
                     crm_phone_detection: { status: fields.phoneStatus } },
             },
         }) as { interaction_id?: string; customer_id?: string;
@@ -261,7 +278,14 @@ export async function processLeadAdsChange(
             p_meta_ad_id: adId, p_ad_name: adName, p_meta_form_id: formId,
             p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
             p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
-            p_ads_context_data: creativeSnapshot ? { creative_snapshot: creativeSnapshot } : null,
+            p_ads_context_data: (() => {
+                const context = {
+                    ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
+                    ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
+                    ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
+                };
+                return Object.keys(context).length > 0 ? context : null;
+            })(),
             p_attribution_status: 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
             p_occurred: claim.occurred_at || change.time,
         });
