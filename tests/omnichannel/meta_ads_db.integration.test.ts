@@ -190,8 +190,10 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
                 if (leadId === '20006') {
                     return Response.json({
                         id: leadId, created_time: 1793318400, form_id: '123', form_name: 'Snapshot form',
-                        ad_id: 'ad_snapshot_1', ad_name: 'Raw ad', adset_id: 'adset_snapshot',
-                        adset_name: 'Raw ad set', campaign_id: 'campaign_snapshot',
+                        ad_id: 'ad_snapshot_1', ad_name: 'Raw ad',
+                        // Leadgen details omit optional Ad Set fields; intake must
+                        // recover them only from the verified Ad creative response.
+                        campaign_id: 'campaign_snapshot',
                         campaign_name: 'Raw campaign',
                         field_data: [{ name: 'full_name', values: ['Snapshot Lead'] }],
                     });
