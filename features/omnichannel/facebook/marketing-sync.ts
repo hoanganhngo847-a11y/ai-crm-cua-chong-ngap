@@ -399,7 +399,10 @@ export async function fetchMetaAdCreativeSnapshot(
         const version = marketingVersion();
         const fieldSets = [
             'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
-            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id}',
+            // Keep independent fallbacks: object_story_spec.page_id and effective story IDs
+            // are alternate Page signals, so one unsupported field must not discard the other.
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id}',
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,effective_object_story_id,object_story_id}',
             'id,name,preview_shareable_link,campaign_id,adset_id,creative{id,name,object_type,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id}',
             'id,name,creative{id,name}',
         ];
