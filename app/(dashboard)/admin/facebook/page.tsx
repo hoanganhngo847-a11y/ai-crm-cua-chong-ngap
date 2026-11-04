@@ -26,7 +26,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   FACEBOOK_PAGE_NOT_MANAGED: 'Tài khoản Facebook này không quản lý Page đã chọn.',
   FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE:
     'Có Page đã chọn chưa được cấu hình cho workspace CRM hiện tại.',
-  FACEBOOK_SUBSCRIBE_FAILED: 'Không thể đăng ký Page với webhook Messenger.',
+  FACEBOOK_SUBSCRIBE_FAILED: 'Không thể đăng ký Page với webhook Lead Ads.',
   FACEBOOK_CONNECT_SELECT_FAILED: 'Không thể hoàn tất kết nối Page.',
   FACEBOOK_CONNECT_START_FAILED: 'Không thể bắt đầu đăng nhập Facebook.',
   INVALID_PAGE: 'Vui lòng chọn ít nhất một Page hợp lệ.',
@@ -52,10 +52,10 @@ export default async function FacebookConnectionPage({
   const connectionSummary =
     connectedCount > 0
       ? leadAdsStatus === 'ALL_CONNECTED'
-        ? `Đã xác minh webhook Messenger và Lead Ads cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : '.'}${connectedAdsCount > 0 ? ` Đồng thời kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.` : ''}`
+        ? `Đã xác minh webhook Lead Ads cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : '.'}${connectedAdsCount > 0 ? ` Đồng thời kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.` : ''}`
         : leadAdsStatus === 'SUBSCRIPTION_UNKNOWN'
-          ? `Messenger đã kết nối cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''}. Trạng thái Lead Ads chưa xác minh; CRM không coi Lead Ads đã kết nối.`
-          : `Messenger đã kết nối cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''}. Lead Ads chưa được xác nhận kết nối.`
+          ? `Trạng thái webhook Lead Ads của ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''} chưa xác minh; CRM không coi Lead Ads đã kết nối.`
+          : `Lead Ads chưa được xác nhận kết nối cho ${connectedCount} Page${connectedPages ? `: ${connectedPages}` : ''}.`
       : connectedAdsCount > 0
         ? `Đã kết nối ${connectedAdsCount} tài khoản quảng cáo Meta.`
         : 'Kết nối đã hoàn tất.';
@@ -75,7 +75,7 @@ export default async function FacebookConnectionPage({
   const adAccounts = adAccountsRes.data || [];
   const configuredPageIds = configuredFacebookPageIds(companyId);
   const fullyConnected =
-    connections.length > 0 && connections.every((connection) => connection.subscribed);
+    connections.length > 0 && connections.every((connection) => connection.leadAdsSubscribed);
 
   return (
     <div className="space-y-6">
@@ -123,8 +123,8 @@ export default async function FacebookConnectionPage({
           <div>
             <div className="font-semibold">
               {connectedCount > 0 && leadAdsStatus !== 'ALL_CONNECTED'
-                ? 'Messenger đã kết nối; Lead Ads chưa xác nhận'
-                : 'Kết nối thành công'}
+                ? 'Lead Ads chưa xác nhận kết nối'
+                : 'Kết nối Lead Ads thành công'}
             </div>
             <div className="mt-0.5 text-xs text-emerald-700">{connectionSummary}</div>
           </div>
@@ -137,7 +137,7 @@ export default async function FacebookConnectionPage({
           <div className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Bước 1</div>
           <h2 className="text-sm font-semibold text-text-primary">Đăng nhập Facebook</h2>
           <p className="text-xs text-text-secondary leading-relaxed">
-            Boss Admin có AAL2 đăng nhập và cấp pages_show_list, pages_manage_metadata, pages_messaging.
+            Boss Admin có AAL2 đăng nhập và cấp pages_show_list, pages_manage_metadata, pages_read_engagement, ads_read, leads_retrieval.
           </p>
         </Card>
         <Card className="p-5 space-y-2">
@@ -151,7 +151,7 @@ export default async function FacebookConnectionPage({
           <div className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Bước 3</div>
           <h2 className="text-sm font-semibold text-text-primary">Đăng ký webhook</h2>
           <p className="text-xs text-text-secondary leading-relaxed">
-            CRM subscribe trường messages cho từng Page đã chọn. Tin nhắn sau đó được định tuyến theo Page ID riêng.
+            CRM chỉ đăng ký webhook leadgen cho từng Page đã chọn. Các trường hiện có, bao gồm messages, được giữ nguyên; luồng này không thay đổi cấu hình Messenger.
           </p>
         </Card>
       </section>
@@ -162,7 +162,7 @@ export default async function FacebookConnectionPage({
           <div>
             <h2 className="text-base font-semibold text-text-primary">Các Page của workspace</h2>
             <p className="mt-1 text-xs text-text-secondary">
-              Runtime có thể nhận và gửi song song trên tất cả Page đã cấu hình.
+              CRM kiểm tra trạng thái webhook Lead Ads của từng Page và chỉ bổ sung trường leadgen khi cần.
             </p>
           </div>
           <Badge variant={fullyConnected ? 'success' : connections.length > 0 ? 'warning' : 'neutral'}>
@@ -195,8 +195,20 @@ export default async function FacebookConnectionPage({
                       {connection.pageId}
                     </div>
                   </div>
-                  <Badge variant={connection.subscribed ? 'success' : 'warning'}>
-                    {connection.subscribed ? 'Webhook OK' : 'Cần xác minh'}
+                  <Badge
+                    variant={
+                      connection.leadAdsSubscribed
+                        ? 'success'
+                        : connection.leadAdsStatus === 'SUBSCRIPTION_UNKNOWN'
+                          ? 'warning'
+                          : 'neutral'
+                    }
+                  >
+                    {connection.leadAdsSubscribed
+                      ? 'Lead Ads OK'
+                      : connection.leadAdsStatus === 'SUBSCRIPTION_UNKNOWN'
+                        ? 'Cần xác minh'
+                        : 'Chưa kết nối Lead Ads'}
                   </Badge>
                 </div>
               </div>
@@ -403,7 +415,7 @@ export default async function FacebookConnectionPage({
       <Card className="p-4 text-xs text-text-secondary bg-surface-secondary">
         <div className="font-semibold text-text-primary mb-1">Dùng cho Meta App Review</div>
         <p className="leading-relaxed">
-          Khi quay screencast: mở trang này → bấm “Kết nối / xác minh các Facebook Page” → hoàn tất Facebook Login → cho reviewer thấy danh sách Page từ Meta → Page của workspace được chọn → bấm kết nối → mở Hộp thư và chứng minh Messenger hai chiều.
+          Khi quay screencast: mở trang này → bấm “Kết nối / xác minh Facebook Pages & Meta Ads” → hoàn tất Facebook Login → cho reviewer thấy danh sách Page từ Meta → Page của workspace được chọn → bấm kết nối → xác minh webhook Lead Ads và trạng thái đồng bộ attribution; không cần gửi tin nhắn thử.
         </p>
       </Card>
     </div>

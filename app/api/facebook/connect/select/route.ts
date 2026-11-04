@@ -109,11 +109,8 @@ export async function POST(request: Request) {
         pageId,
         actor.companyId,
       );
-      // Preserve a verified Messenger connection when only Lead Ads read-back is unknown.
-      // Unknown Messenger state remains a hard failure.
-      if (!pageResult.messengerSubscribed) {
-        throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
-      }
+      // Lead Ads onboarding only changes the leadgen subscription. Existing
+      // Messenger messages subscription is observed but never required or modified.
       connectedPages.push(pageResult);
     }
 
@@ -188,7 +185,7 @@ export async function POST(request: Request) {
     const allLeadAdsConnected =
       connectedPages.length > 0 && connectedPages.every((page) => page.leadAdsSubscribed);
     const leadAdsStateUnknown = connectedPages.some(
-      (page) => page.status === 'SUBSCRIPTION_UNKNOWN' && page.messengerSubscribed,
+      (page) => page.status === 'SUBSCRIPTION_UNKNOWN',
     );
     url.searchParams.set(
       'lead_ads_status',

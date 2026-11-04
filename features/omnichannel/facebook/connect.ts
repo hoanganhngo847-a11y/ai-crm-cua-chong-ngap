@@ -51,7 +51,6 @@ export type ConfiguredFacebookConnection = {
   subscribed: boolean;
   leadAdsSubscribed?: boolean;
   leadAdsStatus?:
-    | 'MESSENGER_CONNECTED'
     | 'ALL_CONNECTED'
     | 'LEAD_ADS_NOT_CONNECTED'
     | 'SUBSCRIPTION_UNKNOWN';
@@ -445,7 +444,6 @@ export type SubscribePageResult = {
   messengerSubscribed: boolean;
   leadAdsSubscribed: boolean;
   status:
-    | 'MESSENGER_CONNECTED'
     | 'ALL_CONNECTED'
     | 'LEAD_ADS_NOT_CONNECTED'
     | 'SUBSCRIPTION_UNKNOWN';
@@ -564,49 +562,12 @@ export async function subscribeManagedPage(
     `https://graph.facebook.com/${version}/${encodeURIComponent(pageId)}/subscribed_apps`,
   );
 
-  // 2. Ensure Messenger messages subscription and preserve existing fields
-  let messengerSubscribed = currentFields.includes('messages');
-  if (!messengerSubscribed) {
-    const messengerFields = Array.from(new Set([...currentFields, 'messages'])).join(',');
-    const msgRes = await fetchFn(subUrl.toString(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Bearer ${page.accessToken}`,
-      },
-      body: new URLSearchParams({ subscribed_fields: messengerFields }),
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!msgRes.ok) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
-    const msgPayload = (await msgRes.json().catch(() => null)) as { success?: unknown } | null;
-    if (msgPayload?.success !== true) throw new Error('FACEBOOK_SUBSCRIBE_FAILED');
+  // Read Messenger state for diagnostics only. This Meta Ads flow never adds,
+  // removes, or reconfigures the existing `messages` subscription.
+  const messengerSubscribed = currentFields.includes('messages');
 
-    // 4. After subscription changes, read back the fields and verify the expected state
-    const postRead = await readPageSubscribedFields(
-      pageId,
-      page.accessToken,
-      appId,
-      fetchFn,
-    );
+  // Subscribe only to Lead Ads. Preserve every existing Page subscription.
 
-    if (!postRead.success || !postRead.fields.includes('messages')) {
-      // Read-back mismatch: Meta did not confirm messages subscription
-      return {
-        id: page.id,
-        name: page.name,
-        messengerSubscribed: false,
-        leadAdsSubscribed: false,
-        status: 'SUBSCRIPTION_UNKNOWN',
-        error: 'SUBSCRIPTION_READBACK_MISMATCH',
-      };
-    }
-
-    messengerSubscribed = true;
-    currentFields = postRead.fields;
-  }
-
-  // 3. Decoupled Lead Ads subscription (do not fail Messenger if leadgen fails)
   let leadAdsSubscribed = currentFields.includes('leadgen');
   let leadAdsError: string | undefined;
   let subscriptionUnknown = false;
@@ -669,9 +630,7 @@ export async function subscribeManagedPage(
       ? 'SUBSCRIPTION_UNKNOWN'
       : leadAdsSubscribed
         ? 'ALL_CONNECTED'
-        : messengerSubscribed
-          ? 'MESSENGER_CONNECTED'
-          : 'SUBSCRIPTION_UNKNOWN',
+        : 'LEAD_ADS_NOT_CONNECTED',
     ...(leadAdsError ? { leadAdsError } : {}),
     ...(subscriptionUnknown && leadAdsError ? { error: leadAdsError } : {}),
   };
@@ -753,20 +712,15 @@ async function configuredConnectionForBinding(
     };
   }
 
-  const subscribedFields = readResult.fields;
-  const isSubscribed = readResult.appFound;
-  const messengerSubscribed = isSubscribed && (subscribedFields.length === 0 || subscribedFields.includes('messages'));
-  const leadAdsSubscribed = isSubscribed && subscribedFields.includes('leadgen');
-  const leadAdsStatus: 'MESSENGER_CONNECTED' | 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED' =
-    leadAdsSubscribed
-      ? 'ALL_CONNECTED'
-      : (messengerSubscribed ? 'MESSENGER_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED');
+  const leadAdsSubscribed = readResult.fields.includes('leadgen');
+  const leadAdsStatus: 'ALL_CONNECTED' | 'LEAD_ADS_NOT_CONNECTED' =
+    leadAdsSubscribed ? 'ALL_CONNECTED' : 'LEAD_ADS_NOT_CONNECTED';
 
   return {
     configured: true,
     pageId: binding.page,
     pageName,
-    subscribed: isSubscribed,
+    subscribed: leadAdsSubscribed,
     leadAdsSubscribed,
     leadAdsStatus,
     tokenConfigured: true,

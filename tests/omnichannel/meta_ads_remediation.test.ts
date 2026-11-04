@@ -648,13 +648,14 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
         throw new Error(`Unexpected call: ${url}`);
     };
     const resAppNotFound = await subscribeManagedPage('token', page, company, fetchAppNotFoundWithReadBack);
-    assert.equal(resAppNotFound.messengerSubscribed, true);
+    assert.equal(resAppNotFound.messengerSubscribed, false, 'this flow must not create a Messenger messages subscription');
+    assert.deepEqual(currentFields5, ['leadgen']);
     assert.equal(resAppNotFound.leadAdsSubscribed, true);
     assert.equal(resAppNotFound.status, 'ALL_CONNECTED');
 
     // 6. Existing fields preserved: existing fields ['feed', 'mention'] are preserved in all POST bodies
     const postBodies6: string[] = [];
-    let currentFields6: string[] = ['feed', 'mention'];
+    let currentFields6: string[] = ['messages', 'feed', 'mention'];
     const fetchPreserve: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
         if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
@@ -674,12 +675,13 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
     };
     const resPreserve = await subscribeManagedPage('token', page, company, fetchPreserve);
     assert.equal(resPreserve.status, 'ALL_CONNECTED');
+    assert.equal(resPreserve.messengerSubscribed, true, 'existing Messenger subscription is only observed');
     for (const body of postBodies6) {
         assert.ok(body.includes('feed'), `POST body must preserve feed: ${body}`);
         assert.ok(body.includes('mention'), `POST body must preserve mention: ${body}`);
     }
 
-    // 7. Read-back mismatch: POST for messages returns success, but read-back lacks messages
+    // 7. Leadgen POST returns success, but read-back does not confirm leadgen
     const fetchMismatch: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
         if (url.pathname.endsWith('/me/accounts')) return Response.json(basePageResponse);
@@ -698,7 +700,7 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
     assert.equal(resMismatch.messengerSubscribed, false);
     assert.equal(resMismatch.error, 'SUBSCRIPTION_READBACK_MISMATCH');
 
-    // 8. Both subscriptions successful
+    // 8. Lead Ads succeeds without creating a Messenger subscription
     let currentFields8: string[] = [];
     const fetchBoth: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
@@ -716,8 +718,9 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
         throw new Error(`Unexpected call: ${url}`);
     };
     const resBoth = await subscribeManagedPage('token', page, company, fetchBoth);
-    assert.equal(resBoth.messengerSubscribed, true);
+    assert.equal(resBoth.messengerSubscribed, false);
     assert.equal(resBoth.leadAdsSubscribed, true);
+    assert.deepEqual(currentFields8, ['leadgen']);
     assert.equal(resBoth.status, 'ALL_CONNECTED');
 
     // 9. Messenger success with leadgen failure: messages is verified, leadgen returns 403
@@ -742,9 +745,9 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
         throw new Error(`Unexpected call: ${url}`);
     };
     const resLeadFail = await subscribeManagedPage('token', page, company, fetchLeadFail);
-    assert.equal(resLeadFail.messengerSubscribed, true);
+    assert.equal(resLeadFail.messengerSubscribed, false);
     assert.equal(resLeadFail.leadAdsSubscribed, false);
-    assert.equal(resLeadFail.status, 'MESSENGER_CONNECTED');
+    assert.equal(resLeadFail.status, 'LEAD_ADS_NOT_CONNECTED');
     assert.equal(resLeadFail.leadAdsError, 'LEAD_ADS_NOT_CONNECTED');
 
     // 10. Leadgen POST succeeds but read-back omits leadgen: report unknown, never connected.
