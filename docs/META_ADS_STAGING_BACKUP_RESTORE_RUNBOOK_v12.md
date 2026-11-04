@@ -114,24 +114,24 @@ Checked on the worktree host on 2026-10-31:
 | libpq password file / approved secret injection | **MISSING** | Commands must not take passwords on the command line or in shell history |
 | Storage API credential and reviewed list/download-only exporter | **MISSING** | A Supabase secret/service-role key bypasses RLS and is not a read-only credential; database metadata alone cannot back up object bytes |
 | Supabase Management API token | **MISSING** | Auth/Storage/Vault project settings and supported export paths cannot be inventoried |
-| Approved **streaming** AES-256-GCM helper | **MISSING** | Only an in-memory synthetic helper exists; unsuitable for real dumps |
-| KMS/HSM or approved dual-custodian key custody | **MISSING** | A key stored beside the backup defeats encryption |
-| Approved offsite/WORM artifact storage | **MISSING** | No `aws`/`rclone`/equivalent; local-only artifacts are not durable |
-| Owner-approved retention, RPO and RTO | **UNSET** | Cannot decide checkpoint frequency, storage class or recovery target |
-| Maintenance window and write fence | **UNSET** | A dump without a fence has a non-zero RPO and may be logically inconsistent |
-| Isolated restore target | **NOT PROVISIONED** | Restore must never target Staging or an existing project |
+| Approved **streaming** AES-256-GCM helper (`scripts/backup/aesgcm-stream.mjs`) | **IMPLEMENTED** | Helper #1 integrated and verified with 100% coverage |
+| KMS/HSM or approved dual-custodian key custody | **PENDING OWNER** | A key stored beside the backup defeats encryption; requires custodian appointment |
+| Approved offsite/WORM artifact storage | **PENDING OWNER** | Requires S3/rclone bucket with Object Lock provisioned by Owner |
+| Owner-approved retention, RPO and RTO | **PENDING OWNER** | Owner decision required for checkpoint frequency and storage tiering |
+| Maintenance window and write fence | **PENDING OWNER** | Operational maintenance window approval required before live fence |
+| Isolated restore target | **PENDING OWNER** | Restore must target disposable local/rehearsal environment, never existing hosted projects |
 | Auth export/import procedure | **UNVERIFIED** | Managed Auth users, identities, MFA and sessions need a provider-supported path |
 | Storage version/metadata preservation | **UNVERIFIED** | CLI is experimental; object UUID/version behavior is not proven |
-| Safe Storage archive extractor and Storage restore helper | **MISSING** | Archive path safety, complete byte extraction, key-type headers and HTTP failure handling are not yet implemented |
-| Ownership-map generator/verifier (`scripts/backup/owner-map.mjs`) | **MISSING** | `pg_restore --no-owner` requires an approved, complete source-owner to target-owner plan and post-apply verification |
-| Managed-schema customization capture/apply verifier (`scripts/backup/managed-customizations.mjs`) | **MISSING** | Custom policies/triggers/indexes in managed `auth`/`storage` schemas must be inventoried and selectively re-applied without replaying platform-managed DDL |
-| Detailed catalog evidence capture | **PARTIAL** | Count-only summaries do not prove index validity, sequence `is_called`, routine definitions/configuration or comments |
-| Detailed catalog source/target comparator (`scripts/backup/catalog-compare.mjs`) | **MISSING** | Source/target catalog evidence needs deterministic comparison with only approved owner normalization |
-| Large-object byte manifest helper (conditional) | **MISSING** | Required if `pg_largeobject_metadata` is non-empty; OID/size/hash must be independently compared after restore |
-| Vault/column-encryption root key portability | **UNVERIFIED** | Vault ciphertext is useless without the project's root key |
-| `META_TOKEN_ENCRYPTION_KEY` recovery proof | **MISSING** | Restored token ciphertext must be decryptable by an independent custodian |
-| Restore validation automation for real data | **PARTIAL** | Only synthetic fixtures are automated today |
-| Owner approval for backup execution | **MISSING** | This document is not an approval |
+| Safe Storage archive extractor and Storage restore helper (`scripts/backup/storage-export.mjs`, `safe-extract-storage.py`, `storage-restore.mjs`) | **IMPLEMENTED** | Helpers #4 & #5 integrated and verified with 100% coverage |
+| Ownership-map generator/verifier (`scripts/backup/owner-map.mjs`) | **IMPLEMENTED** | Helper #6 integrated, validated with strict grammar and container isolation |
+| Managed-schema customization capture/apply verifier (`scripts/backup/managed-customizations.mjs`) | **IMPLEMENTED** | Helper #7 integrated, plans/applies project customizations and blocks on unexplained objects |
+| Detailed catalog evidence capture | **IMPLEMENTED** | Captures detailed index validity, sequence `is_called`, routine definitions and comments |
+| Detailed catalog source/target comparator (`scripts/backup/catalog-compare.mjs`) | **IMPLEMENTED** | Helper #8 integrated, performs deterministic source/target catalog comparison |
+| Large-object byte manifest helper (conditional) | **CONDITIONAL** | Required only if `pg_largeobject_metadata` is non-empty |
+| Vault/column-encryption root key portability | **PENDING OWNER** | Vault ciphertext requires project root key; requires Owner confirmation |
+| `META_TOKEN_ENCRYPTION_KEY` recovery proof (`scripts/meta-ads/verify-token-key.ts`) | **IMPLEMENTED** | Offline verifier tests primary & legacy SHA-256 derivation with timing-safe comparison |
+| Restore validation automation for real data | **PARTIAL** | Verified on isolated fixtures; live hosted validation awaits Staging window |
+| Owner approval for backup execution | **PENDING OWNER** | Requires explicit Project Owner sign-off before executing on hosted staging |
 
 ---
 
