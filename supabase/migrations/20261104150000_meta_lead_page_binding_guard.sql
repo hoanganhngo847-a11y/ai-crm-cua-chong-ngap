@@ -120,7 +120,7 @@ BEGIN
             AND p_ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
             AND p_ads_context_data->'creative_snapshot'->>'adId' = p_meta_ad_id
             AND p_ads_context_data->'creative_snapshot'->>'pageId' = p_page_id
-            AND COALESCE(p_ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') <> 'true',
+            AND COALESCE(p_ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false',
             false
         );
     ELSE
@@ -321,7 +321,7 @@ BEGIN
                 t.ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
                 AND t.ads_context_data->'creative_snapshot'->>'adId' = t.meta_ad_id
                 AND t.ads_context_data->'creative_snapshot'->>'pageId' = t.page_id
-                AND COALESCE(t.ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') <> 'true',
+                AND COALESCE(t.ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false',
                 false
             ) AS page_verified
         FROM public.lead_attribution_touchpoints t
