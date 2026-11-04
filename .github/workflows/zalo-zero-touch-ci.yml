@@ -19,14 +19,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3
+        with:
+          version: '2.119.0'
       - run: npm ci
       - name: Runtime invariants
         run: npx tsx tests/campaigns/zalo-zero-touch-runtime.test.ts
       - name: Start local Supabase
-        run: npx supabase start -x studio,logflare,vector,realtime
+        run: supabase start -x studio,logflare,vector,realtime
       - name: Apply all migrations
-        run: npx supabase db reset
+        run: supabase db reset
       - name: Zero-touch database invariants
         run: npx tsx tests/campaigns/zalo-contact-linking-db.test.ts
       - name: Legacy Zalo identity upgrade invariants
