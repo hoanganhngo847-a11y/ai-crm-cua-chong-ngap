@@ -11,6 +11,8 @@ import {
   handleApplyCommand,
   handleVerifyCommand,
   getPlatformAclBaseline,
+  validatePlatformAclBaseline,
+  canonicalEntryKey,
   validateCustomizationDetails,
   deepCompareCustomizationItem,
 } from '../../scripts/backup/managed-customizations.mjs';
@@ -45,6 +47,21 @@ function runCli(args) {
 }
 
 test('managed-customizations helper suite', async (t) => {
+  await t.test('platform ACL baseline integrity is validated before classification', () => {
+    const baseline = getPlatformAclBaseline();
+    assert.equal(validatePlatformAclBaseline(baseline), baseline);
+    assert.throws(() => canonicalEntryKey({ grantee: 'anon', grantor: 'postgres', privilegeType: 'SELECT', isGrantable: 'false' }), /boolean isGrantable/);
+
+    const corrupted = JSON.parse(JSON.stringify(baseline));
+    corrupted.columns['auth.audit_log_entries.created_at'].aclIsNull = false;
+    assert.throws(() => validatePlatformAclBaseline(corrupted), /content digest mismatch/);
+
+    const wrongCoverage = JSON.parse(JSON.stringify(baseline));
+    wrongCoverage._metadata.totalColumns -= 1;
+    assert.throws(() => validatePlatformAclBaseline(wrongCoverage), /coverage count mismatch/);
+  });
+
+
   await t.test('classifies platform defaults correctly', () => {
     const defaultPolicy = {
       kind: 'policy',
@@ -498,6 +515,45 @@ test('managed-customizations helper suite', async (t) => {
     }
   });
 
+  await t.test('source unexplained and duplicate source/target identities block verification', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'source.json');
+      const reportPath = path.join(tempDir, 'report.json');
+      const validPolicy = {
+        kind: 'policy',
+        identity: 'storage.objects:crm_documents_policy',
+        details: { schema: 'storage', table: 'objects', policy: 'crm_documents_policy', permissive: 'PERMISSIVE', roles: ['authenticated'], command: 'SELECT', using: 'true', withCheck: null },
+      };
+
+      await fsp.writeFile(sourcePath, JSON.stringify([{ kind: 'unknown-kind', identity: 'unclassified_object', details: {} }]));
+      const unexplained = await handleVerifyCommand({
+        sourcePath, target: 'supabase_db_crm-restore-rehearsal', reportPath,
+        querySql: async () => JSON.stringify([]),
+      });
+      assert.equal(unexplained.status, 'BLOCKED');
+      assert.ok(unexplained.report.discrepancies.some((d) => d.field === 'source_unexplained'));
+
+      await fsp.writeFile(sourcePath, JSON.stringify([validPolicy, validPolicy]));
+      const duplicateSource = await handleVerifyCommand({
+        sourcePath, target: 'supabase_db_crm-restore-rehearsal', reportPath,
+        querySql: async () => JSON.stringify([validPolicy]),
+      });
+      assert.equal(duplicateSource.status, 'BLOCKED');
+      assert.ok(duplicateSource.report.discrepancies.some((d) => d.field === 'duplicate_source_identity'));
+
+      await fsp.writeFile(sourcePath, JSON.stringify([validPolicy]));
+      const duplicateTarget = await handleVerifyCommand({
+        sourcePath, target: 'supabase_db_crm-restore-rehearsal', reportPath,
+        querySql: async () => JSON.stringify([validPolicy, validPolicy]),
+      });
+      assert.equal(duplicateTarget.status, 'BLOCKED');
+      assert.ok(duplicateTarget.report.discrepancies.some((d) => d.field === 'duplicate_target_identity'));
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   await t.test('Finding 2 regression: deep restore verification mutation tests fail closed on any attribute change', async () => {
     const tempDir = await createTempDir();
     try {
@@ -587,6 +643,12 @@ test('managed-customizations helper suite', async (t) => {
           `Expected discrepancy on field '${expectedField}', found: ${JSON.stringify(res.report.discrepancies)}`
         );
       };
+
+      // Malformed nested arrays must not be normalized into valid values.
+      await verifyMutation((t) => { t[0].details.roles = [42]; }, 'schema_validation');
+      await verifyMutation((t) => { t[2].details.functionConfig = [null]; }, 'schema_validation');
+      await verifyMutation((t) => { t[3].details.config = [42]; }, 'schema_validation');
+      await verifyMutation((t) => { t[3].details.acl = [{}]; }, 'schema_validation');
 
       // 1. Policy mutations
       await verifyMutation((t) => { t[0].details.roles = ['authenticated']; }, 'roles');

@@ -253,19 +253,136 @@ FROM items;
 const BASELINE_PATH = new URL('./platform-acl-baseline.json', import.meta.url);
 let platformAclBaseline = null;
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validateAclEntryList(entries, label) {
+  if (!Array.isArray(entries)) return { valid: false, reason: `${label} entries must be an array` };
+  const seen = new Set();
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    if (
+      !isPlainObject(entry) ||
+      !isNonEmptyString(entry.grantee) ||
+      !isNonEmptyString(entry.grantor) ||
+      !isNonEmptyString(entry.privilegeType) ||
+      typeof entry.isGrantable !== 'boolean' ||
+      Object.keys(entry).sort().join('|') !== ['grantee', 'grantor', 'isGrantable', 'privilegeType'].sort().join('|')
+    ) {
+      return { valid: false, reason: `${label} ACL entry ${index} has invalid fields or non-boolean isGrantable` };
+    }
+    const key = canonicalEntryKey(entry);
+    if (seen.has(key)) return { valid: false, reason: `${label} contains duplicate ACL entry '${key}'` };
+    seen.add(key);
+  }
+  return { valid: true };
+}
+
+export function validatePlatformAclBaseline(baseline) {
+  const metadata = baseline?._metadata;
+  if (
+    !isPlainObject(baseline) ||
+    !isPlainObject(metadata) ||
+    metadata.format !== 'crm-platform-acl-baseline/v2' ||
+    metadata.postgresVersion !== '17.11' ||
+    metadata.supabaseImage !== 'public.ecr.aws/supabase/postgres:17.11.0.002' ||
+    metadata.imageDigest !== 'sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53' ||
+    metadata.totalRelations !== 38 ||
+    metadata.totalColumns !== 362 ||
+    metadata.extractionScript !== 'scripts/backup/extract-platform-acl-baseline.mjs' ||
+    typeof metadata.outputSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/i.test(metadata.outputSha256) ||
+    !isPlainObject(baseline.relations) ||
+    !isPlainObject(baseline.columns)
+  ) {
+    fail('INVALID_PLATFORM_ACL_BASELINE', 'Platform ACL baseline metadata, pinned image provenance, or top-level schema is invalid');
+  }
+
+  const relationEntries = Object.entries(baseline.relations);
+  const columnEntries = Object.entries(baseline.columns);
+  if (relationEntries.length !== metadata.totalRelations || columnEntries.length !== metadata.totalColumns) {
+    fail('INVALID_PLATFORM_ACL_BASELINE', 'Platform ACL baseline relation/column coverage count mismatch');
+  }
+
+  const actualDigest = sha256Hex(JSON.stringify({ relations: baseline.relations, columns: baseline.columns }));
+  if (actualDigest !== metadata.outputSha256.toLowerCase()) {
+    fail('INVALID_PLATFORM_ACL_BASELINE', 'Platform ACL baseline content digest mismatch');
+  }
+
+  for (const [identity, entry] of relationEntries) {
+    if (
+      !isPlainObject(entry) ||
+      !isNonEmptyString(entry.schema) ||
+      !isNonEmptyString(entry.table) ||
+      identity !== `${entry.schema}.${entry.table}` ||
+      typeof entry.aclIsNull !== 'boolean' ||
+      Object.keys(entry).sort().join('|') !== ['schema', 'table', 'aclIsNull', 'entries'].sort().join('|')
+    ) {
+      fail('INVALID_PLATFORM_ACL_BASELINE', `Invalid relation ACL baseline identity/schema: ${identity}`);
+    }
+    const checked = validateAclEntryList(entry.entries, `Relation ${identity}`);
+    if (!checked.valid) fail('INVALID_PLATFORM_ACL_BASELINE', checked.reason);
+    if (JSON.stringify(baseline[identity]) !== JSON.stringify(entry)) {
+      fail('INVALID_PLATFORM_ACL_BASELINE', `Legacy relation alias differs from canonical baseline: ${identity}`);
+    }
+  }
+
+  for (const [identity, entry] of columnEntries) {
+    if (
+      !isPlainObject(entry) ||
+      !isNonEmptyString(entry.schema) ||
+      !isNonEmptyString(entry.table) ||
+      !isNonEmptyString(entry.column) ||
+      identity !== `${entry.schema}.${entry.table}.${entry.column}` ||
+      typeof entry.aclIsNull !== 'boolean' ||
+      Object.keys(entry).sort().join('|') !== ['schema', 'table', 'column', 'aclIsNull', 'entries'].sort().join('|')
+    ) {
+      fail('INVALID_PLATFORM_ACL_BASELINE', `Invalid column ACL baseline identity/schema: ${identity}`);
+    }
+    const checked = validateAclEntryList(entry.entries, `Column ${identity}`);
+    if (!checked.valid) fail('INVALID_PLATFORM_ACL_BASELINE', checked.reason);
+  }
+
+  const allowedTopLevel = new Set(['_metadata', 'relations', 'columns', ...Object.keys(baseline.relations)]);
+  if (Object.keys(baseline).some((key) => !allowedTopLevel.has(key))) {
+    fail('INVALID_PLATFORM_ACL_BASELINE', 'Platform ACL baseline contains unexpected top-level keys');
+  }
+  return baseline;
+}
+
+function deepFreeze(value) {
+  if (isPlainObject(value) || Array.isArray(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 export function getPlatformAclBaseline() {
   if (!platformAclBaseline) {
-    platformAclBaseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
+    validatePlatformAclBaseline(parsed);
+    platformAclBaseline = deepFreeze(parsed);
   }
   return platformAclBaseline;
 }
 
 export function canonicalEntryKey(entry) {
-  const grantee = entry?.grantee ?? '';
-  const grantor = entry?.grantor ?? '';
-  const priv = entry?.privilegeType ?? '';
-  const grantable = Boolean(entry?.isGrantable);
-  return `${grantee}|${grantor}|${priv}|${grantable}`;
+  if (
+    !isPlainObject(entry) ||
+    !isNonEmptyString(entry.grantee) ||
+    !isNonEmptyString(entry.grantor) ||
+    !isNonEmptyString(entry.privilegeType) ||
+    typeof entry.isGrantable !== 'boolean'
+  ) {
+    throw new TypeError('ACL entry requires non-empty grantee, grantor, privilegeType, and boolean isGrantable');
+  }
+  return `${entry.grantee}|${entry.grantor}|${entry.privilegeType}|${entry.isGrantable}`;
 }
 
 /**
@@ -274,8 +391,9 @@ export function canonicalEntryKey(entry) {
  * grant option tampering, non-null column ACL, or unknown relation.
  */
 export function classifyAclCustomization(item, projectAllowlist = new Set()) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return { classification: 'unexplained', reason: 'Malformed ACL object' };
   const { kind, identity, details } = item;
-  if (!details || typeof details !== 'object') {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
     return { classification: 'unexplained', reason: 'Malformed ACL details' };
   }
 
@@ -285,8 +403,11 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
   }
 
   if (kind === 'column-acl') {
-    const baseline = getPlatformAclBaseline();
-    const columnsBaseline = baseline.columns || {};
+    let baseline;
+    try { baseline = getPlatformAclBaseline(); } catch (error) {
+      return { classification: 'unexplained', reason: `Platform ACL baseline validation failed: ${error.message}` };
+    }
+    const columnsBaseline = baseline.columns;
     const baselineObj = columnsBaseline[identity];
     if (!baselineObj) {
       return {
@@ -295,6 +416,12 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
       };
     }
 
+    if (details.schema !== baselineObj.schema || details.table !== baselineObj.table || details.column !== baselineObj.column) {
+      return { classification: 'unexplained', reason: `Column identity metadata mismatch on ${identity}` };
+    }
+    if (details.schema !== baselineObj.schema || details.table !== baselineObj.table) {
+      return { classification: 'unexplained', reason: `Relation identity metadata mismatch on ${identity}` };
+    }
     if (typeof details.aclIsNull !== 'boolean' || !Array.isArray(details.entries)) {
       return {
         classification: 'unexplained',
@@ -311,6 +438,8 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
 
     const actualEntries = details.entries;
     const baselineEntries = baselineObj.entries;
+    const actualValidation = validateAclEntryList(actualEntries, `Column ${identity}`);
+    if (!actualValidation.valid) return { classification: 'unexplained', reason: actualValidation.reason };
     const actualSet = new Set(actualEntries.map(canonicalEntryKey));
     const baselineSet = new Set(baselineEntries.map(canonicalEntryKey));
 
@@ -348,8 +477,11 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
   }
 
   if (kind === 'relation-acl') {
-    const baseline = getPlatformAclBaseline();
-    const relationsBaseline = baseline.relations || baseline;
+    let baseline;
+    try { baseline = getPlatformAclBaseline(); } catch (error) {
+      return { classification: 'unexplained', reason: `Platform ACL baseline validation failed: ${error.message}` };
+    }
+    const relationsBaseline = baseline.relations;
     const baselineObj = relationsBaseline[identity];
     if (!baselineObj) {
       return {
@@ -372,8 +504,10 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
       };
     }
 
-    const actualEntries = Array.isArray(details.entries) ? details.entries : [];
-    const baselineEntries = Array.isArray(baselineObj.entries) ? baselineObj.entries : [];
+    const actualEntries = details.entries;
+    const baselineEntries = baselineObj.entries;
+    const actualValidation = validateAclEntryList(actualEntries, `Relation ${identity}`);
+    if (!actualValidation.valid) return { classification: 'unexplained', reason: actualValidation.reason };
 
     const baselineSet = new Set(baselineEntries.map(canonicalEntryKey));
     const actualSet = new Set(actualEntries.map(canonicalEntryKey));
@@ -423,8 +557,9 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
  * - 'unexplained': Unrecognized object (triggers fail-closed BLOCKED status)
  */
 export function classifyManagedCustomization(item, projectAllowlist = new Set()) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return { classification: 'unexplained', reason: 'Malformed object structure' };
   const { kind, identity, details } = item;
-  if (!kind || !identity || typeof details !== 'object' || details === null) {
+  if (typeof kind !== 'string' || !kind.trim() || typeof identity !== 'string' || !identity.trim() || typeof details !== 'object' || details === null || Array.isArray(details)) {
     return { classification: 'unexplained', reason: 'Malformed object structure' };
   }
 
@@ -781,6 +916,20 @@ export function normalizeConfigArray(config) {
   return [String(config).trim()];
 }
 
+function isNonEmptyStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
+}
+
+function isNullableStringArray(value) {
+  return value === null || isNonEmptyStringArray(value);
+}
+
+function isNullableStringOrStringArray(value) {
+  return value === null ||
+    (typeof value === 'string' && value.trim().length > 0) ||
+    isNonEmptyStringArray(value);
+}
+
 export function validateCustomizationDetails(kind, identity, details, label = 'item') {
   if (!details || typeof details !== 'object' || Array.isArray(details)) {
     return { valid: false, reason: `${label} '${identity}' details must be a non-null object` };
@@ -797,19 +946,19 @@ export function validateCustomizationDetails(kind, identity, details, label = 'i
       if (typeof details.policy !== 'string' || !details.policy.trim()) {
         return { valid: false, reason: `${label} policy '${identity}' missing non-empty string policy` };
       }
-      if (typeof details.permissive !== 'string') {
-        return { valid: false, reason: `${label} policy '${identity}' missing string permissive` };
+      if (!['PERMISSIVE', 'RESTRICTIVE'].includes(details.permissive)) {
+        return { valid: false, reason: `${label} policy '${identity}' has invalid permissive mode` };
       }
-      if (!Array.isArray(details.roles)) {
-        return { valid: false, reason: `${label} policy '${identity}' missing array roles` };
+      if (!isNonEmptyStringArray(details.roles) || new Set(details.roles).size !== details.roles.length) {
+        return { valid: false, reason: `${label} policy '${identity}' roles must be unique non-empty strings` };
       }
-      if (typeof details.command !== 'string') {
-        return { valid: false, reason: `${label} policy '${identity}' missing string command` };
+      if (!['ALL', 'SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(details.command)) {
+        return { valid: false, reason: `${label} policy '${identity}' has invalid command` };
       }
-      if (!('using' in details) || (details.using !== null && typeof details.using !== 'string')) {
+      if (!('using' in details) || (details.using !== null && (typeof details.using !== 'string' || !details.using.trim()))) {
         return { valid: false, reason: `${label} policy '${identity}' missing nullable string using` };
       }
-      if (!('withCheck' in details) || (details.withCheck !== null && typeof details.withCheck !== 'string')) {
+      if (!('withCheck' in details) || (details.withCheck !== null && (typeof details.withCheck !== 'string' || !details.withCheck.trim()))) {
         return { valid: false, reason: `${label} policy '${identity}' missing nullable string withCheck` };
       }
       return { valid: true };
@@ -841,14 +990,14 @@ export function validateCustomizationDetails(kind, identity, details, label = 'i
       if (typeof details.definition !== 'string' || !details.definition.trim()) {
         return { valid: false, reason: `${label} trigger '${identity}' missing string definition` };
       }
-      if (typeof details.enabled !== 'string') {
-        return { valid: false, reason: `${label} trigger '${identity}' missing string enabled` };
+      if (!['O', 'D', 'R', 'A'].includes(details.enabled)) {
+        return { valid: false, reason: `${label} trigger '${identity}' has invalid enabled state` };
       }
       if (typeof details.functionIdentity !== 'string' || !details.functionIdentity.trim()) {
         return { valid: false, reason: `${label} trigger '${identity}' missing string functionIdentity` };
       }
-      if (typeof details.functionDefinition !== 'string') {
-        return { valid: false, reason: `${label} trigger '${identity}' missing string functionDefinition` };
+      if (typeof details.functionDefinition !== 'string' || !details.functionDefinition.trim()) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing non-empty string functionDefinition` };
       }
       if (typeof details.functionOwner !== 'string' || !details.functionOwner.trim()) {
         return { valid: false, reason: `${label} trigger '${identity}' missing string functionOwner` };
@@ -856,10 +1005,10 @@ export function validateCustomizationDetails(kind, identity, details, label = 'i
       if (typeof details.securityDefiner !== 'boolean') {
         return { valid: false, reason: `${label} trigger '${identity}' missing boolean securityDefiner` };
       }
-      if (!('functionConfig' in details) || (details.functionConfig !== null && !Array.isArray(details.functionConfig))) {
+      if (!('functionConfig' in details) || !isNullableStringArray(details.functionConfig)) {
         return { valid: false, reason: `${label} trigger '${identity}' missing nullable array functionConfig` };
       }
-      if (!('functionAcl' in details) || (details.functionAcl !== null && !Array.isArray(details.functionAcl) && typeof details.functionAcl !== 'string')) {
+      if (!('functionAcl' in details) || !isNullableStringOrStringArray(details.functionAcl)) {
         return { valid: false, reason: `${label} trigger '${identity}' missing nullable array/string functionAcl` };
       }
       return { valid: true };
@@ -876,10 +1025,10 @@ export function validateCustomizationDetails(kind, identity, details, label = 'i
       if (typeof details.securityDefiner !== 'boolean') {
         return { valid: false, reason: `${label} ${kind} '${identity}' missing boolean securityDefiner` };
       }
-      if (!('config' in details) || (details.config !== null && !Array.isArray(details.config))) {
+      if (!('config' in details) || !isNullableStringArray(details.config)) {
         return { valid: false, reason: `${label} ${kind} '${identity}' missing nullable array config` };
       }
-      if (!('acl' in details) || (details.acl !== null && !Array.isArray(details.acl) && typeof details.acl !== 'string')) {
+      if (!('acl' in details) || !isNullableStringOrStringArray(details.acl)) {
         return { valid: false, reason: `${label} ${kind} '${identity}' missing nullable array/string acl` };
       }
       if (typeof details.language !== 'string' || !details.language.trim()) {
@@ -1050,6 +1199,15 @@ export function deepCompareCustomizationItem(sourceItem, targetItem) {
   return discrepancies;
 }
 
+function managedItemKey(item) {
+  if (
+    !item || typeof item !== 'object' || Array.isArray(item) ||
+    typeof item.kind !== 'string' || !item.kind.trim() ||
+    typeof item.identity !== 'string' || !item.identity.trim()
+  ) return null;
+  return `${item.kind}:${item.identity}`;
+}
+
 export async function handleVerifyCommand({ sourcePath, target, reportPath, targetInventoryPath = null, querySql = null, projectAllowlist = [] }) {
   installSignalHandlers();
 
@@ -1073,14 +1231,28 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
   }
 
   const allowlistSet = new Set(projectAllowlist);
-
-  // Verify project-owned objects
-  const projectOwned = sourceItems.filter(item => {
-    const res = classifyManagedCustomization(item, allowlistSet);
-    return res.classification === 'project-owned';
-  });
-
   const discrepancies = [];
+  const projectOwned = [];
+  const sourceSeen = new Set();
+
+  // Source inventory is evidence: malformed, duplicate, or unexplained entries must block.
+  for (const item of sourceItems) {
+    const key = managedItemKey(item);
+    if (!key) {
+      discrepancies.push({ identity: item?.identity ?? null, kind: item?.kind ?? null, field: 'source_schema', reason: 'Source inventory contains a malformed identity or object' });
+      continue;
+    }
+    if (sourceSeen.has(key)) {
+      discrepancies.push({ identity: item.identity, kind: item.kind, field: 'duplicate_source_identity', reason: `Source inventory contains duplicate identity '${key}'` });
+      continue;
+    }
+    sourceSeen.add(key);
+    const classification = classifyManagedCustomization(item, allowlistSet);
+    if (classification.classification === 'project-owned') projectOwned.push(item);
+    else if (classification.classification === 'unexplained') {
+      discrepancies.push({ identity: item.identity, kind: item.kind, field: 'source_unexplained', reason: `Source contains unexplained object: ${classification.reason}` });
+    }
+  }
   let targetItems = null;
 
   try {
@@ -1124,8 +1296,26 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
     fail('TARGET_EVIDENCE_MISSING', 'Verification requires verified target inventory data array');
   }
 
+  // Reject malformed and duplicate target identities before constructing lookup maps.
+  const targetMap = new Map();
+  const targetSeen = new Set();
+  const verifiedTargetItems = [];
+  for (const item of targetItems) {
+    const key = managedItemKey(item);
+    if (!key) {
+      discrepancies.push({ identity: item?.identity ?? null, kind: item?.kind ?? null, field: 'target_schema', reason: 'Target inventory contains a malformed identity or object' });
+      continue;
+    }
+    if (targetSeen.has(key)) {
+      discrepancies.push({ identity: item.identity, kind: item.kind, field: 'duplicate_target_identity', reason: `Target inventory contains duplicate identity '${key}'` });
+      continue;
+    }
+    targetSeen.add(key);
+    targetMap.set(key, item);
+    verifiedTargetItems.push(item);
+  }
+
   // 1. Check that all project-owned items exist in target and match all attributes exactly
-  const targetMap = new Map(targetItems.map(item => [`${item.kind}:${item.identity}`, item]));
   const sourceProjectKeySet = new Set(projectOwned.map(item => `${item.kind}:${item.identity}`));
 
   for (const item of projectOwned) {
@@ -1149,7 +1339,7 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
   }
 
   // 2. Check for extra unexpected project-owned customizations or unexplained objects on target
-  for (const targetItem of targetItems) {
+  for (const targetItem of verifiedTargetItems) {
     const tKey = `${targetItem.kind}:${targetItem.identity}`;
     const tClass = classifyManagedCustomization(targetItem, allowlistSet);
     if (tClass.classification === 'project-owned') {

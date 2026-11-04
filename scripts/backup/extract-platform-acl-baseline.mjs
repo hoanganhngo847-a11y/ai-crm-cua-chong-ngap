@@ -75,9 +75,30 @@ WHERE n.nspname IN ('auth', 'storage')
 ORDER BY identity
 `;
 
-export function extractBaselineFromContainer(containerName = 'supabase_db_ai-crm-cua-chong-ngap') {
+export function extractBaselineFromContainer(containerName = 'supabase_db_ai-crm-cua-chong-ngap', runCommand = execFileSync) {
+  const imageId = runCommand('docker', ['inspect', '--format', '{{.Image}}', containerName], { encoding: 'utf8' }).trim();
+  if (!/^sha256:[0-9a-f]{64}$/i.test(imageId)) {
+    throw new Error(`Container ${containerName} has an invalid immutable image ID`);
+  }
+  const repoDigestsRaw = runCommand('docker', ['image', 'inspect', '--format', '{{json .RepoDigests}}', imageId], { encoding: 'utf8' }).trim();
+  let repoDigests;
+  try { repoDigests = JSON.parse(repoDigestsRaw); } catch {
+    throw new Error('Docker image RepoDigests metadata is invalid JSON');
+  }
+  const expectedRepository = EXPECTED_SUPABASE_IMAGE.split(':')[0];
+  if (!Array.isArray(repoDigests) || !repoDigests.includes(`${expectedRepository}@${EXPECTED_IMAGE_DIGEST}`)) {
+    throw new Error(`Container image digest mismatch: expected ${EXPECTED_IMAGE_DIGEST}`);
+  }
+
+  const serverVersion = runCommand('docker', [
+    'exec', '-i', containerName, 'psql', '-U', 'postgres', '-d', 'postgres', '-XqAt', '-c', 'SHOW server_version;',
+  ], { encoding: 'utf8' }).trim();
+  if (serverVersion.split(/\s+/)[0] !== EXPECTED_POSTGRES_VERSION) {
+    throw new Error(`PostgreSQL server version mismatch: expected ${EXPECTED_POSTGRES_VERSION}, got ${serverVersion}`);
+  }
+
   const queryPsql = (sql) => {
-    const raw = execFileSync(
+    const raw = runCommand(
       'docker',
       [
         'exec',
