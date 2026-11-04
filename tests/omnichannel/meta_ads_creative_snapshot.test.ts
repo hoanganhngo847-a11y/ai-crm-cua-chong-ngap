@@ -295,6 +295,7 @@ test('creative backfill uses compare-and-set so stale results cannot overwrite a
         const guard = patch.url.searchParams.get('or') || '';
         assert.match(guard, /PENDING_SYNC/);
         assert.match(guard, /creative_snapshot\.is\.null/);
+        assert.match(guard, /pageId\.is\.null/, 'missing Page identity remains eligible for compare-and-set backfill');
         assert.equal(patch.body.ads_context_data?.raw_meta?.campaign_id, 'campaign-raw', 'raw Meta evidence survives backfill');
         assert.equal(patch.body.ads_context_data?.creative_snapshot?.captureTiming, 'BACKFILL');
     } finally {
