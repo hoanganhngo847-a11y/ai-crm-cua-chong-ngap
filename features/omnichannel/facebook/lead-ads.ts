@@ -254,14 +254,18 @@ export async function processLeadAdsChange(
         const adsetId = leadData.adset_id || verifiedCreative?.adsetId || null;
         const adsetName = leadData.adset_name || verifiedCreative?.adsetName || null;
         const adName = leadData.ad_name || verifiedCreative?.adName || null;
+        const attributionEvidence = {
+            ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
+            ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
+            ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
+        };
+        const adsContextData = Object.keys(attributionEvidence).length > 0 ? attributionEvidence : null;
         const ingest = await rpc('ingest_meta_leadgen_event', {
             p_company_id: config.company, p_leadgen_id: change.leadgenId, p_claim_token: claimToken,
             p_ingest: {
                 name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
                 content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
-                ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
-                ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
-                ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
+                ...attributionEvidence,
                 payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
                     campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name),
                     ...(adIdConflict ? { crm_lead_ad_id_conflict: true } : {}),
@@ -278,14 +282,7 @@ export async function processLeadAdsChange(
             p_meta_ad_id: adId, p_ad_name: adName, p_meta_form_id: formId,
             p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
             p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
-            p_ads_context_data: (() => {
-                const context = {
-                    ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
-                    ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
-                    ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
-                };
-                return Object.keys(context).length > 0 ? context : null;
-            })(),
+            p_ads_context_data: adsContextData,
             p_attribution_status: 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
             p_occurred: claim.occurred_at || change.time,
         });
