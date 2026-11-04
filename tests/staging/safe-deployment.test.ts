@@ -101,7 +101,7 @@ const lead=`
     PERFORM public.record_lead_attribution_touchpoint(
       p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,
       p_page_id=>'7777777777777777',p_meta_ad_id=>'synthetic_ad',p_meta_leadgen_id=>'88001',
-      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"synthetic_ad","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
+      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"synthetic_ad","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
     );
     PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
     PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',token,'PROCESSED');
@@ -117,7 +117,7 @@ const leadPair=lead+`
     PERFORM public.record_lead_attribution_touchpoint(
       p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,
       p_page_id=>'7777777777777777',p_meta_ad_id=>'ad_b',p_meta_leadgen_id=>'88002',
-      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","adId":"ad_b","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
+      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_b","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
     );
     PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
     PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',token,'PROCESSED');
