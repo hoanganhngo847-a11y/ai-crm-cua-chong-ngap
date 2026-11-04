@@ -292,8 +292,8 @@ export function validatePlatformAclBaseline(baseline) {
     metadata.postgresVersion !== '17.11' ||
     metadata.supabaseImage !== 'public.ecr.aws/supabase/postgres:17.11.0.002' ||
     metadata.imageDigest !== 'sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53' ||
-    metadata.totalRelations !== 38 ||
-    metadata.totalColumns !== 362 ||
+    !Number.isInteger(metadata.totalRelations) ||
+    !Number.isInteger(metadata.totalColumns) ||
     metadata.extractionScript !== 'scripts/backup/extract-platform-acl-baseline.mjs' ||
     typeof metadata.outputSha256 !== 'string' ||
     !/^[0-9a-f]{64}$/i.test(metadata.outputSha256) ||
@@ -305,7 +305,12 @@ export function validatePlatformAclBaseline(baseline) {
 
   const relationEntries = Object.entries(baseline.relations);
   const columnEntries = Object.entries(baseline.columns);
-  if (relationEntries.length !== metadata.totalRelations || columnEntries.length !== metadata.totalColumns) {
+  if (
+    relationEntries.length !== metadata.totalRelations ||
+    columnEntries.length !== metadata.totalColumns ||
+    metadata.totalRelations !== 38 ||
+    metadata.totalColumns !== 362
+  ) {
     fail('INVALID_PLATFORM_ACL_BASELINE', 'Platform ACL baseline relation/column coverage count mismatch');
   }
 

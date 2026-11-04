@@ -188,11 +188,15 @@ function readEvidenceFile(filePath: string | undefined, label: string): { bytes?
   }
 }
 
-function parseEvidenceJson(bytes: Buffer, label: string): { value?: Record<string, any>; reason?: string } {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseEvidenceJson(bytes: Buffer, label: string): { value?: Record<string, unknown>; reason?: string } {
   try {
     const value: unknown = JSON.parse(bytes.toString('utf8'));
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return { reason: `${label} must contain one JSON object` };
-    return { value: value as Record<string, any> };
+    if (!isRecord(value)) return { reason: `${label} must contain one JSON object` };
+    return { value };
   } catch {
     return { reason: `${label} must contain valid JSON` };
   }
@@ -370,11 +374,11 @@ export function verifySignedApprovalArtifact(
   const manifestParsed = parseEvidenceJson(manifestRead.bytes, 'Backup manifest');
   if (!manifestParsed.value) return { valid: false, reason: manifestParsed.reason };
   const manifest = manifestParsed.value;
-  const manifestSource = manifest.source;
+  const manifestSource = isRecord(manifest.source) ? manifest.source : null;
   if (
     manifest.format !== 'crm-staging-backup-manifest/v1' ||
     !isNonEmptyString(manifest.backupId) ||
-    !manifestSource || typeof manifestSource !== 'object' ||
+    !manifestSource ||
     manifestSource.projectRef !== expectedProjectRef ||
     manifestSource.environment !== 'staging' ||
     manifestSource.auditBaselineCommit !== payload.sourceCommit ||
@@ -384,7 +388,7 @@ export function verifySignedApprovalArtifact(
     !isNonEmptyString(manifestSource.serverVersion) ||
     !isNonEmptyString(manifestSource.dumpToolVersion) ||
     !Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0 ||
-    manifest.artifacts.some((entry: any) => !entry || typeof entry !== 'object' || !isNonEmptyString(entry.path) || !isNonEmptyString(entry.kind))
+    manifest.artifacts.some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry.path) || !isNonEmptyString(entry.kind))
   ) {
     return { valid: false, reason: 'Backup manifest schema or staging provenance is invalid' };
   }
@@ -409,6 +413,7 @@ export function verifySignedApprovalArtifact(
   const evidenceParsed = parseEvidenceJson(evidenceRead.bytes, 'Backup/restore evidence');
   if (!evidenceParsed.value) return { valid: false, reason: evidenceParsed.reason };
   const evidence = evidenceParsed.value;
+  const restoreTarget = isRecord(evidence.restoreTarget) ? evidence.restoreTarget : null;
   const startedAt = isValidTimestamp(evidence.startedAt) ? Date.parse(evidence.startedAt) : NaN;
   const completedAt = isValidTimestamp(evidence.completedAt) ? Date.parse(evidence.completedAt) : NaN;
   if (
@@ -418,8 +423,7 @@ export function verifySignedApprovalArtifact(
     evidence.sourceEnvironment !== 'staging' ||
     evidence.backupManifestDigest !== manifestDigest ||
     evidence.backupStatus !== 'PASSED' || evidence.restoreStatus !== 'PASSED' || evidence.status !== 'PASSED' ||
-    !evidence.restoreTarget || typeof evidence.restoreTarget !== 'object' ||
-    evidence.restoreTarget.type !== 'disposable-isolated' || !isNonEmptyString(evidence.restoreTarget.identity) ||
+    !restoreTarget || restoreTarget.type !== 'disposable-isolated' || !isNonEmptyString(restoreTarget.identity) ||
     !Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt
   ) {
     return { valid: false, reason: 'Backup/restore evidence schema, success status, target, project, or timestamps are invalid' };

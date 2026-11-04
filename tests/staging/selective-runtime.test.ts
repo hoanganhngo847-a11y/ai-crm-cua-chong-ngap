@@ -491,7 +491,7 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           backupEvidencePath: '/non/existent/path/to/evidence.json',
         });
         assert.equal(resMissingEv.valid, false);
-        assert.match(resMissingEv.reason!, /Backup evidence file not found/);
+        assert.match(resMissingEv.reason!, /Backup\/restore evidence file not found/);
 
         // 11. Tampered migration hash fails closed
         const badHashesPayload = {
