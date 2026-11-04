@@ -542,7 +542,7 @@ export async function syncPendingCreativeSnapshots(
             .eq('meta_ad_id', adId)
             // Compare-and-set: a usable/terminal snapshot written after the
             // initial scan must win over this stale backfill result.
-            .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
+            .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null,ads_context_data->creative_snapshot->>pageId.is.null')
             .select('id');
 
         if (updateError) {
