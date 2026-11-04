@@ -3,7 +3,7 @@
  *
  * Runs against local PostgreSQL 17.11 container (`supabase_db_ai-crm-cua-chong-ngap`).
  * Validates all mandatory scenarios from Section 5:
- * 1. Successful five-file release + registry creation + 21 canonical ledger rows preserved.
+ * 1. Successful seven-file release + registry creation + 21 canonical ledger rows preserved.
  * 2. Ordinary migration writer fence: Blocks unapproved inserts with MIGRATION_LEDGER_FENCED.
  * 3. Immutable ledger: Blocks update/delete on schema_migrations with MIGRATION_LEDGER_IMMUTABLE.
  * 4. Duplicate release attempt: Rejects with SELECTIVE_RELEASE_ALREADY_APPLIED.
@@ -109,7 +109,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
 
   try {
     // ------------------------------------------------------------------------
-    // SCENARIO 1: Successful 5-file release, registry creation, ledger preservation
+    // SCENARIO 1: Successful seven-file release, registry creation, ledger preservation
     // ------------------------------------------------------------------------
     await t.test('1. Successful selective release preserves 21 ledger rows and records registry entry', () => {
       const db = getDb('success');
@@ -137,7 +137,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
       assert.equal(reg.reconciled_to_canonical, false);
       assert.equal(reg.sources.length, META_SOURCES.length);
 
-      // Verify all 5 Meta tables exist
+      // Verify all five public Meta tables exist (plus two private tables)
       const metaTables = runSql(
         db,
         `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -591,12 +591,14 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
         `
       );
 
+      const originalLedger = runSql(db, 'SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m;');
+
       // Step 3: Run the canonical reconciliation package
       const reconcilePack = buildCanonicalReconciliationPackage({ releaseId: 'meta-ads-20261031-r1' });
       const recOutput = runSql(db, reconcilePack.sql);
       assert.match(recOutput, /META_RECONCILIATION_SUCCESSFUL/);
 
-      // Canonical ledger now contains 21 + 5 = 26 records
+      // Canonical ledger now contains 21 + 7 = 28 records
       const ledgerCount = runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;');
       assert.equal(ledgerCount, String(21 + META_SOURCES.length), 'Canonical ledger must contain the historical prefix plus every reconciled Meta migration');
 
@@ -606,6 +608,12 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
       );
       assert.equal(reg.reconciled_to_canonical, true);
       assert.ok(reg.reconciled_at !== null);
+      assert.equal(reg.recovery_evidence.reconciliation_canonical_migrations_added, 7);
+      assert.equal(reconcilePack.metaFiles.length, 7);
+      const addedVersions = reconcilePack.metaFiles.map(m => q(m.version)).join(',');
+      assert.equal(runSql(db, `SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m WHERE version NOT IN (${addedVersions});`), originalLedger);
+      const added = JSON.parse(runSql(db, `SELECT jsonb_agg(jsonb_build_object('version',version,'name',name,'statements',statements) ORDER BY version) FROM supabase_migrations.schema_migrations WHERE version IN (${addedVersions});`));
+      assert.deepEqual(added, reconcilePack.metaFiles.map(m => ({ version: m.version, name: m.name, statements: [m.sql] })));
 
       // Step 4: Real migration runner simulation
       // A canonical runner inspects schema_migrations and applies any migration not yet recorded.
@@ -613,7 +621,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
         JSON.parse(runSql(db, 'SELECT json_agg(version) FROM supabase_migrations.schema_migrations;'))
       );
 
-      // Verify that all 5 Meta migrations are in recordedVersions
+      // Verify that all seven Meta migrations are in recordedVersions
       for (const m of reconcilePack.metaFiles) {
         assert.ok(recordedVersions.has(m.version), `Reconciled version ${m.version} must be recognized in canonical ledger`);
       }
@@ -626,7 +634,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
         sql: 'CREATE TABLE public.crm_future_expansion(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), note text);',
       };
 
-      // Ensure 5 Meta migrations are SKIPPED (not re-executed)
+      // Ensure seven Meta migrations are SKIPPED (not re-executed)
       let metaReexecuted = 0;
       for (const m of reconcilePack.metaFiles) {
         if (!recordedVersions.has(m.version)) {
@@ -646,7 +654,7 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
       );
 
       // Step 5: Verification of invariants post-reconciliation
-      // 1. Ledger count is 21 + 5 + 1 = 27
+      // 1. Ledger count is 21 + 7 + 1 = 29
       assert.equal(runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;'), String(22 + META_SOURCES.length));
 
       // 2. Pre-existing business data created during selective period is 100% intact
@@ -668,6 +676,92 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
 
       // 3. New canonical feature table exists
       assert.equal(runSql(db, "SELECT to_regclass('public.crm_future_expansion') IS NOT NULL;"), 't');
+    });
+
+    await t.test('12. Reconciliation preflight rejects historical and source-evidence tampering without disabling the fence', () => {
+      const pack = buildSelectiveExecutorPackage();
+      const reconciliation = buildCanonicalReconciliationPackage();
+      const version = historical.migration_history[0].version;
+      const nextVersion = historical.migration_history[1].version;
+      const cases = [
+        { name: 'modified_name', mutate: `UPDATE supabase_migrations.schema_migrations SET name='tampered' WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_LEDGER_MISMATCH' },
+        { name: 'modified_sql', mutate: `UPDATE supabase_migrations.schema_migrations SET statements=ARRAY['SELECT 123;'] WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_LEDGER_MISMATCH' },
+        { name: 'unexpected_version', mutate: `UPDATE supabase_migrations.schema_migrations SET version='20990101000000' WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_LEDGER_MISMATCH' },
+        { name: 'missing', mutate: `DELETE FROM supabase_migrations.schema_migrations WHERE version=${q(version)};`, code: 'CANONICAL_LEDGER_COUNT_MISMATCH' },
+        { name: 'duplicate', mutate: `ALTER TABLE supabase_migrations.schema_migrations DROP CONSTRAINT schema_migrations_pkey;
+            DELETE FROM supabase_migrations.schema_migrations WHERE version=${q(nextVersion)};
+            INSERT INTO supabase_migrations.schema_migrations SELECT * FROM supabase_migrations.schema_migrations WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_LEDGER_MISMATCH' },
+      ];
+      const state = (db: string) => runSql(db, `SELECT jsonb_build_object(
+        'ledger',(SELECT jsonb_agg(to_jsonb(m) ORDER BY to_jsonb(m)::text) FROM supabase_migrations.schema_migrations m),
+        'registry',(SELECT jsonb_agg(to_jsonb(r)) FROM private.selective_feature_releases r));`);
+      const fails = (db: string, source: string, code: string) => {
+        const before = state(db);
+        assert.throws(() => runSql(db, source), (error: unknown) => {
+          assert.ok(error && typeof error === 'object' && 'stderr' in error);
+          assert.ok(String(error.stderr).includes(code), String(error.stderr)); return true;
+        });
+        assert.equal(state(db), before, 'failed reconciliation leaves ledger and registry byte-identical');
+        assert.equal(runSql(db, "SELECT count(*) FROM pg_trigger WHERE tgname='trg_guard_selective_release_ledger' AND tgenabled='O';"), '1');
+        assert.throws(() => runSql(db, "INSERT INTO supabase_migrations.schema_migrations VALUES ('20990101000001','forbidden',ARRAY['SELECT 1;']);"), /MIGRATION_LEDGER_FENCED/);
+      };
+      for (const fixture of cases) {
+        const db = getDb('rec_' + fixture.name);
+        createPrefixDatabase(db);
+        // Fault fixture is assembled before installing the real registry/fence SQL.
+        // No deployed ledger fence is disabled to manufacture the corrupt state.
+        runSql(db, fixture.mutate);
+        runSql(db, pack.registrySql);
+        fails(db, reconciliation.sql, fixture.code);
+      }
+      const db = getDb('rec_source_evidence');
+      createPrefixDatabase(db);
+      runSql(db, pack.sql);
+      const originalSources = runSql(db, "SELECT sources FROM private.selective_feature_releases;");
+      for (const expression of [
+        "sources - 0", "sources || (sources->0)", "jsonb_set(sources,'{0,sha256}',to_jsonb(repeat('0',64)))",
+        "jsonb_set(sources,'{0,file}','\"20990101000000_unexpected.sql\"'::jsonb)",
+      ]) {
+        runSql(db, `UPDATE private.selective_feature_releases SET sources=${expression};`);
+        fails(db, reconciliation.sql, 'RECONCILIATION_SOURCE_EVIDENCE_MISMATCH');
+        runSql(db, `UPDATE private.selective_feature_releases SET sources=${q(originalSources)}::jsonb;`);
+      }
+    });
+
+    await t.test('13. Reconciliation postflight detects exact-row changes and rolls back the registry, seven inserts and fence transition', () => {
+      const db = getDb('rec_postflight');
+      createPrefixDatabase(db);
+      runSql(db, buildSelectiveExecutorPackage().sql);
+      const pack = buildCanonicalReconciliationPackage();
+      const version = historical.migration_history[0].version;
+      const metaVersion = pack.metaFiles[0].version;
+      const state = () => runSql(db, `SELECT jsonb_build_object(
+        'ledger',(SELECT jsonb_agg(to_jsonb(m) ORDER BY version) FROM supabase_migrations.schema_migrations m),
+        'registry',(SELECT jsonb_agg(to_jsonb(r)) FROM private.selective_feature_releases r));`);
+      const before = state();
+      const cases = [
+        { sql: `UPDATE supabase_migrations.schema_migrations SET name='tampered' WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_ROWS_CHANGED' },
+        { sql: `UPDATE supabase_migrations.schema_migrations SET statements=ARRAY['SELECT 123;'] WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
+        { sql: `UPDATE supabase_migrations.schema_migrations SET version='20990101000000' WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
+        { sql: `DELETE FROM supabase_migrations.schema_migrations WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_POST_COUNT_MISMATCH' },
+        { sql: `INSERT INTO supabase_migrations.schema_migrations VALUES ('20990101000000','unrelated',ARRAY['SELECT 1;']);`, code: 'RECONCILIATION_POST_COUNT_MISMATCH' },
+        { sql: `ALTER TABLE supabase_migrations.schema_migrations DROP CONSTRAINT schema_migrations_pkey;
+            DELETE FROM supabase_migrations.schema_migrations WHERE version=${q(pack.metaFiles[1].version)};
+            INSERT INTO supabase_migrations.schema_migrations SELECT * FROM supabase_migrations.schema_migrations WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
+        { sql: `UPDATE private.selective_feature_releases SET reconciled_to_canonical=false;`, code: 'RECONCILIATION_REGISTRY_MISMATCH' },
+      ];
+      for (const fixture of cases) {
+        const injected = pack.sql.replace('DO $reconcile_postflight$', fixture.sql + '\nDO $reconcile_postflight$');
+        assert.throws(() => runSql(db, injected), (error: unknown) => {
+          assert.ok(error && typeof error === 'object' && 'stderr' in error);
+          assert.ok(String(error.stderr).includes(fixture.code), String(error.stderr)); return true;
+        });
+        assert.equal(state(), before, 'all reconciliation writes and injected corruption roll back');
+        assert.equal(runSql(db, "SELECT count(*) FROM pg_trigger WHERE tgname='trg_guard_selective_release_ledger' AND tgenabled='O';"), '1');
+        assert.throws(() => runSql(db, `UPDATE supabase_migrations.schema_migrations SET name='blocked' WHERE version=${q(version)};`), /MIGRATION_LEDGER_IMMUTABLE/);
+      }
+      assert.match(runSql(db, pack.sql), /META_RECONCILIATION_SUCCESSFUL/);
+      assert.equal(runSql(db, 'SELECT count(*) FROM supabase_migrations.schema_migrations;'), '28');
     });
   } finally {
     // Clean up all created disposable test databases

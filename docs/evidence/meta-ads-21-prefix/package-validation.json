@@ -3,5 +3,5 @@
   "preconditionDriftRollback": true,
   "postconditionRollback": true,
   "canonicalLedgerRows": 21,
-  "bundleSha256": "a89a9bb2bad6037011b5a31e9a487dd31630c262bfe89c69a28afaec995576eb"
+  "bundleSha256": "dc2063919a916d1687257d18e5363a075e17c2d97f9903ef2968e912cada698d"
 }

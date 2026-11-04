@@ -5,7 +5,7 @@
 **Document Reference**: `docs/META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md`  
 **Repository**: `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`  
 **Branch**: `meta_ads_integration` | **Pull Request**: [#139](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139) (Open + Draft)  
-**Verified Git Baseline**: `e51a5989143582af0885ba5ee26644a68b388995`
+**Historical implementation baseline (superseded by PR #143 remediation)**: `e51a5989143582af0885ba5ee26644a68b388995`
 **Target Staging Project**: `qmhfmgkymjgoevwmkidm` (`ai-crm-meta-staging`)  
 **Target Engine**: PostgreSQL 17.11 (Supabase Free Plan)  
 **Execution Status**: **BLOCKED FOR HOSTED EXECUTION** (Engine validated locally; awaiting physical backup restoration verification and project owner approval).
@@ -14,7 +14,7 @@
 
 ## 1. Executive Summary & Architecture Strategy
 
-This specification details the formal implementation of **Strategy (A+B)** for deploying the five isolated Meta Ads lead attribution migrations to the existing Supabase Staging environment without performing destructive database recreation, without modifying the historical 21 migration ledger entries, and without fabricating records for the 95 unapplied canonical gap migrations.
+This specification details the formal implementation of **Strategy (A+B)** for deploying the seven isolated Meta Ads lead attribution migrations to the existing Supabase Staging environment without performing destructive database recreation, without modifying the historical 21 migration ledger entries, and without fabricating records for the 95 unapplied canonical gap migrations.
 
 ```
 +--------------------------------------------------------------------------------------------------+
@@ -22,7 +22,7 @@ This specification details the formal implementation of **Strategy (A+B)** for d
 |                                                                                                  |
 |  1. ADVISORY LOCK (pg_advisory_xact_lock) + SHARE LOCK ON CANONICAL LEDGER & ALL APP TABLES      |
 |  2. PRECONDITIONS: Server Version 17.x, Project Ref Check, 21-Ledger SHA Check, Catalog Match    |
-|  3. SOURCES: 5 Isolated Meta Ads Migrations (Pinned Hashes f29e..., e83f..., 7931..., etc.)      |
+|  3. SOURCES: 7 Isolated Meta Ads Migrations (Pinned Hashes f29e..., e83f..., 7931..., etc.)      |
 |  4. PRIVATE REGISTRY: Record release metadata into private.selective_feature_releases            |
 |  5. FENCE TRIGGER: trg_guard_selective_release_ledger on supabase_migrations.schema_migrations   |
 |  6. POSTCONDITIONS: Schema verification (365 approved objects), 0 writes to canonical ledger     |
@@ -32,7 +32,7 @@ This specification details the formal implementation of **Strategy (A+B)** for d
 ### Core Invariants Guaranteed
 1. **Preservation of Canonical Ledger**: The existing `supabase_migrations.schema_migrations` table contains exactly 21 historical records. The selective executor performs **0 INSERTs, 0 UPDATEs, and 0 DELETEs** on this table during selective deployment.
 2. **No Gap Migration Fabrication**: None of the 95 canonical gap migrations between prefix 21 and the Meta feature bundle are falsely recorded as executed.
-3. **Fail-Closed Atomic Transaction**: The entire release—preconditions, 5 migration DDLs, registry record creation, fencing trigger installation, and postconditions—runs inside a single transaction guarded by `pg_advisory_xact_lock`. Any check failure triggers an immediate `ROLLBACK`, leaving zero Meta tables, zero orphaned rows, and zero catalog changes.
+3. **Fail-Closed Atomic Transaction**: The entire release—preconditions, seven migration DDLs, registry record creation, fencing trigger installation, and postconditions—runs inside a single transaction guarded by `pg_advisory_xact_lock`. Any check failure triggers an immediate `ROLLBACK`, leaving zero Meta tables, zero orphaned rows, and zero catalog changes.
 4. **Target Project Identity & Connection Verification**: Validates the actual database connection host and Supabase project ref prior to running DDL. Redacts credentials and fails closed on unknown or mismatched targets.
 5. **PostgreSQL 17.x Version Enforcement**: Actively asserts that the server version is PostgreSQL 17.x (specifically matching staging 17.11 baseline) before executing DDL.
 6. **Messenger & Omnichannel Isolation**: As established in commit `25e8f21`, `han_ingest` is completely untouched. Messenger SLA windows remain at count 0. Lead Ads intake operates strictly through `public.ingest_meta_leadgen_event` callable exclusively by `service_role`.
@@ -123,7 +123,7 @@ GRANT SELECT ON TABLE private.selective_feature_releases TO service_role;
 | `feature_name` | `text` | Feature scope identifier (`META_ADS_LEAD_ATTRIBUTION`). |
 | `target_project_ref` | `text` | Target Supabase project ref (`qmhfmgkymjgoevwmkidm`). Rejects wrong instances. |
 | `source_commit` | `text` | Exact git commit hash of the verified bundle (`e51a598...`). |
-| `bundle_sha256` | `text` | SHA-256 checksum of the assembled 5-file DDL body. |
+| `bundle_sha256` | `text` | SHA-256 checksum of the assembled seven-file DDL body. |
 | `preconditions_sha256` | `text` | SHA-256 checksum of the preflight validation SQL block. |
 | `postconditions_sha256` | `text` | Status token updated upon post-flight verification success (`POSTCONDITIONS_VERIFIED`). |
 | `sources` | `jsonb` | Array of migration filenames, pinned SHA-256 hashes, and statement counts. |
@@ -199,19 +199,23 @@ Because database triggers alone cannot guarantee absolute isolation against unco
 
 ## 7. Canonical Migration Reconciliation Strategy
 
-When staging eventually catches up with the canonical migration history (applying the 95 gap migrations and aligning with production), the selective release is reconciled cleanly:
+The implemented reconciliation transitions the selective release from the exact original 21-row ledger to a ledger containing that unchanged prefix plus its seven already-executed Meta sources. It does not apply the omitted gap migrations:
 
 ### 7.1 Reconciliation Procedure ([`buildCanonicalReconciliationPackage`](file:///Users/hoangthuy/.gemini/antigravity/worktrees/ai-crm-cua-chong-ngap/meta_ads_integration/scripts/meta-ads/selective-executor.ts))
-In a single atomic transaction under exclusive lock:
-1. Verifies that the selective release is in `COMPLETED` status in `private.selective_feature_releases`.
-2. Marks `reconciled_to_canonical = true` and records reconciliation timestamp.
-3. Disarms the fence trigger `trg_guard_selective_release_ledger`.
-4. Records the five Meta migrations (`20261030090000`, `20261030100000`, `20261030110000`, `20261030120000`, `20261030130000`) into `supabase_migrations.schema_migrations` with their full canonical SQL statements.
-5. Verifies canonical ledger now contains 21 + 5 = 26 records, and all original 21 records are byte-for-byte unchanged.
+The reconciliation package operates on the exact original 21-row prefix and records only the seven Meta sources already executed by the selective release. It does not execute the 95 omitted gap migrations or manufacture evidence that those gaps ran. Applying the omitted canonical history requires a separately reviewed compatibility/ordering procedure; this reconciliation alone does not establish full-chain parity.
+
+In one transaction under the existing advisory lock and an exclusive canonical-ledger lock:
+1. Require the completed, unreconciled release and lock its registry row. Compare every original version, name and stored-SQL fingerprint with the expected historical 21-row manifest; reject missing, duplicated, substituted or modified entries.
+2. Require the exact ordered seven-source registry metadata (filenames, pinned SQL hashes and statement counts), matching project/feature and historical-ledger fingerprint. Snapshot the complete original ledger rows inside the transaction.
+3. Mark the release reconciled and record its timestamp; transition the existing ordinary migration fence only after all preconditions pass.
+4. Record the seven already-executed versions: `20261030090000`, `20261030100000`, `20261030110000`, `20261030120000`, `20261030130000`, `20261104150000` and `20261104171905`, with their exact approved names and SQL arrays.
+5. Require exactly **21 + 7 = 28** canonical records. Compare all original rows byte-for-byte with the transaction snapshot, and compare every added row against the exact seven approved versions/names/SQL arrays. Verify the reconciled registry flag, timestamp, source evidence and seven-source count.
+
+Any mismatch rolls back all seven inserts, registry updates and the fence transition. Fault-injection regressions cover corrupt historical records, invalid source sets, unexpected/duplicate versions and failures after the transition; the original active fence must be restored by rollback. No fence is disabled to construct the preflight corruption fixtures.
 
 ### 7.2 Proof of Zero Re-execution & Data Preservation
-Because the 5 Meta migrations are now recorded in `supabase_migrations.schema_migrations`:
-- Subsequent canonical migration runners (such as Supabase CLI) inspect the ledger, find all 5 Meta migrations, and **SKIP** them.
+Because the seven Meta migrations are now recorded in `supabase_migrations.schema_migrations`:
+- Subsequent canonical migration runners (such as Supabase CLI) inspect the ledger, find all seven Meta migrations, and **SKIP** them.
 - They are **NEVER re-executed**, preventing duplicate table, column, or policy errors (`policy "rls_meta_ad_accounts_tenant" already exists`).
 - All customer lead attribution data, campaigns, and touchpoints created during the selective period remain **100% intact**.
 - Subsequent migrations (e.g. migration 122+) execute cleanly on top.
@@ -222,14 +226,14 @@ Because the 5 Meta migrations are now recorded in `supabase_migrations.schema_mi
 
 The selective-release ledger engine is tested against a real local PostgreSQL 17.11 container (`supabase_db_ai-crm-cua-chong-ngap`) and is integrated directly into the GitHub Actions Verify workflow.
 
-### 8.1 Test Execution Summary
+### 8.1 Historical baseline test execution summary
 Command: `npm run test:selective-ledger`  
 Test File: [`tests/staging/selective-ledger.test.ts`](file:///Users/hoangthuy/.gemini/antigravity/worktrees/ai-crm-cua-chong-ngap/meta_ads_integration/tests/staging/selective-ledger.test.ts)  
 Result: **13/13 PASSED (100%)** | Duration: ~42.3 seconds
 
 | # | Scenario Tested | Outcome | Details Verified |
 |---|---|---|---|
-| 1 | Successful selective release | **PASS** | 5 Meta tables created, registry recorded, exactly 21 canonical ledger entries preserved byte-for-byte. |
+| 1 | Successful selective release | **PASS** | 7 Meta tables created (5 public and 2 private), registry recorded, exactly 21 canonical ledger entries preserved byte-for-byte. |
 | 1b | Migration writer fence | **PASS** | Unapproved `INSERT` into `schema_migrations` blocked with `MIGRATION_LEDGER_FENCED`. |
 | 1c | Canonical ledger immutability | **PASS** | `UPDATE` and `DELETE` on `schema_migrations` blocked with `MIGRATION_LEDGER_IMMUTABLE`. |
 | 1d | Duplicate release attempt | **PASS** | Re-running the package rejected with `SELECTIVE_RELEASE_ALREADY_APPLIED`. |
@@ -246,6 +250,11 @@ Result: **13/13 PASSED (100%)** | Duration: ~42.3 seconds
 | 11 | Canonical reconciliation | **PASS** | Real sequence execution proves Meta migrations are not re-run, original 21 migrations preserved, lead data intact. |
 
 ---
+
+### 8.2 PR #143 independent-review remediation (5 November 2026)
+
+The current local selective-ledger suite passes **15/15**, including exact historical/source-set rejection and transaction rollback after the fence transition. Native attribution integration passes **3/3**, covering pending first/latest campaign and Ad projections, history retention, timestamp guards and cross-company isolation. Runtime security passes **9/9** and source/migration integrity passes **17/17**. The updated seven-source catalog proof and bundle hashes come from the local prefix/full-chain/atomic rehearsal. Exact-head GitHub Actions must be verified separately; these results do not establish hosted deployment or physical backup/restore acceptance.
+
 
 ## 9. CI Integration (`.github/workflows/verify.yml`)
 
@@ -279,7 +288,7 @@ Because `supabase start` in CI launches PostgreSQL 17.11 (configured via `major_
 
 ### Final Verdict: **BLOCKED**
 Hosted deployment to Supabase Staging (`qmhfmgkymjgoevwmkidm`) remains **BLOCKED**.
-All 5 review issues have been fully resolved, implemented, and proven with 100% passing tests. Execution on hosted infrastructure must remain blocked until the physical backup is taken and project owner approval is received.
+The five issues in the original historical review were resolved at that baseline. PR #143 adds the later security and reconciliation regressions described above; exact-head CI evidence must be checked separately. Execution on hosted infrastructure must remain blocked until the physical backup is taken and project owner approval is received.
 
 
 ## 11. Runtime-path correction and superseding evidence

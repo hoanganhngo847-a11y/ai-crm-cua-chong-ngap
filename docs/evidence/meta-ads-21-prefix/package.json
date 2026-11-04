@@ -41,12 +41,12 @@
     {
       "file": "sources/20261104171905_meta_lead_evidence_conflict_guard.sql",
       "repositorySource": "supabase/migrations/20261104171905_meta_lead_evidence_conflict_guard.sql",
-      "sha256": "8fd392e3745ead995dda5fd961c71fa85d20761c2b2b544b3ffde27e5d1d900e"
+      "sha256": "d5518d3686de808252e7338aa4037f06240f4cd545aacd78d42137c461ec06e6"
     }
   ],
-  "bundleSha256": "a89a9bb2bad6037011b5a31e9a487dd31630c262bfe89c69a28afaec995576eb",
+  "bundleSha256": "dc2063919a916d1687257d18e5363a075e17c2d97f9903ef2968e912cada698d",
   "preconditionsSha256": "27834a8650050e43722af2fdaef5ad881f53df415e47f371fd13ec6905fcd9cc",
-  "postconditionsSha256": "4ad4e228d9639fe995c6f750cf515668dcb6cc169a053c676f329004113e70aa",
+  "postconditionsSha256": "d9581ac18a56ba44b23daf5953f07875d7325a345042715651d5203d8073f270",
   "expectedObjects": [
     "column:private.meta_ad_account_tokens.ad_account_id",
     "column:private.meta_ad_account_tokens.company_id",

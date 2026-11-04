@@ -552,3 +552,62 @@ test('token migration preserves ciphertext, expiry and linked rows; conflicts or
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
 });
+
+test('pending retry restores first/latest campaign and Ad projections without losing history or crossing companies', () => {
+    sql(`CREATE DATABASE ${db};`, 'postgres');
+    try {
+        const migrations = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
+        sql(PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '') + migrations.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        const guarded = randomUUID(), foreign = randomUUID();
+        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Projection A','ACTIVE'),(${q(other)},'Projection B','ACTIVE');
+            INSERT INTO public.customers(id,company_id,name,source,stage) VALUES
+              (${q(customer)},${q(company)},'Projection customer','FACEBOOK','LEAD_NEW'),
+              (${q(guarded)},${q(company)},'Timestamp protected','FACEBOOK','LEAD_NEW'),
+              (${q(foreign)},${q(other)},'Other company','FACEBOOK','LEAD_NEW');
+            INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+              VALUES (${q(company)},'act_projection','latest_campaign','Latest campaign','ACTIVE');
+            INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+              VALUES (${q(company)},'act_projection','latest_campaign','latest_ad','Latest Ad','ACTIVE');`);
+        const touch = (tenant: string, who: string, lead: string, adId: string, occurred: string) => sql(`
+            SELECT public.record_lead_attribution_touchpoint(p_company=>${q(tenant)},p_customer=>${q(who)},
+              p_page_id=>${q(page)},p_meta_leadgen_id=>${q(lead)},p_meta_ad_id=>${q(adId)},p_occurred=>${q(occurred)},
+              p_ads_context_data=>${q({ leadgen_event_binding: { source: 'SIGNED_META_WEBHOOK', leadgenId: lead, pageId: page, adId } })}::jsonb);`);
+        for (const [who, prefix] of [[customer, 'projection'], [guarded, 'guarded']]) {
+            touch(company, who, `${prefix}-first`, 'pending_ad', '2026-10-01T00:00:00Z');
+            touch(company, who, `${prefix}-latest`, 'latest_ad', '2026-10-02T00:00:00Z');
+        }
+        touch(other, foreign, 'foreign-first', 'pending_ad', '2026-10-01T00:00:00Z');
+        const snapshot = (who: string) => JSON.parse(sql(`SELECT jsonb_build_object(
+            'first_campaign',first_campaign_name,'first_ad',first_ad_name,'first_at',first_touch_at,
+            'latest_campaign',latest_campaign_name,'latest_ad',latest_ad_name,'latest_at',latest_touch_at)
+            FROM public.customers WHERE id=${q(who)};`));
+        assert.equal(snapshot(customer).first_ad, null, 'pending first touch has no invented Ad name');
+        assert.equal(snapshot(customer).latest_ad, 'Latest Ad');
+        sql(`UPDATE public.customers SET first_campaign_name='Protected first campaign',first_ad_name='Protected first Ad',
+              first_touch_at='2026-09-01T00:00:00Z',latest_campaign_name='Protected latest campaign',latest_ad_name='Protected latest Ad',
+              latest_touch_at='2026-11-01T00:00:00Z' WHERE id=${q(guarded)};`);
+        const protectedBefore = snapshot(guarded), foreignBefore = snapshot(foreign);
+        const foreignHistory = sql(`SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(other)};`);
+        const identities = () => sql(`SELECT jsonb_agg(jsonb_build_array(id,company_id,customer_id,meta_leadgen_id,occurred_at,touchpoint_type) ORDER BY id)
+            FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)};`);
+        const historyBefore = identities();
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 0);
+        sql(`INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+              VALUES (${q(company)},'act_projection','first_campaign','First campaign','ACTIVE');
+            INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+              VALUES (${q(company)},'act_projection','first_campaign','pending_ad','First Ad','ACTIVE');`);
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 2);
+        const projected = snapshot(customer);
+        assert.equal(projected.first_campaign, 'First campaign');
+        assert.equal(projected.first_ad, 'First Ad');
+        assert.equal(projected.latest_campaign, 'Latest campaign');
+        assert.equal(projected.latest_ad, 'Latest Ad');
+        assert.equal(new Date(projected.first_at).toISOString(), '2026-10-01T00:00:00.000Z');
+        assert.equal(new Date(projected.latest_at).toISOString(), '2026-10-02T00:00:00.000Z');
+        assert.equal(identities(), historyBefore, 'retry retains every historical identity, occurrence time and first/latest designation');
+        assert.deepEqual(snapshot(guarded), protectedBefore, 'existing timestamp guards protect both projections');
+        assert.deepEqual(snapshot(foreign), foreignBefore, 'retry cannot update another company customer');
+        assert.equal(sql(`SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(other)};`), foreignHistory);
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 0, 'retry is idempotent');
+    } finally { sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres'); }
+});

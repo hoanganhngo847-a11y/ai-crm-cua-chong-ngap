@@ -32,7 +32,7 @@ export const META_SOURCES = [
 
 export const PINNED_SOURCE_HASHES: Record<string, string> = {
   '20261104150000_meta_lead_page_binding_guard.sql': '402cb115cfcfce4f76619467fdd4f1a9b80f7142f91d0e3385016c345a46fc9f',
-  '20261104171905_meta_lead_evidence_conflict_guard.sql': '8fd392e3745ead995dda5fd961c71fa85d20761c2b2b544b3ffde27e5d1d900e',
+  '20261104171905_meta_lead_evidence_conflict_guard.sql': 'd5518d3686de808252e7338aa4037f06240f4cd545aacd78d42137c461ec06e6',
 
   '20261030090000_meta_ads_lead_attribution.sql': 'f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a',
   '20261030100000_meta_ads_hardening.sql': 'e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657',
@@ -635,13 +635,36 @@ export function buildCanonicalReconciliationPackage(options: {
     return { file, version, name, sql, sha256 };
   });
 
+  // Approval covers exactly these seven unique sources, including their stored SQL.
+  assert.equal(metaFiles.length, 7, 'Reconciliation requires exactly seven approved Meta sources');
+  assert.equal(new Set(metaFiles.map((m) => m.version)).size, 7, 'Duplicate Meta migration versions');
+  const recorded = JSON.parse(readFileSync('docs/evidence/meta-ads-safe-deployment/staging-metadata.json', 'utf8')).data[0].snapshot.migration_history;
+  assert.equal(recorded.length, EXPECTED_CANONICAL_LEDGER_COUNT);
+  assert.equal(new Set(recorded.map((m: { version: string }) => m.version)).size, EXPECTED_CANONICAL_LEDGER_COUNT);
+  const expectedLedger = recorded.map((m: { version: string; name: string; stored_sql_sha256: string }) => ({
+    version: m.version, name: m.name, source_hash: m.stored_sql_sha256,
+  }));
+  const expectedHistorical = quote(JSON.stringify(expectedLedger));
+  const expectedSources = quote(JSON.stringify(metaFiles.map((m) => ({
+    file: m.file, sha256: m.sha256, statements_count: inspectTransactionEnvelope(m.sql).statements.length,
+  }))));
+  const expectedMetaRecords = quote(JSON.stringify(metaFiles.map((m) => ({
+    version: m.version, name: m.name, statements: [m.sql],
+  }))));
+  const historicalVersions = recorded.map((m: { version: string }) => quote(m.version)).join(',');
+  const preLedgerFingerprint = createHash('sha256').update(JSON.stringify(expectedLedger), 'utf8').digest('hex');
+
   const reconciliationSql = `
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(hashtextextended('meta-ads-selective-release', 0));
 LOCK TABLE supabase_migrations.schema_migrations IN EXCLUSIVE MODE;
 
+CREATE TEMP TABLE meta_reconciliation_original_ledger ON COMMIT DROP AS
+SELECT * FROM supabase_migrations.schema_migrations;
+
 DO $reconcile_preflight$
+DECLARE actual jsonb;
 BEGIN
   -- 1. Verify release exists and was COMPLETED
   IF NOT EXISTS (
@@ -657,6 +680,10 @@ BEGIN
     RAISE EXCEPTION 'RECONCILIATION_FAILED: Release % not found or not in COMPLETED status', ${quote(releaseId)};
   END IF;
 
+  -- Hold the registry row through validation and the atomic state transition.
+  PERFORM 1 FROM private.selective_feature_releases
+    WHERE release_id = ${quote(releaseId)} FOR UPDATE;
+
   -- 2. Verify not already reconciled
   IF EXISTS (
     SELECT 1 FROM private.selective_feature_releases
@@ -669,6 +696,23 @@ BEGIN
   IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> ${EXPECTED_CANONICAL_LEDGER_COUNT} THEN
     RAISE EXCEPTION 'CANONICAL_LEDGER_COUNT_MISMATCH: Expected ${EXPECTED_CANONICAL_LEDGER_COUNT} records before reconciliation, found %',
       (SELECT count(*) FROM supabase_migrations.schema_migrations);
+  END IF;
+  -- Count alone cannot detect changed names/SQL, substituted versions or duplicates.
+  SELECT jsonb_agg(jsonb_build_object('version',version,'name',name,
+    'source_hash',encode(sha256(convert_to(array_to_string(statements,E'\\n'),'UTF8')),'hex')) ORDER BY version)
+    INTO actual FROM supabase_migrations.schema_migrations;
+  IF actual IS DISTINCT FROM ${expectedHistorical}::jsonb THEN
+    RAISE EXCEPTION 'RECONCILIATION_HISTORICAL_LEDGER_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM private.selective_feature_releases
+    WHERE release_id = ${quote(releaseId)}
+      AND feature_name = 'META_ADS_LEAD_ATTRIBUTION'
+      AND target_project_ref = ${quote(targetProject)}
+      AND pre_ledger_fingerprint = ${quote(preLedgerFingerprint)}
+      AND sources = ${expectedSources}::jsonb
+  ) THEN
+    RAISE EXCEPTION 'RECONCILIATION_SOURCE_EVIDENCE_MISMATCH';
   END IF;
 END $reconcile_preflight$;
 
@@ -697,11 +741,38 @@ VALUES (${quote(m.version)}, ${quote(m.name)}, ARRAY[${quote(m.sql)}]);`
   .join('\n')}
 
 DO $reconcile_postflight$
+DECLARE actual jsonb;
 BEGIN
   -- Verify the ledger contains the original prefix plus every reconciled source
   IF (SELECT count(*) FROM supabase_migrations.schema_migrations) <> (${EXPECTED_CANONICAL_LEDGER_COUNT} + ${metaFiles.length}) THEN
     RAISE EXCEPTION 'RECONCILIATION_POST_COUNT_MISMATCH: Expected ${EXPECTED_CANONICAL_LEDGER_COUNT + metaFiles.length} canonical ledger records, found %',
       (SELECT count(*) FROM supabase_migrations.schema_migrations);
+  END IF;
+  -- Compare complete original rows, including statement arrays and any ledger columns.
+  IF EXISTS (
+    (SELECT to_jsonb(m) FROM supabase_migrations.schema_migrations m WHERE version IN (${historicalVersions})
+      EXCEPT ALL SELECT to_jsonb(m) FROM meta_reconciliation_original_ledger m)
+    UNION ALL
+    (SELECT to_jsonb(m) FROM meta_reconciliation_original_ledger m
+      EXCEPT ALL SELECT to_jsonb(m) FROM supabase_migrations.schema_migrations m WHERE version IN (${historicalVersions}))
+  ) THEN
+    RAISE EXCEPTION 'RECONCILIATION_HISTORICAL_ROWS_CHANGED';
+  END IF;
+  SELECT jsonb_agg(jsonb_build_object('version',version,'name',name,'statements',to_jsonb(statements)) ORDER BY version)
+    INTO actual FROM supabase_migrations.schema_migrations WHERE version NOT IN (${historicalVersions});
+  IF actual IS DISTINCT FROM ${expectedMetaRecords}::jsonb THEN
+    RAISE EXCEPTION 'RECONCILIATION_META_LEDGER_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM private.selective_feature_releases
+    WHERE release_id = ${quote(releaseId)} AND execution_status = 'COMPLETED'
+      AND reconciled_to_canonical AND reconciled_at IS NOT NULL
+      AND sources = ${expectedSources}::jsonb
+      AND pre_ledger_fingerprint = ${quote(preLedgerFingerprint)}
+      AND recovery_evidence->>'reconciled' = 'true'
+      AND recovery_evidence->>'reconciliation_canonical_migrations_added' = '7'
+  ) THEN
+    RAISE EXCEPTION 'RECONCILIATION_REGISTRY_MISMATCH';
   END IF;
 END $reconcile_postflight$;
 

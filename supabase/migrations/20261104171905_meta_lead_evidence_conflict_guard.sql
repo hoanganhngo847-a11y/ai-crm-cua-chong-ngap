@@ -329,6 +329,7 @@ DECLARE
     v_remaining bigint;
     v_checked integer := 0;
     v_first_name text;
+    v_first_ad text;
     v_first_at timestamptz;
     v_latest_name text;
     v_latest_ad text;
@@ -437,14 +438,15 @@ BEGIN
         IF v_row.customer_id IS NOT NULL THEN
             -- Recompute the customer's first/latest attribution projections from
             -- the preserved touchpoint history (chronological, oldest wins first-touch).
-            SELECT t.campaign_name_snapshot, t.occurred_at
-            INTO v_first_name, v_first_at
+            SELECT t.campaign_name_snapshot, t.ad_name_snapshot, t.occurred_at
+            INTO v_first_name, v_first_ad, v_first_at
             FROM public.lead_attribution_touchpoints t
             WHERE t.company_id = p_company AND t.customer_id = v_row.customer_id
             ORDER BY t.occurred_at ASC
             LIMIT 1;
             UPDATE public.customers c
             SET first_campaign_name = v_first_name,
+                first_ad_name = v_first_ad,
                 first_touch_at = v_first_at,
                 updated_at = now()
             WHERE c.id = v_row.customer_id AND c.company_id = p_company
