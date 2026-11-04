@@ -321,6 +321,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -351,6 +352,7 @@ test('Scenario 4: Webhook idempotency retry is deduplicated safely without dupli
                 p_meta_form_id => 'form_001',
                 p_form_name => 'Biểu mẫu đăng ký',
                 p_meta_leadgen_id => 'lg_idempotent_999',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_001","pageId":"target_page_123","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'ATTRIBUTED',
                 p_attribution_method => 'DIRECT_LEADGEN'
             );
@@ -513,6 +515,7 @@ test('Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and upd
                 p_ad_account_id => 'act_100',
                 p_meta_ad_id => 'ad_berlin_01',
                 p_meta_leadgen_id => 'lg_mapped_01',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_berlin_01","pageId":"page_chd_01","pageIdConflict":false}}'::jsonb,
                 p_attribution_status => 'UNATTRIBUTED',
                 p_attribution_method => 'AD_LOOKUP'
             );
@@ -1284,7 +1287,7 @@ test('Scenario 19: Marketing sync lease concurrency guard and complete paginatio
 // -----------------------------------------------------------------------------
 // SCENARIO 20: Attribution Rule Strictness & First-Touch Preservation (Priority 5)
 // -----------------------------------------------------------------------------
-test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is strictly immutable', async () => {
+test('Scenario 20: Lead Ads require same-Page creative evidence; first-touch snapshot is strictly immutable', async () => {
     const supabase = await createPgliteSupabase();
     const { db } = supabase;
 
@@ -1322,7 +1325,8 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
                 NULL, NULL,
                 'lg_unknown_999',
                 'LEAD_ADS', 'INSTANT_FORM',
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_completely_unknown_999","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb,
+                NULL, NULL, NULL, NULL, NULL, NULL,
                 'ATTRIBUTED'
             );
         `);
@@ -1345,7 +1349,8 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
                 'ad_mapped_100',
                 NULL,
                 NULL, NULL,
-                'lg_mapped_100'
+                'lg_mapped_100',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
             );
         `);
         const tp2 = (tpMappedId.rows[0] as any).record_lead_attribution_touchpoint;
@@ -1375,9 +1380,59 @@ test('Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is str
                 'ad_mapped_200',
                 NULL,
                 NULL, NULL,
-                'lg_mapped_200'
+                'lg_mapped_200',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_200","pageId":"1026991374010112","pageIdConflict":false}}'::jsonb
             );
         `);
+
+        // 20D: A mapped Ad from another Page must remain pending and cannot be resolved by retry.
+        const wrongPageId = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                p_company => '${companyId}'::uuid,
+                p_channel => 'FACEBOOK_LEAD_ADS',
+                p_page_id => '1026991374010112',
+                p_meta_ad_id => 'ad_mapped_100',
+                p_meta_leadgen_id => 'lg_wrong_page_100',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100","pageId":"2222222222222222","pageIdConflict":false}}'::jsonb
+            );
+        `);
+        const wrongPageTouchpointId = (wrongPageId.rows[0] as any).record_lead_attribution_touchpoint;
+        const wrongPageBeforeRetry = await db.query(`
+            SELECT attribution_status, meta_campaign_id, campaign_name_snapshot
+            FROM public.lead_attribution_touchpoints WHERE id = '${wrongPageTouchpointId}';
+        `);
+        assert.equal((wrongPageBeforeRetry.rows[0] as any).attribution_status, 'PENDING_SYNC');
+        assert.equal((wrongPageBeforeRetry.rows[0] as any).meta_campaign_id, null);
+        assert.equal((wrongPageBeforeRetry.rows[0] as any).campaign_name_snapshot, null);
+
+        const retry = await db.query(`SELECT public.retry_pending_lead_attribution('${companyId}'::uuid) AS result;`);
+        assert.equal((retry.rows[0] as any).result.resolved, 0);
+        const wrongPageAfterRetry = await db.query(`
+            SELECT attribution_status, meta_campaign_id
+            FROM public.lead_attribution_touchpoints WHERE id = '${wrongPageTouchpointId}';
+        `);
+        assert.equal((wrongPageAfterRetry.rows[0] as any).attribution_status, 'PENDING_SYNC');
+        assert.equal((wrongPageAfterRetry.rows[0] as any).meta_campaign_id, null);
+
+        // 20E: A creative response without a Page identifier is also insufficient proof.
+        const missingPage = await db.query(`
+            SELECT record_lead_attribution_touchpoint(
+                p_company => '${companyId}'::uuid,
+                p_channel => 'FACEBOOK_LEAD_ADS',
+                p_page_id => '1026991374010112',
+                p_meta_ad_id => 'ad_mapped_100',
+                p_meta_leadgen_id => 'lg_missing_page_100',
+                p_ads_context_data => '{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_mapped_100"}}'::jsonb
+            );
+        `);
+        const missingPageTouchpointId = (missingPage.rows[0] as any).record_lead_attribution_touchpoint;
+        const missingPageRow = await db.query(`
+            SELECT attribution_status, meta_campaign_id, campaign_name_snapshot
+            FROM public.lead_attribution_touchpoints WHERE id = '${missingPageTouchpointId}';
+        `);
+        assert.equal((missingPageRow.rows[0] as any).attribution_status, 'PENDING_SYNC');
+        assert.equal((missingPageRow.rows[0] as any).meta_campaign_id, null);
+        assert.equal((missingPageRow.rows[0] as any).campaign_name_snapshot, null);
 
         const custAfter = await db.query(`
             SELECT first_campaign_name, latest_campaign_name FROM public.customers WHERE id = '${customerId}';

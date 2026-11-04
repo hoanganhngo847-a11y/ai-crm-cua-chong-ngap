@@ -98,7 +98,11 @@ const lead=`
     v:=public.ingest_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',token,
         '{"name":"Synthetic Meta customer","phone":"+843000000011","content":"Synthetic content","lead_data":{"id":"88001"},"payload":{"crm_lead_ads":true}}');
     c:=(v->>'customer_id')::uuid; i:=(v->>'interaction_id')::uuid;
-    PERFORM public.record_lead_attribution_touchpoint(p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,p_meta_ad_id=>'synthetic_ad',p_meta_leadgen_id=>'88001');
+    PERFORM public.record_lead_attribution_touchpoint(
+      p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,
+      p_page_id=>'7777777777777777',p_meta_ad_id=>'synthetic_ad',p_meta_leadgen_id=>'88001',
+      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"synthetic_ad","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
+    );
     PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
     PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88001',token,'PROCESSED');
     v:=jsonb_build_object('ingest',v,'campaign',(SELECT campaign_name_snapshot FROM public.lead_attribution_touchpoints WHERE meta_leadgen_id='88001'),'status',(SELECT status FROM private.meta_leadgen_events WHERE leadgen_id='88001'));`;
@@ -110,7 +114,11 @@ const leadPair=lead+`
     v:=public.ingest_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',token,
       '{"name":"Same phone second form","phone":"+843000000011","content":"Second form","payload":{"crm_lead_ads":true}}');
     c:=(v->>'customer_id')::uuid; i:=(v->>'interaction_id')::uuid;
-    PERFORM public.record_lead_attribution_touchpoint(p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,p_meta_ad_id=>'ad_b',p_meta_leadgen_id=>'88002');
+    PERFORM public.record_lead_attribution_touchpoint(
+      p_company=>'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',p_customer=>c,p_interaction=>i,
+      p_page_id=>'7777777777777777',p_meta_ad_id=>'ad_b',p_meta_leadgen_id=>'88002',
+      p_ads_context_data=>'{"creative_snapshot":{"schemaVersion":2,"source":"META_MARKETING_API","captureTiming":"AT_LEAD_INTAKE","adId":"ad_b","pageId":"7777777777777777","pageIdConflict":false}}'::jsonb
+    );
     PERFORM public.mark_lead_attribution_phone_match('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',v->>'phone_match_status',(v->>'is_duplicate_phone')::boolean);
     PERFORM public.finalize_meta_leadgen_event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','88002',token,'PROCESSED');
     v:=jsonb_build_object('same_customer',c=(first_result->'ingest'->>'customer_id')::uuid,'duplicate',v->'is_duplicate_phone',
