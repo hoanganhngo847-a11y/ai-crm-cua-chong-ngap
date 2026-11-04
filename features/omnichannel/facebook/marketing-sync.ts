@@ -160,7 +160,7 @@ export function normalizeMetaAdCreativeSnapshot(
         metaText(creative.object_story_id, 256),
     ].filter((value): value is string => Boolean(value));
     const storyPageIds = storyIds
-        .map((storyId) => storyId.match(/^(\\d{1,100})_\\d{1,100}$/)?.[1])
+        .map((storyId) => storyId.match(/^(\d{1,100})_\d{1,100}$/)?.[1])
         .filter((value): value is string => Boolean(value));
     const pageIds = [...new Set([storySpecPageId, ...storyPageIds].filter((value): value is string => Boolean(value)))];
     const pageIdConflict = pageIds.length > 1;
