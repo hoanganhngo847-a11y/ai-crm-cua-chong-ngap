@@ -142,9 +142,11 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
 
         const touch = (lead: string, campaign: string | null, name: string, ad: string | null, time: string) => {
             const pageEvidence = ad ? JSON.stringify({
-                creative_snapshot: {
-                    schemaVersion: 2, source: 'META_MARKETING_API', captureTiming: 'AT_LEAD_INTAKE',
-                    adId: ad, pageId: page, pageIdConflict: false,
+                leadgen_event_binding: {
+                    source: 'SIGNED_META_WEBHOOK',
+                    leadgenId: lead,
+                    pageId: page,
+                    adId: ad,
                 },
             }) : null;
             return `SELECT public.record_lead_attribution_touchpoint(
