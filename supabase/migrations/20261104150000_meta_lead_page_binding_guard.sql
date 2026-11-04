@@ -113,7 +113,7 @@ BEGIN
     -- additionally require the Meta-fetched creative to identify this exact Page and Ad.
     -- Missing/conflicting Page evidence preserves the lead as PENDING_SYNC but cannot
     -- produce an attributed campaign.
-    IF p_channel = 'FACEBOOK_LEAD_ADS' THEN
+    IF p_channel = 'FACEBOOK_LEAD_ADS' OR p_meta_leadgen_id IS NOT NULL THEN
         v_page_verified := COALESCE(
             p_page_id IS NOT NULL
             AND p_meta_ad_id IS NOT NULL
