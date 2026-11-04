@@ -285,22 +285,72 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
   }
 
   if (kind === 'column-acl') {
-    // In standard Supabase PostgreSQL baseline, NO column in auth or storage has an explicit ACL (attacl is NULL).
-    // Platform default state is: aclIsNull === true && (!entries || entries.length === 0).
-    const aclIsNull = details.aclIsNull === true;
-    const entries = Array.isArray(details.entries) ? details.entries : [];
-    if (aclIsNull && entries.length === 0) {
-      return { classification: 'platform-default', reason: 'Standard platform column ACL (attacl IS NULL)' };
+    const baseline = getPlatformAclBaseline();
+    const columnsBaseline = baseline.columns || {};
+    const baselineObj = columnsBaseline[identity];
+    if (!baselineObj) {
+      return {
+        classification: 'unexplained',
+        reason: `Column ${identity} is not in platform ACL baseline (unrecognized or extra column)`,
+      };
     }
+
+    if (typeof details.aclIsNull !== 'boolean' || !Array.isArray(details.entries)) {
+      return {
+        classification: 'unexplained',
+        reason: `Missing required ACL metadata fields on column ${identity}`,
+      };
+    }
+
+    if (details.aclIsNull !== baselineObj.aclIsNull) {
+      return {
+        classification: 'unexplained',
+        reason: `Column ACL nullability mismatch on ${identity}: expected aclIsNull=${baselineObj.aclIsNull}, got ${details.aclIsNull}`,
+      };
+    }
+
+    const actualEntries = details.entries;
+    const baselineEntries = baselineObj.entries;
+    const actualSet = new Set(actualEntries.map(canonicalEntryKey));
+    const baselineSet = new Set(baselineEntries.map(canonicalEntryKey));
+
+    if (actualSet.size !== actualEntries.length) {
+      return {
+        classification: 'unexplained',
+        reason: `Duplicate column ACL entries detected on ${identity}`,
+      };
+    }
+
+    for (const entry of actualEntries) {
+      const key = canonicalEntryKey(entry);
+      if (!baselineSet.has(key)) {
+        return {
+          classification: 'unexplained',
+          reason: `Unexpected column ACL entry '${key}' on ${identity}`,
+        };
+      }
+    }
+
+    for (const entry of baselineEntries) {
+      const key = canonicalEntryKey(entry);
+      if (!actualSet.has(key)) {
+        return {
+          classification: 'unexplained',
+          reason: `Missing expected baseline column ACL entry '${key}' on ${identity}`,
+        };
+      }
+    }
+
     return {
-      classification: 'unexplained',
-      reason: `Custom column-level ACL present on ${identity} (aclIsNull=${details.aclIsNull}, entries=${entries.length})`,
+      classification: 'platform-default',
+      reason: 'Exact match with verified platform column ACL baseline',
     };
   }
 
   if (kind === 'relation-acl') {
     const baseline = getPlatformAclBaseline();
-    const baselineObj = baseline[identity];
+    const relationsBaseline = baseline.relations || baseline;
+    const baselineObj = relationsBaseline[identity];
     if (!baselineObj) {
       return {
         classification: 'unexplained',
@@ -308,12 +358,17 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
       };
     }
 
-    const actualIsNull = Boolean(details.aclIsNull);
-    const baselineIsNull = Boolean(baselineObj.aclIsNull);
-    if (actualIsNull !== baselineIsNull) {
+    if (typeof details.aclIsNull !== 'boolean' || !Array.isArray(details.entries)) {
       return {
         classification: 'unexplained',
-        reason: `ACL nullability mismatch on ${identity}: expected aclIsNull=${baselineIsNull}, got ${actualIsNull}`,
+        reason: `Missing required ACL metadata fields on relation ${identity}`,
+      };
+    }
+
+    if (details.aclIsNull !== baselineObj.aclIsNull) {
+      return {
+        classification: 'unexplained',
+        reason: `ACL nullability mismatch on ${identity}: expected aclIsNull=${baselineObj.aclIsNull}, got ${details.aclIsNull}`,
       };
     }
 
@@ -726,40 +781,192 @@ export function normalizeConfigArray(config) {
   return [String(config).trim()];
 }
 
+export function validateCustomizationDetails(kind, identity, details, label = 'item') {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return { valid: false, reason: `${label} '${identity}' details must be a non-null object` };
+  }
+
+  switch (kind) {
+    case 'policy': {
+      if (typeof details.schema !== 'string' || !details.schema.trim()) {
+        return { valid: false, reason: `${label} policy '${identity}' missing non-empty string schema` };
+      }
+      if (typeof details.table !== 'string' || !details.table.trim()) {
+        return { valid: false, reason: `${label} policy '${identity}' missing non-empty string table` };
+      }
+      if (typeof details.policy !== 'string' || !details.policy.trim()) {
+        return { valid: false, reason: `${label} policy '${identity}' missing non-empty string policy` };
+      }
+      if (typeof details.permissive !== 'string') {
+        return { valid: false, reason: `${label} policy '${identity}' missing string permissive` };
+      }
+      if (!Array.isArray(details.roles)) {
+        return { valid: false, reason: `${label} policy '${identity}' missing array roles` };
+      }
+      if (typeof details.command !== 'string') {
+        return { valid: false, reason: `${label} policy '${identity}' missing string command` };
+      }
+      if (!('using' in details) || (details.using !== null && typeof details.using !== 'string')) {
+        return { valid: false, reason: `${label} policy '${identity}' missing nullable string using` };
+      }
+      if (!('withCheck' in details) || (details.withCheck !== null && typeof details.withCheck !== 'string')) {
+        return { valid: false, reason: `${label} policy '${identity}' missing nullable string withCheck` };
+      }
+      return { valid: true };
+    }
+
+    case 'index': {
+      if (typeof details.definition !== 'string' || !details.definition.trim()) {
+        return { valid: false, reason: `${label} index '${identity}' missing string definition` };
+      }
+      if (typeof details.valid !== 'boolean') {
+        return { valid: false, reason: `${label} index '${identity}' missing boolean valid` };
+      }
+      if (typeof details.ready !== 'boolean') {
+        return { valid: false, reason: `${label} index '${identity}' missing boolean ready` };
+      }
+      if (typeof details.live !== 'boolean') {
+        return { valid: false, reason: `${label} index '${identity}' missing boolean live` };
+      }
+      if (typeof details.unique !== 'boolean') {
+        return { valid: false, reason: `${label} index '${identity}' missing boolean unique` };
+      }
+      if (typeof details.primary !== 'boolean') {
+        return { valid: false, reason: `${label} index '${identity}' missing boolean primary` };
+      }
+      return { valid: true };
+    }
+
+    case 'trigger': {
+      if (typeof details.definition !== 'string' || !details.definition.trim()) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing string definition` };
+      }
+      if (typeof details.enabled !== 'string') {
+        return { valid: false, reason: `${label} trigger '${identity}' missing string enabled` };
+      }
+      if (typeof details.functionIdentity !== 'string' || !details.functionIdentity.trim()) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing string functionIdentity` };
+      }
+      if (typeof details.functionDefinition !== 'string') {
+        return { valid: false, reason: `${label} trigger '${identity}' missing string functionDefinition` };
+      }
+      if (typeof details.functionOwner !== 'string' || !details.functionOwner.trim()) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing string functionOwner` };
+      }
+      if (typeof details.securityDefiner !== 'boolean') {
+        return { valid: false, reason: `${label} trigger '${identity}' missing boolean securityDefiner` };
+      }
+      if (!('functionConfig' in details) || (details.functionConfig !== null && !Array.isArray(details.functionConfig))) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing nullable array functionConfig` };
+      }
+      if (!('functionAcl' in details) || (details.functionAcl !== null && !Array.isArray(details.functionAcl) && typeof details.functionAcl !== 'string')) {
+        return { valid: false, reason: `${label} trigger '${identity}' missing nullable array/string functionAcl` };
+      }
+      return { valid: true };
+    }
+
+    case 'routine':
+    case 'procedure': {
+      if (typeof details.definition !== 'string' || !details.definition.trim()) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing string definition` };
+      }
+      if (typeof details.owner !== 'string' || !details.owner.trim()) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing string owner` };
+      }
+      if (typeof details.securityDefiner !== 'boolean') {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing boolean securityDefiner` };
+      }
+      if (!('config' in details) || (details.config !== null && !Array.isArray(details.config))) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing nullable array config` };
+      }
+      if (!('acl' in details) || (details.acl !== null && !Array.isArray(details.acl) && typeof details.acl !== 'string')) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing nullable array/string acl` };
+      }
+      if (typeof details.language !== 'string' || !details.language.trim()) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing string language` };
+      }
+      if (!('comment' in details) || (details.comment !== null && typeof details.comment !== 'string')) {
+        return { valid: false, reason: `${label} ${kind} '${identity}' missing nullable string comment` };
+      }
+      return { valid: true };
+    }
+
+    default: {
+      return { valid: false, reason: `Unsupported customization kind '${kind}' for schema validation` };
+    }
+  }
+}
+
 /**
  * Performs deep, field-by-field verification of a project-owned customization object
  * against its restored target counterpart.
+ * Validates schema on both source and target beforehand, failing closed on any missing
+ * or invalid fields without defaulting or loose coercion.
  */
 export function deepCompareCustomizationItem(sourceItem, targetItem) {
   const discrepancies = [];
   const { kind, identity } = sourceItem;
-  const s = sourceItem.details || {};
-  const t = targetItem.details || {};
+
+  // 1. Validate source details
+  const srcValid = validateCustomizationDetails(kind, identity, sourceItem?.details, 'Source');
+  if (!srcValid.valid) {
+    discrepancies.push({
+      identity,
+      kind,
+      field: 'schema_validation',
+      sourceValue: 'invalid',
+      targetValue: 'unverified',
+      reason: srcValid.reason,
+    });
+    return discrepancies;
+  }
+
+  // 2. Validate target details
+  const tgtValid = validateCustomizationDetails(kind, identity, targetItem?.details, 'Target');
+  if (!tgtValid.valid) {
+    discrepancies.push({
+      identity,
+      kind,
+      field: 'schema_validation',
+      sourceValue: 'valid',
+      targetValue: 'invalid',
+      reason: tgtValid.reason,
+    });
+    return discrepancies;
+  }
+
+  const s = sourceItem.details;
+  const t = targetItem.details;
 
   const check = (field, sVal, tVal, reason, customEqual = null) => {
-    const isEq = customEqual ? customEqual(sVal, tVal) : compareStringsStrict(sVal, tVal);
+    let isEq = false;
+    if (customEqual) {
+      isEq = customEqual(sVal, tVal);
+    } else {
+      if (sVal === null && tVal === null) isEq = true;
+      else if (typeof sVal === 'string' && typeof tVal === 'string') isEq = sVal.trim() === tVal.trim();
+      else isEq = false;
+    }
     if (!isEq) {
       discrepancies.push({
         identity,
         kind,
         field,
-        sourceValue: sVal ?? null,
-        targetValue: tVal ?? null,
+        sourceValue: sVal,
+        targetValue: tVal,
         reason,
       });
     }
   };
 
   const checkBool = (field, sVal, tVal, reason) => {
-    const b1 = Boolean(sVal);
-    const b2 = Boolean(tVal);
-    if (b1 !== b2) {
+    if (typeof sVal !== 'boolean' || typeof tVal !== 'boolean' || sVal !== tVal) {
       discrepancies.push({
         identity,
         kind,
         field,
-        sourceValue: b1,
-        targetValue: b2,
+        sourceValue: sVal,
+        targetValue: tVal,
         reason,
       });
     }
@@ -767,9 +974,9 @@ export function deepCompareCustomizationItem(sourceItem, targetItem) {
 
   switch (kind) {
     case 'policy': {
-      check('permissive', s.permissive, t.permissive, 'Policy permissive mode mismatch', (a, b) => (a ?? '').toUpperCase() === (b ?? '').toUpperCase());
+      check('permissive', s.permissive, t.permissive, 'Policy permissive mode mismatch', (a, b) => (typeof a === 'string' && typeof b === 'string' && a.toUpperCase() === b.toUpperCase()));
       check('roles', s.roles, t.roles, 'Policy roles mismatch', (a, b) => JSON.stringify(normalizeRolesArray(a)) === JSON.stringify(normalizeRolesArray(b)));
-      check('command', s.command, t.command, 'Policy command mismatch', (a, b) => (a ?? '').toUpperCase() === (b ?? '').toUpperCase());
+      check('command', s.command, t.command, 'Policy command mismatch', (a, b) => (typeof a === 'string' && typeof b === 'string' && a.toUpperCase() === b.toUpperCase()));
       check('using', s.using, t.using, 'Policy using expression mismatch');
       check('withCheck', s.withCheck, t.withCheck, 'Policy withCheck expression mismatch');
       break;
@@ -787,13 +994,22 @@ export function deepCompareCustomizationItem(sourceItem, targetItem) {
 
     case 'trigger': {
       check('definition', s.definition, t.definition, 'Trigger definition mismatch');
-      check('enabled', s.enabled ?? 'O', t.enabled ?? 'O', 'Trigger enabled state mismatch');
+      check('enabled', s.enabled, t.enabled, 'Trigger enabled state mismatch');
       check('functionIdentity', s.functionIdentity, t.functionIdentity, 'Trigger function identity mismatch');
       check('functionDefinition', s.functionDefinition, t.functionDefinition, 'Trigger function definition mismatch');
       check('functionOwner', s.functionOwner, t.functionOwner, 'Trigger function owner mismatch');
       checkBool('securityDefiner', s.securityDefiner, t.securityDefiner, 'Trigger function SECURITY DEFINER mismatch');
-      check('functionConfig', s.functionConfig, t.functionConfig, 'Trigger function config mismatch', (a, b) => JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b)));
-      check('functionAcl', s.functionAcl, t.functionAcl, 'Trigger function ACL mismatch');
+      check('functionConfig', s.functionConfig, t.functionConfig, 'Trigger function config mismatch', (a, b) => {
+        if (a === null && b === null) return true;
+        if (!Array.isArray(a) || !Array.isArray(b)) return false;
+        return JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b));
+      });
+      check('functionAcl', s.functionAcl, t.functionAcl, 'Trigger function ACL mismatch', (a, b) => {
+        if (a === null && b === null) return true;
+        if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a.map(String).sort()) === JSON.stringify(b.map(String).sort());
+        if (typeof a === 'string' && typeof b === 'string') return a.trim() === b.trim();
+        return false;
+      });
       break;
     }
 
@@ -802,8 +1018,17 @@ export function deepCompareCustomizationItem(sourceItem, targetItem) {
       check('definition', s.definition, t.definition, `${kind} definition mismatch`);
       check('owner', s.owner, t.owner, `${kind} owner mismatch`);
       checkBool('securityDefiner', s.securityDefiner, t.securityDefiner, `${kind} SECURITY DEFINER mismatch`);
-      check('config', s.config, t.config, `${kind} config mismatch`, (a, b) => JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b)));
-      check('acl', s.acl, t.acl, `${kind} ACL mismatch`);
+      check('config', s.config, t.config, `${kind} config mismatch`, (a, b) => {
+        if (a === null && b === null) return true;
+        if (!Array.isArray(a) || !Array.isArray(b)) return false;
+        return JSON.stringify(normalizeConfigArray(a)) === JSON.stringify(normalizeConfigArray(b));
+      });
+      check('acl', s.acl, t.acl, `${kind} ACL mismatch`, (a, b) => {
+        if (a === null && b === null) return true;
+        if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a.map(String).sort()) === JSON.stringify(b.map(String).sort());
+        if (typeof a === 'string' && typeof b === 'string') return a.trim() === b.trim();
+        return false;
+      });
       check('language', s.language, t.language, `${kind} language mismatch`);
       check('comment', s.comment, t.comment, `${kind} comment mismatch`);
       break;

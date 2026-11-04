@@ -11,6 +11,8 @@ import {
   handleApplyCommand,
   handleVerifyCommand,
   getPlatformAclBaseline,
+  validateCustomizationDetails,
+  deepCompareCustomizationItem,
 } from '../../scripts/backup/managed-customizations.mjs';
 import { sha256Hex } from '../../scripts/backup/owner-map.mjs';
 
@@ -284,7 +286,26 @@ test('managed-customizations helper suite', async (t) => {
     };
     assert.equal(classifyManagedCustomization(explicitColAcl).classification, 'unexplained');
 
-    // 10. Allowlisted custom relation ACL -> project-owned
+    // 10. Column ACL on unknown/unexpected column -> unexplained (FAIL CLOSED)
+    const unknownColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.non_existent_column',
+      details: {
+        aclIsNull: true,
+        entries: [],
+      },
+    };
+    assert.equal(classifyManagedCustomization(unknownColAcl).classification, 'unexplained');
+
+    // 11. Column ACL on column with missing details or missing aclIsNull -> unexplained (FAIL CLOSED)
+    const malformedColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.email',
+      details: null,
+    };
+    assert.equal(classifyManagedCustomization(malformedColAcl).classification, 'unexplained');
+
+    // 12. Allowlisted custom relation ACL -> project-owned
     const allowlist = new Set(['auth.users']);
     assert.equal(classifyManagedCustomization(extraDeleteAcl, allowlist).classification, 'project-owned');
   });
@@ -412,15 +433,22 @@ test('managed-customizations helper suite', async (t) => {
         {
           kind: 'policy',
           identity: 'storage.objects:crm_documents_policy',
-          details: { schema: 'storage', table: 'objects', policy: 'crm_documents_policy' },
+          details: {
+            schema: 'storage',
+            table: 'objects',
+            policy: 'crm_documents_policy',
+            permissive: 'PERMISSIVE',
+            roles: ['authenticated'],
+            command: 'SELECT',
+            using: 'true',
+            withCheck: null,
+          },
         },
       ];
       await fsp.writeFile(sourcePath, JSON.stringify(sourceItems));
 
       // Case 1: Target matches
-      const targetQuerySuccess = async () => JSON.stringify([
-        { kind: 'policy', identity: 'storage.objects:crm_documents_policy', details: {} },
-      ]);
+      const targetQuerySuccess = async () => JSON.stringify(sourceItems);
       const resPass = await handleVerifyCommand({
         sourcePath,
         target: 'supabase_db_crm-restore-rehearsal',
@@ -614,6 +642,65 @@ test('managed-customizations helper suite', async (t) => {
     } finally {
       await removeTempDir(tempDir);
     }
+  });
+
+  await t.test('validateCustomizationDetails and deepCompareCustomizationItem fail closed on missing/invalid schema', () => {
+    // 1. Policy validation
+    assert.equal(validateCustomizationDetails('policy', 'p1', null, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('policy', 'p1', {}, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('policy', 'p1', { schema: 'storage', table: 'objects' }, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('policy', 'p1', { schema: 'storage', table: 'objects', policy: 'p1', permissive: 'PERMISSIVE', roles: 'not-array', command: 'ALL', using: null, withCheck: null }, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('policy', 'p1', { schema: 'storage', table: 'objects', policy: 'p1', permissive: 'PERMISSIVE', roles: ['authenticated'], command: 'ALL', using: null, withCheck: null }, 'Source').valid, true);
+
+    // 2. Index validation
+    assert.equal(validateCustomizationDetails('index', 'i1', {}, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('index', 'i1', { definition: 'CREATE INDEX...', valid: true, ready: true, live: true, unique: false }, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('index', 'i1', { definition: 'CREATE INDEX...', valid: true, ready: true, live: true, unique: false, primary: false }, 'Source').valid, true);
+
+    // 3. Trigger validation
+    assert.equal(validateCustomizationDetails('trigger', 't1', {}, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('trigger', 't1', {
+      definition: 'CREATE TRIGGER...',
+      enabled: 'O',
+      functionIdentity: 'public.trg()',
+      functionDefinition: '...',
+      functionOwner: 'postgres',
+      securityDefiner: false,
+      functionConfig: null,
+      functionAcl: null,
+    }, 'Source').valid, true);
+
+    // 4. Routine & Procedure validation
+    assert.equal(validateCustomizationDetails('routine', 'r1', {}, 'Source').valid, false);
+    assert.equal(validateCustomizationDetails('routine', 'r1', {
+      definition: 'SELECT 1;',
+      owner: 'postgres',
+      securityDefiner: false,
+      config: null,
+      acl: null,
+      language: 'sql',
+      comment: null,
+    }, 'Source').valid, true);
+
+    // 5. Unsupported kind fails closed
+    assert.equal(validateCustomizationDetails('unsupported_kind', 'u1', {}, 'Source').valid, false);
+
+    // 6. deepCompareCustomizationItem with invalid source or target details
+    const validSrc = {
+      kind: 'index',
+      identity: 'public.t:idx',
+      details: { definition: 'CREATE INDEX...', valid: true, ready: true, live: true, unique: false, primary: false },
+    };
+    const invalidSrc = {
+      kind: 'index',
+      identity: 'public.t:idx',
+      details: {},
+    };
+    const discSrc = deepCompareCustomizationItem(invalidSrc, validSrc);
+    assert.ok(discSrc.some((d) => d.field === 'schema_validation' && d.sourceValue === 'invalid'));
+
+    const discTgt = deepCompareCustomizationItem(validSrc, invalidSrc);
+    assert.ok(discTgt.some((d) => d.field === 'schema_validation' && d.targetValue === 'invalid'));
   });
 
   await t.test('CLI rejects duplicate JSON keys (parseJsonStrict)', async () => {

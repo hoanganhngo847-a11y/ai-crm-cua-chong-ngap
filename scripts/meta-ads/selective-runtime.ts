@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createHmac, timingSafeEqual, verify } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, timingSafeEqual, verify } from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +23,7 @@ import {
   TARGET_STAGING_PROJECT,
   verifyPostgresServerVersion,
   verifyTargetProjectConnection,
+  CURRENT_SOURCE_COMMIT,
 } from './selective-executor';
 
 export const SERVER_VERSION_QUERY =
@@ -76,18 +77,36 @@ export interface SignedApprovalArtifact {
 }
 
 export const TRUSTED_OWNER_ROOT_PUB_PATH = path.resolve(__dirname, 'trusted-owner-root.pub');
+export const EXPECTED_OWNER_ROOT_FINGERPRINT =
+  '4a06943d7db2e99d822e5f315344789cc16e9409ec96838a9e889ac2f2f404ce';
+export const AUDIT_BASELINE_COMMIT = '0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f';
+export const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/i;
+export const GIT_COMMIT_SHA_REGEX = /^[0-9a-f]{40}$/i;
 
-export function loadTrustedOwnerRootPublicKey(customPath?: string): string {
-  const rootPath =
-    customPath ||
-    process.env.META_ADS_TRUSTED_OWNER_ROOT_PUBKEY_PATH ||
-    TRUSTED_OWNER_ROOT_PUB_PATH;
-  if (!fs.existsSync(rootPath)) {
+export function computePublicKeyFingerprint(pem: string): string {
+  try {
+    const pubKey = createPublicKey(pem.trim());
+    const spkiDer = pubKey.export({ type: 'spki', format: 'der' });
+    return createHash('sha256').update(spkiDer).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+export function loadTrustedOwnerRootPublicKey(): string {
+  if (!fs.existsSync(TRUSTED_OWNER_ROOT_PUB_PATH)) {
     throw new Error(
-      `HOSTED_EXECUTION_BLOCKED: Trusted owner root public key file not found at ${rootPath}`
+      `HOSTED_EXECUTION_BLOCKED: Trusted owner root public key file not found at ${TRUSTED_OWNER_ROOT_PUB_PATH}`
     );
   }
-  return fs.readFileSync(rootPath, 'utf8').trim();
+  const pem = fs.readFileSync(TRUSTED_OWNER_ROOT_PUB_PATH, 'utf8').trim();
+  const fp = computePublicKeyFingerprint(pem);
+  if (fp !== EXPECTED_OWNER_ROOT_FINGERPRINT) {
+    throw new Error(
+      `HOSTED_EXECUTION_BLOCKED: Trusted owner root public key fingerprint mismatch. Expected ${EXPECTED_OWNER_ROOT_FINGERPRINT}, found ${fp || 'INVALID_KEY'}`
+    );
+  }
+  return pem;
 }
 
 export function canonicalizeApprovalPayload(payload: OwnerApprovalPayload): string {
@@ -134,22 +153,38 @@ export function verifyArtifactSignature(params: {
   }
 }
 
-export function verifySignedApprovalArtifact(params: {
+export interface VerifySignedApprovalArtifactParams {
   artifact: unknown;
   trustedRootPublicKey: string;
   expectedProjectRef: string;
   expectedReleaseId: string;
+  expectedSourceCommit?: string;
+  expectedSnapshotCommit?: string;
   expectedReleasePackageDigest?: string;
   expectedMigrationHashes?: Record<string, string>;
+  expectedBackupManifestDigest?: string;
+  expectedBackupEvidenceDigest?: string;
+  backupManifestPath?: string;
+  backupEvidencePath?: string;
   currentTime?: Date;
-}): { valid: boolean; reason?: string } {
+}
+
+export function verifySignedApprovalArtifact(
+  params: VerifySignedApprovalArtifactParams
+): { valid: boolean; reason?: string } {
   const {
     artifact,
     trustedRootPublicKey,
     expectedProjectRef,
     expectedReleaseId,
+    expectedSourceCommit,
+    expectedSnapshotCommit,
     expectedReleasePackageDigest,
     expectedMigrationHashes,
+    expectedBackupManifestDigest,
+    expectedBackupEvidenceDigest,
+    backupManifestPath,
+    backupEvidencePath,
     currentTime,
   } = params;
 
@@ -215,14 +250,52 @@ export function verifySignedApprovalArtifact(params: {
     return { valid: false, reason: 'Approval missing approvedWriteGroups array' };
   }
 
-  if (!payload.sourceCommit || typeof payload.sourceCommit !== 'string' || !payload.snapshotCommit || typeof payload.snapshotCommit !== 'string') {
-    return { valid: false, reason: 'Approval missing sourceCommit or snapshotCommit' };
+  // Commit provenance validation
+  if (
+    !payload.sourceCommit ||
+    typeof payload.sourceCommit !== 'string' ||
+    !GIT_COMMIT_SHA_REGEX.test(payload.sourceCommit)
+  ) {
+    return {
+      valid: false,
+      reason: 'Invalid or missing sourceCommit: expected 40-character git commit SHA',
+    };
+  }
+  if (expectedSourceCommit && payload.sourceCommit !== expectedSourceCommit) {
+    return {
+      valid: false,
+      reason: `Source commit mismatch: expected '${expectedSourceCommit}', got '${payload.sourceCommit}'`,
+    };
   }
 
-  if (!payload.backupManifestDigest || !payload.backupEvidenceDigest) {
-    return { valid: false, reason: 'Approval missing backupManifestDigest or backupEvidenceDigest' };
+  if (
+    !payload.snapshotCommit ||
+    typeof payload.snapshotCommit !== 'string' ||
+    !GIT_COMMIT_SHA_REGEX.test(payload.snapshotCommit)
+  ) {
+    return {
+      valid: false,
+      reason: 'Invalid or missing snapshotCommit: expected 40-character git commit SHA',
+    };
+  }
+  if (expectedSnapshotCommit && payload.snapshotCommit !== expectedSnapshotCommit) {
+    return {
+      valid: false,
+      reason: `Snapshot commit mismatch: expected '${expectedSnapshotCommit}', got '${payload.snapshotCommit}'`,
+    };
   }
 
+  // Release package digest validation
+  if (
+    !payload.releasePackageDigest ||
+    typeof payload.releasePackageDigest !== 'string' ||
+    !SHA256_HEX_REGEX.test(payload.releasePackageDigest)
+  ) {
+    return {
+      valid: false,
+      reason: `Invalid or placeholder releasePackageDigest: expected 64-character hex SHA-256 string, got '${payload.releasePackageDigest}'`,
+    };
+  }
   if (expectedReleasePackageDigest && payload.releasePackageDigest !== expectedReleasePackageDigest) {
     return {
       valid: false,
@@ -230,10 +303,83 @@ export function verifySignedApprovalArtifact(params: {
     };
   }
 
-  if (expectedMigrationHashes) {
-    if (!payload.migrationHashes || typeof payload.migrationHashes !== 'object') {
-      return { valid: false, reason: 'Approval missing migrationHashes dictionary' };
+  // Backup manifest digest validation
+  if (
+    !payload.backupManifestDigest ||
+    typeof payload.backupManifestDigest !== 'string' ||
+    !SHA256_HEX_REGEX.test(payload.backupManifestDigest)
+  ) {
+    return {
+      valid: false,
+      reason: `Invalid or placeholder backupManifestDigest: expected 64-character hex SHA-256 string, got '${payload.backupManifestDigest}'`,
+    };
+  }
+  if (backupManifestPath) {
+    if (!fs.existsSync(backupManifestPath)) {
+      return { valid: false, reason: `Backup manifest file not found at ${backupManifestPath}` };
     }
+    const manifestBytes = fs.readFileSync(backupManifestPath);
+    const computedDigest = createHash('sha256').update(manifestBytes).digest('hex');
+    if (computedDigest !== payload.backupManifestDigest.toLowerCase()) {
+      return {
+        valid: false,
+        reason: `Backup manifest digest mismatch: computed '${computedDigest}' from file, approval payload specified '${payload.backupManifestDigest}'`,
+      };
+    }
+  } else if (expectedBackupManifestDigest) {
+    if (payload.backupManifestDigest.toLowerCase() !== expectedBackupManifestDigest.toLowerCase()) {
+      return {
+        valid: false,
+        reason: `Backup manifest digest mismatch: expected '${expectedBackupManifestDigest}', got '${payload.backupManifestDigest}'`,
+      };
+    }
+  }
+
+  // Backup evidence digest validation
+  if (
+    !payload.backupEvidenceDigest ||
+    typeof payload.backupEvidenceDigest !== 'string' ||
+    !SHA256_HEX_REGEX.test(payload.backupEvidenceDigest)
+  ) {
+    return {
+      valid: false,
+      reason: `Invalid or placeholder backupEvidenceDigest: expected 64-character hex SHA-256 string, got '${payload.backupEvidenceDigest}'`,
+    };
+  }
+  if (backupEvidencePath) {
+    if (!fs.existsSync(backupEvidencePath)) {
+      return { valid: false, reason: `Backup evidence file not found at ${backupEvidencePath}` };
+    }
+    const evidenceBytes = fs.readFileSync(backupEvidencePath);
+    const computedDigest = createHash('sha256').update(evidenceBytes).digest('hex');
+    if (computedDigest !== payload.backupEvidenceDigest.toLowerCase()) {
+      return {
+        valid: false,
+        reason: `Backup evidence digest mismatch: computed '${computedDigest}' from file, approval payload specified '${payload.backupEvidenceDigest}'`,
+      };
+    }
+  } else if (expectedBackupEvidenceDigest) {
+    if (payload.backupEvidenceDigest.toLowerCase() !== expectedBackupEvidenceDigest.toLowerCase()) {
+      return {
+        valid: false,
+        reason: `Backup evidence digest mismatch: expected '${expectedBackupEvidenceDigest}', got '${payload.backupEvidenceDigest}'`,
+      };
+    }
+  }
+
+  // Migration hashes validation
+  if (!payload.migrationHashes || typeof payload.migrationHashes !== 'object') {
+    return { valid: false, reason: 'Approval missing migrationHashes dictionary' };
+  }
+  for (const [file, hash] of Object.entries(payload.migrationHashes)) {
+    if (typeof hash !== 'string' || !SHA256_HEX_REGEX.test(hash)) {
+      return {
+        valid: false,
+        reason: `Invalid migration hash format for '${file}': expected 64-character hex SHA-256, got '${hash}'`,
+      };
+    }
+  }
+  if (expectedMigrationHashes) {
     for (const [file, hash] of Object.entries(expectedMigrationHashes)) {
       if (payload.migrationHashes[file] !== hash) {
         return {
@@ -322,7 +468,12 @@ export interface ExecuteSelectiveReleaseOptions {
   allowLocalTest?: boolean;
   approvalArtifact?: SignedApprovalArtifact;
   approvalArtifactPath?: string;
+  backupManifestPath?: string;
+  backupEvidencePath?: string;
+  expectedBackupManifestDigest?: string;
+  expectedBackupEvidenceDigest?: string;
   trustedRootPublicKey?: string;
+  /** @deprecated Legacy approval options are ignored and forbidden in hosted execution */
   hostedApproval?: HostedExecutionApproval;
   psqlPath?: string;
   runPsql?: PsqlRunner;
@@ -549,13 +700,6 @@ export function executeSelectiveRelease(
   );
 
   const releaseId = options.releaseId ?? 'meta-ads-20261031-r1';
-  const approval = options.hostedApproval;
-  const approvalReference = approval?.reference;
-  const signature = approval?.signature || process.env.META_ADS_OWNER_APPROVAL_SIGNATURE;
-  const secretOrKey =
-    approval?.secretOrPublicKey ||
-    process.env.META_ADS_OWNER_APPROVAL_SECRET ||
-    process.env.META_ADS_OWNER_PUBLIC_KEY;
 
   if (!connection.isLocalTest) {
     let artifact: SignedApprovalArtifact | null = options.approvalArtifact || null;
@@ -578,67 +722,72 @@ export function executeSelectiveRelease(
       }
     }
 
-    if (artifact) {
-      const pack = buildSelectiveExecutorPackage({
-        targetProjectRef: TARGET_STAGING_PROJECT,
-        releaseId,
-      });
+    if (!artifact) {
+      throw new Error(
+        'HOSTED_EXECUTION_BLOCKED: A cryptographically signed approval artifact (crm-owner-approval/v1) is strictly required for hosted execution.'
+      );
+    }
 
-      const expectedMigrationHashes: Record<string, string> = {};
-      for (const src of pack.sources) {
-        expectedMigrationHashes[src.file] = src.sha256;
-      }
-
-      const trustedRoot =
-        options.trustedRootPublicKey || loadTrustedOwnerRootPublicKey();
-
-      const verification = verifySignedApprovalArtifact({
-        artifact,
-        trustedRootPublicKey: trustedRoot,
-        expectedProjectRef: connection.projectRef,
-        expectedReleaseId: releaseId,
-        expectedReleasePackageDigest: pack.bundleSha256,
-        expectedMigrationHashes,
-      });
-
-      if (!verification.valid) {
+    // Pinned owner root cannot be overridden in hosted execution
+    const trustedRoot = loadTrustedOwnerRootPublicKey();
+    if (options.trustedRootPublicKey) {
+      const callerFp = computePublicKeyFingerprint(options.trustedRootPublicKey);
+      if (callerFp !== EXPECTED_OWNER_ROOT_FINGERPRINT) {
         throw new Error(
-          `HOSTED_EXECUTION_BLOCKED: ${verification.reason || 'Cryptographic owner approval signature verification failed'}`
+          'HOSTED_EXECUTION_BLOCKED: Overriding the trusted owner root public key is forbidden in hosted execution.'
         );
       }
-    } else {
-      if (
-        !(
-          approval?.backupRestoreVerified === true &&
-          approval.ownerApproved === true &&
-          typeof approvalReference === 'string' &&
-          approvalReference.trim().length > 0
-        )
-      ) {
-        throw new Error(
-          'HOSTED_EXECUTION_BLOCKED: A verified physical backup/restore rehearsal and explicit Project Owner approval reference are required.'
-        );
-      }
+    }
 
-      if (!signature || !secretOrKey) {
-        throw new Error(
-          'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature and verification key/secret are required.'
-        );
-      }
-      const isSignatureValid = verifyOwnerApprovalSignature({
-        projectRef: connection.projectRef,
-        releaseId,
-        reference: approvalReference!.trim(),
-        signature,
-        secretOrPublicKey: secretOrKey,
-      });
-      if (!isSignatureValid) {
-        throw new Error(
-          'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature verification failed for target project ' +
-            connection.projectRef +
-            '.'
-        );
-      }
+    const pack = buildSelectiveExecutorPackage({
+      targetProjectRef: TARGET_STAGING_PROJECT,
+      releaseId,
+    });
+
+    const expectedMigrationHashes: Record<string, string> = {};
+    for (const src of pack.sources) {
+      expectedMigrationHashes[src.file] = src.sha256;
+    }
+
+    const backupManifestPath =
+      options.backupManifestPath || process.env.META_ADS_BACKUP_MANIFEST_PATH;
+    const backupEvidencePath =
+      options.backupEvidencePath || process.env.META_ADS_BACKUP_EVIDENCE_PATH;
+    const expectedBackupManifestDigest =
+      options.expectedBackupManifestDigest || process.env.META_ADS_EXPECTED_BACKUP_MANIFEST_DIGEST;
+    const expectedBackupEvidenceDigest =
+      options.expectedBackupEvidenceDigest || process.env.META_ADS_EXPECTED_BACKUP_EVIDENCE_DIGEST;
+
+    if (!backupManifestPath && !expectedBackupManifestDigest) {
+      throw new Error(
+        'HOSTED_EXECUTION_BLOCKED: Actual verified backup manifest artifact or digest is required for hosted execution.'
+      );
+    }
+    if (!backupEvidencePath && !expectedBackupEvidenceDigest) {
+      throw new Error(
+        'HOSTED_EXECUTION_BLOCKED: Actual verified backup/restore evidence artifact or digest is required for hosted execution.'
+      );
+    }
+
+    const verification = verifySignedApprovalArtifact({
+      artifact,
+      trustedRootPublicKey: trustedRoot,
+      expectedProjectRef: connection.projectRef,
+      expectedReleaseId: releaseId,
+      expectedSourceCommit: AUDIT_BASELINE_COMMIT,
+      expectedSnapshotCommit: CURRENT_SOURCE_COMMIT,
+      expectedReleasePackageDigest: pack.bundleSha256,
+      expectedMigrationHashes,
+      expectedBackupManifestDigest,
+      expectedBackupEvidenceDigest,
+      backupManifestPath,
+      backupEvidencePath,
+    });
+
+    if (!verification.valid) {
+      throw new Error(
+        `HOSTED_EXECUTION_BLOCKED: ${verification.reason || 'Cryptographic owner approval signature verification failed'}`
+      );
     }
   }
 
@@ -744,13 +893,10 @@ export function executeSelectiveRelease(
 
 export interface CliArgs {
   approvalArtifactPath?: string;
-  trustedRootPath?: string;
+  backupManifestPath?: string;
+  backupEvidencePath?: string;
   releaseId?: string;
   allowLocalTest?: boolean;
-  backupRestoreVerified?: boolean;
-  ownerApproved?: boolean;
-  approvalReference?: string;
-  ownerSignature?: string;
 }
 
 export function parseCliArgs(argv: string[]): CliArgs {
@@ -772,32 +918,41 @@ export function parseCliArgs(argv: string[]): CliArgs {
         'INSECURE_ARGUMENT: Overriding the owner public key via CLI argument is forbidden. The owner trust root is pinned and independent.'
       );
     }
+    if (arg === '--trusted-root' || arg.startsWith('--trusted-root=')) {
+      throw new Error(
+        'INSECURE_ARGUMENT: Overriding the trusted root public key via CLI argument is forbidden. The owner trust root is pinned and immutable.'
+      );
+    }
+    if (
+      arg === '--owner-approved' ||
+      arg === '--backup-restore-verified' ||
+      arg === '--owner-approval-reference' ||
+      arg.startsWith('--owner-approval-reference=') ||
+      arg === '--owner-signature' ||
+      arg.startsWith('--owner-signature=')
+    ) {
+      throw new Error(
+        'LEGACY_ARGUMENT_FORBIDDEN: Legacy boolean approval flags and text references are forbidden. Hosted execution requires a signed approval artifact (--approval-artifact=<path>).'
+      );
+    }
     if (arg === '--approval-artifact' && i + 1 < argv.length) {
       args.approvalArtifactPath = argv[++i];
     } else if (arg.startsWith('--approval-artifact=')) {
       args.approvalArtifactPath = arg.slice('--approval-artifact='.length);
-    } else if (arg === '--trusted-root' && i + 1 < argv.length) {
-      args.trustedRootPath = argv[++i];
-    } else if (arg.startsWith('--trusted-root=')) {
-      args.trustedRootPath = arg.slice('--trusted-root='.length);
+    } else if (arg === '--backup-manifest' && i + 1 < argv.length) {
+      args.backupManifestPath = argv[++i];
+    } else if (arg.startsWith('--backup-manifest=')) {
+      args.backupManifestPath = arg.slice('--backup-manifest='.length);
+    } else if (arg === '--backup-evidence' && i + 1 < argv.length) {
+      args.backupEvidencePath = argv[++i];
+    } else if (arg.startsWith('--backup-evidence=')) {
+      args.backupEvidencePath = arg.slice('--backup-evidence='.length);
     } else if (arg === '--release-id' && i + 1 < argv.length) {
       args.releaseId = argv[++i];
     } else if (arg.startsWith('--release-id=')) {
       args.releaseId = arg.slice('--release-id='.length);
     } else if (arg === '--allow-local-test') {
       args.allowLocalTest = true;
-    } else if (arg === '--backup-restore-verified') {
-      args.backupRestoreVerified = true;
-    } else if (arg === '--owner-approved') {
-      args.ownerApproved = true;
-    } else if (arg === '--owner-approval-reference' && i + 1 < argv.length) {
-      args.approvalReference = argv[++i];
-    } else if (arg.startsWith('--owner-approval-reference=')) {
-      args.approvalReference = arg.slice('--owner-approval-reference='.length);
-    } else if (arg === '--owner-signature' && i + 1 < argv.length) {
-      args.ownerSignature = argv[++i];
-    } else if (arg.startsWith('--owner-signature=')) {
-      args.ownerSignature = arg.slice('--owner-signature='.length);
     }
   }
   return args;
@@ -813,32 +968,17 @@ function runCli(): void {
   }
 
   const allowLocalTest = cliArgs.allowLocalTest ?? (process.env.META_ADS_ALLOW_LOCAL_TEST === '1');
-  const backupRestoreVerified = cliArgs.backupRestoreVerified ?? (process.env.META_ADS_BACKUP_RESTORE_VERIFIED === '1');
-  const ownerApproved = cliArgs.ownerApproved ?? (process.env.META_ADS_OWNER_APPROVED === '1');
-  const reference = cliArgs.approvalReference || process.env.META_ADS_OWNER_APPROVAL_REFERENCE || '';
-  const signature = cliArgs.ownerSignature || process.env.META_ADS_OWNER_APPROVAL_SIGNATURE;
-  const secretOrPublicKey =
-    process.env.META_ADS_OWNER_APPROVAL_SECRET ||
-    process.env.META_ADS_OWNER_PUBLIC_KEY;
-
-  let trustedRootPublicKey: string | undefined;
-  if (cliArgs.trustedRootPath) {
-    trustedRootPublicKey = loadTrustedOwnerRootPublicKey(cliArgs.trustedRootPath);
-  }
 
   const result = executeSelectiveRelease({
     connectionString,
     releaseId: cliArgs.releaseId || process.env.META_ADS_RELEASE_ID,
     allowLocalTest,
-    approvalArtifactPath: cliArgs.approvalArtifactPath,
-    trustedRootPublicKey,
-    hostedApproval: {
-      backupRestoreVerified,
-      ownerApproved,
-      reference,
-      signature,
-      secretOrPublicKey,
-    },
+    approvalArtifactPath:
+      cliArgs.approvalArtifactPath || process.env.META_ADS_APPROVAL_ARTIFACT_PATH,
+    backupManifestPath:
+      cliArgs.backupManifestPath || process.env.META_ADS_BACKUP_MANIFEST_PATH,
+    backupEvidencePath:
+      cliArgs.backupEvidencePath || process.env.META_ADS_BACKUP_EVIDENCE_PATH,
   });
 
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');

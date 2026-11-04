@@ -62,8 +62,26 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenIndexes = new Set();
   for (let i = 0; i < catalog.indexes.length; i++) {
     const idx = catalog.indexes[i];
-    if (!idx || typeof idx !== 'object' || typeof idx.schema !== 'string' || typeof idx.table !== 'string' || typeof idx.name !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} index at position ${i} has invalid schema (requires string schema, table, name)`);
+    if (
+      !idx ||
+      typeof idx !== 'object' ||
+      typeof idx.schema !== 'string' ||
+      !idx.schema.trim() ||
+      typeof idx.table !== 'string' ||
+      !idx.table.trim() ||
+      typeof idx.name !== 'string' ||
+      !idx.name.trim() ||
+      typeof idx.definition !== 'string' ||
+      typeof idx.valid !== 'boolean' ||
+      typeof idx.ready !== 'boolean' ||
+      typeof idx.live !== 'boolean' ||
+      typeof idx.unique !== 'boolean' ||
+      typeof idx.primary !== 'boolean'
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} index at position ${i} has invalid schema (requires non-empty string schema, table, name, string definition, and boolean valid, ready, live, unique, primary)`
+      );
     }
     const key = `${idx.schema}.${idx.table}.${idx.name}`;
     if (seenIndexes.has(key)) {
@@ -76,8 +94,24 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenConstraints = new Set();
   for (let i = 0; i < catalog.constraints.length; i++) {
     const con = catalog.constraints[i];
-    if (!con || typeof con !== 'object' || typeof con.schema !== 'string' || typeof con.table !== 'string' || typeof con.name !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} constraint at position ${i} has invalid schema (requires string schema, table, name)`);
+    if (
+      !con ||
+      typeof con !== 'object' ||
+      typeof con.schema !== 'string' ||
+      !con.schema.trim() ||
+      typeof con.table !== 'string' ||
+      !con.table.trim() ||
+      typeof con.name !== 'string' ||
+      !con.name.trim() ||
+      typeof con.definition !== 'string' ||
+      typeof con.validated !== 'boolean' ||
+      typeof con.deferrable !== 'boolean' ||
+      typeof con.initiallyDeferred !== 'boolean'
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} constraint at position ${i} has invalid schema (requires non-empty string schema, table, name, string definition, and boolean validated, deferrable, initiallyDeferred)`
+      );
     }
     const key = `${con.schema}.${con.table}.${con.name}`;
     if (seenConstraints.has(key)) {
@@ -90,11 +124,25 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenRoutines = new Set();
   for (let i = 0; i < catalog.routines.length; i++) {
     const r = catalog.routines[i];
-    if (!r || typeof r !== 'object' || typeof r.identity !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} routine at position ${i} has invalid schema (requires string identity)`);
-    }
-    if (r.definition === undefined || r.definition === null || typeof r.definition !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} routine '${r.identity}' is missing string definition`);
+    if (
+      !r ||
+      typeof r !== 'object' ||
+      typeof r.identity !== 'string' ||
+      !r.identity.trim() ||
+      typeof r.definition !== 'string' ||
+      typeof r.owner !== 'string' ||
+      !r.owner.trim() ||
+      typeof r.securityDefiner !== 'boolean' ||
+      typeof r.language !== 'string' ||
+      !r.language.trim() ||
+      (r.config !== null && !Array.isArray(r.config)) ||
+      (r.acl !== null && !Array.isArray(r.acl) && typeof r.acl !== 'string') ||
+      (r.comment !== null && typeof r.comment !== 'string')
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} routine at position ${i} has invalid schema (requires non-empty string identity, definition, owner, language, boolean securityDefiner, nullable array config/acl, nullable string comment)`
+      );
     }
     const key = r.identity;
     if (seenRoutines.has(key)) {
@@ -107,8 +155,20 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenSeqs = new Set();
   for (let i = 0; i < catalog.sequences.length; i++) {
     const seq = catalog.sequences[i];
-    if (!seq || typeof seq !== 'object' || typeof seq.schema_name !== 'string' || typeof seq.sequence_name !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} sequence at position ${i} has invalid schema (requires string schema_name, sequence_name)`);
+    if (
+      !seq ||
+      typeof seq !== 'object' ||
+      typeof seq.schema_name !== 'string' ||
+      !seq.schema_name.trim() ||
+      typeof seq.sequence_name !== 'string' ||
+      !seq.sequence_name.trim() ||
+      (typeof seq.last_value !== 'string' && typeof seq.last_value !== 'number') ||
+      typeof seq.is_called !== 'boolean'
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} sequence at position ${i} has invalid schema (requires non-empty string schema_name, sequence_name, string/number last_value, boolean is_called)`
+      );
     }
     const key = `${seq.schema_name}.${seq.sequence_name}`;
     if (seenSeqs.has(key)) {
@@ -121,8 +181,19 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenRelComments = new Set();
   for (let i = 0; i < catalog.relationComments.length; i++) {
     const rc = catalog.relationComments[i];
-    if (!rc || typeof rc !== 'object' || typeof rc.schema !== 'string' || typeof rc.relation !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} relationComment at position ${i} has invalid schema (requires string schema, relation)`);
+    if (
+      !rc ||
+      typeof rc !== 'object' ||
+      typeof rc.schema !== 'string' ||
+      !rc.schema.trim() ||
+      typeof rc.relation !== 'string' ||
+      !rc.relation.trim() ||
+      (rc.comment !== null && typeof rc.comment !== 'string')
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} relationComment at position ${i} has invalid schema (requires non-empty string schema, relation, and nullable string comment)`
+      );
     }
     const key = `${rc.schema}.${rc.relation}`;
     if (seenRelComments.has(key)) {
@@ -135,8 +206,21 @@ export function validateCatalogSchema(catalog, label = 'Catalog') {
   const seenColComments = new Set();
   for (let i = 0; i < catalog.columnComments.length; i++) {
     const cc = catalog.columnComments[i];
-    if (!cc || typeof cc !== 'object' || typeof cc.schema !== 'string' || typeof cc.relation !== 'string' || typeof cc.column !== 'string') {
-      fail('INVALID_CATALOG_SCHEMA', `${label} columnComment at position ${i} has invalid schema (requires string schema, relation, column)`);
+    if (
+      !cc ||
+      typeof cc !== 'object' ||
+      typeof cc.schema !== 'string' ||
+      !cc.schema.trim() ||
+      typeof cc.relation !== 'string' ||
+      !cc.relation.trim() ||
+      typeof cc.column !== 'string' ||
+      !cc.column.trim() ||
+      (cc.comment !== null && typeof cc.comment !== 'string')
+    ) {
+      fail(
+        'INVALID_CATALOG_SCHEMA',
+        `${label} columnComment at position ${i} has invalid schema (requires non-empty string schema, relation, column, and nullable string comment)`
+      );
     }
     const key = `${cc.schema}.${cc.relation}.${cc.column}`;
     if (seenColComments.has(key)) {

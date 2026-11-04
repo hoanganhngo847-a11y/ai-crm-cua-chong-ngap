@@ -150,6 +150,14 @@ To ensure complete cryptographic auditability between repository state and datab
 4. **Distinction between software implementation and hosted verification**:
    - The backup/restore helpers (Helpers #1 through #8) and selective migration executor are **IMPLEMENTED** in software with automated local integration test suites passing.
    - The physical execution against hosted Staging database `qmhfmgkymjgoevwmkidm` is **UNVERIFIED / BLOCKED** awaiting the 14 prerequisites and explicit owner approval. Hosted execution cannot proceed until a successful physical backup/restore rehearsal is completed and cryptographically signed.
+5. **Cryptographic Owner Approval & Independent Pinned Trust Root**:
+   - Hosted execution strictly requires a cryptographically signed approval artifact (`SignedApprovalArtifact` format `crm-owner-approval/v1`).
+   - All legacy fallback mechanisms (HMAC secrets, environment variables `META_ADS_OWNER_APPROVAL_SECRET`, `META_ADS_OWNER_PUBLIC_KEY`, `META_ADS_OWNER_APPROVAL_SIGNATURE`, and boolean flags `META_ADS_OWNER_APPROVED`, `META_ADS_BACKUP_RESTORE_VERIFIED`) have been completely purged from hosted execution paths.
+   - The owner trust root public key is pinned and immutable at `scripts/meta-ads/trusted-owner-root.pub` with SPKI SHA-256 fingerprint:
+     `4a06943d7db2e99d822e5f315344789cc16e9409ec96838a9e889ac2f2f404ce`
+   - CLI overrides (`--trusted-root`, `--owner-secret`, `--owner-public-key`, `--connection-string`) are explicitly rejected fail-closed.
+   - The artifact payload cryptographically binds exact 64-character hex digests of the actual backup manifest and backup evidence files (`backupManifestDigest`, `backupEvidenceDigest`). Placeholder or dummy digests are rejected, and actual files on disk are re-hashed and verified against the signed artifact before any hosted preflight query.
+   - Exact per-object catalog validation (Helper #8 `catalog-compare.mjs`) and deep attribute verification (Helper #7 `managed-customizations.mjs`) enforce strict type and structure checks without loose type coercion, backed by an exact 38-relation and 362-column platform ACL baseline (`platform-acl-baseline.json`).
 
 ---
 

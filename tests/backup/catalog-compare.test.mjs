@@ -12,6 +12,78 @@ import {
   compareStrings,
 } from '../../scripts/backup/catalog-compare.mjs';
 
+function makeIndex(overrides = {}) {
+  return {
+    schema: 'public',
+    table: 'tbl',
+    name: 'idx',
+    definition: 'CREATE INDEX idx ON public.tbl(id)',
+    valid: true,
+    ready: true,
+    live: true,
+    unique: false,
+    primary: false,
+    ...overrides,
+  };
+}
+
+function makeConstraint(overrides = {}) {
+  return {
+    schema: 'public',
+    table: 'tbl',
+    name: 'chk',
+    definition: 'CHECK (1=1)',
+    validated: true,
+    deferrable: false,
+    initiallyDeferred: false,
+    ...overrides,
+  };
+}
+
+function makeRoutine(overrides = {}) {
+  return {
+    schema: 'public',
+    identity: 'public.my_func()',
+    definition: 'SELECT 1;',
+    owner: 'postgres',
+    securityDefiner: false,
+    config: null,
+    acl: null,
+    language: 'sql',
+    comment: null,
+    ...overrides,
+  };
+}
+
+function makeSequence(overrides = {}) {
+  return {
+    schema_name: 'public',
+    sequence_name: 'seq',
+    last_value: 10,
+    is_called: true,
+    ...overrides,
+  };
+}
+
+function makeRelationComment(overrides = {}) {
+  return {
+    schema: 'public',
+    relation: 'tbl',
+    comment: 'Table comment',
+    ...overrides,
+  };
+}
+
+function makeColumnComment(overrides = {}) {
+  return {
+    schema: 'public',
+    relation: 'tbl',
+    column: 'col',
+    comment: 'Column comment',
+    ...overrides,
+  };
+}
+
 function makeCanonicalCatalog(overrides = {}) {
   return {
     indexes: [],
@@ -132,19 +204,19 @@ test('catalog-compare helper suite', async (t) => {
   await t.test('detects index invalidity and sequence is_called mismatch', () => {
     const source = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: true, ready: true },
+        makeIndex({ schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: true, ready: true }),
       ],
       sequences: [
-        { schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: true },
+        makeSequence({ schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: true }),
       ],
     });
 
     const target = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: false, ready: true },
+        makeIndex({ schema: 'public', table: 'tbl', name: 'idx', definition: 'CREATE INDEX...', valid: false, ready: true }),
       ],
       sequences: [
-        { schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: false },
+        makeSequence({ schema_name: 'public', sequence_name: 'seq', last_value: 10, is_called: false }),
       ],
     });
 
@@ -269,13 +341,13 @@ test('catalog-compare helper suite', async (t) => {
   await t.test('detects missing and extra objects in target', () => {
     const source = makeCanonicalCatalog({
       constraints: [
-        { schema: 'public', table: 't1', name: 'c1', definition: 'CHECK (1=1)', validated: true },
+        makeConstraint({ schema: 'public', table: 't1', name: 'c1', definition: 'CHECK (1=1)' }),
       ],
     });
 
     const target = makeCanonicalCatalog({
       constraints: [
-        { schema: 'public', table: 't2', name: 'c2', definition: 'CHECK (2=2)', validated: true },
+        makeConstraint({ schema: 'public', table: 't2', name: 'c2', definition: 'CHECK (2=2)' }),
       ],
     });
 
@@ -358,8 +430,8 @@ test('catalog-compare helper suite', async (t) => {
     // 7. Duplicate index identity
     const dupIndex = makeCanonicalCatalog({
       indexes: [
-        { schema: 'public', table: 'users', name: 'users_idx', definition: '...' },
-        { schema: 'public', table: 'users', name: 'users_idx', definition: '...' },
+        makeIndex({ schema: 'public', table: 'users', name: 'users_idx' }),
+        makeIndex({ schema: 'public', table: 'users', name: 'users_idx' }),
       ],
     });
     assert.throws(() => validateCatalogSchema(dupIndex, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
@@ -367,8 +439,8 @@ test('catalog-compare helper suite', async (t) => {
     // 8. Duplicate constraint identity
     const dupConstraint = makeCanonicalCatalog({
       constraints: [
-        { schema: 'public', table: 'users', name: 'users_pkey', definition: '...' },
-        { schema: 'public', table: 'users', name: 'users_pkey', definition: '...' },
+        makeConstraint({ schema: 'public', table: 'users', name: 'users_pkey' }),
+        makeConstraint({ schema: 'public', table: 'users', name: 'users_pkey' }),
       ],
     });
     assert.throws(() => validateCatalogSchema(dupConstraint, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
@@ -376,17 +448,26 @@ test('catalog-compare helper suite', async (t) => {
     // 9. Duplicate routine identity
     const dupRoutine = makeCanonicalCatalog({
       routines: [
-        { identity: 'public.do_work()', definition: '...' },
-        { identity: 'public.do_work()', definition: '...' },
+        makeRoutine({ identity: 'public.do_work()' }),
+        makeRoutine({ identity: 'public.do_work()' }),
       ],
     });
     assert.throws(() => validateCatalogSchema(dupRoutine, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
 
+    // 9b. Duplicate sequence identity
+    const dupSeq = makeCanonicalCatalog({
+      sequences: [
+        makeSequence({ schema_name: 'public', sequence_name: 'seq1' }),
+        makeSequence({ schema_name: 'public', sequence_name: 'seq1' }),
+      ],
+    });
+    assert.throws(() => validateCatalogSchema(dupSeq, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
+
     // 10. Duplicate relation comment
     const dupRelComment = makeCanonicalCatalog({
       relationComments: [
-        { schema: 'public', relation: 'users', comment: 'c1' },
-        { schema: 'public', relation: 'users', comment: 'c2' },
+        makeRelationComment({ schema: 'public', relation: 'users', comment: 'c1' }),
+        makeRelationComment({ schema: 'public', relation: 'users', comment: 'c2' }),
       ],
     });
     assert.throws(() => validateCatalogSchema(dupRelComment, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
@@ -394,13 +475,103 @@ test('catalog-compare helper suite', async (t) => {
     // 11. Duplicate column comment
     const dupColComment = makeCanonicalCatalog({
       columnComments: [
-        { schema: 'public', relation: 'users', column: 'email', comment: 'c1' },
-        { schema: 'public', relation: 'users', column: 'email', comment: 'c2' },
+        makeColumnComment({ schema: 'public', relation: 'users', column: 'email', comment: 'c1' }),
+        makeColumnComment({ schema: 'public', relation: 'users', column: 'email', comment: 'c2' }),
       ],
     });
     assert.throws(() => validateCatalogSchema(dupColComment, 'Test'), (err) => err.code === 'DUPLICATE_CATALOG_ENTRY');
 
-    // 12. compareStrings fails closed on non-string inputs
+    // 12. P1 regression: Exhaustive field-by-field validation for all 6 catalog sections
+    // Test that missing or wrong-typed required fields in source, target, or both sides ALWAYS fails closed
+    const indexRequiredFields = ['schema', 'table', 'name', 'definition', 'valid', 'ready', 'live', 'unique', 'primary'];
+    for (const field of indexRequiredFields) {
+      const badIdx = makeIndex();
+      delete badIdx[field];
+      const badCatalog = makeCanonicalCatalog({ indexes: [badIdx] });
+      // Missing in single catalog
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      // Missing in source during compare
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      // Missing in target during compare
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      // Missing in both during compare
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    const constraintRequiredFields = ['schema', 'table', 'name', 'definition', 'validated', 'deferrable', 'initiallyDeferred'];
+    for (const field of constraintRequiredFields) {
+      const badCon = makeConstraint();
+      delete badCon[field];
+      const badCatalog = makeCanonicalCatalog({ constraints: [badCon] });
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    const routineRequiredFields = ['identity', 'definition', 'owner', 'securityDefiner', 'language'];
+    for (const field of routineRequiredFields) {
+      const badRtn = makeRoutine();
+      delete badRtn[field];
+      const badCatalog = makeCanonicalCatalog({ routines: [badRtn] });
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    const sequenceRequiredFields = ['schema_name', 'sequence_name', 'last_value', 'is_called'];
+    for (const field of sequenceRequiredFields) {
+      const badSeq = makeSequence();
+      delete badSeq[field];
+      const badCatalog = makeCanonicalCatalog({ sequences: [badSeq] });
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    const relCommentRequiredFields = ['schema', 'relation'];
+    for (const field of relCommentRequiredFields) {
+      const badRc = makeRelationComment();
+      delete badRc[field];
+      const badCatalog = makeCanonicalCatalog({ relationComments: [badRc] });
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    const colCommentRequiredFields = ['schema', 'relation', 'column'];
+    for (const field of colCommentRequiredFields) {
+      const badCc = makeColumnComment();
+      delete badCc[field];
+      const badCatalog = makeCanonicalCatalog({ columnComments: [badCc] });
+      assert.throws(() => validateCatalogSchema(badCatalog, 'Source'), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, valid, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(valid, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+      assert.throws(() => compareCatalogDetails(badCatalog, badCatalog, {}), (err) => err.code === 'INVALID_CATALOG_SCHEMA');
+    }
+
+    // Whitespace-only string fields must fail closed
+    assert.throws(
+      () => validateCatalogSchema(makeCanonicalCatalog({ indexes: [makeIndex({ schema: '   ' })] }), 'Test'),
+      (err) => err.code === 'INVALID_CATALOG_SCHEMA'
+    );
+    assert.throws(
+      () => validateCatalogSchema(makeCanonicalCatalog({ constraints: [makeConstraint({ table: '' })] }), 'Test'),
+      (err) => err.code === 'INVALID_CATALOG_SCHEMA'
+    );
+    assert.throws(
+      () => validateCatalogSchema(makeCanonicalCatalog({ routines: [makeRoutine({ identity: ' \t ' })] }), 'Test'),
+      (err) => err.code === 'INVALID_CATALOG_SCHEMA'
+    );
+    assert.throws(
+      () => validateCatalogSchema(makeCanonicalCatalog({ sequences: [makeSequence({ sequence_name: '' })] }), 'Test'),
+      (err) => err.code === 'INVALID_CATALOG_SCHEMA'
+    );
+
+    // 13. compareStrings fails closed on non-string inputs
     assert.equal(compareStrings(true, {}), false);
     assert.equal(compareStrings(123, 123), false);
     assert.equal(compareStrings(null, null), true);
