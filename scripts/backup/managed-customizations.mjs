@@ -427,9 +427,6 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
     if (details.schema !== baselineObj.schema || details.table !== baselineObj.table || details.column !== baselineObj.column) {
       return { classification: 'unexplained', reason: `Column identity metadata mismatch on ${identity}` };
     }
-    if (details.schema !== baselineObj.schema || details.table !== baselineObj.table) {
-      return { classification: 'unexplained', reason: `Relation identity metadata mismatch on ${identity}` };
-    }
     if (typeof details.aclIsNull !== 'boolean' || !Array.isArray(details.entries)) {
       return {
         classification: 'unexplained',
@@ -496,6 +493,10 @@ export function classifyAclCustomization(item, projectAllowlist = new Set()) {
         classification: 'unexplained',
         reason: `Relation ${identity} is not in platform ACL baseline`,
       };
+    }
+
+    if (details.schema !== baselineObj.schema || details.table !== baselineObj.table) {
+      return { classification: 'unexplained', reason: `Relation identity metadata mismatch on ${identity}` };
     }
 
     if (typeof details.aclIsNull !== 'boolean' || !Array.isArray(details.entries)) {

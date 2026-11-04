@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {
   classifyManagedCustomization,
   generateManagedCustomizationsSql,
@@ -17,7 +17,7 @@ import {
   validateCustomizationDetails,
   deepCompareCustomizationItem,
 } from '../../scripts/backup/managed-customizations.mjs';
-import { sha256Hex } from '../../scripts/backup/owner-map.mjs';
+import { resolveEffectiveDockerEndpoint, parseAndValidateDockerEndpoint, sha256Hex } from '../../scripts/backup/owner-map.mjs';
 
 async function createTempDir(prefix = 'managed-cust-test-') {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -204,12 +204,18 @@ test('managed-customizations helper suite', async (t) => {
       details: JSON.parse(JSON.stringify(usersBaseline)),
     };
     assert.equal(classifyManagedCustomization(standardAcl).classification, 'platform-default');
+    for (const details of [
+      { ...standardAcl.details, schema: 'storage' },
+      { ...standardAcl.details, table: 'objects' },
+      { ...standardAcl.details, schema: undefined, table: undefined },
+    ]) assert.equal(classifyManagedCustomization({ ...standardAcl, details }).classification, 'unexplained', 'a matching grant set cannot override a mismatched canonical relation identity');
 
     // 2. ACL có thêm DELETE bất thường cấp cho authenticated -> unexplained (FAIL CLOSED)
     const extraDeleteAcl = {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: [
           ...JSON.parse(JSON.stringify(usersBaseline.entries)),
@@ -226,6 +232,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: alteredGrantOptionEntries,
       },
@@ -238,6 +245,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: missingPrivEntries,
       },
@@ -251,6 +259,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: alteredGrantorEntries,
       },
@@ -262,6 +271,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: true, // Baseline has false
         entries: [],
       },
@@ -273,6 +283,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: [
           ...JSON.parse(JSON.stringify(usersBaseline.entries)),
@@ -805,4 +816,26 @@ test('managed-customizations helper suite', async (t) => {
       await removeTempDir(tempDir);
     }
   });
+});
+
+
+test('live PostgreSQL column ACL extraction preserves canonical identity and detects extra grants', {
+  skip: process.env.BACKUP_REQUIRE_LIVE_PG17 !== '1',
+}, () => {
+  const endpoint = resolveEffectiveDockerEndpoint();
+  assert.ok(endpoint.rawEndpoint && parseAndValidateDockerEndpoint(endpoint.rawEndpoint).isLocal, 'local Docker only');
+  const container = 'crm-dumpcheck-test';
+  const labels = execFileSync('docker', ['inspect', '--format', '{{index .Config.Labels "crm.disposable-test"}}|{{index .Config.Labels "crm.owner"}}|{{index .Config.Labels "crm.purpose"}}', container], { encoding: 'utf8' }).trim();
+  assert.equal(labels, 'true|ci-postgres17|pg17-backup-restore-test');
+  const query = (sql) => JSON.parse(execFileSync('docker', ['exec', '-i', container, 'psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-U', 'supabase_admin', '-d', 'postgres'], { input: sql, encoding: 'utf8' }));
+  const inventory = query(MANAGED_CUSTOMIZATIONS_QUERY_SQL);
+  const column = inventory.find(i => i.kind === 'column-acl' && i.identity === 'auth.users.email');
+  assert.ok(column);
+  assert.equal(column.details.schema, 'auth');
+  assert.equal(column.details.table, 'users');
+  assert.equal(column.details.column, 'email');
+  assert.equal(classifyManagedCustomization(column).classification, 'platform-default');
+  const changed = query('BEGIN; GRANT SELECT(email) ON auth.users TO anon;\n' + MANAGED_CUSTOMIZATIONS_QUERY_SQL + '\nROLLBACK;');
+  assert.equal(classifyManagedCustomization(changed.find(i => i.kind === 'column-acl' && i.identity === column.identity)).classification, 'unexplained');
+  assert.equal(classifyManagedCustomization(query(MANAGED_CUSTOMIZATIONS_QUERY_SQL).find(i => i.kind === 'column-acl' && i.identity === column.identity)).classification, 'platform-default', 'the grant fixture was rolled back');
 });
