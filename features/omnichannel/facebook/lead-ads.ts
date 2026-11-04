@@ -183,6 +183,15 @@ function isMetaAdCreativeSnapshot(value: unknown): value is MetaAdCreativeSnapsh
         && Array.isArray(snapshot.videoAssets);
 }
 
+interface LeadgenCheckpoint {
+    lead_data?: MetaLeadData;
+    creative_snapshot?: unknown;
+    leadgen_event_binding?: unknown;
+    leadgen_ad_id_conflict?: unknown;
+    leadgen_page_evidence_conflict?: unknown;
+    payload?: { ad_id?: string };
+}
+
 /**
  * Ingest a Meta Lead Ads event into CRM with attribution touchpoint
  */
@@ -200,7 +209,7 @@ export async function processLeadAdsChange(
     const claim = await rpc('claim_meta_leadgen_event', {
         p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
         p_form_id: change.formId || null, p_ad_id: change.adId || null, p_occurred: change.time,
-    }) as { status?: string; claim_token?: string; occurred_at?: string; ingest_args?: { lead_data?: MetaLeadData; creative_snapshot?: unknown } } | null;
+    }) as { status?: string; claim_token?: string; occurred_at?: string; ingest_args?: LeadgenCheckpoint } | null;
     if (claim?.status === 'ALREADY_PROCESSED') return { leadgenId: change.leadgenId, status: 'EXISTING' };
     if (claim?.status !== 'CLAIMED' || !claim.claim_token) throw new ChannelError('LEADGEN_CLAIM_UNAVAILABLE', 503);
     const claimToken = claim.claim_token;
@@ -214,14 +223,18 @@ export async function processLeadAdsChange(
         // submission with a newer version edited in Meta in the meantime.
         const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
         const fields = extractLeadFields(leadData.field_data || []);
-        const webhookAdId = change.adId || null;
+        const webhookAdId = claim.ingest_args ? claim.ingest_args.payload?.ad_id || null : change.adId || null;
         const leadDetailsAdId = leadData.ad_id || null;
-        const adIdConflict = Boolean(webhookAdId && leadDetailsAdId && webhookAdId !== leadDetailsAdId);
+        const adIdConflict = claim.ingest_args
+            ? claim.ingest_args.leadgen_ad_id_conflict !== undefined && claim.ingest_args.leadgen_ad_id_conflict !== false
+            : Boolean(webhookAdId && leadDetailsAdId && webhookAdId !== leadDetailsAdId);
         const adId = leadDetailsAdId || webhookAdId;
         // This module is called by the webhook route only after the request signature
         // has been verified. Preserve that contemporaneous Page/Ad binding separately
         // from creative snapshots, which may later be backfilled.
-        const leadgenEventBinding = !adIdConflict && webhookAdId && adId === webhookAdId && change.page === config.page
+        const leadgenEventBinding = claim.ingest_args
+            ? claim.ingest_args.leadgen_event_binding
+            : !adIdConflict && webhookAdId && adId === webhookAdId && change.page === config.page
             ? {
                 source: 'SIGNED_META_WEBHOOK' as const,
                 leadgenId: change.leadgenId,
@@ -254,10 +267,18 @@ export async function processLeadAdsChange(
         const adsetId = leadData.adset_id || verifiedCreative?.adsetId || null;
         const adsetName = leadData.adset_name || verifiedCreative?.adsetName || null;
         const adName = leadData.ad_name || verifiedCreative?.adName || null;
+        const pageEvidenceConflict = claim.ingest_args
+            ? claim.ingest_args.leadgen_page_evidence_conflict !== undefined && claim.ingest_args.leadgen_page_evidence_conflict !== false
+            : Boolean(creativeSnapshot?.captureTiming === 'AT_LEAD_INTAKE' && (
+                creativeSnapshot.pageIdConflict
+                || (creativeSnapshot.pageId && creativeSnapshot.pageId !== config.page)
+                || (creativeSnapshot.source === 'META_MARKETING_API' && creativeSnapshot.adId !== adId)
+            ));
         const attributionEvidence = {
             ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
             ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
             ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
+            ...(pageEvidenceConflict ? { leadgen_page_evidence_conflict: true } : {}),
         };
         const adsContextData = Object.keys(attributionEvidence).length > 0 ? attributionEvidence : null;
         const ingest = await rpc('ingest_meta_leadgen_event', {

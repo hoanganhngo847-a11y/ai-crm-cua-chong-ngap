@@ -399,15 +399,14 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         ]) for (const role of ['anon', 'authenticated']) assert.throws(() => sql(`SET ROLE ${role}; ${statement};`), /Command failed/);
 
         // Pending campaign resolution: a bounded, safe retry. Before the asset sync
-        // lands anything, only the assertion corroborated by an existing synced
-        // campaign row resolves (INFERRED); everything else stays pending.
+        // lands an exact Ad mapping, a campaign assertion remains unverified.
         const retryBeforeSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
         assert.equal(retryBeforeSync.checked, 13, 'all pending leadgen rows are inspected in one bounded pass: 5 forged-loop rows, 4 stable no-phone webhooks, 4 duplicate-phone submissions');
-        assert.equal(retryBeforeSync.resolved, 1);
-        assert.equal(Number(retryBeforeSync.remaining), 12);
+        assert.equal(retryBeforeSync.resolved, 0);
+        assert.equal(Number(retryBeforeSync.remaining), 13);
         assert.equal(
             sql(`SELECT attribution_status||'|'||COALESCE(campaign_name_snapshot,'') FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)} AND meta_leadgen_id='unknown-ad';`),
-            'INFERRED|Verified campaign',
+            'PENDING_SYNC|',
         );
         // Tenant isolation: no company can claim another company's campaign evidence.
         const retryOther = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(other)});`));
@@ -445,7 +444,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
              WHERE company_id = ${q(company)} AND meta_leadgen_id ~ '^300';`);
         const retryAfterSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
         assert.equal(retryAfterSync.resolved, 4);
-        assert.equal(Number(retryAfterSync.remaining), 8, 'only rows with unresolvable assertions stay pending: forged loops, no-phone stable leads, late-arrival');
+        assert.equal(Number(retryAfterSync.remaining), 9, 'only rows with unresolvable assertions stay pending: forged loops, no-phone stable leads, late-arrival');
         const resolvedOne = JSON.parse(sql(`SELECT row_to_json(t) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(company)} AND meta_leadgen_id='30001';`));
         assert.equal(resolvedOne.attribution_status, 'ATTRIBUTED');
         assert.equal(resolvedOne.campaign_name_snapshot, 'Chiến dịch Du học 300');

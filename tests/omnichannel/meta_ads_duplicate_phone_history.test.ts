@@ -430,12 +430,16 @@ test('TEST 8: unresolvable campaign stays pending and is safely completed by ret
             INSERT INTO public.meta_campaigns (company_id, ad_account_id, meta_campaign_id, name, status)
             VALUES ('${company}', 'act_01', 'camp_t8_a', 'Chiến dịch Du học Đức', 'ACTIVE');
         `);
+        const campaignOnly = (await db.query(`SELECT public.retry_pending_lead_attribution(${q(company)}) AS r;`)).rows[0] as { r: { resolved: number } };
+        assert.equal(campaignOnly.r.resolved, 0, 'a campaign assertion without a synced Ad mapping remains unverified');
+        await db.exec(`INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+            VALUES ('${company}','act_01','camp_t8_a','ad_t8_a','Verified Ad A','ACTIVE');`);
         const retryAfterSync = (await db.query(`SELECT public.retry_pending_lead_attribution(${q(company)}) AS r;`)).rows[0] as { r: { resolved: number; remaining: number } };
         assert.equal(Number(retryAfterSync.r.resolved), 1);
         assert.equal(Number(retryAfterSync.r.remaining), 0);
 
         const resolved = await touchRows(db, company);
-        assert.equal(resolved[0].attribution_status, 'INFERRED', 'resolved through the lead-scoped campaign identifier');
+        assert.equal(resolved[0].attribution_status, 'ATTRIBUTED', 'resolved only through the exact synced Ad mapping');
         assert.equal(resolved[0].campaign_name_snapshot, 'Chiến dịch Du học Đức');
         assert.equal(resolved[0].is_duplicate_phone, false, 'the preserved history never loses verdicts');
         assert.equal(resolved[0].raw_meta_campaign_id, 'camp_t8_a');
@@ -454,7 +458,7 @@ test('TEST 8: unresolvable campaign stays pending and is safely completed by ret
         const final = await touchRows(db, company);
         assert.equal(final.length, 2);
         assert.equal(final[0].campaign_name_snapshot, 'Chiến dịch Du học Đức', 'first-touch attribution is immutable');
-        assert.equal(final[0].attribution_status, 'INFERRED');
+        assert.equal(final[0].attribution_status, 'ATTRIBUTED');
         assert.equal(final[1].attribution_status, 'ATTRIBUTED', 'ad-identifier evidence resolves ATTRIBUTED');
         assert.equal(final[1].campaign_name_snapshot, 'Chiến dịch IELTS Online');
 

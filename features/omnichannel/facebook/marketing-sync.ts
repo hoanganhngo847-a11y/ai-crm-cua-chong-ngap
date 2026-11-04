@@ -539,11 +539,17 @@ export async function syncPendingCreativeSnapshots(
 
         const { data: updatedRows, error: updateError } = await supabase
             .from('lead_attribution_touchpoints')
-            .update({ ads_context_data: { ...currentContext, creative_snapshot: snapshot } })
+            .update({ ads_context_data: {
+                ...currentContext,
+                ...(currentSnapshot.captureTiming === 'AT_LEAD_INTAKE' ? { intake_creative_snapshot: currentSnapshot } : {}),
+                creative_snapshot: snapshot,
+            } })
             .eq('id', row.id)
             .eq('company_id', companyId)
             .in('channel', ['FACEBOOK_LEAD_ADS', 'FACEBOOK_MESSENGER'])
             .eq('meta_ad_id', adId)
+            .filter('ads_context_data', row.ads_context_data == null ? 'is' : 'eq',
+                row.ads_context_data == null ? 'null' : JSON.stringify(currentContext))
             // Compare-and-set: a usable/terminal snapshot written after the
             // initial scan must win over this stale backfill result.
             .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null,ads_context_data->creative_snapshot->>pageId.is.null')
