@@ -330,6 +330,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(persistedCreative.intake.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.captureTiming, 'AT_LEAD_INTAKE');
+        assert.equal(persistedCreative.touchpoint.pageId, page, 'the originating Page ID is checkpointed with the creative evidence');
         assert.equal(snapshotAdSetArgument, 'adset_snapshot', 'missing Lead Details Ad Set is recovered from the verified Meta creative response');
         assert.ok(persistedCreative.touchpoint.capturedAt, 'snapshot capture time is persisted');
         assert.equal(persistedCreative.adset_id, 'adset_snapshot', 'Ad Set ID is resolved from the synced Ad object');
