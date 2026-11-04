@@ -23,10 +23,10 @@ function insertCompany(id: string, name: string) {
 }
 
 /** A claimed, lease-live leadgen intake slot, mirroring what the claim RPC produces. */
-function claimLeadgen(company: string, leadgenId: string, occurred: string) {
+function claimLeadgen(company: string, leadgenId: string, occurred: string, adId: string | null) {
     return `
         INSERT INTO private.meta_leadgen_events (company_id, page_id, leadgen_id, form_id, ad_id, status, occurred_at, claim_token, lease_until)
-        VALUES ('${company}', ${q(PAGE)}, ${q(leadgenId)}, 'form_01', 'ad_01', 'PROCESSING', ${q(occurred)}, gen_random_uuid(), clock_timestamp() + interval '5 minutes')
+        VALUES ('${company}', ${q(PAGE)}, ${q(leadgenId)}, 'form_01', ${q(adId)}, 'PROCESSING', ${q(occurred)}, gen_random_uuid(), clock_timestamp() + interval '5 minutes')
         ON CONFLICT (company_id, leadgen_id) DO UPDATE SET status = 'PROCESSING', claim_token = gen_random_uuid(), lease_until = clock_timestamp() + interval '5 minutes';
     `;
 }
@@ -61,7 +61,14 @@ async function submitLeadgen(
         adName?: string | null;
     },
 ): Promise<Submission> {
-    await db.exec(claimLeadgen(opts.company, opts.leadgenId, opts.occurred));
+    const adId = opts.adId ?? null;
+    const creativeEvidence = adId ? JSON.stringify({
+        creative_snapshot: {
+            schemaVersion: 2, source: 'META_MARKETING_API', adId,
+            pageId: PAGE, pageIdConflict: false,
+        },
+    }) : null;
+    await db.exec(claimLeadgen(opts.company, opts.leadgenId, opts.occurred, adId));
     const ingest = JSON.stringify({
         name: (opts.callerName || 'Khách Lead Ads').slice(0, 100),
         phone: opts.phone,
@@ -69,7 +76,8 @@ async function submitLeadgen(
         lead_data: { id: opts.leadgenId, form_id: 'form_01' },
         payload: {
             leadgen_id: opts.leadgenId, page_id: PAGE, form_id: 'form_01',
-            ad_id: opts.adId ?? 'ad_01', campaign_id: opts.campaignId ?? 'campaign_asserted',
+            ...(adId ? { ad_id: adId } : {}),
+            campaign_id: opts.campaignId ?? 'campaign_asserted',
             crm_lead_ads: true, field_data_keys: ['full_name', 'phone_number'],
             crm_phone_detection: { status: opts.phone ? 'VALID' : 'MISSING' },
         },
@@ -88,9 +96,10 @@ async function submitLeadgen(
             p_company => ${q(opts.company)}, p_customer => ${q(result.customer_id)}, p_interaction => ${q(result.interaction_id)},
             p_channel => 'FACEBOOK_LEAD_ADS', p_page_id => ${q(PAGE)}, p_page_name => 'Du học CHD',
             p_meta_campaign_id => ${q(opts.campaignId ?? null)}, p_campaign_name => ${q(opts.campaignName ?? null)},
-            p_meta_ad_id => ${q(opts.adId ?? null)}, p_ad_name => ${q(opts.adName ?? null)},
+            p_meta_ad_id => ${q(adId)}, p_ad_name => ${q(opts.adName ?? null)},
             p_meta_form_id => 'form_01', p_form_name => 'Form Du học',
             p_meta_leadgen_id => ${q(opts.leadgenId)}, p_referral_source => 'LEAD_ADS', p_referral_type => 'INSTANT_FORM',
+            p_ads_context_data => ${q(creativeEvidence)}::jsonb,
             p_attribution_status => 'UNATTRIBUTED', p_attribution_method => 'DIRECT_LEADGEN', p_occurred => ${q(opts.occurred)}
         ) AS touchpoint_id;
     `);
@@ -402,7 +411,7 @@ test('TEST 8: unresolvable campaign stays pending and is safely completed by ret
         await db.exec(insertCompany(company, 'CHD Lead Ads'));
         const a = await submitLeadgen(db, {
             company, leadgenId: '3308001', occurred: '2026-10-15T02:00:00Z',
-            phone: '+843000000011', content: 'Lead A', campaignId: 'camp_t8_a', campaignName: 'Tên chưa xác minh',
+            phone: '+843000000011', content: 'Lead A', campaignId: 'camp_t8_a', campaignName: 'Tên chưa xác minh', adId: 'ad_t8_a',
         });
         const rowsBefore = await touchRows(db, company);
         assert.equal(rowsBefore[0].attribution_status, 'PENDING_SYNC', 'campaign lookup with no synced evidence is pending, not attributed');
