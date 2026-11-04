@@ -117,10 +117,24 @@ BEGIN
         v_page_verified := COALESCE(
             p_page_id IS NOT NULL
             AND p_meta_ad_id IS NOT NULL
-            AND p_ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
-            AND p_ads_context_data->'creative_snapshot'->>'adId' = p_meta_ad_id
-            AND p_ads_context_data->'creative_snapshot'->>'pageId' = p_page_id
-            AND COALESCE(p_ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false',
+            AND p_meta_leadgen_id IS NOT NULL
+            AND COALESCE(p_ads_context_data->>'leadgen_ad_id_conflict', 'false') = 'false'
+            AND (
+                (
+                    p_ads_context_data->'leadgen_event_binding'->>'source' = 'SIGNED_META_WEBHOOK'
+                    AND p_ads_context_data->'leadgen_event_binding'->>'leadgenId' = p_meta_leadgen_id
+                    AND p_ads_context_data->'leadgen_event_binding'->>'pageId' = p_page_id
+                    AND p_ads_context_data->'leadgen_event_binding'->>'adId' = p_meta_ad_id
+                )
+                OR
+                (
+                    p_ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
+                    AND p_ads_context_data->'creative_snapshot'->>'captureTiming' = 'AT_LEAD_INTAKE'
+                    AND p_ads_context_data->'creative_snapshot'->>'adId' = p_meta_ad_id
+                    AND p_ads_context_data->'creative_snapshot'->>'pageId' = p_page_id
+                    AND COALESCE(p_ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false'
+                )
+            ),
             false
         );
     ELSE
@@ -318,10 +332,25 @@ BEGIN
         SELECT t.id, t.customer_id, t.meta_ad_id,
             COALESCE(t.ads_context_data->'raw_meta'->>'campaign_id', t.meta_campaign_id) AS asserted_campaign_id,
             COALESCE(
-                t.ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
-                AND t.ads_context_data->'creative_snapshot'->>'adId' = t.meta_ad_id
-                AND t.ads_context_data->'creative_snapshot'->>'pageId' = t.page_id
-                AND COALESCE(t.ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false',
+                t.page_id IS NOT NULL
+                AND t.meta_ad_id IS NOT NULL
+                AND COALESCE(t.ads_context_data->>'leadgen_ad_id_conflict', 'false') = 'false'
+                AND (
+                    (
+                        t.ads_context_data->'leadgen_event_binding'->>'source' = 'SIGNED_META_WEBHOOK'
+                        AND t.ads_context_data->'leadgen_event_binding'->>'leadgenId' = t.meta_leadgen_id
+                        AND t.ads_context_data->'leadgen_event_binding'->>'pageId' = t.page_id
+                        AND t.ads_context_data->'leadgen_event_binding'->>'adId' = t.meta_ad_id
+                    )
+                    OR
+                    (
+                        t.ads_context_data->'creative_snapshot'->>'source' = 'META_MARKETING_API'
+                        AND t.ads_context_data->'creative_snapshot'->>'captureTiming' = 'AT_LEAD_INTAKE'
+                        AND t.ads_context_data->'creative_snapshot'->>'adId' = t.meta_ad_id
+                        AND t.ads_context_data->'creative_snapshot'->>'pageId' = t.page_id
+                        AND COALESCE(t.ads_context_data->'creative_snapshot'->>'pageIdConflict', 'false') = 'false'
+                    )
+                ),
                 false
             ) AS page_verified
         FROM public.lead_attribution_touchpoints t
