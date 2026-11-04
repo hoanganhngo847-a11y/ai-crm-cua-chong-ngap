@@ -527,7 +527,11 @@ export async function syncPendingCreativeSnapshots(
 
         const currentContext = metaRecord(row.ads_context_data);
         const currentSnapshot = metaRecord(currentContext.creative_snapshot);
-        if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC') continue;
+        const currentPageId = typeof currentSnapshot.pageId === 'string' ? currentSnapshot.pageId.trim() : '';
+        const pageBindingNeedsRefresh = row.channel === 'FACEBOOK_LEAD_ADS'
+            && currentSnapshot.status !== 'UNAVAILABLE'
+            && (!currentPageId || currentSnapshot.pageIdConflict === true);
+        if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC' && !pageBindingNeedsRefresh) continue;
 
         const { data: updatedRows, error: updateError } = await supabase
             .from('lead_attribution_touchpoints')
