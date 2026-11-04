@@ -1,5 +1,7 @@
 # Meta Ads: Selective-Release Ledger Architecture & Staging Deployment Engine
 
+> Cập nhật security 05/11/2026: yêu cầu exact Ad mapping, immutable intake proof và bundle bảy migration trong [remediation report](META_ADS_CI_SECURITY_REMEDIATION_20261105.md) thay thế các mô tả cũ về campaign-only inference hoặc bundle năm source. Hosted execution vẫn BLOCKED.
+
 **Document Reference**: `docs/META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md`  
 **Repository**: `hoanganhngo847-a11y/ai-crm-cua-chong-ngap`  
 **Branch**: `meta_ads_integration` | **Pull Request**: [#139](https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap/pull/139) (Open + Draft)  
