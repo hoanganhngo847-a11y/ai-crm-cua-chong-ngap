@@ -148,7 +148,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
                 },
             }) : null;
             return `SELECT public.record_lead_attribution_touchpoint(
-                p_company=>${q(company)},p_customer=>${q(customer)},p_meta_leadgen_id=>${q(lead)},
+                p_company=>${q(company)},p_customer=>${q(customer)},p_page_id=>${q(page)},p_meta_leadgen_id=>${q(lead)},
                 p_meta_campaign_id=>${q(campaign)},p_campaign_name=>${q(name)},p_meta_ad_id=>${q(ad)},
                 p_ads_context_data=>${q(pageEvidence)}::jsonb,
                 p_attribution_status=>'ATTRIBUTED',p_occurred=>${q(time)}
