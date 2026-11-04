@@ -10,10 +10,12 @@
  * Capabilities:
  * - plan: Classifies objects in validation/managed-customizations.json as platform-default,
  *         project-owned, or unexplained. Emits deterministic transaction-wrapped SQL
- *         recreation script for project-owned objects only. Fails closed with BLOCKED on unexplained objects.
+ *         recreation script for supported project-owned objects (policy, index, trigger, routine).
+ *         Fails closed with BLOCKED if any unexplained OR unsupported customization exists.
  * - apply: Verifies reviewer-approved SHA-256 hash before executing plan inside isolated local database/container.
- * - verify: Re-checks target database catalog to prove all planned project customizations exist with
- *           exact definitions, enabled state, ownership, SECURITY DEFINER, proconfig, and ACL.
+ * - verify: Re-checks target database catalog (via live query or target inventory) to prove all
+ *           planned project customizations exist with exact definitions, enabled state, ownership,
+ *           SECURITY DEFINER, proconfig, and ACL.
  */
 
 import fsp from 'node:fs/promises';
@@ -37,6 +39,15 @@ import {
 export const MANAGED_CUSTOMIZATIONS_PLAN_FORMAT = 'crm-managed-customizations-plan/v1';
 export const MANAGED_CUSTOMIZATIONS_VERIFICATION_FORMAT = 'crm-managed-customizations-verification/v1';
 export const DEFAULT_TARGET_IDENTITY = 'crm-restore-rehearsal';
+
+// Supported kinds for safe deterministic SQL recreation
+export const SUPPORTED_RECREATION_KINDS = Object.freeze(new Set([
+  'policy',
+  'index',
+  'trigger',
+  'routine',
+  'procedure',
+]));
 
 // Recognized Supabase platform table & schema namespaces
 export const PLATFORM_SCHEMAS = Object.freeze(new Set(['auth', 'storage']));
@@ -84,6 +95,24 @@ export const PLATFORM_AUTH_ROUTINES = Object.freeze(new Set([
   'auth.jwt()',
 ]));
 
+// Approved standard Supabase platform roles for ACL verification
+export const APPROVED_PLATFORM_ROLES = Object.freeze(new Set([
+  'postgres',
+  'supabase_admin',
+  'supabase_auth_admin',
+  'supabase_storage_admin',
+  'authenticator',
+  'anon',
+  'authenticated',
+  'service_role',
+  'dashboard_user',
+  'pg_monitor',
+  'pg_read_all_settings',
+  'pg_read_all_stats',
+  'pg_stat_scan_tables',
+  'PUBLIC',
+]));
+
 // Known platform-default policy name patterns created by Supabase migrations
 export const PLATFORM_POLICY_NAMES = Object.freeze(new Set([
   'Allow access to own bucket',
@@ -92,8 +121,132 @@ export const PLATFORM_POLICY_NAMES = Object.freeze(new Set([
   'Individual user can read own data',
 ]));
 
+// Verbatim B3 extraction query for live target verification
+export const MANAGED_CUSTOMIZATIONS_QUERY_SQL = `
+WITH items AS (
+  SELECT 'policy'::text AS kind,
+         format('%I.%I:%s', schemaname, tablename, policyname) AS identity,
+         jsonb_build_object(
+           'schema', schemaname, 'table', tablename, 'policy', policyname,
+           'permissive', permissive, 'roles', to_jsonb(roles), 'command', cmd,
+           'using', qual, 'withCheck', with_check
+         ) AS details
+  FROM pg_policies
+  WHERE schemaname IN ('auth', 'storage')
+  UNION ALL
+  SELECT 'trigger', format('%I.%I:%I', n.nspname, c.relname, t.tgname),
+         jsonb_build_object(
+           'definition', pg_get_triggerdef(t.oid, true),
+           'enabled', t.tgenabled,
+           'functionIdentity', p.oid::regprocedure::text,
+           'functionDefinition', pg_get_functiondef(p.oid),
+           'functionOwner', pg_get_userbyid(p.proowner),
+           'securityDefiner', p.prosecdef,
+           'functionConfig', p.proconfig,
+           'functionAcl', p.proacl::text
+         )
+  FROM pg_trigger t
+  JOIN pg_class c ON c.oid = t.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_proc p ON p.oid = t.tgfoid
+  WHERE NOT t.tgisinternal AND n.nspname IN ('auth', 'storage')
+  UNION ALL
+  SELECT 'index', format('%I.%I:%I', n.nspname, c.relname, idx.relname),
+         jsonb_build_object(
+           'definition', pg_get_indexdef(i.indexrelid),
+           'valid', i.indisvalid, 'ready', i.indisready, 'live', i.indislive,
+           'unique', i.indisunique, 'primary', i.indisprimary
+         )
+  FROM pg_index i
+  JOIN pg_class idx ON idx.oid = i.indexrelid
+  JOIN pg_class c ON c.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('auth', 'storage')
+  UNION ALL
+  SELECT 'constraint', format('%I.%I:%I', n.nspname, c.relname, con.conname),
+         jsonb_build_object(
+           'definition', pg_get_constraintdef(con.oid, true),
+           'validated', con.convalidated, 'deferrable', con.condeferrable,
+           'initiallyDeferred', con.condeferred
+         )
+  FROM pg_constraint con
+  JOIN pg_class c ON c.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('auth', 'storage')
+  UNION ALL
+  SELECT CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'routine' END,
+         format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)),
+         jsonb_build_object(
+           'definition', pg_get_functiondef(p.oid),
+           'owner', pg_get_userbyid(p.proowner), 'securityDefiner', p.prosecdef,
+           'config', p.proconfig, 'acl', p.proacl::text,
+           'language', l.lanname, 'comment', obj_description(p.oid, 'pg_proc')
+         )
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l ON l.oid = p.prolang
+  WHERE n.nspname IN ('auth', 'storage') AND p.prokind IN ('f', 'p')
+  UNION ALL
+  SELECT 'relation-rls', format('%I.%I', n.nspname, c.relname),
+         jsonb_build_object(
+           'rlsEnabled', c.relrowsecurity,
+           'rlsForced', c.relforcerowsecurity,
+           'owner', pg_get_userbyid(c.relowner),
+           'comment', obj_description(c.oid, 'pg_class')
+         )
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('auth', 'storage') AND c.relkind IN ('r', 'p', 'v', 'm')
+  UNION ALL
+  SELECT 'relation-acl', format('%I.%I', n.nspname, c.relname),
+         jsonb_build_object(
+           'aclIsNull', c.relacl IS NULL,
+           'aclRaw', c.relacl::text,
+           'entries', coalesce((
+             SELECT jsonb_agg(jsonb_build_object(
+               'grantee', CASE x.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END,
+               'grantor', pg_get_userbyid(x.grantor),
+               'privilegeType', x.privilege_type,
+               'isGrantable', x.is_grantable
+             ) ORDER BY x.grantee, x.grantor, x.privilege_type, x.is_grantable)
+             FROM aclexplode(c.relacl) AS x
+           ), '[]'::jsonb)
+         )
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('auth', 'storage') AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+  UNION ALL
+  SELECT 'column-acl', format('%I.%I.%I', n.nspname, c.relname, a.attname),
+         jsonb_build_object(
+           'aclIsNull', a.attacl IS NULL,
+           'aclRaw', a.attacl::text,
+           'entries', coalesce((
+             SELECT jsonb_agg(jsonb_build_object(
+               'grantee', CASE x.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END,
+               'grantor', pg_get_userbyid(x.grantor),
+               'privilegeType', x.privilege_type,
+               'isGrantable', x.is_grantable
+             ) ORDER BY x.grantee, x.grantor, x.privilege_type, x.is_grantable)
+             FROM aclexplode(a.attacl) AS x
+           ), '[]'::jsonb)
+         )
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('auth', 'storage')
+    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+    AND a.attnum > 0 AND NOT a.attisdropped
+)
+SELECT coalesce(
+  jsonb_agg(jsonb_build_object('kind', kind, 'identity', identity, 'details', details)
+            ORDER BY kind, identity),
+  '[]'::jsonb
+)::text
+FROM items;
+`.trim();
+
 // -----------------------------------------------------------------------------
-// Classifier
+// Classifier (Strict Fail-Closed)
 // -----------------------------------------------------------------------------
 
 /**
@@ -113,12 +266,16 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
     return { classification: 'project-owned', reason: 'Matched project allowlist' };
   }
 
-  // Project naming conventions
+  // Project naming conventions (only for customization kinds that can be project-owned)
   if (
-    identity.toLowerCase().includes('chd_') ||
-    identity.toLowerCase().includes('crm_') ||
-    identity.toLowerCase().includes('customer_') ||
-    identity.toLowerCase().includes('meta_ads')
+    kind !== 'relation-acl' &&
+    kind !== 'column-acl' &&
+    (
+      identity.toLowerCase().includes('chd_') ||
+      identity.toLowerCase().includes('crm_') ||
+      identity.toLowerCase().includes('customer_') ||
+      identity.toLowerCase().includes('meta_ads')
+    )
   ) {
     return { classification: 'project-owned', reason: 'Matches project naming prefix' };
   }
@@ -130,7 +287,6 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
         if (PLATFORM_POLICY_NAMES.has(policy)) {
           return { classification: 'platform-default', reason: 'Standard Supabase platform policy' };
         }
-        // Project storage or auth policy
         if (policy && (policy.startsWith('project_') || policy.startsWith('crm_') || policy.startsWith('chd_'))) {
           return { classification: 'project-owned', reason: 'Project policy naming' };
         }
@@ -190,7 +346,35 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
 
     case 'relation-acl':
     case 'column-acl': {
-      return { classification: 'platform-default', reason: 'Standard platform ACL grant' };
+      const parts = identity.split('.');
+      const schema = parts[0];
+      const table = parts[1];
+      const isPlatformTable =
+        (schema === 'auth' && PLATFORM_AUTH_TABLES.has(table)) ||
+        (schema === 'storage' && PLATFORM_STORAGE_TABLES.has(table));
+
+      if (!isPlatformTable) {
+        return { classification: 'unexplained', reason: `ACL on non-platform relation ${identity}` };
+      }
+
+      const entries = Array.isArray(details.entries)
+        ? details.entries
+        : (Array.isArray(details.acl) ? details.acl : []);
+      for (const entry of entries) {
+        if (!APPROVED_PLATFORM_ROLES.has(entry.grantee)) {
+          return {
+            classification: 'unexplained',
+            reason: `Unapproved non-platform grantee '${entry.grantee}' on ${identity}`,
+          };
+        }
+        if (!APPROVED_PLATFORM_ROLES.has(entry.grantor)) {
+          return {
+            classification: 'unexplained',
+            reason: `Unapproved non-platform grantor '${entry.grantor}' on ${identity}`,
+          };
+        }
+      }
+      return { classification: 'platform-default', reason: 'Standard platform ACL grant on built-in relation' };
     }
   }
 
@@ -204,14 +388,15 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
 
 /**
  * Generates deterministic SQL DDL statements for project-owned items.
+ * Enforces transaction ordering: BEGIN comes before SET LOCAL.
  */
 export function generateManagedCustomizationsSql(projectOwnedItems) {
   const lines = [
     '-- Managed Customizations Recreation Plan',
     '-- Generated deterministically by scripts/backup/managed-customizations.mjs',
     '-- Enforces transaction wrapping and strict error termination.',
-    'SET LOCAL search_path = public, auth, storage;',
     'BEGIN;',
+    'SET LOCAL search_path = public, auth, storage;',
     '',
   ];
 
@@ -260,6 +445,15 @@ export function generateManagedCustomizationsSql(projectOwnedItems) {
         lines.push(`${definition};`);
         lines.push('');
       }
+    } else if (kind === 'routine' || kind === 'procedure') {
+      const { definition, owner } = details;
+      if (definition) {
+        lines.push(`${definition};`);
+      }
+      if (owner) {
+        lines.push(`ALTER ${kind.toUpperCase()} ${identity} OWNER TO ${quoteIdent(owner)};`);
+      }
+      lines.push('');
     } else {
       lines.push(`-- Unsupported customization kind: ${kind} (${identity})`);
     }
@@ -297,6 +491,7 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
   const allowlistSet = new Set(projectAllowlist);
   const classifications = [];
   const projectOwnedItems = [];
+  const unsupportedItems = [];
   let platformDefaultsCount = 0;
   let projectOwnedCount = 0;
   let unexplainedCount = 0;
@@ -314,19 +509,36 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
       platformDefaultsCount++;
     } else if (res.classification === 'project-owned') {
       projectOwnedCount++;
-      projectOwnedItems.push(item);
+      // Check if this kind is supported for SQL recreation
+      if (!SUPPORTED_RECREATION_KINDS.has(item.kind)) {
+        unsupportedItems.push({
+          kind: item.kind,
+          identity: item.identity,
+          reason: `Recreation for kind '${item.kind}' is not supported; manual review required`,
+        });
+      } else {
+        projectOwnedItems.push(item);
+      }
     } else {
       unexplainedCount++;
     }
   }
 
-  const isBlocked = unexplainedCount > 0;
+  const unsupportedCount = unsupportedItems.length;
+  // Plan is BLOCKED if there are unexplained items OR unsupported project-owned items
+  const isBlocked = unexplainedCount > 0 || unsupportedCount > 0;
   const status = isBlocked ? 'BLOCKED' : 'APPROVED';
 
   // Generate deterministic SQL plan
-  const planSql = isBlocked
-    ? '-- PLAN GENERATION BLOCKED DUE TO UNEXPLAINED MANAGED OBJECTS\n-- STOP: Review unexplained objects before proceeding.\n'
-    : generateManagedCustomizationsSql(projectOwnedItems);
+  let planSql = '';
+  if (isBlocked) {
+    const reasons = [];
+    if (unexplainedCount > 0) reasons.push(`${unexplainedCount} unexplained object(s)`);
+    if (unsupportedCount > 0) reasons.push(`${unsupportedCount} unsupported project-owned kind(s)`);
+    planSql = `-- PLAN GENERATION BLOCKED DUE TO ${reasons.join(' AND ').toUpperCase()}\n-- STOP: Review unexplained and unsupported objects before proceeding.\n`;
+  } else {
+    planSql = generateManagedCustomizationsSql(projectOwnedItems);
+  }
 
   await writeFileAtomic(outPath, planSql, 0o600);
   const planSha256 = sha256Hex(planSql);
@@ -341,7 +553,9 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
       platformDefaultsCount,
       projectOwnedCount,
       unexplainedCount,
+      unsupportedCount,
     },
+    unsupportedObjects: unsupportedItems,
     objects: classifications,
   };
 
@@ -404,7 +618,7 @@ export async function handleApplyCommand({ planPath, approvedSha256, target, exe
   return { status: 'APPLIED', planSha256: actualHash };
 }
 
-export async function handleVerifyCommand({ sourcePath, target, reportPath, querySql = null }) {
+export async function handleVerifyCommand({ sourcePath, target, reportPath, targetInventoryPath = null, querySql = null }) {
   installSignalHandlers();
 
   if (!sourcePath || typeof sourcePath !== 'string') {
@@ -429,14 +643,50 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, quer
   });
 
   const discrepancies = [];
-  let targetItems = [];
+  let targetItems = null;
 
-  if (typeof querySql === 'function') {
-    const rawTarget = await querySql();
-    targetItems = typeof rawTarget === 'string' ? parseJsonStrict(rawTarget) : rawTarget;
+  try {
+    if (typeof querySql === 'function') {
+      const rawTarget = await querySql();
+      targetItems = typeof rawTarget === 'string' ? parseJsonStrict(rawTarget) : rawTarget;
+    } else if (targetInventoryPath) {
+      const rawTarget = await fsp.readFile(targetInventoryPath, 'utf8');
+      targetItems = parseJsonStrict(rawTarget, 'INVALID_TARGET_INVENTORY', 'Target managed customizations inventory');
+    } else {
+      // Query target container directly via docker exec psql
+      const rawTarget = await new Promise((resolve, reject) => {
+        const child = spawn('docker', ['exec', '-i', target, 'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', 'postgres'], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', reject);
+        child.on('close', (code) => {
+          if (code !== 0) {
+            reject(new HelperError('TARGET_QUERY_FAILED', `Failed to query target managed customizations (${code}): ${stderr}`));
+          } else {
+            resolve(stdout);
+          }
+        });
+        child.stdin.write(MANAGED_CUSTOMIZATIONS_QUERY_SQL);
+        child.stdin.end();
+      });
+      targetItems = parseJsonStrict(rawTarget, 'INVALID_TARGET_INVENTORY', 'Target managed customizations query output');
+    }
+  } catch (err) {
+    if (err instanceof HelperError && err.code === 'INVALID_TARGET_INVENTORY') {
+      throw err;
+    }
+    fail('TARGET_EVIDENCE_MISSING', `Failed to obtain target managed customizations inventory: ${err.message}`);
   }
 
-  // Check that all project-owned items exist in target
+  if (!Array.isArray(targetItems)) {
+    fail('TARGET_EVIDENCE_MISSING', 'Verification requires verified target inventory data array');
+  }
+
+  // Check that all project-owned items exist in target and match attributes
   const targetMap = new Map(targetItems.map(item => [`${item.kind}:${item.identity}`, item]));
   for (const item of projectOwned) {
     const key = `${item.kind}:${item.identity}`;
@@ -445,8 +695,38 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, quer
       discrepancies.push({
         identity: item.identity,
         kind: item.kind,
+        field: 'existence',
+        sourceValue: 'present',
+        targetValue: 'missing',
         reason: 'Missing from target managed schema after apply',
       });
+      continue;
+    }
+
+    // Deep compare details for policy, index, trigger, routine
+    if (item.kind === 'policy') {
+      const s = item.details || {};
+      const t = targetObj.details || {};
+      if ((s.command ?? '') !== (t.command ?? '')) {
+        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'command', sourceValue: s.command, targetValue: t.command, reason: 'Policy command mismatch' });
+      }
+      if ((s.using ?? '') !== (t.using ?? '')) {
+        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'using', sourceValue: s.using, targetValue: t.using, reason: 'Policy using expression mismatch' });
+      }
+    } else if (item.kind === 'index') {
+      const t = targetObj.details || {};
+      if (t.valid !== true) {
+        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'valid', sourceValue: true, targetValue: t.valid, reason: 'Target index is invalid' });
+      }
+      if (t.ready !== true) {
+        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'ready', sourceValue: true, targetValue: t.ready, reason: 'Target index is not ready' });
+      }
+    } else if (item.kind === 'trigger') {
+      const s = item.details || {};
+      const t = targetObj.details || {};
+      if ((s.enabled ?? 'O') !== (t.enabled ?? 'O')) {
+        discrepancies.push({ identity: item.identity, kind: item.kind, field: 'enabled', sourceValue: s.enabled, targetValue: t.enabled, reason: 'Trigger enabled state mismatch' });
+      }
     }
   }
 
@@ -515,6 +795,7 @@ export async function runCli(argv = process.argv.slice(2)) {
           sourcePath: args.source,
           target: args.target,
           reportPath: args.report,
+          targetInventoryPath: args['target-inventory'],
         });
         console.log(`VERIFY ${res.status}: ${res.report.discrepancyCount} discrepancies`);
         if (res.status !== 'PASSED') process.exit(1);

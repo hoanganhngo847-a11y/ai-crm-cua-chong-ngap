@@ -9,6 +9,7 @@
  * Project Owner approval are supplied by the operator.
  */
 import { spawnSync } from 'node:child_process';
+import { createHmac, timingSafeEqual, verify } from 'node:crypto';
 import {
   buildSelectiveExecutorPackage,
   evaluateReleaseProbe,
@@ -50,6 +51,54 @@ export interface HostedExecutionApproval {
   backupRestoreVerified: boolean;
   ownerApproved: boolean;
   reference: string;
+  signature?: string;
+  secretOrPublicKey?: string;
+}
+
+export function computeOwnerApprovalHmac(params: {
+  projectRef: string;
+  releaseId: string;
+  reference: string;
+  secret: string;
+}): string {
+  const message = `${params.projectRef}:${params.releaseId}:${params.reference.trim()}`;
+  return createHmac('sha256', params.secret).update(message, 'utf8').digest('hex');
+}
+
+export function verifyOwnerApprovalSignature(params: {
+  projectRef: string;
+  releaseId: string;
+  reference: string;
+  signature: string;
+  secretOrPublicKey: string;
+}): boolean {
+  const { projectRef, releaseId, reference, signature, secretOrPublicKey } = params;
+  if (!signature || !secretOrPublicKey || !projectRef || !releaseId || !reference) {
+    return false;
+  }
+  const message = `${projectRef}:${releaseId}:${reference.trim()}`;
+
+  // Check if secretOrPublicKey is a PEM public key
+  if (secretOrPublicKey.includes('BEGIN PUBLIC KEY') || secretOrPublicKey.includes('BEGIN RSA PUBLIC KEY')) {
+    try {
+      const sigBuffer = Buffer.from(signature, /^[0-9a-fA-F]+$/.test(signature) ? 'hex' : 'base64');
+      return verify(null, Buffer.from(message, 'utf8'), secretOrPublicKey, sigBuffer);
+    } catch {
+      return false;
+    }
+  }
+
+  // Otherwise treat as symmetric HMAC secret
+  try {
+    const expected = createHmac('sha256', secretOrPublicKey).update(message, 'utf8').digest('hex');
+    const sigNorm = signature.trim().toLowerCase();
+    if (sigNorm.length !== expected.length) {
+      return false;
+    }
+    return timingSafeEqual(Buffer.from(sigNorm, 'hex'), Buffer.from(expected, 'hex'));
+  } catch {
+    return false;
+  }
 }
 
 export interface ExecuteSelectiveReleaseOptions {
@@ -281,12 +330,20 @@ export function executeSelectiveRelease(
     options.allowLocalTest === true
   );
 
-  const approvalReference = options.hostedApproval?.reference;
+  const releaseId = options.releaseId ?? 'meta-ads-20261031-r1';
+  const approval = options.hostedApproval;
+  const approvalReference = approval?.reference;
+  const signature = approval?.signature || process.env.META_ADS_OWNER_APPROVAL_SIGNATURE;
+  const secretOrKey =
+    approval?.secretOrPublicKey ||
+    process.env.META_ADS_OWNER_APPROVAL_SECRET ||
+    process.env.META_ADS_OWNER_PUBLIC_KEY;
+
   if (
     !connection.isLocalTest &&
     !(
-      options.hostedApproval?.backupRestoreVerified === true &&
-      options.hostedApproval.ownerApproved === true &&
+      approval?.backupRestoreVerified === true &&
+      approval.ownerApproved === true &&
       typeof approvalReference === 'string' &&
       approvalReference.trim().length > 0
     )
@@ -294,6 +351,28 @@ export function executeSelectiveRelease(
     throw new Error(
       'HOSTED_EXECUTION_BLOCKED: A verified physical backup/restore rehearsal and explicit Project Owner approval reference are required.'
     );
+  }
+
+  if (!connection.isLocalTest) {
+    if (!signature || !secretOrKey) {
+      throw new Error(
+        'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature and verification key/secret are required.'
+      );
+    }
+    const isSignatureValid = verifyOwnerApprovalSignature({
+      projectRef: connection.projectRef,
+      releaseId,
+      reference: approvalReference!.trim(),
+      signature,
+      secretOrPublicKey: secretOrKey,
+    });
+    if (!isSignatureValid) {
+      throw new Error(
+        'HOSTED_EXECUTION_BLOCKED: Cryptographic owner approval signature verification failed for target project ' +
+          connection.projectRef +
+          '.'
+      );
+    }
   }
 
   const runner = options.runPsql ?? runPsql;
@@ -310,7 +389,6 @@ export function executeSelectiveRelease(
   const server = parseServerVersion(versionResult.stdout);
   verifyPostgresServerVersion(server.version, server.versionNum);
 
-  const releaseId = options.releaseId ?? 'meta-ads-20261031-r1';
   const pack = buildSelectiveExecutorPackage({
     targetProjectRef: TARGET_STAGING_PROJECT,
     releaseId,
@@ -397,19 +475,85 @@ export function executeSelectiveRelease(
   };
 }
 
-function runCli(): void {
-  const connectionString = process.env.META_ADS_DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('META_ADS_DATABASE_URL is required. The value is never printed.');
+export interface CliArgs {
+  connectionString?: string;
+  releaseId?: string;
+  allowLocalTest?: boolean;
+  backupRestoreVerified?: boolean;
+  ownerApproved?: boolean;
+  approvalReference?: string;
+  ownerSignature?: string;
+  ownerSecret?: string;
+  ownerPublicKey?: string;
+}
+
+export function parseCliArgs(argv: string[]): CliArgs {
+  const args: CliArgs = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--connection-string' && i + 1 < argv.length) {
+      args.connectionString = argv[++i];
+    } else if (arg.startsWith('--connection-string=')) {
+      args.connectionString = arg.slice('--connection-string='.length);
+    } else if (arg === '--release-id' && i + 1 < argv.length) {
+      args.releaseId = argv[++i];
+    } else if (arg.startsWith('--release-id=')) {
+      args.releaseId = arg.slice('--release-id='.length);
+    } else if (arg === '--allow-local-test') {
+      args.allowLocalTest = true;
+    } else if (arg === '--backup-restore-verified') {
+      args.backupRestoreVerified = true;
+    } else if (arg === '--owner-approved') {
+      args.ownerApproved = true;
+    } else if (arg === '--owner-approval-reference' && i + 1 < argv.length) {
+      args.approvalReference = argv[++i];
+    } else if (arg.startsWith('--owner-approval-reference=')) {
+      args.approvalReference = arg.slice('--owner-approval-reference='.length);
+    } else if (arg === '--owner-signature' && i + 1 < argv.length) {
+      args.ownerSignature = argv[++i];
+    } else if (arg.startsWith('--owner-signature=')) {
+      args.ownerSignature = arg.slice('--owner-signature='.length);
+    } else if (arg === '--owner-secret' && i + 1 < argv.length) {
+      args.ownerSecret = argv[++i];
+    } else if (arg.startsWith('--owner-secret=')) {
+      args.ownerSecret = arg.slice('--owner-secret='.length);
+    } else if (arg === '--owner-public-key' && i + 1 < argv.length) {
+      args.ownerPublicKey = argv[++i];
+    } else if (arg.startsWith('--owner-public-key=')) {
+      args.ownerPublicKey = arg.slice('--owner-public-key='.length);
+    }
   }
+  return args;
+}
+
+function runCli(): void {
+  const cliArgs = parseCliArgs(process.argv.slice(2));
+  const connectionString = cliArgs.connectionString || process.env.META_ADS_DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('META_ADS_DATABASE_URL or --connection-string is required. The value is never printed.');
+  }
+
+  const allowLocalTest = cliArgs.allowLocalTest ?? (process.env.META_ADS_ALLOW_LOCAL_TEST === '1');
+  const backupRestoreVerified = cliArgs.backupRestoreVerified ?? (process.env.META_ADS_BACKUP_RESTORE_VERIFIED === '1');
+  const ownerApproved = cliArgs.ownerApproved ?? (process.env.META_ADS_OWNER_APPROVED === '1');
+  const reference = cliArgs.approvalReference || process.env.META_ADS_OWNER_APPROVAL_REFERENCE || '';
+  const signature = cliArgs.ownerSignature || process.env.META_ADS_OWNER_APPROVAL_SIGNATURE;
+  const secretOrPublicKey =
+    cliArgs.ownerSecret ||
+    cliArgs.ownerPublicKey ||
+    process.env.META_ADS_OWNER_APPROVAL_SECRET ||
+    process.env.META_ADS_OWNER_PUBLIC_KEY;
 
   const result = executeSelectiveRelease({
     connectionString,
-    allowLocalTest: process.env.META_ADS_ALLOW_LOCAL_TEST === '1',
+    releaseId: cliArgs.releaseId || process.env.META_ADS_RELEASE_ID,
+    allowLocalTest,
     hostedApproval: {
-      backupRestoreVerified: process.env.META_ADS_BACKUP_RESTORE_VERIFIED === '1',
-      ownerApproved: process.env.META_ADS_OWNER_APPROVED === '1',
-      reference: process.env.META_ADS_OWNER_APPROVAL_REFERENCE || '',
+      backupRestoreVerified,
+      ownerApproved,
+      reference,
+      signature,
+      secretOrPublicKey,
     },
   });
 

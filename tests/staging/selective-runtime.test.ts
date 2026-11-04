@@ -15,7 +15,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { PLATFORM_STUBS } from '../zalo/helpers/pglite-supabase';
 import { inspectTransactionEnvelope } from '../../scripts/meta-ads/ledger-readiness';
-import { executeSelectiveRelease, SERVER_VERSION_QUERY } from '../../scripts/meta-ads/selective-runtime';
+import {
+  executeSelectiveRelease,
+  SERVER_VERSION_QUERY,
+  computeOwnerApprovalHmac,
+  verifyOwnerApprovalSignature,
+  parseCliArgs,
+} from '../../scripts/meta-ads/selective-runtime';
 import type { PsqlConnectionConfig, PsqlRunner } from '../../scripts/meta-ads/selective-runtime';
 import { TARGET_STAGING_PROJECT } from '../../scripts/meta-ads/selective-executor';
 
@@ -179,6 +185,130 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
         /HOSTED_EXECUTION_BLOCKED/
       );
       assert.equal(calls, 0, 'Hosted approval must be checked before opening a database connection');
+
+      // Rejects even when boolean ownerApproved is true, if signature is missing
+      assert.throws(
+        () =>
+          executeSelectiveRelease({
+            connectionString:
+              'postgresql://postgres:secret@db.' +
+              TARGET_STAGING_PROJECT +
+              '.supabase.co:5432/postgres?sslmode=require',
+            hostedApproval: {
+              backupRestoreVerified: true,
+              ownerApproved: true,
+              reference: 'ref-without-signature',
+            },
+            runPsql: unusedRunner,
+          }),
+        /HOSTED_EXECUTION_BLOCKED.*signature and verification key/
+      );
+
+      // Rejects forged signature
+      assert.throws(
+        () =>
+          executeSelectiveRelease({
+            connectionString:
+              'postgresql://postgres:secret@db.' +
+              TARGET_STAGING_PROJECT +
+              '.supabase.co:5432/postgres?sslmode=require',
+            hostedApproval: {
+              backupRestoreVerified: true,
+              ownerApproved: true,
+              reference: 'ref-forged',
+              signature: '0'.repeat(64),
+              secretOrPublicKey: 'trusted_secret',
+            },
+            runPsql: unusedRunner,
+          }),
+        /HOSTED_EXECUTION_BLOCKED.*Cryptographic owner approval signature verification failed/
+      );
+
+      // Genuine cryptographic signature allows passing the approval barrier to reach the runner
+      const releaseId = 'test-release-sig-01';
+      const reference = 'ref-genuine-owner-approval-01';
+      const secret = 'super_secret_owner_signing_key_12345';
+      const genuineSig = computeOwnerApprovalHmac({
+        projectRef: TARGET_STAGING_PROJECT,
+        releaseId,
+        reference,
+        secret,
+      });
+
+      let runnerCalled = false;
+      const preflightRunner: PsqlRunner = () => {
+        runnerCalled = true;
+        return versionResult('17.11', 170011);
+      };
+
+      // Throws because mock runner doesn't handle the full script, but proves approval barrier was passed!
+      try {
+        executeSelectiveRelease({
+          connectionString:
+            'postgresql://postgres:secret@db.' +
+            TARGET_STAGING_PROJECT +
+            '.supabase.co:5432/postgres?sslmode=require',
+          releaseId,
+          hostedApproval: {
+            backupRestoreVerified: true,
+            ownerApproved: true,
+            reference,
+            signature: genuineSig,
+            secretOrPublicKey: secret,
+          },
+          runPsql: preflightRunner,
+        });
+      } catch {
+        // Expected because mock runner is minimal
+      }
+      assert.equal(runnerCalled, true, 'Genuine signature passed approval barrier and reached database preflight');
+    });
+
+    await t.test('2b. Cryptographic signature and CLI args parsing utilities', () => {
+      // 1. Signature binding tests
+      const secret = 'test_secret_key';
+      const projectRef = TARGET_STAGING_PROJECT;
+      const releaseId = 'rel-123';
+      const reference = 'runbook-v12-rehearsal-001';
+
+      const sig = computeOwnerApprovalHmac({ projectRef, releaseId, reference, secret });
+      assert.ok(sig && sig.length === 64, 'HMAC-SHA256 generates 64-char hex string');
+
+      // Matches
+      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId, reference, signature: sig, secretOrPublicKey: secret }), true);
+
+      // Wrong releaseId fails
+      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId: 'wrong-rel', reference, signature: sig, secretOrPublicKey: secret }), false);
+
+      // Wrong reference fails
+      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId, reference: 'tampered-ref', signature: sig, secretOrPublicKey: secret }), false);
+
+      // Wrong projectRef fails
+      assert.equal(verifyOwnerApprovalSignature({ projectRef: 'other_proj', releaseId, reference, signature: sig, secretOrPublicKey: secret }), false);
+
+      // Wrong secret fails
+      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId, reference, signature: sig, secretOrPublicKey: 'wrong_secret' }), false);
+
+      // 2. CLI arguments parser tests
+      const parsed = parseCliArgs([
+        '--connection-string=postgresql://user:pass@localhost:5432/db',
+        '--allow-local-test',
+        '--owner-approved',
+        '--backup-restore-verified',
+        '--owner-approval-reference', 'test-ref-001',
+        '--owner-signature', sig,
+        '--owner-secret', secret,
+        '--release-id=custom-rel-99',
+      ]);
+
+      assert.equal(parsed.connectionString, 'postgresql://user:pass@localhost:5432/db');
+      assert.equal(parsed.allowLocalTest, true);
+      assert.equal(parsed.ownerApproved, true);
+      assert.equal(parsed.backupRestoreVerified, true);
+      assert.equal(parsed.approvalReference, 'test-ref-001');
+      assert.equal(parsed.ownerSignature, sig);
+      assert.equal(parsed.ownerSecret, secret);
+      assert.equal(parsed.releaseId, 'custom-rel-99');
     });
 
     await t.test('3. PostgreSQL 16 is rejected before the release SQL is sent', () => {

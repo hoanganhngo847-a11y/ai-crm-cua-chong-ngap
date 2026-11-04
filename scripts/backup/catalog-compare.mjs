@@ -14,7 +14,8 @@
  *            - constraints (definition, validated, deferrable, initiallyDeferred)
  *            - routines (definition, normalized owner, securityDefiner, proconfig, acl, language, comment)
  *            - sequences (last_value, is_called)
- *            - relation comments and column comments
+ *            - relation comments and column comments (detects missing, extra, and text differences)
+ *            Handles null vs present mismatches properly across all fields.
  *            Fails closed with BLOCKED status on any missing, extra, or mismatched object.
  */
 
@@ -93,6 +94,13 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     columnComments: { sourceCount: 0, targetCount: 0, matchedCount: 0, discrepancyCount: 0 },
   };
 
+  // Helper for string comparison (handles null/undefined vs string)
+  const compareStrings = (val1, val2) => {
+    const s1 = typeof val1 === 'string' ? val1.trim() : null;
+    const s2 = typeof val2 === 'string' ? val2.trim() : null;
+    return s1 === s2;
+  };
+
   // 1. Compare Indexes
   const sourceIndexes = Array.isArray(source.indexes) ? source.indexes : [];
   const targetIndexes = Array.isArray(target.indexes) ? target.indexes : [];
@@ -126,31 +134,64 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     let matched = true;
 
     // Check validity, readiness, liveness
-    if (tgt.valid !== true && src.valid === true) {
+    if (tgt.valid !== src.valid) {
       discrepancies.push({
         kind: 'index',
         identity: key,
         field: 'valid',
         sourceValue: src.valid,
         targetValue: tgt.valid,
-        reason: 'Target index is invalid (indisvalid is false)',
+        reason: `Target index validity mismatch (expected ${src.valid}, found ${tgt.valid})`,
       });
       matched = false;
     }
-    if (tgt.ready !== true && src.ready === true) {
+    if (tgt.ready !== src.ready) {
       discrepancies.push({
         kind: 'index',
         identity: key,
         field: 'ready',
         sourceValue: src.ready,
         targetValue: tgt.ready,
-        reason: 'Target index is not ready (indisready is false)',
+        reason: `Target index ready state mismatch (expected ${src.ready}, found ${tgt.ready})`,
+      });
+      matched = false;
+    }
+    if (tgt.live !== src.live) {
+      discrepancies.push({
+        kind: 'index',
+        identity: key,
+        field: 'live',
+        sourceValue: src.live,
+        targetValue: tgt.live,
+        reason: `Target index live state mismatch (expected ${src.live}, found ${tgt.live})`,
+      });
+      matched = false;
+    }
+    if (tgt.unique !== src.unique) {
+      discrepancies.push({
+        kind: 'index',
+        identity: key,
+        field: 'unique',
+        sourceValue: src.unique,
+        targetValue: tgt.unique,
+        reason: `Target index unique flag mismatch (expected ${src.unique}, found ${tgt.unique})`,
+      });
+      matched = false;
+    }
+    if (tgt.primary !== src.primary) {
+      discrepancies.push({
+        kind: 'index',
+        identity: key,
+        field: 'primary',
+        sourceValue: src.primary,
+        targetValue: tgt.primary,
+        reason: `Target index primary flag mismatch (expected ${src.primary}, found ${tgt.primary})`,
       });
       matched = false;
     }
 
-    // Check definition
-    if (src.definition && tgt.definition && src.definition.trim() !== tgt.definition.trim()) {
+    // Check definition (properly handling null vs string)
+    if (!compareStrings(src.definition, tgt.definition)) {
       discrepancies.push({
         kind: 'index',
         identity: key,
@@ -212,19 +253,42 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     seenTargetConstraints.add(key);
     let matched = true;
 
-    if (src.validated === true && tgt.validated !== true) {
+    if (src.validated !== tgt.validated) {
       discrepancies.push({
         kind: 'constraint',
         identity: key,
         field: 'validated',
         sourceValue: src.validated,
         targetValue: tgt.validated,
-        reason: 'Target constraint is not validated (convalidated is false)',
+        reason: `Target constraint validated mismatch (expected ${src.validated}, found ${tgt.validated})`,
+      });
+      matched = false;
+    }
+    if (src.deferrable !== tgt.deferrable) {
+      discrepancies.push({
+        kind: 'constraint',
+        identity: key,
+        field: 'deferrable',
+        sourceValue: src.deferrable,
+        targetValue: tgt.deferrable,
+        reason: `Target constraint deferrable mismatch (expected ${src.deferrable}, found ${tgt.deferrable})`,
+      });
+      matched = false;
+    }
+    if (src.initiallyDeferred !== tgt.initiallyDeferred) {
+      discrepancies.push({
+        kind: 'constraint',
+        identity: key,
+        field: 'initiallyDeferred',
+        sourceValue: src.initiallyDeferred,
+        targetValue: tgt.initiallyDeferred,
+        reason: `Target constraint initiallyDeferred mismatch (expected ${src.initiallyDeferred}, found ${tgt.initiallyDeferred})`,
       });
       matched = false;
     }
 
-    if (src.definition && tgt.definition && src.definition.trim() !== tgt.definition.trim()) {
+    // Check definition (null vs string)
+    if (!compareStrings(src.definition, tgt.definition)) {
       discrepancies.push({
         kind: 'constraint',
         identity: key,
@@ -314,8 +378,8 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     }
 
     // Check proconfig
-    const srcConfig = Array.isArray(src.config) ? src.config.sort().join(';') : (src.config || '');
-    const tgtConfig = Array.isArray(tgt.config) ? tgt.config.sort().join(';') : (tgt.config || '');
+    const srcConfig = Array.isArray(src.config) ? src.config.slice().sort().join(';') : (src.config || null);
+    const tgtConfig = Array.isArray(tgt.config) ? tgt.config.slice().sort().join(';') : (tgt.config || null);
     if (srcConfig !== tgtConfig) {
       discrepancies.push({
         kind: 'routine',
@@ -328,8 +392,47 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
       matched = false;
     }
 
-    // Check definition
-    if (src.definition && tgt.definition && src.definition.trim() !== tgt.definition.trim()) {
+    // Check ACL
+    if (!compareStrings(src.acl, tgt.acl)) {
+      discrepancies.push({
+        kind: 'routine',
+        identity: key,
+        field: 'acl',
+        sourceValue: src.acl,
+        targetValue: tgt.acl,
+        reason: 'Routine ACL privileges mismatch',
+      });
+      matched = false;
+    }
+
+    // Check language
+    if (!compareStrings(src.language, tgt.language)) {
+      discrepancies.push({
+        kind: 'routine',
+        identity: key,
+        field: 'language',
+        sourceValue: src.language,
+        targetValue: tgt.language,
+        reason: 'Routine implementation language mismatch',
+      });
+      matched = false;
+    }
+
+    // Check comment
+    if (!compareStrings(src.comment, tgt.comment)) {
+      discrepancies.push({
+        kind: 'routine',
+        identity: key,
+        field: 'comment',
+        sourceValue: src.comment,
+        targetValue: tgt.comment,
+        reason: 'Routine comment description mismatch',
+      });
+      matched = false;
+    }
+
+    // Check definition (null vs string)
+    if (!compareStrings(src.definition, tgt.definition)) {
       discrepancies.push({
         kind: 'routine',
         identity: key,
@@ -435,17 +538,34 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
     }
   }
 
-  // 5. Compare Relation Comments & Column Comments
+  // 5. Compare Relation Comments
   const sourceRelComments = Array.isArray(source.relationComments) ? source.relationComments : [];
   const targetRelComments = Array.isArray(target.relationComments) ? target.relationComments : [];
   summary.relationComments.sourceCount = sourceRelComments.length;
   summary.relationComments.targetCount = targetRelComments.length;
 
-  const targetRelCommentMap = new Map(targetRelComments.map(c => [`${c.schema}.${c.relation}`, c.comment]));
+  const targetRelCommentMap = new Map();
+  for (const c of targetRelComments) {
+    targetRelCommentMap.set(`${c.schema}.${c.relation}`, c.comment);
+  }
+
+  const seenTargetRelComments = new Set();
   for (const src of sourceRelComments) {
     const key = `${src.schema}.${src.relation}`;
     const tgtComment = targetRelCommentMap.get(key);
-    if (src.comment !== tgtComment) {
+    seenTargetRelComments.add(key);
+
+    if (tgtComment === undefined) {
+      discrepancies.push({
+        kind: 'relationComment',
+        identity: key,
+        field: 'existence',
+        sourceValue: 'present',
+        targetValue: 'missing',
+        reason: 'Relation comment is missing in target database',
+      });
+      summary.relationComments.discrepancyCount++;
+    } else if (!compareStrings(src.comment, tgtComment)) {
       discrepancies.push({
         kind: 'relationComment',
         identity: key,
@@ -457,6 +577,76 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
       summary.relationComments.discrepancyCount++;
     } else {
       summary.relationComments.matchedCount++;
+    }
+  }
+
+  for (const [key, tgtComment] of targetRelCommentMap) {
+    if (!seenTargetRelComments.has(key)) {
+      discrepancies.push({
+        kind: 'relationComment',
+        identity: key,
+        field: 'existence',
+        sourceValue: 'missing',
+        targetValue: tgtComment,
+        reason: 'Extra unexpected relation comment in target database',
+      });
+      summary.relationComments.discrepancyCount++;
+    }
+  }
+
+  // 6. Compare Column Comments
+  const sourceColComments = Array.isArray(source.columnComments) ? source.columnComments : [];
+  const targetColComments = Array.isArray(target.columnComments) ? target.columnComments : [];
+  summary.columnComments.sourceCount = sourceColComments.length;
+  summary.columnComments.targetCount = targetColComments.length;
+
+  const targetColCommentMap = new Map();
+  for (const c of targetColComments) {
+    targetColCommentMap.set(`${c.schema}.${c.relation}.${c.column}`, c.comment);
+  }
+
+  const seenTargetColComments = new Set();
+  for (const src of sourceColComments) {
+    const key = `${src.schema}.${src.relation}.${src.column}`;
+    const tgtComment = targetColCommentMap.get(key);
+    seenTargetColComments.add(key);
+
+    if (tgtComment === undefined) {
+      discrepancies.push({
+        kind: 'columnComment',
+        identity: key,
+        field: 'existence',
+        sourceValue: 'present',
+        targetValue: 'missing',
+        reason: 'Column comment is missing in target database',
+      });
+      summary.columnComments.discrepancyCount++;
+    } else if (!compareStrings(src.comment, tgtComment)) {
+      discrepancies.push({
+        kind: 'columnComment',
+        identity: key,
+        field: 'comment',
+        sourceValue: src.comment,
+        targetValue: tgtComment,
+        reason: 'Column comment mismatch',
+      });
+      summary.columnComments.discrepancyCount++;
+    } else {
+      summary.columnComments.matchedCount++;
+    }
+  }
+
+  for (const [key, tgtComment] of targetColCommentMap) {
+    if (!seenTargetColComments.has(key)) {
+      discrepancies.push({
+        kind: 'columnComment',
+        identity: key,
+        field: 'existence',
+        sourceValue: 'missing',
+        targetValue: tgtComment,
+        reason: 'Extra unexpected column comment in target database',
+      });
+      summary.columnComments.discrepancyCount++;
     }
   }
 
@@ -474,13 +664,15 @@ export function compareCatalogDetails(source, target, ownerMapDict) {
         summary.constraints.sourceCount +
         summary.routines.sourceCount +
         summary.sequences.sourceCount +
-        summary.relationComments.sourceCount,
+        summary.relationComments.sourceCount +
+        summary.columnComments.sourceCount,
       totalTargetObjects:
         summary.indexes.targetCount +
         summary.constraints.targetCount +
         summary.routines.targetCount +
         summary.sequences.targetCount +
-        summary.relationComments.targetCount,
+        summary.relationComments.targetCount +
+        summary.columnComments.targetCount,
       totalDiscrepancies: discrepancies.length,
     },
     discrepancies,

@@ -133,6 +133,22 @@ Checked on the worktree host on 2026-10-31:
 | Restore validation automation for real data | **PARTIAL** | Verified on isolated fixtures; live hosted validation awaits Staging window |
 | Owner approval for backup execution | **PENDING OWNER** | Requires explicit Project Owner sign-off before executing on hosted staging |
 
+### 2.4 Migration provenance and immutable artifact chain
+
+To ensure complete cryptographic auditability between repository state and database state, the selective Meta Ads release chain is pinned to exact immutable hashes:
+
+1. **Audit baseline commit**: `0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f` (recorded in `docs/evidence/meta-ads-final-scope/migration-manifest.json` as the baseline audit commit validating the 21 existing canonical ledger records on Staging `qmhfmgkymjgoevwmkidm`).
+2. **Snapshot commit**: `e51a5989143582af0885ba5ee26644a68b388995` (recorded as `CURRENT_SOURCE_COMMIT` in `scripts/meta-ads/selective-executor.ts` where the selective release package was finalized).
+3. **5 pinned Meta Ads migration SQL hashes**:
+   - `20261030090000_meta_ads_lead_attribution.sql`: `f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a`
+   - `20261030100000_meta_ads_hardening.sql`: `e83f9ffb4a0eb4914ac8b1b6cca35674720dde8809bb30c66218eecbd2001657`
+   - `20261030110000_meta_ads_final_remediation.sql`: `79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814`
+   - `20261030120000_meta_ads_attribution_rpc_security.sql`: `a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1`
+   - `20261030130000_meta_ads_phone_duplicate_history.sql`: `54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770`
+4. **Distinction between software implementation and hosted verification**:
+   - The backup/restore helpers (Helpers #1 through #8) and selective migration executor are **IMPLEMENTED** in software with automated local integration test suites passing.
+   - The physical execution against hosted Staging database `qmhfmgkymjgoevwmkidm` is **UNVERIFIED / BLOCKED** awaiting the 14 prerequisites and explicit owner approval. Hosted execution cannot proceed until a successful physical backup/restore rehearsal is completed and cryptographically signed.
+
 ---
 
 ## 3. Roles, custody and separation of duties

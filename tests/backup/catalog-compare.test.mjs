@@ -138,6 +138,117 @@ test('catalog-compare helper suite', async (t) => {
     assert.ok(report.discrepancies.some((d) => d.kind === 'sequence' && d.field === 'is_called'));
   });
 
+  await t.test('detects all index flags (live, unique, primary) and constraint flags (deferrable, initiallyDeferred)', () => {
+    const source = {
+      indexes: [
+        { schema: 'public', table: 'tbl', name: 'idx', valid: true, ready: true, live: true, unique: true, primary: true },
+      ],
+      constraints: [
+        { schema: 'public', table: 'tbl', name: 'chk', validated: true, deferrable: false, initiallyDeferred: false },
+      ],
+    };
+
+    const target = {
+      indexes: [
+        { schema: 'public', table: 'tbl', name: 'idx', valid: true, ready: true, live: false, unique: false, primary: false },
+      ],
+      constraints: [
+        { schema: 'public', table: 'tbl', name: 'chk', validated: true, deferrable: true, initiallyDeferred: true },
+      ],
+    };
+
+    const report = compareCatalogDetails(source, target, {});
+    assert.equal(report.status, 'BLOCKED');
+    // 3 index flags (live, unique, primary) + 2 constraint flags (deferrable, initiallyDeferred)
+    assert.equal(report.discrepancies.length, 5);
+    assert.ok(report.discrepancies.some((d) => d.kind === 'index' && d.field === 'live'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'index' && d.field === 'unique'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'index' && d.field === 'primary'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'constraint' && d.field === 'deferrable'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'constraint' && d.field === 'initiallyDeferred'));
+  });
+
+  await t.test('detects routine attribute mismatches (securityDefiner, config, acl, language, comment) and handles null-vs-present', () => {
+    const source = {
+      routines: [
+        {
+          schema: 'public',
+          identity: 'public.my_func()',
+          definition: 'SELECT 1;',
+          owner: 'postgres',
+          securityDefiner: true,
+          config: ['search_path=public'],
+          acl: 'postgres=X/postgres',
+          language: 'sql',
+          comment: null, // null in source
+        },
+      ],
+    };
+
+    const target = {
+      routines: [
+        {
+          schema: 'public',
+          identity: 'public.my_func()',
+          definition: 'SELECT 2;', // definition mismatch
+          owner: 'postgres',
+          securityDefiner: false, // mismatch
+          config: null, // mismatch
+          acl: null, // mismatch
+          language: 'plpgsql', // mismatch
+          comment: 'has a comment now', // null-vs-present mismatch!
+        },
+      ],
+    };
+
+    const report = compareCatalogDetails(source, target, {});
+    assert.equal(report.status, 'BLOCKED');
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'definition'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'securityDefiner'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'config'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'acl'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'language'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'routine' && d.field === 'comment'));
+  });
+
+  await t.test('detects missing, extra, and mismatched columnComments and extra relationComments', () => {
+    const source = {
+      relationComments: [
+        { schema: 'public', relation: 'leads', comment: 'Lead records' },
+      ],
+      columnComments: [
+        { schema: 'public', relation: 'leads', column: 'phone', comment: 'Phone number' },
+        { schema: 'public', relation: 'leads', column: 'email', comment: 'Email address' },
+      ],
+    };
+
+    const target = {
+      relationComments: [
+        { schema: 'public', relation: 'leads', comment: 'Lead records' },
+        { schema: 'public', relation: 'extra_table', comment: 'Surprise table' }, // Extra relation comment
+      ],
+      columnComments: [
+        { schema: 'public', relation: 'leads', column: 'phone', comment: 'Telephone number' }, // Mismatched text
+        // email is missing in target
+        { schema: 'public', relation: 'leads', column: 'extra_col', comment: 'Surprise column' }, // Extra column comment
+      ],
+    };
+
+    const report = compareCatalogDetails(source, target, {});
+    assert.equal(report.status, 'BLOCKED');
+    // Summary checks
+    assert.equal(report.summary.columnComments.sourceCount, 2);
+    assert.equal(report.summary.columnComments.targetCount, 2);
+    assert.equal(report.summary.relationComments.sourceCount, 1);
+    assert.equal(report.summary.relationComments.targetCount, 2);
+
+    // Discrepancy checks
+    assert.ok(report.discrepancies.some((d) => d.kind === 'relationComment' && d.sourceValue === 'missing' && d.identity === 'public.extra_table'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'columnComment' && d.field === 'comment' && d.identity === 'public.leads.phone'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'columnComment' && d.targetValue === 'missing' && d.identity === 'public.leads.email'));
+    assert.ok(report.discrepancies.some((d) => d.kind === 'columnComment' && d.sourceValue === 'missing' && d.identity === 'public.leads.extra_col'));
+  });
+
   await t.test('detects missing and extra objects in target', () => {
     const source = {
       constraints: [

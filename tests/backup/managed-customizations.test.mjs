@@ -125,8 +125,101 @@ test('managed-customizations helper suite', async (t) => {
     const sql = generateManagedCustomizationsSql(projectItems);
     assert.match(sql, /BEGIN;/);
     assert.match(sql, /COMMIT;/);
+    // BEGIN must precede SET LOCAL search_path
+    const beginIndex = sql.indexOf('BEGIN;');
+    const setSearchPathIndex = sql.indexOf('SET LOCAL search_path');
+    assert.ok(beginIndex !== -1, 'BEGIN; must be present');
+    assert.ok(setSearchPathIndex !== -1, 'SET LOCAL search_path must be present');
+    assert.ok(beginIndex < setSearchPathIndex, 'BEGIN; must precede SET LOCAL search_path');
+
     assert.match(sql, /DROP POLICY IF EXISTS "crm_customer_documents_policy" ON "storage"\."objects";/);
     assert.match(sql, /CREATE POLICY "crm_customer_documents_policy"/);
+  });
+
+  await t.test('rejects unsupported project-owned customization kinds as BLOCKED', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'unsupported-kind.json');
+      const planOut = path.join(tempDir, 'unsupported-plan.sql');
+      const reportOut = path.join(tempDir, 'unsupported-report.json');
+
+      // A project-owned constraint or relation-rls is unsupported by recreation logic
+      const items = [
+        {
+          kind: 'constraint',
+          identity: 'public.crm_leads:crm_leads_check_status',
+          details: { schema: 'public', table: 'crm_leads', constraint: 'crm_leads_check_status' },
+        },
+      ];
+      await fsp.writeFile(sourcePath, JSON.stringify(items));
+
+      const res = await handlePlanCommand({
+        sourcePath,
+        targetLabel: 'crm-restore-rehearsal',
+        outPath: planOut,
+        reportPath: reportOut,
+      });
+
+      assert.equal(res.status, 'BLOCKED');
+      assert.equal(res.report.counts.unsupportedCount, 1);
+      assert.equal(res.report.counts.projectOwnedCount, 1);
+      assert.ok(res.report.unsupportedObjects.some((u) => u.kind === 'constraint'));
+      const sql = await fsp.readFile(planOut, 'utf8');
+      assert.match(sql, /PLAN GENERATION BLOCKED/);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  await t.test('fails closed for unauthorized or unexplained relation-acl and column-acl', () => {
+    // Platform default relation with approved role
+    const defaultAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: {
+        schema: 'auth',
+        table: 'users',
+        acl: [{ grantee: 'postgres', grantor: 'supabase_admin', privilege: 'SELECT' }],
+      },
+    };
+    assert.equal(classifyManagedCustomization(defaultAcl).classification, 'platform-default');
+
+    // Platform default relation with unauthorized grantee
+    const rogueAcl = {
+      kind: 'relation-acl',
+      identity: 'auth.users',
+      details: {
+        schema: 'auth',
+        table: 'users',
+        acl: [{ grantee: 'rogue_attacker', grantor: 'supabase_admin', privilege: 'SELECT' }],
+      },
+    };
+    assert.equal(classifyManagedCustomization(rogueAcl).classification, 'unexplained');
+
+    // Non-platform relation acl is unexplained
+    const nonPlatformAcl = {
+      kind: 'relation-acl',
+      identity: 'public.crm_leads',
+      details: {
+        schema: 'public',
+        table: 'crm_leads',
+        acl: [{ grantee: 'authenticated', grantor: 'postgres', privilege: 'SELECT' }],
+      },
+    };
+    assert.equal(classifyManagedCustomization(nonPlatformAcl).classification, 'unexplained');
+
+    // Column ACL with unknown grantee
+    const rogueColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.email',
+      details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'email',
+        acl: [{ grantee: 'unknown_role', grantor: 'supabase_admin', privilege: 'SELECT' }],
+      },
+    };
+    assert.equal(classifyManagedCustomization(rogueColAcl).classification, 'unexplained');
   });
 
   await t.test('plan command generates report and handles approved vs blocked plans', async () => {
@@ -280,6 +373,31 @@ test('managed-customizations helper suite', async (t) => {
       });
       assert.equal(resFail.status, 'BLOCKED');
       assert.equal(resFail.report.discrepancyCount, 1);
+
+      // Case 3: Target inventory provided via file
+      const targetInvPath = path.join(tempDir, 'target-inventory.json');
+      await fsp.writeFile(targetInvPath, JSON.stringify(sourceItems));
+      const resFilePass = await handleVerifyCommand({
+        sourcePath,
+        target: 'supabase_db_crm-restore-rehearsal',
+        targetInventoryPath: targetInvPath,
+        reportPath,
+      });
+      assert.equal(resFilePass.status, 'PASSED');
+      assert.equal(resFilePass.report.discrepancyCount, 0);
+
+      // Case 4: Target evidence missing throws TARGET_EVIDENCE_MISSING error
+      await assert.rejects(
+        async () => {
+          await handleVerifyCommand({
+            sourcePath,
+            target: 'supabase_db_crm-restore-rehearsal',
+            reportPath,
+            querySql: async () => { throw new Error('connection failed'); },
+          });
+        },
+        (err) => err.code === 'TARGET_EVIDENCE_MISSING'
+      );
     } finally {
       await removeTempDir(tempDir);
     }
