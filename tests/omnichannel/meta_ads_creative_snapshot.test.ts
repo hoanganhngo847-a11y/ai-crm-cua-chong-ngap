@@ -17,7 +17,9 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
         creative: {
             id: 'creative_01',
             name: 'Ảnh học bổng',
+            effective_object_story_id: '1026991374010112_123456789',
             object_story_spec: {
+                page_id: '1026991374010112',
                 link_data: {
                     message: 'Tư vấn học bổng du học Áo',
                     name: 'Đăng ký tư vấn miễn phí',
@@ -37,6 +39,8 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
     assert.equal(snapshot.adsetName, 'Học sinh lớp 12');
     assert.equal(snapshot.adsetId, 'adset_01');
     assert.equal(snapshot.creativeId, 'creative_01');
+    assert.equal(snapshot.pageId, '1026991374010112');
+    assert.equal(snapshot.pageIdConflict, undefined);
     assert.equal(snapshot.primaryText, 'Tư vấn học bổng du học Áo');
     assert.deepEqual(snapshot.headlines, ['Đăng ký tư vấn miễn phí']);
     assert.deepEqual(snapshot.descriptions, ['Cơ hội học tập tại Áo']);
@@ -45,6 +49,34 @@ test('Meta creative snapshot normalizes image ad copy, CTA, destination and trus
     assert.equal(snapshot.imageUrl, imageUrl);
     assert.equal(snapshot.previewUrl, 'https://www.facebook.com/ads/preview/example');
     assert.equal(snapshot.capturedAt, '2026-11-03T10:00:00.000Z');
+});
+
+
+test('Meta creative page binding is extracted from effective story IDs and conflicts fail closed', () => {
+    const fromStoryId = normalizeMetaAdCreativeSnapshot({
+        id: 'ad_story_id_01',
+        creative: {
+            id: 'creative_story_id_01',
+            effective_object_story_id: '1026991374010112_987654321',
+            link_url: 'https://example.edu.vn',
+        },
+    });
+    assert.equal(fromStoryId.pageId, '1026991374010112');
+    assert.equal(fromStoryId.pageIdConflict, undefined);
+
+    const conflicting = normalizeMetaAdCreativeSnapshot({
+        id: 'ad_conflicting_page_01',
+        creative: {
+            id: 'creative_conflicting_page_01',
+            effective_object_story_id: '2222222222222222_987654321',
+            object_story_spec: {
+                page_id: '1026991374010112',
+                link_data: { message: 'Creative with conflicting Page evidence' },
+            },
+        },
+    });
+    assert.equal(conflicting.pageId, undefined);
+    assert.equal(conflicting.pageIdConflict, true);
 });
 
 test('Meta creative snapshot identifies video creative and preserves video ID plus thumbnail', () => {
