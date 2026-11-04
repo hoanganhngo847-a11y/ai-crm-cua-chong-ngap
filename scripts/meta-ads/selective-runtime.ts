@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createHash, createHmac, createPublicKey, timingSafeEqual, verify } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +24,8 @@ import {
   verifyPostgresServerVersion,
   verifyTargetProjectConnection,
   CURRENT_SOURCE_COMMIT,
+  PINNED_SOURCE_HASHES,
+  SELECTIVE_RELEASE_APPROVED_WRITE_GROUPS,
 } from './selective-executor';
 
 export const SERVER_VERSION_QUERY =
@@ -162,11 +164,46 @@ export interface VerifySignedApprovalArtifactParams {
   expectedSnapshotCommit?: string;
   expectedReleasePackageDigest?: string;
   expectedMigrationHashes?: Record<string, string>;
-  expectedBackupManifestDigest?: string;
-  expectedBackupEvidenceDigest?: string;
+  expectedApprovedWriteGroups?: readonly string[];
   backupManifestPath?: string;
   backupEvidencePath?: string;
   currentTime?: Date;
+}
+
+function readEvidenceFile(filePath: string | undefined, label: string): { bytes?: Buffer; reason?: string } {
+  if (typeof filePath !== 'string' || !filePath.trim()) return { reason: `Actual ${label} file path is required` };
+  let fd: number | undefined;
+  try {
+    const pathStat = fs.lstatSync(filePath);
+    if (pathStat.isSymbolicLink() || !pathStat.isFile()) return { reason: `${label} must be a regular, non-symlink file` };
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    if (!fs.fstatSync(fd).isFile()) return { reason: `${label} is not a regular file` };
+    return { bytes: fs.readFileSync(fd) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { reason: `${label} file not found at ${filePath}` };
+    return { reason: `${label} file could not be read: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function parseEvidenceJson(bytes: Buffer, label: string): { value?: Record<string, any>; reason?: string } {
+  try {
+    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return { reason: `${label} must contain one JSON object` };
+    return { value: value as Record<string, any> };
+  } catch {
+    return { reason: `${label} must contain valid JSON` };
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isValidTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && Number.isFinite(Date.parse(value));
 }
 
 export function verifySignedApprovalArtifact(
@@ -181,8 +218,7 @@ export function verifySignedApprovalArtifact(
     expectedSnapshotCommit,
     expectedReleasePackageDigest,
     expectedMigrationHashes,
-    expectedBackupManifestDigest,
-    expectedBackupEvidenceDigest,
+    expectedApprovedWriteGroups,
     backupManifestPath,
     backupEvidencePath,
     currentTime,
@@ -246,8 +282,19 @@ export function verifySignedApprovalArtifact(
     };
   }
 
-  if (!Array.isArray(payload.approvedWriteGroups) || payload.approvedWriteGroups.length === 0) {
-    return { valid: false, reason: 'Approval missing approvedWriteGroups array' };
+  const expectedGroups = [...(expectedApprovedWriteGroups ?? SELECTIVE_RELEASE_APPROVED_WRITE_GROUPS)];
+  const actualGroups = payload.approvedWriteGroups;
+  if (
+    !Array.isArray(actualGroups) ||
+    actualGroups.length === 0 ||
+    actualGroups.some((group) => !isNonEmptyString(group)) ||
+    new Set(actualGroups).size !== actualGroups.length ||
+    expectedGroups.length === 0 ||
+    expectedGroups.some((group) => !isNonEmptyString(group)) ||
+    new Set(expectedGroups).size !== expectedGroups.length ||
+    JSON.stringify([...actualGroups].sort()) !== JSON.stringify([...expectedGroups].sort())
+  ) {
+    return { valid: false, reason: 'Approval approvedWriteGroups must be a unique string set exactly matching the release package' };
   }
 
   // Commit provenance validation
@@ -314,25 +361,32 @@ export function verifySignedApprovalArtifact(
       reason: `Invalid or placeholder backupManifestDigest: expected 64-character hex SHA-256 string, got '${payload.backupManifestDigest}'`,
     };
   }
-  if (backupManifestPath) {
-    if (!fs.existsSync(backupManifestPath)) {
-      return { valid: false, reason: `Backup manifest file not found at ${backupManifestPath}` };
-    }
-    const manifestBytes = fs.readFileSync(backupManifestPath);
-    const computedDigest = createHash('sha256').update(manifestBytes).digest('hex');
-    if (computedDigest !== payload.backupManifestDigest.toLowerCase()) {
-      return {
-        valid: false,
-        reason: `Backup manifest digest mismatch: computed '${computedDigest}' from file, approval payload specified '${payload.backupManifestDigest}'`,
-      };
-    }
-  } else if (expectedBackupManifestDigest) {
-    if (payload.backupManifestDigest.toLowerCase() !== expectedBackupManifestDigest.toLowerCase()) {
-      return {
-        valid: false,
-        reason: `Backup manifest digest mismatch: expected '${expectedBackupManifestDigest}', got '${payload.backupManifestDigest}'`,
-      };
-    }
+  const manifestRead = readEvidenceFile(backupManifestPath, 'Backup manifest');
+  if (!manifestRead.bytes) return { valid: false, reason: manifestRead.reason };
+  const manifestDigest = createHash('sha256').update(manifestRead.bytes).digest('hex');
+  if (manifestDigest !== payload.backupManifestDigest.toLowerCase()) {
+    return { valid: false, reason: `Backup manifest digest mismatch: computed '${manifestDigest}' from file, approval payload specified '${payload.backupManifestDigest}'` };
+  }
+  const manifestParsed = parseEvidenceJson(manifestRead.bytes, 'Backup manifest');
+  if (!manifestParsed.value) return { valid: false, reason: manifestParsed.reason };
+  const manifest = manifestParsed.value;
+  const manifestSource = manifest.source;
+  if (
+    manifest.format !== 'crm-staging-backup-manifest/v1' ||
+    !isNonEmptyString(manifest.backupId) ||
+    !manifestSource || typeof manifestSource !== 'object' ||
+    manifestSource.projectRef !== expectedProjectRef ||
+    manifestSource.environment !== 'staging' ||
+    manifestSource.auditBaselineCommit !== payload.sourceCommit ||
+    manifestSource.snapshotCommit !== payload.snapshotCommit ||
+    typeof manifestSource.commitFullSha !== 'string' ||
+    !GIT_COMMIT_SHA_REGEX.test(manifestSource.commitFullSha) ||
+    !isNonEmptyString(manifestSource.serverVersion) ||
+    !isNonEmptyString(manifestSource.dumpToolVersion) ||
+    !Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0 ||
+    manifest.artifacts.some((entry: any) => !entry || typeof entry !== 'object' || !isNonEmptyString(entry.path) || !isNonEmptyString(entry.kind))
+  ) {
+    return { valid: false, reason: 'Backup manifest schema or staging provenance is invalid' };
   }
 
   // Backup evidence digest validation
@@ -346,47 +400,48 @@ export function verifySignedApprovalArtifact(
       reason: `Invalid or placeholder backupEvidenceDigest: expected 64-character hex SHA-256 string, got '${payload.backupEvidenceDigest}'`,
     };
   }
-  if (backupEvidencePath) {
-    if (!fs.existsSync(backupEvidencePath)) {
-      return { valid: false, reason: `Backup evidence file not found at ${backupEvidencePath}` };
-    }
-    const evidenceBytes = fs.readFileSync(backupEvidencePath);
-    const computedDigest = createHash('sha256').update(evidenceBytes).digest('hex');
-    if (computedDigest !== payload.backupEvidenceDigest.toLowerCase()) {
-      return {
-        valid: false,
-        reason: `Backup evidence digest mismatch: computed '${computedDigest}' from file, approval payload specified '${payload.backupEvidenceDigest}'`,
-      };
-    }
-  } else if (expectedBackupEvidenceDigest) {
-    if (payload.backupEvidenceDigest.toLowerCase() !== expectedBackupEvidenceDigest.toLowerCase()) {
-      return {
-        valid: false,
-        reason: `Backup evidence digest mismatch: expected '${expectedBackupEvidenceDigest}', got '${payload.backupEvidenceDigest}'`,
-      };
-    }
+  const evidenceRead = readEvidenceFile(backupEvidencePath, 'Backup/restore evidence');
+  if (!evidenceRead.bytes) return { valid: false, reason: evidenceRead.reason };
+  const evidenceDigest = createHash('sha256').update(evidenceRead.bytes).digest('hex');
+  if (evidenceDigest !== payload.backupEvidenceDigest.toLowerCase()) {
+    return { valid: false, reason: `Backup evidence digest mismatch: computed '${evidenceDigest}' from file, approval payload specified '${payload.backupEvidenceDigest}'` };
+  }
+  const evidenceParsed = parseEvidenceJson(evidenceRead.bytes, 'Backup/restore evidence');
+  if (!evidenceParsed.value) return { valid: false, reason: evidenceParsed.reason };
+  const evidence = evidenceParsed.value;
+  const startedAt = isValidTimestamp(evidence.startedAt) ? Date.parse(evidence.startedAt) : NaN;
+  const completedAt = isValidTimestamp(evidence.completedAt) ? Date.parse(evidence.completedAt) : NaN;
+  if (
+    evidence.format !== 'crm-staging-backup-restore-evidence/v1' ||
+    evidence.backupId !== manifest.backupId ||
+    evidence.projectRef !== expectedProjectRef ||
+    evidence.sourceEnvironment !== 'staging' ||
+    evidence.backupManifestDigest !== manifestDigest ||
+    evidence.backupStatus !== 'PASSED' || evidence.restoreStatus !== 'PASSED' || evidence.status !== 'PASSED' ||
+    !evidence.restoreTarget || typeof evidence.restoreTarget !== 'object' ||
+    evidence.restoreTarget.type !== 'disposable-isolated' || !isNonEmptyString(evidence.restoreTarget.identity) ||
+    !Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt
+  ) {
+    return { valid: false, reason: 'Backup/restore evidence schema, success status, target, project, or timestamps are invalid' };
   }
 
-  // Migration hashes validation
-  if (!payload.migrationHashes || typeof payload.migrationHashes !== 'object') {
+  // Migration hashes must be an exact key/value set for this release package.
+  if (!payload.migrationHashes || typeof payload.migrationHashes !== 'object' || Array.isArray(payload.migrationHashes)) {
     return { valid: false, reason: 'Approval missing migrationHashes dictionary' };
   }
-  for (const [file, hash] of Object.entries(payload.migrationHashes)) {
-    if (typeof hash !== 'string' || !SHA256_HEX_REGEX.test(hash)) {
-      return {
-        valid: false,
-        reason: `Invalid migration hash format for '${file}': expected 64-character hex SHA-256, got '${hash}'`,
-      };
-    }
+  const expectedHashes = expectedMigrationHashes ?? PINNED_SOURCE_HASHES;
+  const actualMigrationFiles = Object.keys(payload.migrationHashes).sort();
+  const expectedMigrationFiles = Object.keys(expectedHashes).sort();
+  if (JSON.stringify(actualMigrationFiles) !== JSON.stringify(expectedMigrationFiles)) {
+    return { valid: false, reason: 'Approval migrationHashes keys must exactly match the release package migration set' };
   }
-  if (expectedMigrationHashes) {
-    for (const [file, hash] of Object.entries(expectedMigrationHashes)) {
-      if (payload.migrationHashes[file] !== hash) {
-        return {
-          valid: false,
-          reason: `Migration hash mismatch for '${file}': expected '${hash}', got '${payload.migrationHashes[file]}'`,
-        };
-      }
+  for (const file of expectedMigrationFiles) {
+    const hash = payload.migrationHashes[file];
+    if (typeof hash !== 'string' || !SHA256_HEX_REGEX.test(hash)) {
+      return { valid: false, reason: `Invalid migration hash format for '${file}': expected 64-character hex SHA-256, got '${hash}'` };
+    }
+    if (hash.toLowerCase() !== expectedHashes[file].toLowerCase()) {
+      return { valid: false, reason: `Migration hash mismatch for '${file}': expected '${expectedHashes[file]}', got '${hash}'` };
     }
   }
 
@@ -408,60 +463,6 @@ export function verifySignedApprovalArtifact(
   return { valid: true };
 }
 
-export interface HostedExecutionApproval {
-  backupRestoreVerified: boolean;
-  ownerApproved: boolean;
-  reference: string;
-  signature?: string;
-  secretOrPublicKey?: string;
-}
-
-export function computeOwnerApprovalHmac(params: {
-  projectRef: string;
-  releaseId: string;
-  reference: string;
-  secret: string;
-}): string {
-  const message = `${params.projectRef}:${params.releaseId}:${params.reference.trim()}`;
-  return createHmac('sha256', params.secret).update(message, 'utf8').digest('hex');
-}
-
-export function verifyOwnerApprovalSignature(params: {
-  projectRef: string;
-  releaseId: string;
-  reference: string;
-  signature: string;
-  secretOrPublicKey: string;
-}): boolean {
-  const { projectRef, releaseId, reference, signature, secretOrPublicKey } = params;
-  if (!signature || !secretOrPublicKey || !projectRef || !releaseId || !reference) {
-    return false;
-  }
-  const message = `${projectRef}:${releaseId}:${reference.trim()}`;
-
-  // Check if secretOrPublicKey is a PEM public key
-  if (secretOrPublicKey.includes('BEGIN PUBLIC KEY') || secretOrPublicKey.includes('BEGIN RSA PUBLIC KEY')) {
-    try {
-      const sigBuffer = Buffer.from(signature, /^[0-9a-fA-F]+$/.test(signature) ? 'hex' : 'base64');
-      return verify(null, Buffer.from(message, 'utf8'), secretOrPublicKey, sigBuffer);
-    } catch {
-      return false;
-    }
-  }
-
-  // Otherwise treat as symmetric HMAC secret
-  try {
-    const expected = createHmac('sha256', secretOrPublicKey).update(message, 'utf8').digest('hex');
-    const sigNorm = signature.trim().toLowerCase();
-    if (sigNorm.length !== expected.length) {
-      return false;
-    }
-    return timingSafeEqual(Buffer.from(sigNorm, 'hex'), Buffer.from(expected, 'hex'));
-  } catch {
-    return false;
-  }
-}
-
 export interface ExecuteSelectiveReleaseOptions {
   connectionString: string;
   releaseId?: string;
@@ -470,11 +471,7 @@ export interface ExecuteSelectiveReleaseOptions {
   approvalArtifactPath?: string;
   backupManifestPath?: string;
   backupEvidencePath?: string;
-  expectedBackupManifestDigest?: string;
-  expectedBackupEvidenceDigest?: string;
   trustedRootPublicKey?: string;
-  /** @deprecated Legacy approval options are ignored and forbidden in hosted execution */
-  hostedApproval?: HostedExecutionApproval;
   psqlPath?: string;
   runPsql?: PsqlRunner;
 }
@@ -753,20 +750,11 @@ export function executeSelectiveRelease(
       options.backupManifestPath || process.env.META_ADS_BACKUP_MANIFEST_PATH;
     const backupEvidencePath =
       options.backupEvidencePath || process.env.META_ADS_BACKUP_EVIDENCE_PATH;
-    const expectedBackupManifestDigest =
-      options.expectedBackupManifestDigest || process.env.META_ADS_EXPECTED_BACKUP_MANIFEST_DIGEST;
-    const expectedBackupEvidenceDigest =
-      options.expectedBackupEvidenceDigest || process.env.META_ADS_EXPECTED_BACKUP_EVIDENCE_DIGEST;
-
-    if (!backupManifestPath && !expectedBackupManifestDigest) {
-      throw new Error(
-        'HOSTED_EXECUTION_BLOCKED: Actual verified backup manifest artifact or digest is required for hosted execution.'
-      );
+    if (!backupManifestPath) {
+      throw new Error('HOSTED_EXECUTION_BLOCKED: Actual verified backup manifest file is required; digest-only inputs are forbidden.');
     }
-    if (!backupEvidencePath && !expectedBackupEvidenceDigest) {
-      throw new Error(
-        'HOSTED_EXECUTION_BLOCKED: Actual verified backup/restore evidence artifact or digest is required for hosted execution.'
-      );
+    if (!backupEvidencePath) {
+      throw new Error('HOSTED_EXECUTION_BLOCKED: Actual verified backup/restore evidence file is required; digest-only inputs are forbidden.');
     }
 
     const verification = verifySignedApprovalArtifact({
@@ -778,8 +766,7 @@ export function executeSelectiveRelease(
       expectedSnapshotCommit: CURRENT_SOURCE_COMMIT,
       expectedReleasePackageDigest: pack.bundleSha256,
       expectedMigrationHashes,
-      expectedBackupManifestDigest,
-      expectedBackupEvidenceDigest,
+      expectedApprovedWriteGroups: pack.approvedWriteGroups,
       backupManifestPath,
       backupEvidencePath,
     });

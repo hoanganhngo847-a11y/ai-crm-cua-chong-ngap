@@ -18,6 +18,7 @@ export const TARGET_STAGING_PROJECT = 'qmhfmgkymjgoevwmkidm';
 export const TARGET_POSTGRES_VERSION = '17.11';
 export const EXPECTED_CANONICAL_LEDGER_COUNT = 21;
 export const CURRENT_SOURCE_COMMIT = 'e51a5989143582af0885ba5ee26644a68b388995';
+export const SELECTIVE_RELEASE_APPROVED_WRITE_GROUPS = Object.freeze(['META_ADS_LEAD_ATTRIBUTION'] as const);
 
 export const META_SOURCES = [
   '20261030090000_meta_ads_lead_attribution.sql',
@@ -381,6 +382,7 @@ FROM meta_21_rows;
     bundleSha256: sqlSha256(sourcesSql),
     packageSha256: sqlSha256(sql),
     sources,
+    approvedWriteGroups: [...SELECTIVE_RELEASE_APPROVED_WRITE_GROUPS],
   };
 }
 

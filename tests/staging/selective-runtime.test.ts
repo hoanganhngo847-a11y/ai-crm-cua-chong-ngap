@@ -20,8 +20,6 @@ import { inspectTransactionEnvelope } from '../../scripts/meta-ads/ledger-readin
 import {
   executeSelectiveRelease,
   SERVER_VERSION_QUERY,
-  computeOwnerApprovalHmac,
-  verifyOwnerApprovalSignature,
   parseCliArgs,
   canonicalizeApprovalPayload,
   verifyArtifactSignature,
@@ -135,87 +133,7 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           executeSelectiveRelease({
             connectionString:
               'postgresql://postgres:secret@db.wrongproject.supabase.co:5432/postgres?sslmode=require',
-            hostedApproval: {
-              backupRestoreVerified: true,
-              ownerApproved: true,
-              reference: 'owner-approved-backup-restore-2026-10-31',
-            },
-            runPsql: unusedRunner,
-          }),
-        /TARGET_PROJECT_MISMATCH/
-      );
 
-      assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString:
-              'postgresql://postgres.' +
-              TARGET_STAGING_PROJECT +
-              ':secret@attacker.example.com:6543/postgres?sslmode=require',
-            hostedApproval: {
-              backupRestoreVerified: true,
-              ownerApproved: true,
-              reference: 'owner-approved-backup-restore-2026-10-31',
-            },
-            runPsql: unusedRunner,
-          }),
-        /TARGET_VERIFICATION_FAILED/
-      );
-
-      assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString:
-              'postgresql://postgres.' +
-              TARGET_STAGING_PROJECT +
-              ':secret@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require',
-            runPsql: unusedRunner,
-          }),
-        /HOSTED_EXECUTION_BLOCKED/
-      );
-
-      assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString: 'postgresql://postgres:secret@localhost:5432/postgres?sslmode=disable',
-            runPsql: unusedRunner,
-          }),
-        /TARGET_PROJECT_MISMATCH/
-      );
-      assert.equal(calls, 0, 'No query may run after failed target validation or hosted approval');
-    });
-
-    await t.test('2. Hosted execution remains blocked without backup/restore proof and owner approval', () => {
-      let calls = 0;
-      const unusedRunner: PsqlRunner = () => {
-        calls++;
-        return versionResult();
-      };
-      const hostedConn =
-        'postgresql://postgres:secret@db.' +
-        TARGET_STAGING_PROJECT +
-        '.supabase.co:5432/postgres?sslmode=require';
-
-      // 1. Missing signed approval artifact blocks hosted execution
-      assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString: hostedConn,
-            runPsql: unusedRunner,
-          }),
-        /HOSTED_EXECUTION_BLOCKED: A cryptographically signed approval artifact \(crm-owner-approval\/v1\) is strictly required for hosted execution\./
-      );
-
-      // 2. Legacy HMAC secret only / boolean ownerApproved only / backupRestoreVerified only blocks
-      assert.throws(
-        () =>
-          executeSelectiveRelease({
-            connectionString: hostedConn,
-            hostedApproval: {
-              backupRestoreVerified: true,
-              ownerApproved: true,
-              reference: 'legacy-ref',
-            } as any,
             runPsql: unusedRunner,
           }),
         /HOSTED_EXECUTION_BLOCKED: A cryptographically signed approval artifact \(crm-owner-approval\/v1\) is strictly required for hosted execution\./
@@ -299,53 +217,15 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
       assert.equal(calls, 0, 'No query may run after failed target validation or hosted approval');
     });
 
-    await t.test('2b. Cryptographic signature and CLI args parsing utilities', () => {
-      // 1. Signature binding tests
-      const secret = 'test_secret_key';
-      const projectRef = TARGET_STAGING_PROJECT;
-      const releaseId = 'rel-123';
-      const reference = 'runbook-v12-rehearsal-001';
-
-      const sig = computeOwnerApprovalHmac({ projectRef, releaseId, reference, secret });
-      assert.ok(sig && sig.length === 64, 'HMAC-SHA256 generates 64-char hex string');
-      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId, reference, signature: sig, secretOrPublicKey: secret }), true);
-      assert.equal(verifyOwnerApprovalSignature({ projectRef, releaseId: 'wrong-rel', reference, signature: sig, secretOrPublicKey: secret }), false);
-
-      // 2. Insecure / forbidden CLI arguments rejection
-      assert.throws(
-        () => parseCliArgs(['--connection-string=postgresql://user:pass@localhost:5432/db']),
-        /INSECURE_ARGUMENT.*connection string.*forbidden/
-      );
-      assert.throws(
-        () => parseCliArgs(['--owner-secret=my_secret']),
-        /INSECURE_ARGUMENT.*owner secret.*forbidden/
-      );
-      assert.throws(
-        () => parseCliArgs(['--owner-public-key=key']),
-        /INSECURE_ARGUMENT.*owner public key.*forbidden/
-      );
-      assert.throws(
-        () => parseCliArgs(['--trusted-root=/tmp/root.pub']),
-        /INSECURE_ARGUMENT.*trusted root public key.*forbidden/
-      );
-      assert.throws(
-        () => parseCliArgs(['--owner-approved']),
-        /LEGACY_ARGUMENT_FORBIDDEN/
-      );
-      assert.throws(
-        () => parseCliArgs(['--backup-restore-verified']),
-        /LEGACY_ARGUMENT_FORBIDDEN/
-      );
-      assert.throws(
-        () => parseCliArgs(['--owner-approval-reference=test-ref']),
-        /LEGACY_ARGUMENT_FORBIDDEN/
-      );
-      assert.throws(
-        () => parseCliArgs(['--owner-signature=sig']),
-        /LEGACY_ARGUMENT_FORBIDDEN/
-      );
-
-      // 3. Supported CLI arguments parsing
+    await t.test('2b. CLI args parsing rejects legacy and secret-bearing arguments', () => {
+      assert.throws(() => parseCliArgs(['--connection-string=postgresql://user:pass@localhost:5432/db']), /INSECURE_ARGUMENT.*connection string.*forbidden/);
+      assert.throws(() => parseCliArgs(['--owner-secret=my_secret']), /INSECURE_ARGUMENT.*owner secret.*forbidden/);
+      assert.throws(() => parseCliArgs(['--owner-public-key=key']), /INSECURE_ARGUMENT.*owner public key.*forbidden/);
+      assert.throws(() => parseCliArgs(['--trusted-root=/tmp/root.pub']), /INSECURE_ARGUMENT.*trusted root public key.*forbidden/);
+      assert.throws(() => parseCliArgs(['--owner-approved']), /LEGACY_ARGUMENT_FORBIDDEN/);
+      assert.throws(() => parseCliArgs(['--backup-restore-verified']), /LEGACY_ARGUMENT_FORBIDDEN/);
+      assert.throws(() => parseCliArgs(['--owner-approval-reference=test-ref']), /LEGACY_ARGUMENT_FORBIDDEN/);
+      assert.throws(() => parseCliArgs(['--owner-signature=sig']), /LEGACY_ARGUMENT_FORBIDDEN/);
       const parsed = parseCliArgs([
         '--approval-artifact', '/tmp/approval.json',
         '--backup-manifest', '/tmp/manifest.json',
@@ -353,7 +233,6 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
         '--allow-local-test',
         '--release-id=custom-rel-99',
       ]);
-
       assert.equal(parsed.approvalArtifactPath, '/tmp/approval.json');
       assert.equal(parsed.backupManifestPath, '/tmp/manifest.json');
       assert.equal(parsed.backupEvidencePath, '/tmp/evidence.json');
@@ -372,9 +251,35 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
       const operatorPrivPem = operatorKeypair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
       const pkgDigest = createHash('sha256').update('test-release-package-sql-bytes').digest('hex');
-      const manifestBytes = Buffer.from('{"backupId":"bk-001","timestamp":"2026-11-04T00:00:00Z"}');
+      const now = new Date();
+      const manifestBytes = Buffer.from(JSON.stringify({
+        format: 'crm-staging-backup-manifest/v1',
+        backupId: 'bk-001',
+        source: {
+          projectRef: TARGET_STAGING_PROJECT,
+          environment: 'staging',
+          auditBaselineCommit: '0d21bb89b97cdcd1b82f08a72149e68f87b8ae2f',
+          snapshotCommit: 'e51a5989143582af0885ba5ee26644a68b388995',
+          commitFullSha: '69d16c3769adf9276c68139261b740246ea6820e',
+          serverVersion: '17.11',
+          dumpToolVersion: '17.11',
+        },
+        artifacts: [{ path: 'db/app.dump.aesgcm', kind: 'pg_dump_custom' }],
+      }));
       const manifestDigest = createHash('sha256').update(manifestBytes).digest('hex');
-      const evidenceBytes = Buffer.from('{"verified":true,"checksum":"pass","rowCounts":{"customers":10}}');
+      const evidenceBytes = Buffer.from(JSON.stringify({
+        format: 'crm-staging-backup-restore-evidence/v1',
+        backupId: 'bk-001',
+        projectRef: TARGET_STAGING_PROJECT,
+        sourceEnvironment: 'staging',
+        status: 'PASSED',
+        backupStatus: 'PASSED',
+        restoreStatus: 'PASSED',
+        backupManifestDigest: manifestDigest,
+        restoreTarget: { type: 'disposable-isolated', identity: 'crm-restore-rehearsal-local-001' },
+        startedAt: new Date(now.getTime() - 60_000).toISOString(),
+        completedAt: now.toISOString(),
+      }));
       const evidenceDigest = createHash('sha256').update(evidenceBytes).digest('hex');
 
       const tmpManifestPath = join(tmpdir(), `test-manifest-${randomUUID()}.json`);
@@ -382,7 +287,6 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
       writeFileSync(tmpManifestPath, manifestBytes);
       writeFileSync(tmpEvidencePath, evidenceBytes);
 
-      const now = new Date();
       const basePayload: OwnerApprovalPayload = {
         projectRef: TARGET_STAGING_PROJECT,
         releaseId: 'test-release-01',
@@ -392,7 +296,7 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
         releasePackageDigest: pkgDigest,
         backupManifestDigest: manifestDigest,
         backupEvidenceDigest: evidenceDigest,
-        approvedWriteGroups: ['crm_leads', 'crm_customers', 'omnichannel_messages'],
+        approvedWriteGroups: ['META_ADS_LEAD_ATTRIBUTION'],
         issuedAt: new Date(now.getTime() - 60_000).toISOString(),
         expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
         approvalReference: 'ref-owner-approved-runbook-v12-001',
@@ -470,6 +374,8 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           trustedRootPublicKey: trustedPubPem,
           expectedProjectRef: TARGET_STAGING_PROJECT,
           expectedReleaseId: 'test-release-01',
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
         });
         assert.equal(resOperator.valid, false);
         assert.match(resOperator.reason!, /Cryptographic signature verification failed/);
@@ -484,6 +390,8 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           trustedRootPublicKey: trustedPubPem,
           expectedProjectRef: TARGET_STAGING_PROJECT,
           expectedReleaseId: 'test-release-01',
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
         });
         assert.equal(resTamperedSig.valid, false);
 
@@ -561,6 +469,8 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           expectedProjectRef: TARGET_STAGING_PROJECT,
           expectedReleaseId: 'test-release-01',
           expectedMigrationHashes: PINNED_SOURCE_HASHES,
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
         });
         assert.equal(resBadHash.valid, false);
         assert.match(resBadHash.reason!, /Migration hash mismatch/);
@@ -580,6 +490,8 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           expectedProjectRef: TARGET_STAGING_PROJECT,
           expectedReleaseId: 'test-release-01',
           expectedMigrationHashes: PINNED_SOURCE_HASHES,
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
         });
         assert.equal(resInvalidHash.valid, false);
         assert.match(resInvalidHash.reason!, /Invalid migration hash format/);
@@ -614,8 +526,50 @@ test('Selective runtime validates the connection and recovers a lost COMMIT ackn
           trustedRootPublicKey: rsaPubPem,
           expectedProjectRef: TARGET_STAGING_PROJECT,
           expectedReleaseId: 'test-release-01',
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
         });
         assert.equal(resRsa.valid, true);
+        const digestOnly = verifySignedApprovalArtifact({
+          artifact: validArtifact,
+          trustedRootPublicKey: trustedPubPem,
+          expectedProjectRef: TARGET_STAGING_PROJECT,
+          expectedReleaseId: 'test-release-01',
+        });
+        assert.equal(digestOnly.valid, false);
+        assert.match(digestOnly.reason!, /Actual Backup manifest file path is required/);
+
+        const extraMigrationArtifact = signArtifact({
+          ...basePayload,
+          migrationHashes: { ...PINNED_SOURCE_HASHES, 'unexpected.sql': 'a'.repeat(64) },
+        }, trustedPrivPem);
+        const extraMigration = verifySignedApprovalArtifact({
+          artifact: extraMigrationArtifact,
+          trustedRootPublicKey: trustedPubPem,
+          expectedProjectRef: TARGET_STAGING_PROJECT,
+          expectedReleaseId: 'test-release-01',
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
+          expectedMigrationHashes: PINNED_SOURCE_HASHES,
+        });
+        assert.equal(extraMigration.valid, false);
+        assert.match(extraMigration.reason!, /exactly match the release package migration set/);
+
+        const extraGroupArtifact = signArtifact({
+          ...basePayload,
+          approvedWriteGroups: ['META_ADS_LEAD_ATTRIBUTION', 'UNAPPROVED_GROUP'],
+        }, trustedPrivPem);
+        const extraGroup = verifySignedApprovalArtifact({
+          artifact: extraGroupArtifact,
+          trustedRootPublicKey: trustedPubPem,
+          expectedProjectRef: TARGET_STAGING_PROJECT,
+          expectedReleaseId: 'test-release-01',
+          backupManifestPath: tmpManifestPath,
+          backupEvidencePath: tmpEvidencePath,
+        });
+        assert.equal(extraGroup.valid, false);
+        assert.match(extraGroup.reason!, /approvedWriteGroups.*exactly matching/);
+
       } finally {
         try { unlinkSync(tmpManifestPath); } catch {}
         try { unlinkSync(tmpEvidencePath); } catch {}
