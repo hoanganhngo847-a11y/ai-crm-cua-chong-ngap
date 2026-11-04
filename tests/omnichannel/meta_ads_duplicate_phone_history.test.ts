@@ -63,9 +63,11 @@ async function submitLeadgen(
 ): Promise<Submission> {
     const adId = opts.adId ?? null;
     const creativeEvidence = adId ? JSON.stringify({
-        creative_snapshot: {
-            schemaVersion: 2, source: 'META_MARKETING_API', adId,
-            pageId: PAGE, pageIdConflict: false,
+        leadgen_event_binding: {
+            source: 'SIGNED_META_WEBHOOK',
+            leadgenId: opts.leadgenId,
+            pageId: PAGE,
+            adId,
         },
     }) : null;
     await db.exec(claimLeadgen(opts.company, opts.leadgenId, opts.occurred, adId));
