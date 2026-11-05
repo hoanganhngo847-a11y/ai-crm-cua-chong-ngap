@@ -5,8 +5,8 @@ import { CustomerService } from '../../features/crm/services/customer.service';
 const COMPANY = '90000000-0000-0000-0000-000000000001';
 
 test('production pipeline uses exact tenant-scoped table counts when stage-count RPC is missing', async () => {
-  const originalNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = 'production';
+  const originalDemoMode = process.env.DEMO_MODE;
+  process.env.DEMO_MODE = 'false';
   try {
     const rows = [
       { id: '92000000-0000-0000-0000-000000000001', company_id: COMPANY, customer_code: 'KH-001', name: 'Legacy lead', stage: 'LEAD_NEW', source: 'FACEBOOK', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', phone: null, email: null },
@@ -70,7 +70,7 @@ test('production pipeline uses exact tenant-scoped table counts when stage-count
     assert.equal(awareness?.needs_review_count, 1);
     assert.ok(headCountQueries >= 10, 'exact head-count queries cover canonical and legacy review stages');
   } finally {
-    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = originalNodeEnv;
+    if (originalDemoMode === undefined) delete process.env.DEMO_MODE;
+    else process.env.DEMO_MODE = originalDemoMode;
   }
 });
