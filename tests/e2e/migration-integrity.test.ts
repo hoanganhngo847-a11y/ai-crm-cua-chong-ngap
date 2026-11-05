@@ -8,6 +8,7 @@ import {
   verifyFilesystemMigrations,
   verifyMigrationGitGuard,
   FROZEN_FOUNDATION_MIGRATIONS,
+  PENDING_MESSENGER_MIGRATION,
 } from './verify-migration-integrity';
 
 console.log('================================================================');
@@ -302,6 +303,44 @@ withTempGitFixture(({ dir }) => {
   );
   testPass('Git guard: missing baseline fails closed');
 });
+
+// Exact historical collision: preserve SQL pending approval, never generalize renames.
+const archivedMessenger = fs.readFileSync(path.resolve('supabase/pending-migrations', PENDING_MESSENGER_MIGRATION));
+const funnelName = '20261028130000_customer_funnel_six_stages.sql';
+const funnelSql = fs.readFileSync(path.resolve('supabase/migrations', funnelName));
+for (const scenario of ['preserved', 'missing', 'tampered', 'funnel-edited', 'baseline-edited', 'reactivated']) {
+  withTempGitFixture(({ dir, migrationsDir }) => {
+    const old = path.join(migrationsDir, PENDING_MESSENGER_MIGRATION);
+    fs.writeFileSync(old, scenario === 'baseline-edited' ? Buffer.concat([archivedMessenger, Buffer.from('\n-- edited')]) : archivedMessenger);
+    fs.writeFileSync(path.join(migrationsDir, funnelName), funnelSql);
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'fixture: historical collision'], { cwd: dir });
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: dir });
+    const pendingDir = path.join(dir, 'supabase/pending-migrations');
+    fs.mkdirSync(pendingDir);
+    const pending = path.join(pendingDir, PENDING_MESSENGER_MIGRATION);
+    fs.renameSync(old, pending);
+    if (scenario === 'missing') fs.unlinkSync(pending);
+    if (scenario === 'tampered') fs.appendFileSync(pending, '\n-- edited');
+    if (scenario === 'funnel-edited') fs.appendFileSync(path.join(migrationsDir, funnelName), '\n-- edited');
+    if (scenario === 'reactivated') fs.copyFileSync(pending, path.join(migrationsDir, PENDING_MESSENGER_MIGRATION.replace('20261028130000', '20261106000000')));
+    const guard = verifyMigrationGitGuard({ cwd: dir });
+    assert.equal(guard.valid, ['preserved', 'reactivated'].includes(scenario), `${scenario}: ${guard.errors.join(', ')}`);
+    const filesystem = verifyFilesystemMigrations(migrationsDir);
+    if (scenario === 'reactivated') assert.ok(filesystem.errors.some(e => e.includes('pending product approval')));
+    if (scenario === 'missing' || scenario === 'tampered') assert.ok(filesystem.errors.some(e => /pending Messenger/i.test(e)));
+    testPass(`Exact Messenger relocation: ${scenario}`);
+  });
+}
+
+// Assert the actual collision, rather than only a generic duplicate fixture.
+{
+  const files = fs.readdirSync(path.resolve('supabase/migrations')).filter(f => f.endsWith('.sql')).sort();
+  const reintroduced = verifyMigrationIntegrity([...files, PENDING_MESSENGER_MIGRATION].sort());
+  assert.ok(reintroduced.errors.some(e => e.includes('Duplicate migration timestamps')));
+  assert.equal(verifyMigrationGitGuard().valid, true, 'Actual branch must preserve immutable migration history');
+  testPass('Actual 20261028130000 collision is rejected and branch history passes');
+}
 
 console.log('\n================================================================');
 console.log(`MIGRATION INTEGRITY TEST RESULTS: ${passCount} PASSED, 0 FAILED`);
