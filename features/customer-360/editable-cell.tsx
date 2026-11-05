@@ -14,7 +14,14 @@ export interface Customer360EditableCellProps {
   isTextarea?: boolean;
 }
 
-export function Customer360EditableCell({
+export function Customer360EditableCell(props: Customer360EditableCellProps) {
+  // A different record, field or server value starts a fresh editing session.
+  // Late save responses belong to the old instance and cannot mask newer props.
+  const sessionKey = JSON.stringify([props.customerId, props.field, props.value ?? '']);
+  return <EditableCellSession key={sessionKey} {...props} />;
+}
+
+function EditableCellSession({
   customerId,
   field,
   value,
@@ -33,11 +40,16 @@ export function Customer360EditableCell({
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Sync state when external value changes
+  const savingRef = useRef(false);
+  const sessionActiveRef = useRef(true);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    setCurrentValue(value ?? '');
-    setDraftValue(value ?? '');
-  }, [value]);
+    sessionActiveRef.current = true;
+    return () => {
+      sessionActiveRef.current = false;
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (isEditing) {
@@ -60,14 +72,19 @@ export function Customer360EditableCell({
 
   const handleCancel = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (savingRef.current) return;
     setDraftValue(currentValue);
     setErrorMsg(null);
     setIsEditing(false);
   };
 
   const handleSave = () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     const trimmed = draftValue.trim();
     setErrorMsg(null);
+    setIsSuccess(false);
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
 
     startTransition(async () => {
       try {
@@ -76,18 +93,21 @@ export function Customer360EditableCell({
           field,
           value: trimmed.length > 0 ? trimmed : null,
         });
+        if (!sessionActiveRef.current) return;
 
         if (res.ok) {
           setCurrentValue(res.value ?? '');
           setDraftValue(res.value ?? '');
           setIsEditing(false);
           setIsSuccess(true);
-          setTimeout(() => setIsSuccess(false), 2000);
+          successTimerRef.current = setTimeout(() => setIsSuccess(false), 2000);
         } else {
           setErrorMsg(res.message || 'Lỗi khi lưu.');
         }
       } catch {
-        setErrorMsg('Lỗi mạng. Vui lòng thử lại.');
+        if (sessionActiveRef.current) setErrorMsg('Lỗi mạng. Vui lòng thử lại.');
+      } finally {
+        savingRef.current = false;
       }
     });
   };
