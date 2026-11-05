@@ -241,8 +241,9 @@ def start_restore():
     script = ('initdb -D /tmp/rehearsal -U '+ADMIN+' --auth-local=trust --auth-host=reject '
               '--encoding=UTF8 --locale=C >/tmp/initdb.log 2>&1; '
               'exec postgres -D /tmp/rehearsal -k /tmp -c listen_addresses= '
-              '-c shared_preload_libraries=pg_cron,pg_stat_statements '
+              '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
               '-c cron.database_name=postgres -c cron.launch_active_jobs=off '
+              '-c pg_net.database_name=template1 '
               '-c logging_collector=off -c log_statement=none -c log_min_error_statement=panic')
     run(['docker','run','--detach','--name',name,'--network','none','--user','postgres',
          '--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','sh',
@@ -304,6 +305,10 @@ def restore(root):
         run(['docker','pull',IMAGE],timeout=600)
         name = start_restore()
         query = restore_query(name)
+        if (query("SELECT current_setting('pg_net.database_name') AS value")[0]['value'] != 'template1'
+                or query("SELECT current_setting('cron.launch_active_jobs') AS value")[0]['value'] != 'off'
+                or run(['docker','inspect','--format','{{.HostConfig.NetworkMode}}',name]).decode().strip() != 'none'):
+            raise Failure('RESTORE_BACKGROUND_OR_NETWORK_ISOLATION_INVALID','BLOCKED')
         if query("SELECT current_setting('server_version_num')::int AS version")[0]['version'] != 170011:
             raise Failure('RESTORE_VERSION_NOT_17_11','BLOCKED')
         available = query('SELECT name,version FROM pg_available_extension_versions')

@@ -48,8 +48,8 @@ def main_test():
         synthetic_run(['docker','pull',IMAGE],timeout=600)
         script = ('initdb -D /tmp/source -U fixture_admin --auth=trust --encoding=UTF8 --locale=C '
                   '>/tmp/initdb.log 2>&1; exec postgres -D /tmp/source -k /tmp '
-                  '-c listen_addresses=* -c shared_preload_libraries=pg_cron,pg_stat_statements '
-                  '-c cron.database_name=postgres -c cron.launch_active_jobs=off')
+                  '-c listen_addresses=* -c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
+                  '-c cron.database_name=postgres -c cron.launch_active_jobs=off -c pg_net.database_name=template1')
         synthetic_run(['docker','run','--detach','--name',SOURCE,'--user','postgres',
                        '--publish','127.0.0.1:55432:5432','--entrypoint','sh',IMAGE,'-ceu',script])
         for _ in range(90):
@@ -72,6 +72,9 @@ def main_test():
           CREATE EXTENSION pg_cron;
           CREATE EXTENSION pg_net;
           CREATE EXTENSION supabase_vault;
+          INSERT INTO net.http_request_queue(method,url,headers,timeout_milliseconds)
+            VALUES ('GET','https://example.invalid/synthetic-never-execute','{{}}'::jsonb,100);
+          INSERT INTO net._http_response(id,content,created) VALUES (4242,'SYNTHETIC_RESPONSE','2000-01-01');
           CREATE SCHEMA auth;
           CREATE SCHEMA private;
           CREATE SCHEMA storage;
