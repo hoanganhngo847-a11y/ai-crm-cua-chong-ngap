@@ -146,6 +146,10 @@ export async function authorizeConversation(id: string, actorClient?: SupabaseCl
 
     const config = binding(conversation.external_conversation_id.split(':')[0]);
 
+    if (config.leadAdsOnly) {
+        throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+    }
+
     if (
         conversation.company_id !== config.company ||
         !conversation.external_conversation_id.startsWith(
@@ -160,6 +164,7 @@ export async function authorizeConversation(id: string, actorClient?: SupabaseCl
 
 export async function listConversations(before?: string | null, page?: string | null) {
     const config = binding(page);
+    if (config.leadAdsOnly) throw new ChannelError('PAGE_NOT_ALLOWED', 403);
 
     await verifyActorForCompany(config.company, {
         allowedRoles: ['BOSS_ADMIN', 'SALE'],
