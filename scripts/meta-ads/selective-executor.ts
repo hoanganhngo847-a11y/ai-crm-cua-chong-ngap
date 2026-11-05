@@ -17,7 +17,7 @@ import { inspectTransactionEnvelope, sqlSha256 } from './ledger-readiness';
 export const TARGET_STAGING_PROJECT = 'qmhfmgkymjgoevwmkidm';
 export const TARGET_POSTGRES_VERSION = '17.11';
 export const EXPECTED_CANONICAL_LEDGER_COUNT = 21;
-export const CURRENT_SOURCE_COMMIT = '8f8294cab60d2ffdb8ce018f90db54c43ea3f110';
+export const CURRENT_SOURCE_COMMIT = 'd5e00b793028e484dbc76d4eb93bb307ee7e0fe1';
 export const SELECTIVE_RELEASE_APPROVED_WRITE_GROUPS = Object.freeze(['META_ADS_LEAD_ATTRIBUTION'] as const);
 
 export const META_SOURCES = [

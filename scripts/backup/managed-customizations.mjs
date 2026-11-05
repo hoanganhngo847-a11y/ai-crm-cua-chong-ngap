@@ -673,11 +673,12 @@ export function classifyManagedCustomization(item, projectAllowlist = new Set())
  * Generates deterministic SQL DDL statements for project-owned items.
  * Enforces transaction ordering: BEGIN comes before SET LOCAL.
  */
-export function generateManagedCustomizationsSql(projectOwnedItems) {
+export function generateManagedCustomizationsSql(projectOwnedItems, projectAllowlistSha256 = null) {
   const lines = [
     '-- Managed Customizations Recreation Plan',
     '-- Generated deterministically by scripts/backup/managed-customizations.mjs',
     '-- Enforces transaction wrapping and strict error termination.',
+    ...(projectAllowlistSha256 ? [`-- Project allowlist SHA-256: ${projectAllowlistSha256}`] : []),
     'BEGIN;',
     'SET LOCAL search_path = public, auth, storage;',
     '',
@@ -751,6 +752,26 @@ export function generateManagedCustomizationsSql(projectOwnedItems) {
 // CLI Handlers: plan, apply, verify
 // -----------------------------------------------------------------------------
 
+export function normalizeProjectAllowlist(projectAllowlist) {
+  if (!Array.isArray(projectAllowlist)) {
+    fail('INVALID_PROJECT_ALLOWLIST', 'Project allowlist root must be an array of exact object identities');
+  }
+  const seen = new Set();
+  const normalized = [];
+  for (let index = 0; index < projectAllowlist.length; index++) {
+    const identity = projectAllowlist[index];
+    if (!isNonEmptyString(identity) || identity !== identity.trim()) {
+      fail('INVALID_PROJECT_ALLOWLIST', `Project allowlist entry ${index} must be a non-empty, trimmed string`);
+    }
+    if (seen.has(identity)) {
+      fail('DUPLICATE_PROJECT_ALLOWLIST', `Project allowlist contains duplicate identity '${identity}'`);
+    }
+    seen.add(identity);
+    normalized.push(identity);
+  }
+  return normalized.sort();
+}
+
 export async function handlePlanCommand({ sourcePath, targetLabel, outPath, reportPath, projectAllowlist = [] }) {
   installSignalHandlers();
 
@@ -771,7 +792,9 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
     fail('INVALID_MANAGED_CUSTOMIZATIONS', 'Root of managed customizations must be an array');
   }
 
-  const allowlistSet = new Set(projectAllowlist);
+  const normalizedProjectAllowlist = normalizeProjectAllowlist(projectAllowlist);
+  const projectAllowlistSha256 = sha256Hex(JSON.stringify(normalizedProjectAllowlist));
+  const allowlistSet = new Set(normalizedProjectAllowlist);
   const classifications = [];
   const projectOwnedItems = [];
   const unsupportedItems = [];
@@ -818,9 +841,9 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
     const reasons = [];
     if (unexplainedCount > 0) reasons.push(`${unexplainedCount} unexplained object(s)`);
     if (unsupportedCount > 0) reasons.push(`${unsupportedCount} unsupported project-owned kind(s)`);
-    planSql = `-- PLAN GENERATION BLOCKED DUE TO ${reasons.join(' AND ').toUpperCase()}\n-- STOP: Review unexplained and unsupported objects before proceeding.\n`;
+    planSql = `-- Project allowlist SHA-256: ${projectAllowlistSha256}\n-- PLAN GENERATION BLOCKED DUE TO ${reasons.join(' AND ').toUpperCase()}\n-- STOP: Review unexplained and unsupported objects before proceeding.\n`;
   } else {
-    planSql = generateManagedCustomizationsSql(projectOwnedItems);
+    planSql = generateManagedCustomizationsSql(projectOwnedItems, projectAllowlistSha256);
   }
 
   await writeFileAtomic(outPath, planSql, 0o600);
@@ -831,6 +854,8 @@ export async function handlePlanCommand({ sourcePath, targetLabel, outPath, repo
     targetLabel: targetLabel || DEFAULT_TARGET_IDENTITY,
     status,
     planSha256,
+    projectAllowlistSha256,
+    projectAllowlist: normalizedProjectAllowlist,
     counts: {
       total: items.length,
       platformDefaultsCount,
@@ -1397,7 +1422,7 @@ export async function handleVerifyCommand({ sourcePath, target, reportPath, targ
 
 export async function runCli(argv = process.argv.slice(2)) {
   if (argv.length === 0) {
-    console.error('Usage: managed-customizations.mjs <plan|apply|verify> [options]');
+    console.error('Usage: managed-customizations.mjs <plan|apply|verify> [options] (plan: --project-allowlist <json-array-file>)');
     process.exit(1);
   }
 
@@ -1415,11 +1440,20 @@ export async function runCli(argv = process.argv.slice(2)) {
   try {
     switch (subcommand) {
       case 'plan': {
+        let projectAllowlist = [];
+        if (args['project-allowlist'] !== undefined) {
+          if (typeof args['project-allowlist'] !== 'string') {
+            fail('INVALID_ARGUMENTS', 'Missing path after --project-allowlist');
+          }
+          const allowlistRaw = await fsp.readFile(args['project-allowlist'], 'utf8');
+          projectAllowlist = parseJsonStrict(allowlistRaw, 'INVALID_PROJECT_ALLOWLIST', 'Project allowlist');
+        }
         const res = await handlePlanCommand({
           sourcePath: args.source,
           targetLabel: args['target-label'],
           outPath: args.out,
           reportPath: args.report,
+          projectAllowlist,
         });
         console.log(`PLAN ${res.status}: ${res.planSha256}`);
         if (res.status === 'BLOCKED') process.exit(1);

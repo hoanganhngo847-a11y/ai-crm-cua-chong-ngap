@@ -38,7 +38,7 @@ Thứ tự selective release hiện tại:
 6. `20261104150000_meta_lead_page_binding_guard.sql`
 7. `20261104171905_meta_lead_evidence_conflict_guard.sql`
 
-Hash và catalog proof được tạo từ rehearsal thật, không tự xác nhận hosted compatibility. `CURRENT_SOURCE_COMMIT` trỏ vào commit chứa source SQL/hashes của remediation (`8f8294c`); approval phải khớp bundle mới, không tái sử dụng approval cho bundle cũ.
+Hash và catalog proof được tạo từ rehearsal thật, không tự xác nhận hosted compatibility. `CURRENT_SOURCE_COMMIT` trỏ vào commit chứa source SQL/hashes của remediation (`d5e00b7`); approval phải khớp bundle mới, không tái sử dụng approval cho bundle cũ.
 
 ## Bằng chứng local tại implementation
 

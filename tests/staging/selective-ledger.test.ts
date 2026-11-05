@@ -62,6 +62,23 @@ const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
 const files = readdirSync('supabase/migrations').filter((f) => f.endsWith('.sql')).sort();
 const historical = JSON.parse(readFileSync('docs/evidence/meta-ads-safe-deployment/staging-metadata.json', 'utf8')).data[0].snapshot;
 
+test('selective release source commit contains the exact seven pinned migration files', () => {
+  assert.match(CURRENT_SOURCE_COMMIT, /^[0-9a-f]{40}$/);
+  for (const file of META_SOURCES) {
+    const committedSql = execFileSync(
+      'git',
+      ['show', `${CURRENT_SOURCE_COMMIT}:supabase/migrations/${file}`],
+      { encoding: 'utf8' },
+    );
+    const checkedOutSql = readFileSync(`supabase/migrations/${file}`, 'utf8');
+    assert.equal(
+      sqlSha256(committedSql),
+      sqlSha256(checkedOutSql),
+      `CURRENT_SOURCE_COMMIT does not contain the checked-out source for ${file}`,
+    );
+  }
+});
+
 function createPrefixDatabase(dbName: string) {
   runSql('postgres', `CREATE DATABASE ${dbName};`);
   runSql(dbName, PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, ''));
