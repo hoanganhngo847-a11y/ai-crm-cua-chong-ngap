@@ -146,6 +146,13 @@ def backup(root):
             write_json(payload/'configuration/baseline.json',baseline)
             write_json(payload/'configuration/roles.json',roles)
             write_json(payload/'configuration/extensions.json',baseline['extensions'])
+            write_json(payload/'configuration/database-settings.json',{
+                'database':query("SELECT to_jsonb(d)-'oid'-'datfrozenxid'-'datminmxid' AS metadata "
+                                 'FROM pg_database d WHERE datname=current_database()')[0]['metadata'],
+                'role_settings':query("SELECT coalesce(d.datname,'*') AS database, "
+                    "coalesce(r.rolname,'*') AS role,s.setconfig FROM pg_db_role_setting s "
+                    "LEFT JOIN pg_database d ON d.oid=s.setdatabase LEFT JOIN pg_roles r ON r.oid=s.setrole "
+                    "WHERE s.setdatabase=0 OR d.datname=current_database()")})
             counts = {f"{x['schema']}.{x['name']}":x['count'] for x in baseline['tables']}
             required = ['supabase_migrations.schema_migrations','public.customers',
                         'public.interactions','private.customer_private_contacts']
@@ -309,6 +316,7 @@ def restore_query(name,admin):
 def restore(root):
     report = base_report()
     report['restore_status'] = 'BLOCKED'
+    report['rehearsal_environment'] = {'image':IMAGE,'network':'none','encoding':'UTF8','locale':'C'}
     try:
         # Production credentials must never be available to this code path.
         if os.environ.get('SUPABASE_DB_URL') or os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):

@@ -12,13 +12,13 @@ from urllib.parse import urlsplit, unquote
 PROJECT = 'yrauljxzyklhisxijeim'
 TENANT = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'
 IMAGE = 'supabase/postgres:17.11.0.002@sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53'
-ADMIN = 'crm_rehearsal_admin'
 LIMITATIONS = [
     'Auth provider/SMTP/JWT and platform settings are not exported by database credentials.',
     'Edge Function source and deployment secrets require a separate Management API export.',
     'Vault/column-encryption external key custody and role passwords require owner recovery procedures.',
     'PostgreSQL rehearsal does not verify Auth, Storage, Realtime or application service recovery.',
     'Storage binaries are verified locally; no Storage service import is performed.',
+    'Database locale and per-database role settings are captured but not reapplied; rehearsal initializes UTF8/C and does not prove locale-dependent behavior.',
 ]
 
 

@@ -8,12 +8,13 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import urllib.error
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'scripts/production_backup'))
-from common import (Failure, PROJECT, checksums, db_environment, extract_archive,  # noqa: E402
+from common import (Failure, PROJECT, age_recipient, checksums, db_environment, extract_archive,  # noqa: E402
                     load_json, object_path, run, verify_checksums, write_json)  # noqa: E402
 import main  # noqa: E402
 import storage  # noqa: E402
@@ -46,6 +47,19 @@ class BackupSecurityTests(unittest.TestCase):
         for value in ['../x', '/abs', 'a//b', 'a/./b', 'a/../b', 'a\\b', 'a\nx', '']:
             self.assert_failure(lambda: object_path(value))
         self.assertEqual(str(object_path('bucket/công-ty/recording.mp4')), 'bucket/công-ty/recording.mp4')
+
+    def test_age_recipient_refuses_ssh_and_multiple_keys(self):
+        for value in ['ssh-ed25519 synthetic', 'age1'+('a'*58)+'\nage1'+('b'*58)]:
+            with patch.dict(os.environ,{'BACKUP_AGE_RECIPIENT':value}):
+                self.assert_failure(age_recipient)
+
+    def test_storage_retries_transient_429_without_printing_body(self):
+        client = storage.Storage('synthetic-token')
+        limited = urllib.error.HTTPError('https://example.invalid',429,'rate limited',{},None)
+        with patch.object(client.opener,'open',side_effect=[limited,limited,io.BytesIO(b'[]')]) as calls, \
+             patch.object(storage.time,'sleep'):
+            self.assertEqual(client.request('/bucket'),[])
+        self.assertEqual(calls.call_count,3)
 
     def test_checksum_exact_set_and_corruption(self):
         (self.root / 'payload').write_bytes(b'synthetic')
