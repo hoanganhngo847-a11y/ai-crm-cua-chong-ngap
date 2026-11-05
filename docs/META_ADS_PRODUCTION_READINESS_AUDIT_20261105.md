@@ -37,6 +37,21 @@
 
 Supabase CLI v3 changed the default target for database commands to the local stack and requires explicit `--remote` for hosted targets; unattended hosted changes require explicit `--yes`. See the [Supabase CLI v3 breaking-change notice](https://supabase.com/changelog?tags=supabase-server). Pin and verify the CLI version in CI and release scripts, and never rely on implicit project linking.
 
+
+## Branch remediation added after the read-only audit
+
+The following code changes are now committed to `meta_ads_integration` for CI review; they are **not deployed to Production**:
+
+- Added additive `META_ADS_PAGE_BINDINGS` configuration for the four approved Pages. It merges with, rather than replaces, `META_PAGE_BINDINGS`.
+- Pages present only in `META_ADS_PAGE_BINDINGS` are marked `leadAdsOnly`. Messenger webhook ingestion, Messenger polling/sync, conversation listing, and message sending exclude those Pages. If a Page already exists in the Messenger binding list for the same tenant, its existing Messenger behavior is preserved.
+- OAuth selection now persists each managed Page access token encrypted through the existing service-role-only private Meta token-vault RPC. The reserved storage key is `__page__:<page_id>`, distinct from Meta Ad Account IDs; the existing `META_TOKEN_ENCRYPTION_KEY` is reused. Token retrieval decrypts server-side, checks the stored expiry, and keeps legacy per-Page environment-token fallback for compatibility. No raw token is stored in Git or returned to the browser.
+- Lead Ads ingestion, Messenger send, Messenger sync, and best-effort profile lookup now resolve Page tokens through the vault adapter.
+- Added tests for additive tenant-safe bindings, encrypted token storage/decryption, expiry fail-closed behavior, legacy fallback, and exclusion of Lead Ads-only Pages from Messenger sync.
+
+The vault adapter deliberately reuses the existing private Meta token store to avoid introducing an eighth schema migration before Production's migration history is reconciled. A future dedicated Page-token table can replace the namespaced key without changing the external token API.
+
+Current PR #139 head is `7777dd02a8a804077f1058c2510e2b6f3020bf64`; it contains 286 changed files and 141 commits. The seven CI workflows for this head are still queued/in progress at the time of this update. Do not treat this branch as Production-ready until all relevant checks pass and the exact diff is reduced/reviewed for unrelated scope.
+
 ## Execution status at audit time
 
 This audit was read-only. No Production DDL, migration-ledger mutation, Render environment change, Render deploy, Page subscription change, or real Meta lead ingestion was performed. Keep the Production hosted-write gate closed until the backup/restore, token-custody, migration-reconciliation, and rollback evidence is reviewed.
