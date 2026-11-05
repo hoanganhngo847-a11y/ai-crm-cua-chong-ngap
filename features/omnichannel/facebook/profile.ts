@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { PageBinding } from './binding';
 import { sanitize } from './core';
+import { getMetaPageToken } from './page-token-vault';
 
 const GENERIC_FACEBOOK_NAMES = new Set([
     'Khách Messenger',
@@ -227,7 +228,12 @@ export async function lookupFacebookDisplayName(
     senderPsid: string,
 ): Promise<string | null> {
     const version = process.env.META_GRAPH_VERSION?.trim();
-    const token = process.env[config.tokenEnv]?.trim();
+    let token: string | null = null;
+    try {
+        token = await getMetaPageToken(config.company, config.page, config.tokenEnv);
+    } catch {
+        token = null;
+    }
 
     if (
         !version ||
