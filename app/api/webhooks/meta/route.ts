@@ -107,7 +107,7 @@ export async function POST(request: Request) {
             if (typeof entry.id !== 'string') throw new ChannelError('INVALID_WEBHOOK');
             const config = binding(entry.id);
 
-            if (Array.isArray(entry.messaging)) {
+            if (Array.isArray(entry.messaging) && !config.leadAdsOnly) {
                 messagingBatches.push({
                     config,
                     events: parseMeta({ object: 'page', entry: [entry] }, config.page),
