@@ -122,6 +122,13 @@ def inventory(query):
                               'state': query(f'SELECT last_value,is_called FROM {table}')[0]})
     extensions = query('SELECT e.extname AS name,e.extversion AS version,n.nspname AS schema '
                        'FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY e.extname')
+    large_objects = query("""SELECT
+      (SELECT count(*) FROM pg_largeobject_metadata) AS objects,
+      count(*) AS pages,
+      coalesce(sum(octet_length(data)),0) AS bytes,
+      md5(coalesce(string_agg(md5(loid::text || ':' || pageno::text || ':' || encode(data,'hex')),
+                            '' ORDER BY loid,pageno),'')) AS content_digest
+      FROM pg_largeobject""")[0]
     counts = {f"{x['schema']}.{x['name']}": x['count'] for x in tables}
     tenant_counts = {}
     for schema, name in [('public','customers'),('public','interactions'),('private','customer_private_contacts')]:
@@ -129,7 +136,8 @@ def inventory(query):
             tenant_counts[f'{schema}.{name}'] = query(
                 f"SELECT count(*) AS count FROM {ident(schema)}.{ident(name)} WHERE company_id='{TENANT}'::uuid")[0]['count']
     return {'postgres': version, 'catalog': catalog, 'tables': tables, 'sequences': sequences,
-            'extensions': extensions, 'row_fingerprints': fingerprints, 'tenant_counts': tenant_counts,
+            'extensions': extensions, 'large_objects': large_objects,
+            'row_fingerprints': fingerprints, 'tenant_counts': tenant_counts,
             'catalog_sha256': hashlib.sha256(json.dumps(catalog,sort_keys=True).encode()).hexdigest()}
 
 
