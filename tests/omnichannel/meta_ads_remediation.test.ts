@@ -939,7 +939,7 @@ test('lead read falls back only for an explicit optional-field error and classif
             calls++;
             return Response.json({ error: { code: 100, message: 'Invalid parameter' } }, { status: 400 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
             err.code === 'INVALID_REQUEST' && err.status === 422
         );
         assert.equal(calls, 1, 'generic HTTP 400 is not retried as a permissions/field issue');
@@ -949,7 +949,7 @@ test('lead read falls back only for an explicit optional-field error and classif
             calls++;
             return Response.json({ error: { code: 10, message: 'Permission denied' } }, { status: 403 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
             err.code === 'PERMISSION_DENIED' && err.status === 403
         );
         assert.equal(calls, 1);
@@ -959,7 +959,7 @@ test('lead read falls back only for an explicit optional-field error and classif
             calls++;
             return Response.json({ error: { code: 803, message: 'Object not found' } }, { status: 404 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
             err.code === 'DATA_UNAVAILABLE' && err.status === 404
         );
         assert.equal(calls, 1);
@@ -969,7 +969,7 @@ test('lead read falls back only for an explicit optional-field error and classif
             calls++;
             return Response.json({ error: { code: 4, message: 'rate limited' } }, { status: 429 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
             err.code === 'PENDING_SYNC' && err.status === 429
         );
         assert.equal(calls, 1);
@@ -979,7 +979,7 @@ test('lead read falls back only for an explicit optional-field error and classif
             calls++;
             return new Response('upstream unavailable', { status: 503 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
             err.code === 'PENDING_SYNC' && err.status === 503
         );
         assert.equal(calls, 1);
