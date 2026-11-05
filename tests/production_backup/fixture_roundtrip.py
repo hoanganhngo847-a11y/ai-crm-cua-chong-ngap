@@ -91,6 +91,7 @@ def main_test():
           CREATE TABLE supabase_migrations.schema_migrations(version text PRIMARY KEY,name text,statements text[]);
           CREATE SEQUENCE public.fixture_sequence START 42;
           SELECT nextval('public.fixture_sequence');
+          SELECT lo_from_bytea(0, convert_to('SYNTHETIC LARGE OBJECT PAYLOAD','UTF8'));
           CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,type text DEFAULT 'STANDARD',public bool DEFAULT false);
           CREATE TABLE storage.objects(id uuid PRIMARY KEY,bucket_id text REFERENCES storage.buckets(id),
             name text,metadata jsonb,version text,updated_at timestamptz DEFAULT '2026-01-01T00:00:00Z');
@@ -142,6 +143,9 @@ def main_test():
             main.seal(root)
         published = load_json(root/'publish/backup-report.json')
         assert published['database_export_complete']
+        baseline = load_json(root/'production-backup/configuration/baseline.json')
+        assert baseline['large_objects']['objects'] == 1
+        assert baseline['large_objects']['bytes'] > 0
         assert published['storage']['files_succeeded'] == len(FILES)
         assert published['status'] == 'PARTIAL'  # Explicit platform gaps, never false PASS.
         rehearsal = root/'rehearsal'
@@ -172,6 +176,8 @@ def main_test():
         assert restored['restore_status'] == 'PASS',restored
         assert restored['status'] == 'PARTIAL'
         assert restored['counts']['customers'] == 1
+        restored_baseline = load_json(rehearsal/'extracted/production-backup/configuration/baseline.json')
+        assert restored_baseline['large_objects']['objects'] == 1
         assert restored['verification']['storage']['objects_verified'] == len(FILES)
         print('SYNTHETIC PASS: PostgreSQL 17.11 dump/restore, roles, schema/catalog, tenant counts, '
               'private row fingerprints, extension data, age owner decryption and Storage checksums.')
