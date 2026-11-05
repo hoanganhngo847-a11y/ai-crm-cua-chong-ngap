@@ -60,3 +60,9 @@ fb-inbox-worker/*.log
 scratch/
 
 local-agent/build/
+
+# Production backup payloads and decryption identities must never be committed.
+production-backup*/
+*.age
+*.agekey
+__pycache__/
