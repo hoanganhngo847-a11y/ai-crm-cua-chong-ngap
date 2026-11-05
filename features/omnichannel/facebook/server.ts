@@ -7,6 +7,7 @@ import { ServerAuthError } from '@/lib/server-auth/errors';
 import { binding } from './binding';
 export { binding } from './binding';
 import { dispatchMessage } from './transport';
+import { getMetaPageToken } from './page-token-vault';
 
 import {
     ChannelError,
@@ -297,7 +298,7 @@ export async function sendMessage(
         throw new ChannelError('MESSAGING_WINDOW_CLOSED', 409);
     }
 
-    const token = env(config.tokenEnv);
+    const token = await getMetaPageToken(config.company, config.page, config.tokenEnv, client);
     const version = env('META_GRAPH_VERSION');
 
     if (!/^v\d+\.\d+$/.test(version)) {
