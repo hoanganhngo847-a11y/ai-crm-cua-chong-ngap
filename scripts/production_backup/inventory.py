@@ -126,7 +126,7 @@ def inventory(query):
       (SELECT count(*) FROM pg_largeobject_metadata) AS objects,
       count(*) AS pages,
       coalesce(sum(octet_length(data)),0) AS bytes,
-      md5(coalesce(string_agg(md5(oid::text || ':' || pageno::text || ':' || encode(data,'hex')),
+      md5(coalesce(string_agg(md5(loid::text || ':' || pageno::text || ':' || encode(data,'hex')),
                             '' ORDER BY oid,pageno),'')) AS content_digest
       FROM pg_largeobject""")[0]
     counts = {f"{x['schema']}.{x['name']}": x['count'] for x in tables}
