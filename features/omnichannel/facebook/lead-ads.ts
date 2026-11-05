@@ -25,6 +25,7 @@ export interface MetaLeadData {
         name: string;
         values: string[];
     }>;
+    attributionStatus?: 'PENDING_SYNC';
 }
 
 export interface IngestedLeadResult {
@@ -37,17 +38,57 @@ export interface IngestedLeadResult {
 }
 
 /**
- * Fetch lead details from Meta Graph API.
- *
- * Extended attribution fields (campaign/ad/adset identifiers and names) are
- * requested with the SAME single call used for the field data. If the page
- * token lacks the permission for those fields (they are optional attributes),
- * the original minimal field set is retried once so a valid lead is never
- * destroyed by a permission gap: pending campaign state is handled downstream.
+ * Fetch lead details from Meta Graph API. Only an explicit optional-field
+ * rejection may degrade to the minimal field set. Generic HTTP 400 responses
+ * are not permission errors and must never trigger a second request.
  */
 const LEAD_FIELDS_FULL =
     'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data';
 const LEAD_FIELDS_MINIMAL = 'id,created_time,form_id,field_data';
+const OPTIONAL_LEAD_FIELDS = [
+    'form_name', 'ad_id', 'ad_name', 'adset_id', 'adset_name', 'campaign_id', 'campaign_name',
+] as const;
+
+interface MetaGraphError {
+    code: number | null;
+    message: string;
+}
+
+async function readMetaGraphError(response: Response): Promise<MetaGraphError> {
+    try {
+        const payload = await response.json() as { error?: { code?: unknown; message?: unknown } };
+        const graphError = payload?.error;
+        return {
+            code: typeof graphError?.code === 'number' ? graphError.code : null,
+            message: typeof graphError?.message === 'string' ? graphError.message : '',
+        };
+    } catch {
+        return { code: null, message: '' };
+    }
+}
+
+function isOptionalLeadFieldUnavailable(status: number, error: MetaGraphError): boolean {
+    if (status !== 400 || error.code !== 100) return false;
+    const message = error.message.toLowerCase();
+    const namesOptionalField = OPTIONAL_LEAD_FIELDS.some((field) => message.includes(field));
+    const explicitlyUnavailable = /non.?existent field|unknown field|field.{0,60}(?:not available|does not exist|cannot be requested)|(?:not available|does not exist).{0,60}field/.test(message);
+    return namesOptionalField && explicitlyUnavailable;
+}
+
+function classifyLeadReadFailure(status: number, error: MetaGraphError): ChannelError {
+    const message = error.message.toLowerCase();
+    if (status === 429) return new ChannelError('PENDING_SYNC', 429);
+    if (status === 408 || status >= 500) return new ChannelError('PENDING_SYNC', 503);
+    if (status === 401 || status === 403 || [10, 190, 200].includes(error.code ?? -1)) {
+        return new ChannelError('PERMISSION_DENIED', 403);
+    }
+    if (status === 404 || error.code === 803
+        || (error.code === 100 && /does not exist|not found/.test(message) && !/permission/.test(message))) {
+        return new ChannelError('DATA_UNAVAILABLE', 404);
+    }
+    if (status >= 400 && status < 500) return new ChannelError('INVALID_REQUEST', 422);
+    return new ChannelError('PENDING_SYNC', 503);
+}
 
 export async function fetchMetaLeadDetails(
     leadgenId: string,
@@ -57,35 +98,51 @@ export async function fetchMetaLeadDetails(
     const fetchFn = fetchDouble || fetch;
     const version = graphVersion();
     let fields = LEAD_FIELDS_FULL;
+    let attributionPending = false;
 
     for (;;) {
-        const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
+        const url = new URL(\`https://graph.facebook.com/\${version}/\${encodeURIComponent(leadgenId)}\`);
         url.searchParams.set('fields', fields);
 
-        const response = await fetchFn(url.toString(), {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${pageAccessToken}` },
-            redirect: 'error',
-            cache: 'no-store',
-            signal: AbortSignal.timeout(10_000),
-        });
+        let response: Response;
+        try {
+            response = await fetchFn(url.toString(), {
+                method: 'GET',
+                headers: { Authorization: \`Bearer \${pageAccessToken}\` },
+                redirect: 'error',
+                cache: 'no-store',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new ChannelError('PENDING_SYNC', 503);
+        }
 
         if (response.ok) {
-            return (await response.json()) as MetaLeadData;
+            try {
+                const payload = await response.json() as MetaLeadData;
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload) || typeof payload.id !== 'string') {
+                    throw new Error('INVALID_META_LEAD_RESPONSE');
+                }
+                return attributionPending ? { ...payload, attributionStatus: 'PENDING_SYNC' } : payload;
+            } catch {
+                throw new ChannelError('PENDING_SYNC', 503);
+            }
         }
-        if (fields !== LEAD_FIELDS_MINIMAL && response.status === 400) {
-            // Extended attribution fields may require permissions the current
-            // token lacks. Fall back once to the minimal set so a valid lead is
-            // never destroyed by a permission gap; campaign state stays pending.
-            console.warn('[lead-ads] extended_fields_unavailable falling_back status=400');
+
+        const graphError = await readMetaGraphError(response);
+        if (!attributionPending && fields !== LEAD_FIELDS_MINIMAL
+            && isOptionalLeadFieldUnavailable(response.status, graphError)) {
+            attributionPending = true;
+            console.warn('[lead-ads] optional_attribution_fields_unavailable status=400 fallback=minimal');
             fields = LEAD_FIELDS_MINIMAL;
             continue;
         }
-        console.error(`[lead-ads] fetch_failed status=${response.status}`);
-        throw new ChannelError('LEAD_RETRIEVAL_FAILED', response.status === 429 ? 429 : 503);
+
+        const failure = classifyLeadReadFailure(response.status, graphError);
+        console.error(\`[lead-ads] fetch_failed status=\${response.status} code=\${failure.code}\`);
+        throw failure;
     }
 }
-
 /**
  * Normalize and extract fields from Lead Ads field_data.
  *
@@ -304,7 +361,7 @@ export async function processLeadAdsChange(
             p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
             p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
             p_ads_context_data: adsContextData,
-            p_attribution_status: 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
+            p_attribution_status: leadData.attributionStatus || 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
             p_occurred: claim.occurred_at || change.time,
         });
         if (typeof touchpointId !== 'string' || !touchpointId) throw new ChannelError('LEADGEN_ATTRIBUTION_INCOMPLETE', 503);
@@ -321,10 +378,11 @@ export async function processLeadAdsChange(
         if (await finalize('PROCESSED') !== true) throw new ChannelError('LEADGEN_FINALIZATION_FAILED', 503);
         return { leadgenId: change.leadgenId, customerId: ingest.customer_id, interactionId: ingest.interaction_id,
             touchpointId, status: 'PROCESSED' };
-    } catch {
-        // Failure acknowledgement must stay retryable even if the DB is down.
-        // A lost lease is reclaimed after expiry and stale tokens cannot finalize.
-        try { await finalize('FAILED', 'LEADGEN_PROCESSING_FAILED'); } catch { /* Retry via lease expiry. */ }
+    } catch (error) {
+        // Persist the underlying failure class for operator triage while keeping
+        // the webhook response retryable and the external error surface generic.
+        const failureCode = error instanceof ChannelError ? error.code : 'LEADGEN_PROCESSING_FAILED';
+        try { await finalize('FAILED', failureCode); } catch { /* Retry via lease expiry. */ }
         throw new ChannelError('LEADGEN_PROCESSING_FAILED', 503);
     }
 }
