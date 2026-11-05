@@ -8,7 +8,7 @@ import tarfile
 import time
 import urllib.request
 
-from common import (ADMIN, IMAGE, LIMITATIONS, PROJECT, TENANT, Failure, age_recipient, checksums,
+from common import (IMAGE, LIMITATIONS, PROJECT, TENANT, Failure, age_recipient, checksums,
                     db_environment, digest, extract_archive, load_json, now, require,
                     run, verify_checksums, workspace, write_json)
 from inventory import ident, inventory, role_inventory
@@ -109,8 +109,6 @@ def backup(root):
             if any(x['kind'] in ('f','m') for x in baseline['catalog']['relations']):
                 raise Failure('FOREIGN_OR_MATERIALIZED_RELATION_REQUIRES_REVIEW','PARTIAL')
             roles = role_inventory(query)
-            if any(r['rolname'] == ADMIN for r in roles['roles']):
-                raise Failure('RESTORE_BOOTSTRAP_ROLE_COLLISION','BLOCKED')
             write_json(payload/'configuration/baseline.json',baseline)
             write_json(payload/'configuration/roles.json',roles)
             write_json(payload/'configuration/extensions.json',baseline['extensions'])
@@ -235,10 +233,11 @@ def container_name():
     return f'crm-backup-restore-{run_id}-{attempt}'
 
 
-def start_restore():
+def start_restore(admin):
     name = container_name()
-    # Bypass image bootstrap/migrations; init an empty cluster with a distinct admin.
-    script = ('initdb -D /tmp/rehearsal -U '+ADMIN+' --auth-local=trust --auth-host=reject '
+    # Preserve source bootstrap OID=10 semantics for PG17 GRANTED BY memberships.
+    # Positional argument prevents role names from becoming shell source.
+    script = ('initdb -D /tmp/rehearsal -U "$1" --auth-local=trust --auth-host=reject '
               '--encoding=UTF8 --locale=C >/tmp/initdb.log 2>&1; '
               'exec postgres -D /tmp/rehearsal -k /tmp -c listen_addresses= '
               '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
@@ -247,22 +246,22 @@ def start_restore():
               '-c logging_collector=off -c log_statement=none -c log_min_error_statement=panic')
     run(['docker','run','--detach','--name',name,'--network','none','--user','postgres',
          '--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','sh',
-         IMAGE,'-ceu',script],timeout=120)
+         IMAGE,'-ceu',script,'rehearsal',admin],timeout=120)
     for _ in range(60):
         try:
-            run(['docker','exec',name,'pg_isready','-h','/tmp','-U',ADMIN],timeout=5)
+            run(['docker','exec',name,'pg_isready','-h','/tmp','-U',admin],timeout=5)
             return name
         except Failure:
             time.sleep(1)
     raise Failure('ISOLATED_POSTGRES_NOT_READY','BLOCKED')
 
 
-def restore_query(name):
+def restore_query(name,admin):
     def query(sql):
         wrapped = "SET search_path=pg_catalog; SET TIME ZONE 'UTC'; "
         wrapped += "SELECT coalesce(jsonb_agg(row_to_json(q)),'[]'::jsonb) FROM ("+sql.strip()+') q;'
         output = run(['docker','exec','--user','postgres','-i',name,'psql','-X','-qAt',
-                      '-h','/tmp','-U',ADMIN,'-d','postgres','--set=ON_ERROR_STOP=1'],
+                      '-h','/tmp','-U',admin,'-d','postgres','--set=ON_ERROR_STOP=1'],
                      input_bytes=wrapped.encode())
         return json.loads(output)
     return query
@@ -299,12 +298,17 @@ def restore(root):
         payload = extract_archive(archive,root/'extracted')
         baseline = load_json(payload/'configuration/baseline.json')
         expected_roles = load_json(payload/'configuration/roles.json')
+        admin = expected_roles['bootstrap_role']
+        bootstrap = next(r for r in expected_roles['roles'] if r['rolname']==admin)
+        if (not re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,62}',admin)
+                or not bootstrap['rolsuper'] or not bootstrap['rolcanlogin']):
+            raise Failure('SOURCE_BOOTSTRAP_ROLE_REQUIRES_MANUAL_REVIEW','BLOCKED')
         original = load_json(payload/'backup-report.json')
         if not original.get('database_export_complete'):
             raise Failure('DATABASE_BACKUP_INCOMPLETE')
         run(['docker','pull',IMAGE],timeout=600)
-        name = start_restore()
-        query = restore_query(name)
+        name = start_restore(admin)
+        query = restore_query(name,admin)
         if (query("SELECT current_setting('pg_net.database_name') AS value")[0]['value'] != 'template1'
                 or query("SELECT current_setting('cron.launch_active_jobs') AS value")[0]['value'] != 'off'
                 or run(['docker','inspect','--format','{{.HostConfig.NetworkMode}}',name]).decode().strip() != 'none'):
@@ -322,17 +326,28 @@ def restore(root):
         for path in [database_dir,*database_dir.rglob('*')]:
             path.chmod(0o755 if path.is_dir() else 0o644)
         run(['docker','cp',str(database_dir),name+':/tmp/backup-database'])
+        # initdb already created the same bootstrap role. Keep its ALTER statements
+        # and all grants; omit exactly one CREATE statement in a rehearsal-only copy.
+        roles_text = (database_dir/'roles.sql').read_text()
+        create_statements = {f'CREATE ROLE {admin};',f'CREATE ROLE {ident(admin)};'}
+        lines = roles_text.splitlines(keepends=True)
+        if sum(line.strip() in create_statements for line in lines) != 1:
+            raise Failure('BOOTSTRAP_ROLE_CREATE_NOT_UNIQUE')
+        roles_rehearsal = root/'roles-rehearsal.sql'
+        roles_rehearsal.write_text(''.join(line for line in lines if line.strip() not in create_statements))
+        roles_rehearsal.chmod(0o644)
+        run(['docker','cp',str(roles_rehearsal),name+':/tmp/backup-database/roles-rehearsal.sql'])
         psql = ['docker','exec','--user','postgres','-i',name,'psql','-X','-q',
-                '-h','/tmp','-U',ADMIN,'-d','postgres','--set=ON_ERROR_STOP=1']
-        run([*psql,'--single-transaction','--file=/tmp/backup-database/roles.sql'])
+                '-h','/tmp','-U',admin,'-d','postgres','--set=ON_ERROR_STOP=1']
+        run([*psql,'--single-transaction','--file=/tmp/backup-database/roles-rehearsal.sql'])
         client = ['docker','exec','--user','postgres',name,'pg_restore','--exit-on-error',
-                  '--single-transaction','--host=/tmp','--username='+ADMIN,'--dbname=postgres']
+                  '--single-transaction','--host=/tmp','--username='+admin,'--dbname=postgres']
         run([*client,'/tmp/backup-database/schema.dump'])
         # Disables user triggers only on the isolated target to preserve original encrypted rows.
         restore_env = os.environ.copy()
         restore_env['PGOPTIONS'] = '-c session_replication_role=replica'
         run(['docker','exec','--env','PGOPTIONS','--user','postgres',name,'pg_restore',
-             '--exit-on-error','--single-transaction','--host=/tmp','--username='+ADMIN,
+             '--exit-on-error','--single-transaction','--host=/tmp','--username='+admin,
              '--dbname=postgres','/tmp/backup-database/data.dump'],env=restore_env)
         actual = inventory(query)
         if actual != baseline:
@@ -340,7 +355,6 @@ def restore(root):
             write_json(root/'restore-actual-inventory.json',actual)
             raise Failure('RESTORE_INVENTORY_OR_RECORD_FINGERPRINT_MISMATCH')
         actual_roles = role_inventory(query)
-        actual_roles['roles'] = [r for r in actual_roles['roles'] if r['rolname'] != ADMIN]
         if actual_roles != expected_roles:
             raise Failure('RESTORE_ROLE_OR_MEMBERSHIP_MISMATCH')
         storage = verify_storage(payload/'storage')

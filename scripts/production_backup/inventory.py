@@ -136,4 +136,5 @@ def role_inventory(query):
     memberships = query("""SELECT pg_get_userbyid(roleid) AS role,pg_get_userbyid(member) AS member,
       pg_get_userbyid(grantor) AS grantor,admin_option,inherit_option,set_option
       FROM pg_auth_members ORDER BY 1,2,3""")
-    return {'roles': roles, 'memberships': memberships}
+    bootstrap = query('SELECT rolname FROM pg_roles WHERE oid=10')[0]['rolname']
+    return {'roles': roles, 'memberships': memberships, 'bootstrap_role':bootstrap}

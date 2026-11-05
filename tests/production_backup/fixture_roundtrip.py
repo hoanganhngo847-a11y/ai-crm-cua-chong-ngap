@@ -149,7 +149,25 @@ def main_test():
         shutil.copytree(root/'publish',rehearsal/'incoming')
         with patch.dict(os.environ,{'BACKUP_AGE_IDENTITY':owner.read_text()}), \
              patch.object(main,'run',side_effect=synthetic_run):
-            main.restore(rehearsal)
+            try:
+                main.restore(rehearsal)
+            except Failure:
+                diagnostic = rehearsal/'restore-actual-inventory.json'
+                if diagnostic.exists():
+                    expected = load_json(root/'production-backup/configuration/baseline.json')
+                    actual = load_json(diagnostic)
+                    for key in expected:
+                        if expected[key] != actual[key]:
+                            if key == 'catalog':
+                                for section in expected[key]:
+                                    left,right = expected[key][section],actual[key][section]
+                                    if left != right:
+                                        print('SYNTHETIC CATALOG MISMATCH',section,
+                                              json.dumps([x for x in left if x not in right][:3]),
+                                              json.dumps([x for x in right if x not in left][:3]))
+                            else:
+                                print('SYNTHETIC INVENTORY MISMATCH',key,json.dumps(expected[key]),json.dumps(actual[key]))
+                raise
         restored = load_json(rehearsal/'restore-publish/restore-report.json')
         assert restored['restore_status'] == 'PASS',restored
         assert restored['status'] == 'PARTIAL'
