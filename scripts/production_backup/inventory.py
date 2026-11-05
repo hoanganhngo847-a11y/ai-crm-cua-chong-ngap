@@ -15,7 +15,9 @@ def inventory(query):
                     "current_setting('server_version_num')::int AS version_num")[0]
     relations = query(f"""SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind,
         pg_get_userbyid(c.relowner) AS owner, c.relrowsecurity AS rls,
-        c.relforcerowsecurity AS force_rls
+        c.relforcerowsecurity AS force_rls,
+        EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass
+          AND d.objid=c.oid AND d.refclassid='pg_extension'::regclass AND d.deptype='e') AS extension_member
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE {NS} AND c.relkind IN ('r','p','S','v','m','f')
         ORDER BY n.nspname COLLATE "C",c.relname COLLATE "C" """)
@@ -108,7 +110,8 @@ def inventory(query):
         table = f'{ident(schema)}.{ident(name)}'
         if kind in ('r', 'p'):
             count = query(f'SELECT count(*) AS count FROM {table}')[0]['count']
-            tables.append({'schema': schema, 'name': name, 'count': count})
+            tables.append({'schema': schema, 'name': name, 'count': count,
+                           'extension_member':relation['extension_member']})
             if (schema, name) in critical:
                 # Multiset digest checks actual restored rows without logging any rows.
                 fingerprints[f'{schema}.{name}'] = query(f"""SELECT md5(coalesce(

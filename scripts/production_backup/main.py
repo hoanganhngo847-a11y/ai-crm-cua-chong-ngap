@@ -72,6 +72,40 @@ def summary(report):
     return {key: report[key] for key in allowed if key in report}
 
 
+def extension_data_copy(conn,baseline,path):
+    # PostgreSQL's extension membership overrides --table. COPY every physical
+    # extension-owned table from the same source snapshot, with no row filters.
+    with path.open('wb') as output:
+        output.write(b'SET session_replication_role = replica;\n')
+        for table in baseline['catalog']['relations']:
+            if table['kind'] != 'r' or not table['extension_member']:
+                continue
+            schema,name = table['schema'],table['name']
+            columns = sorted((c for c in baseline['catalog']['columns']
+                              if c['schema']==schema and c['relation']==name and not c['generated']),
+                             key=lambda c:c['position'])
+            if not columns:
+                raise Failure('EXTENSION_TABLE_WITHOUT_COPY_COLUMNS','PARTIAL')
+            target = ident(schema)+'.'+ident(name)+' ('+','.join(ident(c['name']) for c in columns)+')'
+            output.write(('COPY '+target+' FROM stdin;\n').encode())
+            with conn.cursor().copy('COPY '+target+' TO STDOUT') as copy:
+                for block in copy:
+                    output.write(block)
+            output.write(b'\\.\n\n')
+
+
+def sequence_data(baseline,path):
+    statements = []
+    for sequence in baseline['sequences']:
+        state = sequence['state']
+        if not isinstance(state['last_value'],int) or not isinstance(state['is_called'],bool):
+            raise Failure('INVALID_SEQUENCE_SNAPSHOT')
+        name = ident(sequence['schema'])+'.'+ident(sequence['name'])
+        statements.append("SELECT pg_catalog.setval('"+name.replace("'","''")+"'::regclass,"
+                          +str(state['last_value'])+','+str(state['is_called']).lower()+');\n')
+    path.write_text(''.join(statements) or '-- No sequences in source snapshot.\n')
+
+
 def base_report():
     return {'status':'BLOCKED','project_ref':PROJECT,'tenant':TENANT,'started_at_utc':now(),
             'database_export_complete':False,'restore_status':'BLOCKED','encryption':'NOT_RUN',
@@ -141,7 +175,12 @@ def backup(root):
             # Explicit relations include extension-owned data, auth/private/storage and migration history.
             for table in tables:
                 args += ['--table',table]
+            for table in baseline['tables']:
+                if table['extension_member']:
+                    args += ['--exclude-table-data',ident(table['schema'])+'.'+ident(table['name'])]
             docker_client('pg_dump',args,root,env)
+            extension_data_copy(conn,baseline,payload/'database/extension-data.sql')
+            sequence_data(baseline,payload/'database/sequence-values.sql')
             for name in ['roles.sql','schema.dump','data.dump']:
                 if (payload/'database'/name).stat().st_size == 0:
                     raise Failure('EMPTY_DATABASE_EXPORT')
@@ -349,6 +388,8 @@ def restore(root):
         run(['docker','exec','--env','PGOPTIONS','--user','postgres',name,'pg_restore',
              '--exit-on-error','--single-transaction','--host=/tmp','--username='+admin,
              '--dbname=postgres','/tmp/backup-database/data.dump'],env=restore_env)
+        run([*psql,'--single-transaction','--file=/tmp/backup-database/extension-data.sql',
+             '--file=/tmp/backup-database/sequence-values.sql'])
         actual = inventory(query)
         if actual != baseline:
             # Keep the sensitive mismatch details encrypted/on the disposable runner only.
