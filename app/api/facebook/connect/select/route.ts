@@ -9,6 +9,7 @@ import {
   subscribeManagedPage,
 } from '@/features/omnichannel/facebook/connect';
 import { encryptToken } from '@/features/omnichannel/facebook/token-vault';
+import { storeMetaPageToken } from '@/features/omnichannel/facebook/page-token-vault';
 import { syncCompanyMetaAttribution } from '@/features/omnichannel/facebook/marketing-sync';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -86,6 +87,13 @@ export async function POST(request: Request) {
       return back(request, 'INVALID_PAGE');
     }
 
+    if (requestedPageIds.length > 0 && session.tokenExpiresAt) {
+      const expiresAt = Date.parse(session.tokenExpiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        return back(request, 'FACEBOOK_TOKEN_EXPIRED');
+      }
+    }
+
     const managedPageIds = new Set(session.pages.map((page) => page.id));
     if (requestedPageIds.some((pageId) => !managedPageIds.has(pageId))) {
       return back(request, 'FACEBOOK_PAGE_NOT_MANAGED');
@@ -108,6 +116,15 @@ export async function POST(request: Request) {
         session.userAccessToken,
         pageId,
         actor.companyId,
+        undefined,
+        async (pageAccessToken) => {
+          await storeMetaPageToken(
+            actor.companyId,
+            pageId,
+            pageAccessToken,
+            session.tokenExpiresAt ?? null,
+          );
+        },
       );
       // Lead Ads onboarding only changes the leadgen subscription. Existing
       // Messenger messages subscription is observed but never required or modified.
