@@ -905,44 +905,83 @@ test('F-06: webhook isolates Lead Ads failures and processes Messenger messages 
     }
 });
 
-test('lead read degrades exactly once to minimal fields on 400; other failures never invent permission', async () => {
+test('lead read falls back only for an explicit optional-field error and classifies Graph failures', async () => {
     const original = globalThis.fetch;
     process.env.META_GRAPH_VERSION = 'v26.0';
     try {
         let calls = 0;
-        const seenFields: string[] = [];
+        const seenFields = [];
         globalThis.fetch = async (input, init) => {
             const url = new URL(String(input));
-            assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer test-token`);
+            assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-token');
             assert.equal(url.searchParams.has('access_token'), false);
             seenFields.push(url.searchParams.get('fields') || '');
             calls++;
-            if (calls === 1) return Response.json({ error: { code: 100, message: 'field not available' } }, { status: 400 });
+            if (calls === 1) {
+                return Response.json({
+                    error: {
+                        code: 100,
+                        message: 'Tried accessing nonexisting field (campaign_name) on node type LeadgenData',
+                    },
+                }, { status: 400 });
+            }
             return Response.json({ id: '999', created_time: 1, form_id: 'f1', field_data: [] });
         };
         const lead = await fetchMetaLeadDetails('999', 'test-token');
         assert.equal(lead.id, '999');
-        assert.equal(calls, 2, 'exactly one degrade step: extended fields, then the minimal set');
+        assert.equal(lead.attributionStatus, 'PENDING_SYNC');
+        assert.equal(calls, 2);
         assert.equal(seenFields[0], 'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data');
         assert.equal(seenFields[1], 'id,created_time,form_id,field_data');
 
         calls = 0;
-        seenFields.length = 0;
         globalThis.fetch = async () => {
             calls++;
-            return Response.json({ error: { code: 190, message: 'permission denied' } }, { status: 403 });
+            return Response.json({ error: { code: 100, message: 'Invalid parameter' } }, { status: 400 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { code?: string; status?: number }) =>
-            err.code === 'LEAD_RETRIEVAL_FAILED' && err.status === 503
-        , 'a hard permission failure is not retried against the minimal set as if it were a transient gap');
-        assert.equal(calls, 1, 'no pointless second call on non-400 failures');
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+            err.code === 'INVALID_REQUEST' && err.status === 422
+        );
+        assert.equal(calls, 1, 'generic HTTP 400 is not retried as a permissions/field issue');
+
+        calls = 0;
+        globalThis.fetch = async () => {
+            calls++;
+            return Response.json({ error: { code: 10, message: 'Permission denied' } }, { status: 403 });
+        };
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+            err.code === 'PERMISSION_DENIED' && err.status === 403
+        );
+        assert.equal(calls, 1);
+
+        calls = 0;
+        globalThis.fetch = async () => {
+            calls++;
+            return Response.json({ error: { code: 803, message: 'Object not found' } }, { status: 404 });
+        };
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+            err.code === 'DATA_UNAVAILABLE' && err.status === 404
+        );
+        assert.equal(calls, 1);
 
         calls = 0;
         globalThis.fetch = async () => {
             calls++;
             return Response.json({ error: { code: 4, message: 'rate limited' } }, { status: 429 });
         };
-        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err: { status?: number }) => err.status === 429);
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+            err.code === 'PENDING_SYNC' && err.status === 429
+        );
+        assert.equal(calls, 1);
+
+        calls = 0;
+        globalThis.fetch = async () => {
+            calls++;
+            return new Response('upstream unavailable', { status: 503 });
+        };
+        await assert.rejects(fetchMetaLeadDetails('999', 'test-token'), (err) =>
+            err.code === 'PENDING_SYNC' && err.status === 503
+        );
         assert.equal(calls, 1);
     } finally {
         globalThis.fetch = original;
