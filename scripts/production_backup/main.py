@@ -316,8 +316,12 @@ def restore(root):
         if any((x['name'],x['version']) not in supported for x in baseline['extensions']):
             raise Failure('REQUIRED_EXTENSION_VERSION_UNAVAILABLE','BLOCKED')
         # Copying into the egress-disabled container uses Docker, never a TCP port.
-        run(['docker','cp',str(payload/'database'),name+':/tmp/backup-database'])
-        run(['docker','exec','--user','root',name,'chmod','-R','a+rX','/tmp/backup-database'])
+        # Host parent remains 0700. Only database dump bytes enter the isolated container.
+        # Prepare readable modes before docker cp: cap-drop=ALL also removes root's FOWNER.
+        database_dir = payload/'database'
+        for path in [database_dir,*database_dir.rglob('*')]:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        run(['docker','cp',str(database_dir),name+':/tmp/backup-database'])
         psql = ['docker','exec','--user','postgres','-i',name,'psql','-X','-q',
                 '-h','/tmp','-U',ADMIN,'-d','postgres','--set=ON_ERROR_STOP=1']
         run([*psql,'--single-transaction','--file=/tmp/backup-database/roles.sql'])
