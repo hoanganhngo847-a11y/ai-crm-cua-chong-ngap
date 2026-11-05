@@ -114,7 +114,7 @@ export async function POST(request: Request) {
                 });
             }
 
-            if (Array.isArray(entry.changes)) {
+            if (Array.isArray(entry.changes) && config.leadAdsEnabled) {
                 const changes = parseLeadgenChanges({ object: 'page', entry: [entry] }, config.page);
                 for (const change of changes) {
                     leadgenChanges.push({ config, change });
