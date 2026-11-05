@@ -12,6 +12,7 @@ import { cookies } from 'next/headers';
 import { fetchMetaPages, graphVersion, marketingVersion } from './graph-api';
 
 import { bindingsForCompany, pageBindings, type PageBinding } from './binding';
+import { getMetaPageToken } from './page-token-vault';
 
 const STATE_COOKIE = 'fb_connect_state';
 const SESSION_COOKIE = 'fb_connect_session';
@@ -520,6 +521,7 @@ export async function subscribeManagedPage(
   pageId: string,
   companyId: string,
   customFetch?: typeof fetch,
+  persistPageToken?: (accessToken: string, pageName: string) => Promise<void>,
 ): Promise<SubscribePageResult> {
   const fetchFn = customFetch || fetch;
   const configured = pageBindings().find(
@@ -532,6 +534,8 @@ export async function subscribeManagedPage(
   const pages = await fetchManagedPagesWithTokens(userAccessToken, fetchFn);
   const page = pages.find((item) => item.id === pageId);
   if (!page) throw new Error('FACEBOOK_PAGE_NOT_MANAGED');
+  // Persist only after the OAuth user proved they manage this server-bound Page.
+  await persistPageToken?.(page.accessToken, page.name);
 
   const version = graphVersion();
   const appId = process.env.META_APP_ID?.trim() || null;
@@ -636,13 +640,20 @@ export async function subscribeManagedPage(
   };
 }
 
-async function resolveConfiguredPageName(binding: PageBinding): Promise<string | null> {
+async function resolveConfiguredPageName(binding: PageBinding, suppliedToken?: string | null): Promise<string | null> {
   if (binding.name) return binding.name;
 
   const cached = pageNameCache.get(binding.page);
   if (cached && cached.expiresAt > Date.now()) return cached.name;
 
-  const token = process.env[binding.tokenEnv]?.trim();
+  let token = suppliedToken || null;
+  if (!token) {
+    try {
+      token = await getMetaPageToken(binding.company, binding.page, binding.tokenEnv);
+    } catch {
+      return null;
+    }
+  }
   if (!token) return null;
 
   try {
@@ -678,8 +689,13 @@ async function configuredConnectionForBinding(
   binding: PageBinding,
   appId: string | null,
 ): Promise<ConfiguredFacebookConnection> {
-  const token = process.env[binding.tokenEnv]?.trim() || null;
-  const pageName = await resolveConfiguredPageName(binding);
+  let token: string | null = null;
+  try {
+    token = await getMetaPageToken(binding.company, binding.page, binding.tokenEnv);
+  } catch {
+    token = null;
+  }
+  const pageName = await resolveConfiguredPageName(binding, token);
 
   if (!token || !appId) {
     return {
