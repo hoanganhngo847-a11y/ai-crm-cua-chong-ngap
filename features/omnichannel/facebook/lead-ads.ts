@@ -71,7 +71,7 @@ function isOptionalLeadFieldUnavailable(status: number, error: MetaGraphError): 
     if (status !== 400 || error.code !== 100) return false;
     const message = error.message.toLowerCase();
     const namesOptionalField = OPTIONAL_LEAD_FIELDS.some((field) => message.includes(field));
-    const explicitlyUnavailable = /non.?existent field|unknown field|field.{0,60}(?:not available|does not exist|cannot be requested)|(?:not available|does not exist).{0,60}field/.test(message);
+    const explicitlyUnavailable = /non.?exist(?:ent|ing) field|unknown field|field.{0,60}(?:not available|does not exist|cannot be requested)|(?:not available|does not exist).{0,60}field/.test(message);
     return namesOptionalField && explicitlyUnavailable;
 }
 
