@@ -15,24 +15,24 @@ test('production pipeline uses exact tenant-scoped table counts when stage-count
       { id: '92000000-0000-0000-0000-000000000004', company_id: '90000000-0000-0000-0000-000000000002', customer_code: 'KH-004', name: 'Other tenant', stage: 'LEAD_NEW', source: 'FACEBOOK', created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z', phone: null, email: null },
     ];
     let headCountQueries = 0;
-    const client = {
-      rpc: async (name) => {
+    const client: any = {
+      rpc: async (name: string) => {
         assert.equal(name, 'get_customer_stage_counts');
         return { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.get_customer_stage_counts in the schema cache' } };
       },
-      from: (table) => {
+      from: (table: string) => {
         assert.equal(table, 'customers');
-        const state = { equals: {}, inValues: {}, lower: {}, upper: {}, head: false, limit: 1000 };
-        const query = {
-          select: (_columns, options) => { state.head = options?.head === true; if (state.head) headCountQueries++; return query; },
-          eq: (key, value) => { state.equals[key] = value; return query; },
-          in: (key, values) => { state.inValues[key] = values; return query; },
-          or: (value) => { state.search = value; return query; },
-          gte: (key, value) => { state.lower[key] = value; return query; },
-          lte: (key, value) => { state.upper[key] = value; return query; },
-          order: () => query,
-          limit: (value) => { state.limit = value; return query; },
-          then: (resolve, reject) => {
+        const state: any = { equals: {}, inValues: {}, lower: {}, upper: {}, head: false, limit: 1000 };
+        const query: any = {
+          select: (_columns: unknown, options?: { head?: boolean }) => { state.head = options?.head === true; if (state.head) headCountQueries++; return query; },
+          eq: (key: string, value: unknown) => { state.equals[key] = value; return query; },
+          in: (key: string, values: string[]) => { state.inValues[key] = values; return query; },
+          or: (value: string) => { state.search = value; return query; },
+          gte: (key: string, value: string) => { state.lower[key] = value; return query; },
+          lte: (key: string, value: string) => { state.upper[key] = value; return query; },
+          order: (..._args: unknown[]) => query,
+          limit: (value: number) => { state.limit = value; return query; },
+          then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => {
             if (state.equals.company_id !== COMPANY) {
               return Promise.reject(new Error('company_id tenant filter is required')).then(resolve, reject);
             }
