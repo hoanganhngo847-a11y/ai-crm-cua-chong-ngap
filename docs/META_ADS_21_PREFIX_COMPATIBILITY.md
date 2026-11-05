@@ -5,7 +5,7 @@
 
 Reference: PR #139, branch `meta_ads_integration`, previously verified head `3bc50257883957f05cd1fedbd8f57358e058dcee`. Date: 31 October 2026, Asia/Ho_Chi_Minh. Keep the PR **Open + Draft**.
 
-**The corrected five-file SQL bundle passes the exact-prefix isolation tests. Hosted execution remains blocked by selective-release ledger integration and operational acceptance.** No hosted Supabase write, backup, reset, migration, Render/Meta change, real lead, customer message, merge or deployment was performed.
+**Current implementation: seven pinned Meta migrations, with exact-prefix/full-chain/atomic-bundle rehearsal coverage. The dated five-source evidence in this document is historical; current hashes and reconciliation invariants are defined in [the selective-ledger specification](META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md). Hosted execution remains blocked by operational acceptance and Owner evidence.** No hosted Supabase write, backup, reset, migration, Render/Meta change, real lead, customer message, merge or deployment was performed.
 
 ## 1. Root cause
 
@@ -42,7 +42,7 @@ Messenger/Website keep the original `{status, interaction_id}` contract; Meta-on
 
 ## 4. Before/after catalog diff
 
-The exact prefix is executed from the 21 stored SQL sources and checked against all ten captured schema/catalog/RLS/effective-grant fingerprint categories. The second prefix fixture is verified the same way before the five Meta sources are applied.
+The exact prefix is executed from the 21 stored SQL sources and checked against all ten captured schema/catalog/RLS/effective-grant fingerprint categories. The second prefix fixture is verified the same way before the seven approved Meta sources are applied.
 
 The allowlist compares definitions, comments, function/table/schema/default grants, column defaults/ACLs, RLS/policies, indexes, validated constraints, enabled triggers, sequence configuration and enum/domain types across public/private plus Auth, Storage and the migration-ledger schema. **Existing objects cannot be changed or removed**, including existing schema grants. Only seven named Meta tables, ten named Meta RPCs, their owned indexes/constraints/policies/ACLs, and seven customer attribution columns may be added.
 
@@ -101,7 +101,7 @@ Generate offline from the pinned repository sources:
 node --import tsx scripts/meta-ads/prepare-21-prefix-package.ts /absolute/path/to/review-package
 ```
 
-It emits `package.json`, `sources/` with the exact five SQL files, `00-preconditions.sql`, `90-postconditions.sql` and `ordered-bundle.sql`. It has no network/database client or remote executor. The assembled SQL strips only verified outer transaction controls from each source and wraps everything in **one transaction**, so no intermediate ACL/function state becomes public.
+It emits `package.json`, `sources/` with the exact seven approved SQL files, `00-preconditions.sql`, `90-postconditions.sql` and `ordered-bundle.sql`. It has no network/database client or remote executor. The assembled SQL strips only verified outer transaction controls from each source and wraps everything in **one transaction**, so no intermediate ACL/function state becomes public.
 
 | Order / source | SHA-256 |
 | --- | --- |
@@ -110,6 +110,8 @@ It emits `package.json`, `sources/` with the exact five SQL files, `00-precondit
 | `20261030110000_meta_ads_final_remediation.sql` | `79311ef986d9d9a22be77bfafb4b602854aebab6f8a864ea726d9ac7a7cc9814` |
 | `20261030120000_meta_ads_attribution_rpc_security.sql` | `a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1` |
 | `20261030130000_meta_ads_phone_duplicate_history.sql` | `54b36ff61749c0881f38ce257976bcacf9f679f89e6b151297220d04232c0770` |
+| `20261104150000_meta_lead_page_binding_guard.sql` | `402cb115cfcfce4f76619467fdd4f1a9b80f7142f91d0e3385016c345a46fc9f` |
+| `20261104171905_meta_lead_evidence_conflict_guard.sql` | `d5518d3686de808252e7338aa4037f06240f4cd545aacd78d42137c461ec06e6` |
 
 The checked-in [package manifest](evidence/meta-ads-21-prefix/package.json) and [package validation](evidence/meta-ads-21-prefix/package-validation.json) pin the assembled bundle hash, pre/postcondition hashes and expected object identities; CI checks that they remain current.
 
@@ -123,11 +125,11 @@ Stop on any hash/schema/history mismatch, unexpected Meta rows/objects, key/decr
 
 ## 9. Ledger strategy and why deployment is still blocked
 
-The package executes **only the five real Meta sources** and performs **zero canonical-ledger writes**. The local ledger contains the 21 sources genuinely executed in that fixture, with their captured recorded versions; it remains unchanged byte-for-byte after the package. There are no invented records for the missing 95 canonical files, no repair/reset, and no `supabase db push`.
+The package executes **only the seven approved Meta sources** and performs **zero canonical-ledger writes**. The local ledger contains the 21 sources genuinely executed in that fixture, with their captured recorded versions; it remains unchanged byte-for-byte after the package. There are no invented records for the missing 95 canonical files, no repair/reset, and no `supabase db push`.
 
 This proves the SQL can be composed without pretending the 95 files ran. It does **not** resolve deployment bookkeeping: `reconcileMigrationLedger` / `buildLedgerReadinessPlan` still require a canonical prefix and do not understand a separate selective release. Their fail-closed behavior is preserved.
 
-A future narrowly reviewed deployment change must establish a private Meta release registry recording the genuinely executed source/bundle hashes and checkpoint in the same transaction, keep existing canonical rows intact, prevent blind CLI migration pushes, and define/test later canonical reconciliation. No such hosted executor/registry lifecycle is introduced or claimed proven here. Therefore the emitted SQL is a **review/rehearsal package**, not an approved hosted migration command. Do not execute it on staging until that specific strategy is reviewed and validated. This does not require approving/executing the unrelated 160 destructive items.
+The separate controlled executor in `scripts/meta-ads/selective-executor.ts` now implements the private registry, ordinary migration fence and seven-source canonical reconciliation described in [the ledger specification](META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md). Reconciliation verifies the exact original 21 records and the seven approved source records before committing exactly 28 canonical rows; it does not record any omitted gap migration. The offline package described in section 8 remains review/rehearsal input, not a hosted migration command. Hosted execution still requires independently verified backup/restore evidence and signed Owner approval; local implementation does not establish hosted acceptance. This does not authorize the unrelated destructive gap migrations.
 
 ## 10. Required checkpoint before staging execution
 

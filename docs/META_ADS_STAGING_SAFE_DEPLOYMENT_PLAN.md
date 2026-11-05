@@ -1,5 +1,7 @@
 # Meta Ads staging safe deployment plan
 
+> Historical deployment-plan snapshot: five-source probes and dated staging observations below describe the 30–31 October review, not the current release bundle. Current PR #143 uses seven pinned migrations and exact 21 + 7 = 28 reconciliation; see [the current ledger specification](META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md). Hosted execution and physical backup/restore acceptance remain unverified.
+
 > **SUPERSEDED & RECONCILIATION NOTICE (Updated 31 October 2026)**:
 > 1. **Isolation Completed**: The earlier observation in this report that the unreleased Meta bundle changed Messenger SLA behavior was an artifact of commit `3692bf0`. This was cleanly remediated in commit `3bcc163` / `25e8f21`: all modifications to `han_ingest` and canary functions were completely removed. Messenger SLA windows remain at count 0.
 > 2. **Selective-Release Ledger Engine Implemented**: Strategy (A+B) has now been fully implemented and locally validated via [`scripts/meta-ads/selective-executor.ts`](../scripts/meta-ads/selective-executor.ts) and [`tests/staging/selective-ledger.test.ts`](../tests/staging/selective-ledger.test.ts). See [`docs/META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md`](./META_ADS_SELECTIVE_LEDGER_IMPLEMENTATION.md) for full architecture and test evidence.
@@ -333,7 +335,7 @@ inferred from names. Values need a private staging-only target check before rele
 | Page binding | Missing `META_PAGE_BINDINGS` plus its referenced staging-only `META_*_TOKEN`, or the existing single-Page fallback `META_PAGE_ID`, `META_PAGE_ACCESS_TOKEN`, `OMNICHANNEL_COMPANY_ID` (optional display name). Page selection does not grant tenant authority; bind only an approved staging tenant/test Page. |
 | Ad-account credentials | Obtain only through an approved test-account OAuth flow into the encrypted vault; optional `META_SYSTEM_USER_TOKEN` is a separate staging-only fallback, not a production token to copy. |
 | Webhook | `/api/webhooks/meta`; HMAC, GET verify-token check and read-back of Page `leadgen` subscription must be proven using the approved staging app/asset. Existing Messenger subscription fields must be preserved. |
-| Retry scheduler | `CRON_SECRET` missing; production-mode cron route currently fails closed. Metadata-only `/api/cron/meta-ads-sync` needs a separately approved scheduler, or controlled manual sync/retry for acceptance. The five Meta files do not themselves provision this service schedule. |
+| Retry scheduler | `CRON_SECRET` missing; production-mode cron route currently fails closed. Metadata-only `/api/cron/meta-ads-sync` needs a separately approved scheduler, or controlled manual sync/retry for acceptance. The current seven Meta files do not themselves provision this service schedule. |
 | Auth / authorization | Staging currently has **zero Auth users**. Staging-only BOSS_ADMIN membership and AAL2 setup must be separately provisioned and verified before connecting Meta or running manual sync. Auth Site URL/allowed redirects and provider settings are unverified. |
 
 Required/default scopes remain `ads_read`, `leads_retrieval`, `pages_show_list`,

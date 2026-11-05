@@ -48,6 +48,8 @@ export interface MetaAdCreativeSnapshot {
     captureTiming: MetaCreativeCaptureTiming;
     reason?: string;
     adId: string;
+    pageId?: string;
+    pageIdConflict?: boolean;
     adName?: string;
     campaignId?: string;
     campaignName?: string;
@@ -152,6 +154,17 @@ export function normalizeMetaAdCreativeSnapshot(
     const ad = metaRecord(payload);
     const creative = metaRecord(ad.creative);
     const story = metaRecord(creative.object_story_spec);
+    const storySpecPageId = metaText(story.page_id, 128);
+    const storyIds = [
+        metaText(creative.effective_object_story_id, 256),
+        metaText(creative.object_story_id, 256),
+    ].filter((value): value is string => Boolean(value));
+    const storyPageIds = storyIds
+        .map((storyId) => storyId.match(/^(\d{1,100})_\d{1,100}$/)?.[1])
+        .filter((value): value is string => Boolean(value));
+    const pageIds = [...new Set([storySpecPageId, ...storyPageIds].filter((value): value is string => Boolean(value)))];
+    const pageIdConflict = pageIds.length > 1;
+    const pageId = pageIds.length === 1 ? pageIds[0] : undefined;
     const linkData = metaRecord(story.link_data);
     const videoData = metaRecord(story.video_data);
     const templateData = metaRecord(story.template_data);
@@ -276,6 +289,8 @@ export function normalizeMetaAdCreativeSnapshot(
         captureTiming: options.captureTiming || 'AT_LEAD_INTAKE',
         ...(!hasCreative ? { reason: 'CREATIVE_DETAILS_UNAVAILABLE' } : {}),
         adId: metaText(ad.id, 128) || '',
+        ...(pageId ? { pageId } : {}),
+        ...(pageIdConflict ? { pageIdConflict: true } : {}),
         ...(metaText(ad.name, 500) ? { adName: metaText(ad.name, 500) } : {}),
         ...(metaText(metaRecord(ad.campaign).id ?? ad.campaign_id, 128) ? { campaignId: metaText(metaRecord(ad.campaign).id ?? ad.campaign_id, 128) } : {}),
         ...(metaText(metaRecord(ad.campaign).name, 500) ? { campaignName: metaText(metaRecord(ad.campaign).name, 500) } : {}),
@@ -384,8 +399,12 @@ export async function fetchMetaAdCreativeSnapshot(
         const version = marketingVersion();
         const fieldSets = [
             'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id,call_to_action_type}',
+            // Keep independent fallbacks: object_story_spec.page_id and effective story IDs
+            // are alternate Page signals, so one unsupported field must not discard the other.
             'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,asset_feed_spec,image_url,thumbnail_url,video_id}',
-            'id,name,preview_shareable_link,campaign_id,adset_id,creative{id,name,object_type,image_url,thumbnail_url,video_id}',
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,object_story_spec,image_url,thumbnail_url,video_id}',
+            'id,name,preview_shareable_link,campaign{id,name},adset{id,name},creative{id,name,object_type,effective_object_story_id,object_story_id}',
+            'id,name,preview_shareable_link,campaign_id,adset_id,creative{id,name,object_type,image_url,thumbnail_url,video_id,effective_object_story_id,object_story_id}',
             'id,name,creative{id,name}',
         ];
         let response: Response | null = null;
@@ -467,11 +486,11 @@ export async function syncPendingCreativeSnapshots(
     const scanLimit = Math.max(100, limit * 10);
     const { data: rows, error } = await supabase
         .from('lead_attribution_touchpoints')
-        .select('id,meta_ad_id,ads_context_data')
+        .select('id,channel,meta_ad_id,ads_context_data')
         .eq('company_id', companyId)
         .in('channel', ['FACEBOOK_LEAD_ADS', 'FACEBOOK_MESSENGER'])
         .not('meta_ad_id', 'is', null)
-        .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
+        .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null,ads_context_data->creative_snapshot->>pageId.is.null')
         .order('occurred_at', { ascending: false })
         .limit(scanLimit);
 
@@ -480,7 +499,10 @@ export async function syncPendingCreativeSnapshots(
     const candidates = (rows || []).filter((row) => {
         const existing = metaRecord(metaRecord(row.ads_context_data).creative_snapshot);
         if (Object.keys(existing).length === 0) return true;
-        return existing.status === 'PENDING_SYNC';
+        if (existing.status === 'PENDING_SYNC') return true;
+        return row.channel === 'FACEBOOK_LEAD_ADS'
+            && existing.status !== 'UNAVAILABLE'
+            && (typeof existing.pageId !== 'string' || !existing.pageId.trim() || existing.pageIdConflict === true);
     }).slice(0, limit);
 
     const cache = new Map<string, MetaAdCreativeSnapshot>();
@@ -509,18 +531,28 @@ export async function syncPendingCreativeSnapshots(
 
         const currentContext = metaRecord(row.ads_context_data);
         const currentSnapshot = metaRecord(currentContext.creative_snapshot);
-        if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC') continue;
+        const currentPageId = typeof currentSnapshot.pageId === 'string' ? currentSnapshot.pageId.trim() : '';
+        const pageBindingNeedsRefresh = row.channel === 'FACEBOOK_LEAD_ADS'
+            && currentSnapshot.status !== 'UNAVAILABLE'
+            && (!currentPageId || currentSnapshot.pageIdConflict === true);
+        if (currentSnapshot.status && currentSnapshot.status !== 'PENDING_SYNC' && !pageBindingNeedsRefresh) continue;
 
         const { data: updatedRows, error: updateError } = await supabase
             .from('lead_attribution_touchpoints')
-            .update({ ads_context_data: { ...currentContext, creative_snapshot: snapshot } })
+            .update({ ads_context_data: {
+                ...currentContext,
+                ...(currentSnapshot.captureTiming === 'AT_LEAD_INTAKE' ? { intake_creative_snapshot: currentSnapshot } : {}),
+                creative_snapshot: snapshot,
+            } })
             .eq('id', row.id)
             .eq('company_id', companyId)
             .in('channel', ['FACEBOOK_LEAD_ADS', 'FACEBOOK_MESSENGER'])
             .eq('meta_ad_id', adId)
+            .filter('ads_context_data', row.ads_context_data == null ? 'is' : 'eq',
+                row.ads_context_data == null ? 'null' : JSON.stringify(currentContext))
             // Compare-and-set: a usable/terminal snapshot written after the
             // initial scan must win over this stale backfill result.
-            .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null')
+            .or('ads_context_data->creative_snapshot->>status.eq.PENDING_SYNC,ads_context_data->creative_snapshot.is.null,ads_context_data->creative_snapshot->>pageId.is.null')
             .select('id');
 
         if (updateError) {

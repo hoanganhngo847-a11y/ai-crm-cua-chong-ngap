@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {
   classifyManagedCustomization,
   generateManagedCustomizationsSql,
@@ -12,11 +12,12 @@ import {
   handleVerifyCommand,
   getPlatformAclBaseline,
   validatePlatformAclBaseline,
+  MANAGED_CUSTOMIZATIONS_QUERY_SQL,
   canonicalEntryKey,
   validateCustomizationDetails,
   deepCompareCustomizationItem,
 } from '../../scripts/backup/managed-customizations.mjs';
-import { sha256Hex } from '../../scripts/backup/owner-map.mjs';
+import { resolveEffectiveDockerEndpoint, parseAndValidateDockerEndpoint, sha256Hex } from '../../scripts/backup/owner-map.mjs';
 
 async function createTempDir(prefix = 'managed-cust-test-') {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -191,6 +192,80 @@ test('managed-customizations helper suite', async (t) => {
     }
   });
 
+  await t.test('CLI reads an explicit project allowlist and binds its digest into the approved plan', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'managed.json');
+      const allowlistPath = path.join(tempDir, 'project-allowlist.json');
+      const planPath = path.join(tempDir, 'plan.sql');
+      const reportPath = path.join(tempDir, 'report.json');
+      const identity = 'storage.objects:operations_evidence_no_client_insert';
+      const item = {
+        kind: 'policy',
+        identity,
+        details: {
+          schema: 'storage',
+          table: 'objects',
+          policy: 'operations_evidence_no_client_insert',
+          permissive: 'PERMISSIVE',
+          roles: ['anon', 'authenticated'],
+          command: 'INSERT',
+          using: null,
+          withCheck: "bucket_id = 'operations-evidence'",
+        },
+      };
+      await fsp.writeFile(sourcePath, JSON.stringify([item]));
+      await fsp.writeFile(allowlistPath, JSON.stringify([identity]));
+
+      const result = await runCli([
+        'plan',
+        '--source', sourcePath,
+        '--target-label', 'crm-restore-rehearsal',
+        '--out', planPath,
+        '--report', reportPath,
+        '--project-allowlist', allowlistPath,
+      ]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /PLAN APPROVED/);
+
+      const report = JSON.parse(await fsp.readFile(reportPath, 'utf8'));
+      const expectedDigest = sha256Hex(JSON.stringify([identity]));
+      assert.equal(report.projectAllowlistSha256, expectedDigest);
+      assert.deepEqual(report.projectAllowlist, [identity]);
+      assert.equal(report.counts.projectOwnedCount, 1);
+
+      const plan = await fsp.readFile(planPath, 'utf8');
+      assert.match(plan, new RegExp(expectedDigest));
+      assert.match(plan, /CREATE POLICY "operations_evidence_no_client_insert"/);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  await t.test('CLI rejects duplicate project allowlist identities before producing a plan', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'managed.json');
+      const allowlistPath = path.join(tempDir, 'project-allowlist.json');
+      const planPath = path.join(tempDir, 'plan.sql');
+      const reportPath = path.join(tempDir, 'report.json');
+      await fsp.writeFile(sourcePath, '[]');
+      await fsp.writeFile(allowlistPath, JSON.stringify(['storage.objects:policy_a', 'storage.objects:policy_a']));
+
+      const result = await runCli([
+        'plan',
+        '--source', sourcePath,
+        '--out', planPath,
+        '--report', reportPath,
+        '--project-allowlist', allowlistPath,
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /Project allowlist contains duplicate identity/);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   await t.test('Finding 1 regression: exact ACL baseline comparison fails closed on any anomaly', () => {
     const baseline = getPlatformAclBaseline();
     const usersBaseline = baseline['auth.users'];
@@ -203,12 +278,18 @@ test('managed-customizations helper suite', async (t) => {
       details: JSON.parse(JSON.stringify(usersBaseline)),
     };
     assert.equal(classifyManagedCustomization(standardAcl).classification, 'platform-default');
+    for (const details of [
+      { ...standardAcl.details, schema: 'storage' },
+      { ...standardAcl.details, table: 'objects' },
+      { ...standardAcl.details, schema: undefined, table: undefined },
+    ]) assert.equal(classifyManagedCustomization({ ...standardAcl, details }).classification, 'unexplained', 'a matching grant set cannot override a mismatched canonical relation identity');
 
     // 2. ACL có thêm DELETE bất thường cấp cho authenticated -> unexplained (FAIL CLOSED)
     const extraDeleteAcl = {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: [
           ...JSON.parse(JSON.stringify(usersBaseline.entries)),
@@ -225,6 +306,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: alteredGrantOptionEntries,
       },
@@ -237,6 +319,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: missingPrivEntries,
       },
@@ -250,6 +333,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: alteredGrantorEntries,
       },
@@ -261,6 +345,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: true, // Baseline has false
         entries: [],
       },
@@ -272,6 +357,7 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'relation-acl',
       identity: 'auth.users',
       details: {
+        schema: 'auth', table: 'users',
         aclIsNull: false,
         entries: [
           ...JSON.parse(JSON.stringify(usersBaseline.entries)),
@@ -286,17 +372,36 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'column-acl',
       identity: 'auth.users.email',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'email',
         aclIsNull: true,
         entries: [],
       },
     };
     assert.equal(classifyManagedCustomization(standardColAcl).classification, 'platform-default');
 
+    // The catalog extractor and classifier must share the same canonical identity fields.
+    assert.match(
+      MANAGED_CUSTOMIZATIONS_QUERY_SQL,
+      /'schema', n\.nspname,\s*'table', c\.relname,\s*'column', a\.attname/,
+    );
+
+    const missingIdentityColAcl = {
+      kind: 'column-acl',
+      identity: 'auth.users.email',
+      details: { aclIsNull: true, entries: [] },
+    };
+    assert.equal(classifyManagedCustomization(missingIdentityColAcl).classification, 'unexplained');
+
     // 9. Column ACL with explicit permission -> unexplained (FAIL CLOSED)
     const explicitColAcl = {
       kind: 'column-acl',
       identity: 'auth.users.email',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'email',
         aclIsNull: false,
         entries: [{ grantee: 'anon', grantor: 'postgres', privilegeType: 'SELECT', isGrantable: false }],
       },
@@ -308,6 +413,9 @@ test('managed-customizations helper suite', async (t) => {
       kind: 'column-acl',
       identity: 'auth.users.non_existent_column',
       details: {
+        schema: 'auth',
+        table: 'users',
+        column: 'non_existent_column',
         aclIsNull: true,
         entries: [],
       },
@@ -782,4 +890,26 @@ test('managed-customizations helper suite', async (t) => {
       await removeTempDir(tempDir);
     }
   });
+});
+
+
+test('live PostgreSQL column ACL extraction preserves canonical identity and detects extra grants', {
+  skip: process.env.BACKUP_REQUIRE_LIVE_PG17 !== '1',
+}, () => {
+  const endpoint = resolveEffectiveDockerEndpoint();
+  assert.ok(endpoint.rawEndpoint && parseAndValidateDockerEndpoint(endpoint.rawEndpoint).isLocal, 'local Docker only');
+  const container = 'crm-dumpcheck-test';
+  const labels = execFileSync('docker', ['inspect', '--format', '{{index .Config.Labels "crm.disposable-test"}}|{{index .Config.Labels "crm.owner"}}|{{index .Config.Labels "crm.purpose"}}', container], { encoding: 'utf8' }).trim();
+  assert.equal(labels, 'true|ci-postgres17|pg17-backup-restore-test');
+  const query = (sql) => JSON.parse(execFileSync('docker', ['exec', '-i', container, 'psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-U', 'supabase_admin', '-d', 'postgres'], { input: sql, encoding: 'utf8' }));
+  const inventory = query(MANAGED_CUSTOMIZATIONS_QUERY_SQL);
+  const column = inventory.find(i => i.kind === 'column-acl' && i.identity === 'auth.users.email');
+  assert.ok(column);
+  assert.equal(column.details.schema, 'auth');
+  assert.equal(column.details.table, 'users');
+  assert.equal(column.details.column, 'email');
+  assert.equal(classifyManagedCustomization(column).classification, 'platform-default');
+  const changed = query('BEGIN; GRANT SELECT(email) ON auth.users TO anon;\n' + MANAGED_CUSTOMIZATIONS_QUERY_SQL + '\nROLLBACK;');
+  assert.equal(classifyManagedCustomization(changed.find(i => i.kind === 'column-acl' && i.identity === column.identity)).classification, 'unexplained');
+  assert.equal(classifyManagedCustomization(query(MANAGED_CUSTOMIZATIONS_QUERY_SQL).find(i => i.kind === 'column-acl' && i.identity === column.identity)).classification, 'platform-default', 'the grant fixture was rolled back');
 });

@@ -4,13 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { inspectTransactionEnvelope, sqlSha256 } from './ledger-readiness';
 
-export const META_21_SOURCES = [
-    '20261030090000_meta_ads_lead_attribution.sql',
-    '20261030100000_meta_ads_hardening.sql',
-    '20261030110000_meta_ads_final_remediation.sql',
-    '20261030120000_meta_ads_attribution_rpc_security.sql',
-    '20261030130000_meta_ads_phone_duplicate_history.sql',
-] as const;
+import { META_SOURCES } from './selective-executor';
+export const META_21_SOURCES = META_SOURCES;
 const evidence='docs/evidence/meta-ads-21-prefix';
 const quote=(s:string)=>`'${s.replaceAll("'","''")}'`;
 const columns=['first_campaign_name','first_ad_name','first_touch_at','latest_campaign_name','latest_ad_name','latest_touch_at','attribution_status'];
@@ -30,7 +25,7 @@ export function prepareMeta21Package() {
     });
     const expectedLedger=recorded.map((m:{version:string;name:string;stored_sql_sha256:string})=>({version:m.version,name:m.name,source_hash:m.stored_sql_sha256}));
     const preconditions=`-- Review/rehearsal input only. Hosted deployment is BLOCKED pending ledger integration review.
--- Must run in the SAME transaction as the five sources and postconditions.
+-- Must run in the SAME transaction as all pinned sources and postconditions.
 SET LOCAL lock_timeout='5s';
 SELECT pg_advisory_xact_lock(hashtextextended('meta-ads-21-prefix-package',0));
 LOCK TABLE supabase_migrations.schema_migrations IN SHARE MODE;
@@ -43,14 +38,14 @@ DO $preflight$ DECLARE actual jsonb; v_table_row record; BEGIN
   IF actual IS DISTINCT FROM ${quote(JSON.stringify(proof.prefixCatalog))}::jsonb THEN RAISE EXCEPTION 'META_21_SCHEMA_OR_ACL_DRIFT'; END IF;
   -- Block concurrent application writes during count/hash preservation checks.
   FOR v_table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('public','private') AND c.relkind='v_table_row' ORDER BY n.nspname,c.relname
+    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') ORDER BY n.nspname,c.relname
   LOOP EXECUTE format('LOCK TABLE %I.%I IN SHARE MODE',v_table_row.nspname,v_table_row.relname); END LOOP;
 END $preflight$;
 CREATE TEMP TABLE meta_21_rows(name text PRIMARY KEY, row_count bigint, digest text) ON COMMIT DROP;
 CREATE TEMP TABLE meta_21_ledger ON COMMIT DROP AS SELECT * FROM supabase_migrations.schema_migrations;
 DO $checkpoint$ DECLARE v_table_row record; excluded text[]; BEGIN
   FOR v_table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('public','private') AND c.relkind='v_table_row' LOOP
+    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') LOOP
     excluded:=CASE WHEN v_table_row.nspname='public' AND v_table_row.relname='customers' THEN ARRAY[${columns.map(quote).join(',')}] ELSE ARRAY[]::text[] END;
     EXECUTE format('INSERT INTO meta_21_rows SELECT %L,count(*),encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) - %L::text[] ORDER BY (to_jsonb(t) - %L::text[])::text),''[]'')::text,''UTF8'')),''hex'') FROM %I.%I t',
       v_table_row.nspname||'.'||v_table_row.relname,excluded,excluded,v_table_row.nspname,v_table_row.relname);

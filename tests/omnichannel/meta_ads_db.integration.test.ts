@@ -140,8 +140,22 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(release(successLease), 'f', 'completed leases cannot be reused');
         assert.equal(sql("SELECT last_synced_at IS NOT NULL AND sync_status='SUCCESS' FROM public.meta_ad_accounts WHERE ad_account_id='act_lease';"), 't');
 
-        const touch = (lead: string, campaign: string | null, name: string, ad: string | null, time: string) =>
-            `SELECT public.record_lead_attribution_touchpoint(p_company=>${q(company)},p_customer=>${q(customer)},p_meta_leadgen_id=>${q(lead)},p_meta_campaign_id=>${q(campaign)},p_campaign_name=>${q(name)},p_meta_ad_id=>${q(ad)},p_attribution_status=>'ATTRIBUTED',p_occurred=>${q(time)});`;
+        const touch = (lead: string, campaign: string | null, name: string, ad: string | null, time: string) => {
+            const pageEvidence = ad ? JSON.stringify({
+                leadgen_event_binding: {
+                    source: 'SIGNED_META_WEBHOOK',
+                    leadgenId: lead,
+                    pageId: page,
+                    adId: ad,
+                },
+            }) : null;
+            return `SELECT public.record_lead_attribution_touchpoint(
+                p_company=>${q(company)},p_customer=>${q(customer)},p_page_id=>${q(page)},p_meta_leadgen_id=>${q(lead)},
+                p_meta_campaign_id=>${q(campaign)},p_campaign_name=>${q(name)},p_meta_ad_id=>${q(ad)},
+                p_ads_context_data=>${q(pageEvidence)}::jsonb,
+                p_attribution_status=>'ATTRIBUTED',p_occurred=>${q(time)}
+            );`;
+        };
         for (const [lead, campaign, name, ad] of [['name-only',null,'Fabricated name',null],['forged','unknown','Fabricated',null],['foreign','foreign','Foreign campaign',null],['unknown-ad','campaign','Fabricated','unknown-ad']]) {
             const id = sql(touch(lead!, campaign!, name!, ad, '2026-10-29T10:00:00Z'));
             const row = JSON.parse(sql(`SELECT row_to_json(t) FROM public.lead_attribution_touchpoints t WHERE id=${q(id)};`));
@@ -182,7 +196,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
                         name: 'Quảng cáo snapshot',
                         campaign: { id: 'campaign_snapshot', name: 'Chiến dịch snapshot' },
                         adset: { id: 'adset_snapshot', name: 'Nhóm quảng cáo snapshot' },
-                        creative: { id: 'creative_snapshot', object_story_spec: { link_data: {
+                        creative: { id: 'creative_snapshot', object_story_spec: { page_id: page, link_data: {
                             message: creativeText, name: 'Headline snapshot', description: 'Description snapshot',
                             picture: 'https://scontent.xx.fbcdn.net/v/t45.1600-4/snapshot.jpg',
                         } } },
@@ -318,6 +332,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(persistedCreative.intake.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.primaryText, 'Nội dung tại thời điểm tiếp nhận');
         assert.equal(persistedCreative.touchpoint.captureTiming, 'AT_LEAD_INTAKE');
+        assert.equal(persistedCreative.touchpoint.pageId, page, 'the originating Page ID is checkpointed with the creative evidence');
         assert.equal(snapshotAdSetArgument, 'adset_snapshot', 'missing Lead Details Ad Set is recovered from the verified Meta creative response');
         assert.ok(persistedCreative.touchpoint.capturedAt, 'snapshot capture time is persisted');
         assert.equal(persistedCreative.adset_id, 'adset_snapshot', 'Ad Set ID is resolved from the synced Ad object');
@@ -328,9 +343,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
 
         // --- Rule C: one customer profile, many attribution events, zero lost history ---
         intakeFault = false;
-        assert.equal((await webhook('30001')).status, 200);
-        assert.equal((await webhook('30002')).status, 200, 'a duplicate-phone lead must reuse the customer, never fail the webhook');
-        const concurrentSubmissions = await Promise.all([webhook('30003'), webhook('30004')]);
+        assert.equal((await webhook('30001', '300_ad')).status, 200);
+        assert.equal((await webhook('30002', '300_ad')).status, 200, 'a duplicate-phone lead must reuse the customer, never fail the webhook');
+        const concurrentSubmissions = await Promise.all([webhook('30003', '300_ad'), webhook('30004', '300_ad')]);
         assert.deepEqual(
             concurrentSubmissions.map((r) => r.status).sort((a, b) => (a ?? 600) - (b ?? 600)),
             [200, 200],
@@ -384,15 +399,14 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         ]) for (const role of ['anon', 'authenticated']) assert.throws(() => sql(`SET ROLE ${role}; ${statement};`), /Command failed/);
 
         // Pending campaign resolution: a bounded, safe retry. Before the asset sync
-        // lands anything, only the assertion corroborated by an existing synced
-        // campaign row resolves (INFERRED); everything else stays pending.
+        // lands an exact Ad mapping, a campaign assertion remains unverified.
         const retryBeforeSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
         assert.equal(retryBeforeSync.checked, 13, 'all pending leadgen rows are inspected in one bounded pass: 5 forged-loop rows, 4 stable no-phone webhooks, 4 duplicate-phone submissions');
-        assert.equal(retryBeforeSync.resolved, 1);
-        assert.equal(Number(retryBeforeSync.remaining), 12);
+        assert.equal(retryBeforeSync.resolved, 0);
+        assert.equal(Number(retryBeforeSync.remaining), 13);
         assert.equal(
             sql(`SELECT attribution_status||'|'||COALESCE(campaign_name_snapshot,'') FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)} AND meta_leadgen_id='unknown-ad';`),
-            'INFERRED|Verified campaign',
+            'PENDING_SYNC|',
         );
         // Tenant isolation: no company can claim another company's campaign evidence.
         const retryOther = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(other)});`));
@@ -403,9 +417,34 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
              VALUES (${q(company)},'act_1','300_campaign','Chiến dịch Du học 300','ACTIVE');
              INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status)
              VALUES (${q(company)},'act_1','300_campaign','300_adset','300_ad','Quảng cáo Meta 300','ACTIVE');`);
+        // The real admin sync backfills the creative from Meta after the Ad row lands.
+        // Mirror that persisted evidence here before invoking the SQL retry state machine.
+        sql(`UPDATE public.lead_attribution_touchpoints
+             SET ads_context_data = jsonb_set(
+                 COALESCE(ads_context_data, '{}'::jsonb),
+                 '{creative_snapshot}',
+                 jsonb_build_object(
+                     'schemaVersion', 2,
+                     'status', 'AVAILABLE',
+                     'source', 'META_MARKETING_API',
+                     'adId', '300_ad',
+                     'pageId', ${q(page)},
+                     'pageIdConflict', false,
+                     'capturedAt', '2026-11-04T00:00:00Z',
+                     'captureTiming', 'BACKFILL',
+                     'format', 'UNKNOWN',
+                     'headlines', '[]'::jsonb,
+                     'descriptions', '[]'::jsonb,
+                     'carouselAssets', '[]'::jsonb,
+                     'imageAssets', '[]'::jsonb,
+                     'videoAssets', '[]'::jsonb
+                 ),
+                 true
+             )
+             WHERE company_id = ${q(company)} AND meta_leadgen_id ~ '^300';`);
         const retryAfterSync = JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`));
         assert.equal(retryAfterSync.resolved, 4);
-        assert.equal(Number(retryAfterSync.remaining), 8, 'only rows with unresolvable assertions stay pending: forged loops, no-phone stable leads, late-arrival');
+        assert.equal(Number(retryAfterSync.remaining), 9, 'only rows with unresolvable assertions stay pending: forged loops, no-phone stable leads, late-arrival');
         const resolvedOne = JSON.parse(sql(`SELECT row_to_json(t) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(company)} AND meta_leadgen_id='30001';`));
         assert.equal(resolvedOne.attribution_status, 'ATTRIBUTED');
         assert.equal(resolvedOne.campaign_name_snapshot, 'Chiến dịch Du học 300');
@@ -512,4 +551,63 @@ test('token migration preserves ciphertext, expiry and linked rows; conflicts or
         else process.env.META_TOKEN_ENCRYPTION_KEY = oldKey;
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
+});
+
+test('pending retry restores first/latest campaign and Ad projections without losing history or crossing companies', () => {
+    sql(`CREATE DATABASE ${db};`, 'postgres');
+    try {
+        const migrations = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
+        sql(PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '') + migrations.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        const guarded = randomUUID(), foreign = randomUUID();
+        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Projection A','ACTIVE'),(${q(other)},'Projection B','ACTIVE');
+            INSERT INTO public.customers(id,company_id,name,source,stage) VALUES
+              (${q(customer)},${q(company)},'Projection customer','FACEBOOK','LEAD_NEW'),
+              (${q(guarded)},${q(company)},'Timestamp protected','FACEBOOK','LEAD_NEW'),
+              (${q(foreign)},${q(other)},'Other company','FACEBOOK','LEAD_NEW');
+            INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+              VALUES (${q(company)},'act_projection','latest_campaign','Latest campaign','ACTIVE');
+            INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+              VALUES (${q(company)},'act_projection','latest_campaign','latest_ad','Latest Ad','ACTIVE');`);
+        const touch = (tenant: string, who: string, lead: string, adId: string, occurred: string) => sql(`
+            SELECT public.record_lead_attribution_touchpoint(p_company=>${q(tenant)},p_customer=>${q(who)},
+              p_page_id=>${q(page)},p_meta_leadgen_id=>${q(lead)},p_meta_ad_id=>${q(adId)},p_occurred=>${q(occurred)},
+              p_ads_context_data=>${q({ leadgen_event_binding: { source: 'SIGNED_META_WEBHOOK', leadgenId: lead, pageId: page, adId } })}::jsonb);`);
+        for (const [who, prefix] of [[customer, 'projection'], [guarded, 'guarded']]) {
+            touch(company, who, `${prefix}-first`, 'pending_ad', '2026-10-01T00:00:00Z');
+            touch(company, who, `${prefix}-latest`, 'latest_ad', '2026-10-02T00:00:00Z');
+        }
+        touch(other, foreign, 'foreign-first', 'pending_ad', '2026-10-01T00:00:00Z');
+        const snapshot = (who: string) => JSON.parse(sql(`SELECT jsonb_build_object(
+            'first_campaign',first_campaign_name,'first_ad',first_ad_name,'first_at',first_touch_at,
+            'latest_campaign',latest_campaign_name,'latest_ad',latest_ad_name,'latest_at',latest_touch_at)
+            FROM public.customers WHERE id=${q(who)};`));
+        assert.equal(snapshot(customer).first_ad, null, 'pending first touch has no invented Ad name');
+        assert.equal(snapshot(customer).latest_ad, 'Latest Ad');
+        sql(`UPDATE public.customers SET first_campaign_name='Protected first campaign',first_ad_name='Protected first Ad',
+              first_touch_at='2026-09-01T00:00:00Z',latest_campaign_name='Protected latest campaign',latest_ad_name='Protected latest Ad',
+              latest_touch_at='2026-11-01T00:00:00Z' WHERE id=${q(guarded)};`);
+        const protectedBefore = snapshot(guarded), foreignBefore = snapshot(foreign);
+        const foreignHistory = sql(`SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(other)};`);
+        const identities = () => sql(`SELECT jsonb_agg(jsonb_build_array(id,company_id,customer_id,meta_leadgen_id,occurred_at,touchpoint_type) ORDER BY id)
+            FROM public.lead_attribution_touchpoints WHERE company_id=${q(company)};`);
+        const historyBefore = identities();
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 0);
+        sql(`INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+              VALUES (${q(company)},'act_projection','first_campaign','First campaign','ACTIVE');
+            INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+              VALUES (${q(company)},'act_projection','first_campaign','pending_ad','First Ad','ACTIVE');`);
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 2);
+        const projected = snapshot(customer);
+        assert.equal(projected.first_campaign, 'First campaign');
+        assert.equal(projected.first_ad, 'First Ad');
+        assert.equal(projected.latest_campaign, 'Latest campaign');
+        assert.equal(projected.latest_ad, 'Latest Ad');
+        assert.equal(new Date(projected.first_at).toISOString(), '2026-10-01T00:00:00.000Z');
+        assert.equal(new Date(projected.latest_at).toISOString(), '2026-10-02T00:00:00.000Z');
+        assert.equal(identities(), historyBefore, 'retry retains every historical identity, occurrence time and first/latest designation');
+        assert.deepEqual(snapshot(guarded), protectedBefore, 'existing timestamp guards protect both projections');
+        assert.deepEqual(snapshot(foreign), foreignBefore, 'retry cannot update another company customer');
+        assert.equal(sql(`SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM public.lead_attribution_touchpoints t WHERE company_id=${q(other)};`), foreignHistory);
+        assert.equal(JSON.parse(sql(`SELECT public.retry_pending_lead_attribution(${q(company)});`)).resolved, 0, 'retry is idempotent');
+    } finally { sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres'); }
 });

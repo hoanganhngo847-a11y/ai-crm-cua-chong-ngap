@@ -1,5 +1,7 @@
 # Meta Ads Lead Attribution & Duplicate-Phone History — Implementation
 
+> Cập nhật security 05/11/2026: yêu cầu exact Ad mapping, immutable intake proof và bundle bảy migration trong [remediation report](META_ADS_CI_SECURITY_REMEDIATION_20261105.md) thay thế các mô tả cũ về campaign-only inference hoặc bundle năm source. Hosted execution vẫn BLOCKED.
+
 > Scope update, 2026-10-30: [Meta Ads Lead Attribution Final Scope](META_ADS_LEAD_ATTRIBUTION_FINAL_SCOPE.md) supersedes reporting/dashboard, Insights, ad-set sync and deployment instructions below. This document is retained as historical implementation/review context; use the final-scope metadata fields, route names and migration manifest for release.
 
 Branch: `meta_ads_integration` · PR #139 (kept in Draft, not merged)
