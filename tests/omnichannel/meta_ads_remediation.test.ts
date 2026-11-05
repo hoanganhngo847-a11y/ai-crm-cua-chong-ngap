@@ -322,9 +322,9 @@ test('discovered asset identifiers are accepted independently and the Page requi
     const oldBindings = process.env.META_PAGE_BINDINGS;
     const original = globalThis.fetch;
     try {
-        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page: '123', company, tokenEnv: 'META_STAGING_PAGE_TOKEN' }]);
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page: '123', company, tokenEnv: 'META_STAGING_PAGE_TOKEN', leadAdsEnabled: true }]);
         assert.throws(() => binding(page), /NOT_FOUND/);
-        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_STAGING_PAGE_TOKEN', name: 'Du Học Áo CHD' }]);
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_STAGING_PAGE_TOKEN', leadAdsEnabled: true, name: 'Du Học Áo CHD' }]);
         assert.equal(binding(page).company, company);
         assert.equal(binding(page).page, page);
         assert.ok(configuredFacebookPageIds(company).has(page));
@@ -538,7 +538,7 @@ test('FIX B: subscribeManagedPage handles subscription preservation, read-back v
     const page = '654520554683416';
     const company = '11111111-1111-4111-8111-111111111111';
     const appId = '123456';
-    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', name: 'Du Học Áo CHD' }]);
+    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', leadAdsEnabled: true, name: 'Du Học Áo CHD' }]);
     process.env.META_PAGE_TEST_TOKEN = secret;
     process.env.META_APP_ID = appId;
 
