@@ -742,6 +742,8 @@ test('Selective-Release Ledger & Dedicated Controlled Executor Suite', async (t)
       const cases = [
         { sql: `UPDATE supabase_migrations.schema_migrations SET name='tampered' WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_ROWS_CHANGED' },
         { sql: `UPDATE supabase_migrations.schema_migrations SET statements=ARRAY['SELECT 123;'] WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
+        { sql: `UPDATE supabase_migrations.schema_migrations SET statements=('[0:0]='||statements::text)::text[] WHERE version=${q(version)};`, code: 'RECONCILIATION_HISTORICAL_ROWS_CHANGED' },
+        { sql: `UPDATE supabase_migrations.schema_migrations SET statements=('[0:0]='||statements::text)::text[] WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
         { sql: `UPDATE supabase_migrations.schema_migrations SET version='20990101000000' WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_META_LEDGER_MISMATCH' },
         { sql: `DELETE FROM supabase_migrations.schema_migrations WHERE version=${q(metaVersion)};`, code: 'RECONCILIATION_POST_COUNT_MISMATCH' },
         { sql: `INSERT INTO supabase_migrations.schema_migrations VALUES ('20990101000000','unrelated',ARRAY['SELECT 1;']);`, code: 'RECONCILIATION_POST_COUNT_MISMATCH' },

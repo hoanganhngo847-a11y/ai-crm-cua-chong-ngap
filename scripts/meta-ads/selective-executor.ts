@@ -750,17 +750,20 @@ BEGIN
   END IF;
   -- Compare complete original rows, including statement arrays and any ledger columns.
   IF EXISTS (
-    (SELECT to_jsonb(m) FROM supabase_migrations.schema_migrations m WHERE version IN (${historicalVersions})
-      EXCEPT ALL SELECT to_jsonb(m) FROM meta_reconciliation_original_ledger m)
+    (SELECT * FROM supabase_migrations.schema_migrations WHERE version IN (${historicalVersions})
+      EXCEPT ALL SELECT * FROM meta_reconciliation_original_ledger)
     UNION ALL
-    (SELECT to_jsonb(m) FROM meta_reconciliation_original_ledger m
-      EXCEPT ALL SELECT to_jsonb(m) FROM supabase_migrations.schema_migrations m WHERE version IN (${historicalVersions}))
+    (SELECT * FROM meta_reconciliation_original_ledger
+      EXCEPT ALL SELECT * FROM supabase_migrations.schema_migrations WHERE version IN (${historicalVersions}))
   ) THEN
     RAISE EXCEPTION 'RECONCILIATION_HISTORICAL_ROWS_CHANGED';
   END IF;
   SELECT jsonb_agg(jsonb_build_object('version',version,'name',name,'statements',to_jsonb(statements)) ORDER BY version)
     INTO actual FROM supabase_migrations.schema_migrations WHERE version NOT IN (${historicalVersions});
-  IF actual IS DISTINCT FROM ${expectedMetaRecords}::jsonb THEN
+  IF actual IS DISTINCT FROM ${expectedMetaRecords}::jsonb OR EXISTS (
+    SELECT 1 FROM supabase_migrations.schema_migrations WHERE version NOT IN (${historicalVersions})
+      AND array_dims(statements) IS DISTINCT FROM '[1:1]'
+  ) THEN
     RAISE EXCEPTION 'RECONCILIATION_META_LEDGER_MISMATCH';
   END IF;
   IF NOT EXISTS (

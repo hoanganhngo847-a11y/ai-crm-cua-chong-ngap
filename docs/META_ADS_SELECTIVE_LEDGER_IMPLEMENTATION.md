@@ -218,7 +218,7 @@ Because the seven Meta migrations are now recorded in `supabase_migrations.schem
 - Subsequent canonical migration runners (such as Supabase CLI) inspect the ledger, find all seven Meta migrations, and **SKIP** them.
 - They are **NEVER re-executed**, preventing duplicate table, column, or policy errors (`policy "rls_meta_ad_accounts_tenant" already exists`).
 - All customer lead attribution data, campaigns, and touchpoints created during the selective period remain **100% intact**.
-- Subsequent migrations (e.g. migration 122+) execute cleanly on top.
+- The local reconciliation test executes one synthetic subsequent migration successfully. This is not proof that arbitrary omitted gap migrations can run safely; those require a separate ordering and compatibility review.
 
 ---
 
