@@ -179,7 +179,7 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
 
         process.env.META_APP_SECRET = appSecret;
         process.env.META_PAGE_TEST_TOKEN = 'dummy-page-access-token';
-        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN' }]);
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', leadAdsEnabled: true }]);
         sql(`INSERT INTO public.ai_brain_shadow_settings(company_id,channel,enabled) VALUES(${q(company)},'MESSENGER',true);`);
         process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
         process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy-service-key';
