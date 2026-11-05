@@ -535,7 +535,7 @@ export async function subscribeManagedPage(
   const configured = pageBindings().find(
     (item) => item.company === companyId && item.page === pageId,
   );
-  if (!configured) {
+  if (!configured || !configured.leadAdsEnabled) {
     throw new Error('FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
   }
 
