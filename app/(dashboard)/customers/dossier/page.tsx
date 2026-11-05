@@ -154,7 +154,7 @@ export default async function CustomerDossierList({
         </div>
       )}
 
-      {/* Attio-Style Filter Toolbar */}
+      {/* Attio-Style Filter Toolbar */}}
       <Card className="overflow-visible">
         <form
           method="GET"
