@@ -34,7 +34,7 @@ def synthetic_run(args, *, env=None, input_bytes=None, timeout=1800):
 
 
 def execute(sql):
-    return synthetic_run(['docker','exec','-i',SOURCE,'psql','-X','-q','-h','/tmp','-U','fixture_admin',
+    return synthetic_run(['docker','exec','-i',SOURCE,'psql','-X','-q','-h','/tmp','-p','55432','-U','fixture_admin',
                           '-d','postgres','--set=ON_ERROR_STOP=1'],input_bytes=sql.encode())
 
 
@@ -48,13 +48,14 @@ def main_test():
         synthetic_run(['docker','pull',IMAGE],timeout=600)
         script = ('initdb -D /tmp/source -U fixture_admin --auth=trust --encoding=UTF8 --locale=C '
                   '>/tmp/initdb.log 2>&1; exec postgres -D /tmp/source -k /tmp '
-                  '-c listen_addresses=* -c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
+                  '-c listen_addresses=127.0.0.1 -c port=55432 '
+                  '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
                   '-c cron.database_name=postgres -c cron.launch_active_jobs=off -c pg_net.database_name=template1')
         synthetic_run(['docker','run','--detach','--name',SOURCE,'--user','postgres',
-                       '--publish','127.0.0.1:55432:5432','--entrypoint','sh',IMAGE,'-ceu',script])
+                       '--network','host','--entrypoint','sh',IMAGE,'-ceu',script])
         for _ in range(90):
             try:
-                run(['docker','exec',SOURCE,'pg_isready','-h','/tmp','-U','fixture_admin'],timeout=5)
+                run(['docker','exec',SOURCE,'pg_isready','-h','/tmp','-p','55432','-U','fixture_admin'],timeout=5)
                 break
             except Failure:
                 time.sleep(1)

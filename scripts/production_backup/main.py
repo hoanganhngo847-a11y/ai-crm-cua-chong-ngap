@@ -8,7 +8,7 @@ import tarfile
 import time
 import urllib.request
 
-from common import (ADMIN, IMAGE, LIMITATIONS, PROJECT, TENANT, Failure, checksums,
+from common import (ADMIN, IMAGE, LIMITATIONS, PROJECT, TENANT, Failure, age_recipient, checksums,
                     db_environment, digest, extract_archive, load_json, now, require,
                     run, verify_checksums, workspace, write_json)
 from inventory import ident, inventory, role_inventory
@@ -87,7 +87,7 @@ def backup(root):
         require(['SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY','BACKUP_AGE_RECIPIENT'])
         env = db_environment(os.environ['SUPABASE_DB_URL'])
         # Reject invalid recipient before any customer bytes are exported.
-        run(['age','--encrypt','--recipient',os.environ['BACKUP_AGE_RECIPIENT']], input_bytes=b'preflight')
+        run(['age','--encrypt','--recipient',age_recipient()], input_bytes=b'preflight')
         run(['docker','pull',IMAGE], timeout=600)
         version = docker_client('pg_dump',['--version'],root,env).decode()
         if not re.search(r'\b17\.11\b',version):
@@ -194,7 +194,7 @@ def backup(root):
 
 
 def seal(root):
-    require(['BACKUP_AGE_RECIPIENT'])
+    owner_recipient = age_recipient()
     payload, publish = root/'production-backup', root/'publish'
     report = load_json(payload/'backup-report.json')
     keys = root/'keys'
@@ -212,7 +212,7 @@ def seal(root):
         with tarfile.open(archive,'w:gz') as t:
             t.add(payload,arcname='production-backup')
         encrypted = publish/'production-backup.tar.gz.age'
-        run(['age','--encrypt','--recipient',os.environ['BACKUP_AGE_RECIPIENT'],
+        run(['age','--encrypt','--recipient',owner_recipient,
              '--recipient',recipient,'--output',str(encrypted),str(archive)])
         check = root/'decrypt-self-test.tar.gz'
         run(['age','--decrypt','--identity',str(key),'--output',str(check),str(encrypted)])

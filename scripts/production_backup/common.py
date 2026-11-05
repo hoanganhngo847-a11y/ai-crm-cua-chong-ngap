@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
@@ -78,6 +79,14 @@ def require(names):
     missing = [name for name in names if not os.environ.get(name, '').strip()]
     if missing:
         raise Failure('MISSING_SECRET_' + '_AND_'.join(missing), 'BLOCKED')
+
+
+def age_recipient():
+    require(['BACKUP_AGE_RECIPIENT'])
+    value = os.environ['BACKUP_AGE_RECIPIENT'].strip()
+    if not re.fullmatch(r'age1[0-9a-z]{58}',value):
+        raise Failure('RECIPIENT_MUST_BE_ONE_NATIVE_AGE_X25519_KEY','BLOCKED')
+    return value
 
 
 def workspace():

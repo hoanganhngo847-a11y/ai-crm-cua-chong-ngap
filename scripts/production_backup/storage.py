@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -66,7 +67,7 @@ class Storage:
                     raise Failure('STORAGE_READ_PERMISSION_DENIED', 'BLOCKED') from None
                 if error.code not in (408, 429, 500, 502, 503, 504):
                     raise Failure('STORAGE_HTTP_ERROR', 'PARTIAL') from None
-            except (urllib.error.URLError, OSError, TimeoutError):
+            except (urllib.error.URLError, OSError, TimeoutError, http.client.IncompleteRead):
                 pass
             if attempt < 4:
                 time.sleep(min(2**attempt, 8))
