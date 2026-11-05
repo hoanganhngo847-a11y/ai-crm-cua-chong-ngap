@@ -99,7 +99,7 @@ Do not opportunistically alter unrelated CRM policies, functions, or views in th
 4. Apply only the reviewed additive Meta migrations in one controlled release transaction with explicit lock, timeout, rollback, and uncertain-commit verification.
 5. Verify post-migration catalog, migration history invariance, advisor delta, and all CRM invariants.
 6. Run automated tests for Meta attribution, Page binding, encrypted token vault, duplicate phone history, RPC-only ACLs, and existing Messenger/Zalo regressions.
-7. Merge to `main) only after the review and CI gates pass. Confirm the Render service's repository, branch, auto-deploy setting, and production environment before a deploy is allowed.
+7. Merge to `main` only after the review and CI gates pass. Confirm the Render service's repository, branch, auto-deploy setting, and production environment before a deploy is allowed.
 8. Connect the four Pages via OAuth one at a time; verify token encryption and read-back before subscribing only to `leadgen`. Preserve `messages` and all other existing subscriptions.
 9. Submit a controlled test lead (with owner-approved test data), verify CRM customer/touchpoint attribution, idempotency, tenant isolation, and no duplicate customer creation.
 10. Monitor webhook errors and intake health before declaring completion.
