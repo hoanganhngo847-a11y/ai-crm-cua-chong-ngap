@@ -73,7 +73,7 @@ export default async function FacebookConnectionPage({
       .order('created_at', { ascending: false }),
   ]);
   const adAccounts = adAccountsRes.data || [];
-  const configuredPageIds = configuredFacebookPageIds(companyId);
+  const configuredPageIds = configuredLeadAdsPageIds(companyId);
   const fullyConnected =
     connections.length > 0 && connections.every((connection) => connection.leadAdsSubscribed);
 
