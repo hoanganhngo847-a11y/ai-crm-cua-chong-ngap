@@ -35,10 +35,10 @@ test('META_ADS_PAGE_BINDINGS adds the four approved Pages without replacing Mess
     withBindings(
         JSON.stringify([{ page: '111111111111111', company: COMPANY, tokenEnv: 'META_PAGE_OLD_TOKEN', name: 'Existing Messenger Page' }]),
         JSON.stringify([
-            { page: POLAND, company: COMPANY, name: 'Ba Lan' },
-            { page: GERMANY, company: COMPANY, name: 'Đức' },
-            { page: AUSTRIA, company: COMPANY, name: 'Áo' },
-            { page: GERMAN_CENTER, company: COMPANY, name: 'Trung tâm Tiếng Đức' },
+            { page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN', name: 'Ba Lan' },
+            { page: GERMANY, company: COMPANY, tokenEnv: 'META_PAGE_GERMANY_TOKEN', name: 'Đức' },
+            { page: AUSTRIA, company: COMPANY, tokenEnv: 'META_PAGE_AUSTRIA_TOKEN', name: 'Áo' },
+            { page: GERMAN_CENTER, company: COMPANY, tokenEnv: 'META_PAGE_GERMAN_CENTER_TOKEN', name: 'Trung tâm Tiếng Đức' },
         ]),
         () => {
             const pages = pageBindings();
@@ -48,7 +48,7 @@ test('META_ADS_PAGE_BINDINGS adds the four approved Pages without replacing Mess
             assert.equal(binding('111111111111111').leadAdsOnly, false);
             assert.equal(binding(POLAND).company, COMPANY);
             assert.equal(binding(POLAND).leadAdsOnly, true);
-            assert.equal(binding(POLAND).tokenEnv, undefined);
+            assert.equal(binding(POLAND).tokenEnv, 'META_PAGE_POLAND_TOKEN');
             assert.equal(binding(GERMANY).name, 'Đức');
             assert.equal(binding(AUSTRIA).name, 'Áo');
             assert.equal(binding(GERMAN_CENTER).name, 'Trung tâm Tiếng Đức');
@@ -59,7 +59,7 @@ test('META_ADS_PAGE_BINDINGS adds the four approved Pages without replacing Mess
 test('duplicate Page bindings merge only when they retain the same tenant', () => {
     withBindings(
         JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN' }]),
-        JSON.stringify([{ page: POLAND, company: COMPANY, name: 'Ba Lan' }]),
+        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN_NEW', name: 'Ba Lan' }]),
         () => {
             const pages = pageBindings();
             assert.equal(pages.length, 1);
