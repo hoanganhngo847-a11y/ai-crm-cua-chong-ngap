@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import { getActorContext } from '@/lib/auth/context';
 import {
-  configuredFacebookPageIds,
+  configuredLeadAdsPageIds,
   getConfiguredFacebookConnections,
   readFacebookConnectSession,
 } from '@/features/omnichannel/facebook/connect';
