@@ -45,7 +45,9 @@ test('META_ADS_PAGE_BINDINGS adds the four approved Pages without replacing Mess
             assert.equal(pages.length, 5);
             assert.equal(bindingsForCompany(COMPANY).length, 5);
             assert.equal(binding('111111111111111').tokenEnv, 'META_PAGE_OLD_TOKEN');
+            assert.equal(binding('111111111111111').leadAdsOnly, false);
             assert.equal(binding(POLAND).company, COMPANY);
+            assert.equal(binding(POLAND).leadAdsOnly, true);
             assert.equal(binding(POLAND).tokenEnv, undefined);
             assert.equal(binding(GERMANY).name, 'Đức');
             assert.equal(binding(AUSTRIA).name, 'Áo');
@@ -63,6 +65,7 @@ test('duplicate Page bindings merge only when they retain the same tenant', () =
             assert.equal(pages.length, 1);
             assert.equal(pages[0].tokenEnv, 'META_PAGE_POLAND_TOKEN');
             assert.equal(pages[0].name, 'Ba Lan');
+            assert.equal(pages[0].leadAdsOnly, false);
         },
     );
 });
