@@ -439,6 +439,14 @@ export function configuredFacebookPageIds(companyId: string) {
   return new Set(bindingsForCompany(companyId).map((item) => item.page));
 }
 
+export function configuredLeadAdsPageIds(companyId: string) {
+  return new Set(
+    bindingsForCompany(companyId)
+      .filter((item) => item.leadAdsEnabled)
+      .map((item) => item.page),
+  );
+}
+
 export type SubscribePageResult = {
   id: string;
   name: string;
@@ -748,7 +756,7 @@ export async function getConfiguredFacebookConnections(
 ): Promise<ConfiguredFacebookConnection[]> {
   let bindings: PageBinding[] = [];
   try {
-    bindings = bindingsForCompany(companyId);
+    bindings = bindingsForCompany(companyId).filter((binding) => binding.leadAdsEnabled);
   } catch {
     bindings = [];
   }
