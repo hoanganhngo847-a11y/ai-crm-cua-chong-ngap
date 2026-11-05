@@ -774,7 +774,8 @@ export async function syncFacebookPages(
     const dryRun = Boolean(options.dryRun);
 
     const configs = pageBindings().filter(
-        (config) => selectedPages.size === 0 || selectedPages.has(config.page),
+        (config) => !config.leadAdsOnly
+            && (selectedPages.size === 0 || selectedPages.has(config.page)),
     );
 
     const client = dependencies.client ?? createAdminClient();
