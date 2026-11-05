@@ -260,7 +260,7 @@ test('managed-customizations helper suite', async (t) => {
         '--project-allowlist', allowlistPath,
       ]);
       assert.notEqual(result.code, 0);
-      assert.match(result.stderr, /DUPLICATE_PROJECT_ALLOWLIST/);
+      assert.match(result.stderr, /Project allowlist contains duplicate identity/);
     } finally {
       await removeTempDir(tempDir);
     }
