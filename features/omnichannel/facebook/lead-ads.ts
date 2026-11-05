@@ -258,6 +258,7 @@ export async function processLeadAdsChange(
     change: MetaLeadgenChange,
     customFetch?: typeof fetch,
 ): Promise<IngestedLeadResult> {
+    if (!config.leadAdsEnabled) throw new ChannelError('PAGE_NOT_ALLOWED', 403);
     const token = await getMetaPageToken(config.company, config.page, config.tokenEnv);
 
     const claim = await rpc('claim_meta_leadgen_event', {
