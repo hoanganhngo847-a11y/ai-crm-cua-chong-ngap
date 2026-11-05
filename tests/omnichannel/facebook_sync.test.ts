@@ -890,7 +890,7 @@ test('Messenger sync skips Pages configured only for Lead Ads', async () => {
     const page = '1418087751743574';
     const previous = process.env.META_ADS_PAGE_BINDINGS;
     process.env.META_ADS_PAGE_BINDINGS = JSON.stringify([
-        { page, company: COMPANY, name: 'Ba Lan' },
+        { page, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN', name: 'Ba Lan' },
     ]);
 
     try {
