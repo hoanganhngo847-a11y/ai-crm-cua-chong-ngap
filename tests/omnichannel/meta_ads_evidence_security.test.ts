@@ -79,7 +79,7 @@ test('a retry cannot manufacture signed proof absent from the immutable intake c
         throw new Error('UNEXPECTED_REQUEST');
     }) as typeof fetch;
     try {
-        await processLeadAdsChange({ page, company, name: 'Local test', tokenEnv: 'META_EVIDENCE_TEST_TOKEN' }, {
+        await processLeadAdsChange({ page, company, name: 'Local test', tokenEnv: 'META_EVIDENCE_TEST_TOKEN', leadAdsEnabled: true }, {
             kind: 'LEADGEN', adgroupId: null, createdTime: 1793750400, page, leadgenId: '99001', adId: ad, formId: '1', time: '2026-11-04T00:00:00Z', raw: {},
         });
         assert.ok(context);
