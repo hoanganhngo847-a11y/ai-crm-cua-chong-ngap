@@ -54,6 +54,7 @@ process.env.META_PAGE_BINDINGS = JSON.stringify([
         page: TARGET_PAGE_ID,
         company: COMPANY_A,
         tokenEnv: 'META_PAGE_CHD_TOKEN',
+        leadAdsEnabled: true,
         name: 'Du học Đức CHD',
     },
     {
