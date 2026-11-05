@@ -101,14 +101,14 @@ export async function fetchMetaLeadDetails(
     let attributionPending = false;
 
     for (;;) {
-        const url = new URL(\`https://graph.facebook.com/\${version}/\${encodeURIComponent(leadgenId)}\`);
+        const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
         url.searchParams.set('fields', fields);
 
         let response: Response;
         try {
             response = await fetchFn(url.toString(), {
                 method: 'GET',
-                headers: { Authorization: \`Bearer \${pageAccessToken}\` },
+                headers: { Authorization: `Bearer ${pageAccessToken}` },
                 redirect: 'error',
                 cache: 'no-store',
                 signal: AbortSignal.timeout(10_000),
@@ -139,7 +139,7 @@ export async function fetchMetaLeadDetails(
         }
 
         const failure = classifyLeadReadFailure(response.status, graphError);
-        console.error(\`[lead-ads] fetch_failed status=\${response.status} code=\${failure.code}\`);
+        console.error(`[lead-ads] fetch_failed status=${response.status} code=${failure.code}`);
         throw failure;
     }
 }
