@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { pageBindings, type PageBinding } from './binding';
 import { sanitize } from './core';
+import { getMetaPageToken } from './page-token-vault';
 import { processFacebookInboundPhonePrivacy } from './phone-intake';
 import {
     detectLeadForm,
@@ -72,6 +73,7 @@ export type FacebookSyncDependencies = {
     fetcher?: typeof fetch;
     now?: Date;
     promoteDisplayName?: typeof promoteFacebookCustomerDisplayName;
+    getPageToken?: (config: PageBinding) => Promise<string>;
 };
 
 export type FacebookSyncFolderResult = {
@@ -589,19 +591,26 @@ async function syncPage(
     };
 
     const version = process.env.META_GRAPH_VERSION?.trim();
-    const token = process.env[config.tokenEnv]?.trim();
 
     if (!version || !/^v\d+\.\d+$/.test(version)) {
         pageResult.errors.push('graph_version_missing');
         return pageResult;
     }
 
+    const client = dependencies.client ?? createAdminClient();
+    let token: string | null = null;
+    try {
+        token = dependencies.getPageToken
+            ? await dependencies.getPageToken(config)
+            : await getMetaPageToken(config.company, config.page, config.tokenEnv, client);
+    } catch {
+        token = null;
+    }
+
     if (!token) {
         pageResult.errors.push('page_token_missing');
         return pageResult;
     }
-
-    const client = dependencies.client ?? createAdminClient();
     const fetcher = dependencies.fetcher ?? fetch;
     const promoteDisplayName =
         dependencies.promoteDisplayName ?? promoteFacebookCustomerDisplayName;
