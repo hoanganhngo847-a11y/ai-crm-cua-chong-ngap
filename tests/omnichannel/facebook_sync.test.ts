@@ -885,3 +885,25 @@ test('missing outbound intake RPC fails closed without manual table writes or ch
         assert.equal(calls.filter(call => call.name === 'facebook_set_sync_checkpoint').length, 0);
     });
 });
+
+test('Messenger sync skips Pages configured only for Lead Ads', async () => {
+    const page = '1418087751743574';
+    const previous = process.env.META_ADS_PAGE_BINDINGS;
+    process.env.META_ADS_PAGE_BINDINGS = JSON.stringify([
+        { page, company: COMPANY, name: 'Ba Lan' },
+    ]);
+
+    try {
+        const { client } = fakeClient();
+        const summary = await syncFacebookPages(
+            { pages: [page], lookbackMinutes: 5 },
+            { client },
+        );
+
+        assert.equal(summary.ok, true);
+        assert.equal(summary.pages.length, 0);
+    } finally {
+        if (previous === undefined) delete process.env.META_ADS_PAGE_BINDINGS;
+        else process.env.META_ADS_PAGE_BINDINGS = previous;
+    }
+});
