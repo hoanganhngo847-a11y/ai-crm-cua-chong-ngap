@@ -910,7 +910,7 @@ test('lead read falls back only for an explicit optional-field error and classif
     process.env.META_GRAPH_VERSION = 'v26.0';
     try {
         let calls = 0;
-        const seenFields = [];
+        const seenFields: string[] = [];
         globalThis.fetch = async (input, init) => {
             const url = new URL(String(input));
             assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-token');
