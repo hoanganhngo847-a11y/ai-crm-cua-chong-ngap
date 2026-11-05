@@ -43,14 +43,14 @@ Supabase CLI v3 changed the default target for database commands to the local st
 The following code changes are now committed to `meta_ads_integration` for CI review; they are **not deployed to Production**:
 
 - Added additive `META_ADS_PAGE_BINDINGS` configuration for the four approved Pages. It merges with, rather than replaces, `META_PAGE_BINDINGS`.
-- Pages present only in `META_ADS_PAGE_BINDINGS` are marked `leadAdsOnly`. Messenger webhook ingestion, Messenger polling/sync, conversation listing, and message sending exclude those Pages. If a Page already exists in the Messenger binding list for the same tenant, its existing Messenger behavior is preserved. Each binding retains a required per-Page `tokenEnv` name for legacy fallback; the environment value may remain blank while a valid encrypted vault record exists.
+- Only Pages in `META_ADS_PAGE_BINDINGS` (or explicitly opted in with `leadAdsEnabled: true` in `META_PAGE_BINDINGS`) receive Lead Ads webhooks. Pages present only in the Ads list are marked `leadAdsOnly` and are excluded from Messenger webhook intake, polling/sync, conversation listing, standard/AI/SLA sending, and campaign sender selection. If a Page already exists in the Messenger binding list for the same tenant, its existing Messenger behavior is preserved. Each binding retains a required per-Page `tokenEnv` name for legacy fallback; the environment value may remain blank while a valid encrypted vault record exists.
 - OAuth selection now persists each managed Page access token encrypted through the existing service-role-only private Meta token-vault RPC. The reserved storage key is `__page__:<page_id>`, distinct from Meta Ad Account IDs; the existing `META_TOKEN_ENCRYPTION_KEY` is reused. Token retrieval decrypts server-side, checks the stored expiry, and keeps legacy per-Page environment-token fallback for compatibility. No raw token is stored in Git or returned to the browser.
 - Lead Ads ingestion, Messenger send, Messenger sync, and best-effort profile lookup now resolve Page tokens through the vault adapter.
 - Added tests for additive tenant-safe bindings, encrypted token storage/decryption, expiry fail-closed behavior, legacy fallback, and exclusion of Lead Ads-only Pages from Messenger sync.
 
 The vault adapter deliberately reuses the existing private Meta token store to avoid introducing an eighth schema migration before Production's migration history is reconciled. A future dedicated Page-token table can replace the namespaced key without changing the external token API.
 
-Current PR #139 head is `d49bb04e4da9402933ecb4ada27162c3de9d171a`; it contains 286 changed files and 142 commits. The seven CI workflows for this head are still queued/in progress at the time of this update. Do not treat this branch as Production-ready until all relevant checks pass and the exact diff is reduced/reviewed for unrelated scope.
+Current PR #139 head is `5f30735ef41cc456ceb846aab8302a251fc9d0be`; it contains 289 changed files and 166 commits. The seven CI workflows for this head are queued/in progress at the time of this update. Do not treat this branch as Production-ready until all relevant checks pass and the exact diff is reduced/reviewed for unrelated scope.
 
 ## Execution status at audit time
 
