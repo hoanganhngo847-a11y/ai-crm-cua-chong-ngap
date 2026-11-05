@@ -192,6 +192,80 @@ test('managed-customizations helper suite', async (t) => {
     }
   });
 
+  await t.test('CLI reads an explicit project allowlist and binds its digest into the approved plan', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'managed.json');
+      const allowlistPath = path.join(tempDir, 'project-allowlist.json');
+      const planPath = path.join(tempDir, 'plan.sql');
+      const reportPath = path.join(tempDir, 'report.json');
+      const identity = 'storage.objects:operations_evidence_no_client_insert';
+      const item = {
+        kind: 'policy',
+        identity,
+        details: {
+          schema: 'storage',
+          table: 'objects',
+          policy: 'operations_evidence_no_client_insert',
+          permissive: 'PERMISSIVE',
+          roles: ['anon', 'authenticated'],
+          command: 'INSERT',
+          using: null,
+          withCheck: "bucket_id = 'operations-evidence'",
+        },
+      };
+      await fsp.writeFile(sourcePath, JSON.stringify([item]));
+      await fsp.writeFile(allowlistPath, JSON.stringify([identity]));
+
+      const result = await runCli([
+        'plan',
+        '--source', sourcePath,
+        '--target-label', 'crm-restore-rehearsal',
+        '--out', planPath,
+        '--report', reportPath,
+        '--project-allowlist', allowlistPath,
+      ]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /PLAN APPROVED/);
+
+      const report = JSON.parse(await fsp.readFile(reportPath, 'utf8'));
+      const expectedDigest = sha256Hex(JSON.stringify([identity]));
+      assert.equal(report.projectAllowlistSha256, expectedDigest);
+      assert.deepEqual(report.projectAllowlist, [identity]);
+      assert.equal(report.counts.projectOwnedCount, 1);
+
+      const plan = await fsp.readFile(planPath, 'utf8');
+      assert.match(plan, new RegExp(expectedDigest));
+      assert.match(plan, /CREATE POLICY "operations_evidence_no_client_insert"/);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  await t.test('CLI rejects duplicate project allowlist identities before producing a plan', async () => {
+    const tempDir = await createTempDir();
+    try {
+      const sourcePath = path.join(tempDir, 'managed.json');
+      const allowlistPath = path.join(tempDir, 'project-allowlist.json');
+      const planPath = path.join(tempDir, 'plan.sql');
+      const reportPath = path.join(tempDir, 'report.json');
+      await fsp.writeFile(sourcePath, '[]');
+      await fsp.writeFile(allowlistPath, JSON.stringify(['storage.objects:policy_a', 'storage.objects:policy_a']));
+
+      const result = await runCli([
+        'plan',
+        '--source', sourcePath,
+        '--out', planPath,
+        '--report', reportPath,
+        '--project-allowlist', allowlistPath,
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /DUPLICATE_PROJECT_ALLOWLIST/);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   await t.test('Finding 1 regression: exact ACL baseline comparison fails closed on any anomaly', () => {
     const baseline = getPlatformAclBaseline();
     const usersBaseline = baseline['auth.users'];
