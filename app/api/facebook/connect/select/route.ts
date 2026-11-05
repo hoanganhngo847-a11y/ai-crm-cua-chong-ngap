@@ -47,7 +47,8 @@ export async function POST(request: Request) {
   try {
     const actor = await getActorContext();
     if (!actor?.companyId) return back(request, 'NO_COMPANY');
-    await requireBossAdmin(actor.companyId, {
+    const companyId = actor.companyId;
+    await requireBossAdmin(companyId, {
       requireAal2: !isMetaReviewerMfaExempt(actor.userId),
     });
 
@@ -115,11 +116,11 @@ export async function POST(request: Request) {
       const pageResult = await subscribeManagedPage(
         session.userAccessToken,
         pageId,
-        actor.companyId,
+        companyId,
         undefined,
         async (pageAccessToken) => {
           await storeMetaPageToken(
-            actor.companyId,
+            companyId,
             pageId,
             pageAccessToken,
             session.tokenExpiresAt ?? null,
