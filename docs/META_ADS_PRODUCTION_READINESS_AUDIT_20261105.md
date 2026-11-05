@@ -50,7 +50,7 @@ The following code changes are now committed to `meta_ads_integration` for CI re
 
 The vault adapter deliberately reuses the existing private Meta token store to avoid introducing an eighth schema migration before Production's migration history is reconciled. A future dedicated Page-token table can replace the namespaced key without changing the external token API.
 
-Current PR #139 head is `5f30735ef41cc456ceb846aab8302a251fc9d0be`; it contains 289 changed files and 166 commits. The seven CI workflows for this head are queued/in progress at the time of this update. Do not treat this branch as Production-ready until all relevant checks pass and the exact diff is reduced/reviewed for unrelated scope.
+The feature-code head reviewed in this audit is `5f30735ef41cc456ceb846aab8302a251fc9d0be` (289 changed files and 166 commits before this documentation-only update). CI workflows for the code head were queued/in progress at the time of this update. The PR remains Draft; do not treat this branch as Production-ready until relevant checks pass and the exact diff is reduced/reviewed for unrelated scope. Do not treat this branch as Production-ready until all relevant checks pass and the exact diff is reduced/reviewed for unrelated scope.
 
 ## Execution status at audit time
 
