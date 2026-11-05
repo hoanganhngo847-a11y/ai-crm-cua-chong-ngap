@@ -8,6 +8,7 @@ import {
 import type { PageBinding } from './binding';
 import { rpc } from './server';
 import { graphVersion } from './graph-api';
+import { getMetaPageToken } from './page-token-vault';
 import { fetchMetaAdCreativeSnapshot, type MetaAdCreativeSnapshot } from './marketing-sync';
 
 export interface MetaLeadData {
@@ -257,11 +258,7 @@ export async function processLeadAdsChange(
     change: MetaLeadgenChange,
     customFetch?: typeof fetch,
 ): Promise<IngestedLeadResult> {
-    const token = process.env[config.tokenEnv]?.trim();
-    if (!token) {
-        console.error(`[lead-ads] missing_token_env env=${config.tokenEnv} page=${config.page}`);
-        throw new ChannelError('CHANNEL_NOT_CONFIGURED', 503);
-    }
+    const token = await getMetaPageToken(config.company, config.page, config.tokenEnv);
 
     const claim = await rpc('claim_meta_leadgen_event', {
         p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
