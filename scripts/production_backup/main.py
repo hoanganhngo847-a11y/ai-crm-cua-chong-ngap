@@ -178,7 +178,7 @@ def backup(root):
                           '--file=/backup/production-backup/database/schema.dump'],root,env)
             tables = [f"{ident(t['schema'])}.{ident(t['name'])}" for t in baseline['tables']]
             tables += [f"{ident(t['schema'])}.{ident(t['name'])}" for t in baseline['sequences']]
-            args = [*common,'--data-only','--file=/backup/production-backup/database/data.dump']
+            args = [*common,'--data-only','--blobs','--file=/backup/production-backup/database/data.dump']
             # Explicit relations include extension-owned data, auth/private/storage and migration history.
             for table in tables:
                 args += ['--table',table]
