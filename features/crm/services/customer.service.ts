@@ -1473,6 +1473,36 @@ function parseSuggestionEvidence(raw: unknown): CustomerStageSuggestionEvidence[
     .filter((item) => item.quote.trim().length > 0);
 }
 
+
+async function countPipelineRowsWithFilters(
+  client: SupabaseClient,
+  companyId: string,
+  filters: { search: string; source: string | null; from: string | null; to: string | null },
+  stages: string[] | null,
+): Promise<number> {
+  let query = client.from('customers')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId);
+  if (filters.search) {
+    const escaped = filters.search.replace(/[%,()]/g, ' ');
+    query = query.or(`name.ilike.%${escaped}%,customer_code.ilike.%${escaped}%`);
+  }
+  if (filters.source) query = query.eq('source', filters.source);
+  if (filters.from) query = query.gte('created_at', filters.from);
+  if (filters.to) query = query.lte('created_at', filters.to);
+  if (stages) query = query.in('stage', stages);
+  const { count, error } = await query;
+  if (error) throw new Error(`DATABASE_ERROR: Lỗi đếm khách hàng theo giai đoạn: ${error.message}`);
+  return count ?? 0;
+}
+
+function isMissingPipelineCountRpc(error: unknown): boolean {
+  const value = error as { code?: string; message?: string } | null;
+  const message = String(value?.message || '').toLowerCase();
+  return value?.code === 'PGRST202' || value?.code === '42883'
+    || (message.includes('could not find the function') && message.includes('get_customer_stage_counts'));
+}
+
 function parseStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
@@ -1657,7 +1687,27 @@ export async function getPipeline(params: GetCustomerPipelineParams): Promise<Cu
     });
 
     if (error) {
-      if (!isDemoMode) {
+      if (!isDemoMode && isMissingPipelineCountRpc(error) && adminClient) {
+        const filters = { search, source, from, to };
+        const stageCounts = await Promise.all(CANONICAL_CUSTOMER_STAGES.map(async (stage) => {
+          const values = DB_STAGE_VALUES_BY_CANONICAL[stage];
+          const reviewValues = values.filter((value) => stageNeedsReview(value));
+          const [count, needsReview] = await Promise.all([
+            countPipelineRowsWithFilters(adminClient!, companyId, filters, values),
+            reviewValues.length
+              ? countPipelineRowsWithFilters(adminClient!, companyId, filters, reviewValues)
+              : Promise.resolve(0),
+          ]);
+          return { stage, count, needsReview };
+        }));
+        for (const entry of stageCounts) {
+          rawCounts.set(entry.stage, { count: entry.count, needsReview: entry.needsReview });
+        }
+        const totalCount = await countPipelineRowsWithFilters(adminClient, companyId, filters, null);
+        const eligibleCount = stageCounts.reduce((sum, entry) => sum + entry.count, 0);
+        unmappedCount = Math.max(0, totalCount - eligibleCount);
+        countsLoadedFromRpc = true;
+      } else if (!isDemoMode) {
         throw new Error(`DATABASE_ERROR: Lỗi đếm giai đoạn khách hàng: ${error.message}`);
       }
     } else if (Array.isArray(data)) {
