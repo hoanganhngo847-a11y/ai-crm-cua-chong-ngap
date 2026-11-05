@@ -57,22 +57,22 @@ test('list fails closed on query failure, never a silent zero', async () => {
 });
 
 test('missing c360_list falls back to tenant-scoped, PII-free base customer rows', async () => {
-  const calls = [];
+  const calls: Array<[string, unknown[]]> = [];
   const row = {
     id: context.customerId, company_id: context.companyId, name: 'Khách kiểm thử',
     customer_code: 'KH-TEST-01', stage: 'LEAD_NEW', source: 'MANUAL',
     updated_at: '2026-11-05T00:00:00.000Z',
   };
-  const query = {};
+  const query: any = {};
   for (const method of ['select', 'eq', 'or', 'in', 'order', 'range', 'limit']) {
-    query[method] = (...args) => { calls.push([method, args]); return query; };
+    query[method] = (...args: unknown[]) => { calls.push([method, args]); return query; };
   }
-  query.then = (resolve, reject) =>
+  query.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
     Promise.resolve({ data: [row], count: 1, error: null }).then(resolve, reject);
   const db = {
     rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.c360_list(p_company_id, p_search) in the schema cache' } }),
-    from: (table) => { assert.equal(table, 'customers'); return query; },
-  };
+    from: (table: string) => { assert.equal(table, 'customers'); return query; },
+  } as unknown as SupabaseClient;
 
   const result = await listCustomersForActor(db, actor, {});
   assert.equal(result.readOnlyFallback, true);
@@ -87,7 +87,7 @@ test('missing c360_list does not silently ignore advanced or phone filters', asy
   const db = {
     rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.c360_list in the schema cache' } }),
     from: () => { throw new Error('fallback must reject before querying for unsupported filters'); },
-  };
+  } as unknown as SupabaseClient;
   await assert.rejects(listCustomersForActor(db, actor, { owner: actor.userId }), /CUSTOMER_360_MIGRATION_REQUIRED/);
   await assert.rejects(listCustomersForActor(db, actor, { search: '+84912345678' }), /CUSTOMER_360_MIGRATION_REQUIRED/);
 });
