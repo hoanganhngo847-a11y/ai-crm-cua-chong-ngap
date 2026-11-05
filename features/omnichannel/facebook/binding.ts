@@ -7,6 +7,7 @@ export type PageBinding = {
     tokenEnv: string;
     name?: string;
     leadAdsOnly?: boolean;
+    leadAdsEnabled?: boolean;
 };
 
 function parseConfiguredRows(raw: string | undefined): unknown[] {
@@ -25,8 +26,8 @@ export function pageBindings(): PageBinding[] {
         const hasExplicitBindings = messengerRows.length > 0 || leadAdsRows.length > 0;
         const sources = hasExplicitBindings
             ? [
-                { rows: messengerRows, leadAdsOnly: false },
-                { rows: leadAdsRows, leadAdsOnly: true },
+                { rows: messengerRows, leadAdsOnly: false, leadAdsEnabled: false },
+                { rows: leadAdsRows, leadAdsOnly: true, leadAdsEnabled: true },
             ]
             : [{
                 rows: [{
@@ -36,6 +37,7 @@ export function pageBindings(): PageBinding[] {
                     name: process.env.META_PAGE_NAME,
                 }],
                 leadAdsOnly: false,
+                leadAdsEnabled: false,
             }];
 
         const byPage = new Map<string, PageBinding>();
@@ -55,7 +57,9 @@ export function pageBindings(): PageBinding[] {
                 if (typeof row.tokenEnv !== 'string' || !/^META_[A-Z0-9_]+_TOKEN$/.test(row.tokenEnv)) {
                     throw new Error();
                 }
-                const tokenEnv = row.tokenEnv;
+                if (row.leadAdsEnabled !== undefined && typeof row.leadAdsEnabled !== 'boolean') {
+                    throw new Error();
+                }
                 if (
                     row.name !== undefined
                     && (typeof row.name !== 'string' || !row.name.trim() || row.name.trim().length > 120)
@@ -68,13 +72,14 @@ export function pageBindings(): PageBinding[] {
                 byPage.set(row.page, {
                     page: row.page,
                     company,
-                    tokenEnv: existing?.tokenEnv ?? tokenEnv,
+                    tokenEnv: existing?.tokenEnv ?? row.tokenEnv,
                     name: typeof row.name === 'string' ? row.name.trim() : existing?.name,
-                    // A Page already configured for Messenger remains a Messenger Page
-                    // when it is also selected for Lead Ads.
                     leadAdsOnly: existing
                         ? Boolean(existing.leadAdsOnly) && source.leadAdsOnly
                         : source.leadAdsOnly,
+                    leadAdsEnabled: Boolean(existing?.leadAdsEnabled)
+                        || source.leadAdsEnabled
+                        || row.leadAdsEnabled === true,
                 });
             }
         }
