@@ -72,8 +72,8 @@ test('duplicate Page bindings merge only when they retain the same tenant', () =
 
 test('a Page cannot be rebound to a different tenant through the additive configuration', () => {
     withBindings(
-        JSON.stringify([{ page: POLAND, company: COMPANY }]),
-        JSON.stringify([{ page: POLAND, company: OTHER_COMPANY }]),
+        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN' }]),
+        JSON.stringify([{ page: POLAND, company: OTHER_COMPANY, tokenEnv: 'META_PAGE_POLAND_OTHER_TOKEN' }]),
         () => assert.throws(() => pageBindings()),
     );
 });
