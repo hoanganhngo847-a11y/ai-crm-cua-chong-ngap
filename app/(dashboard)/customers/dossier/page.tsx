@@ -146,7 +146,15 @@ export default async function CustomerDossierList({
         }
       />
 
-      {/* Attio-Style Filter Toolbar */}
+      {data.readOnlyFallback && (
+        <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          Customer 360 đang ở chế độ xem cơ bản vì migration hồ sơ 360 chưa có trên Staging.
+          Danh sách chỉ hiển thị dữ liệu CRM gốc; PII, AI snapshot, phân công và thao tác chỉnh sửa vẫn được khóa.
+          Tìm kiếm theo số điện thoại và các bộ lọc nâng cao tạm thời không khả dụng.
+        </div>
+      )}
+
+      {/* Attio-Style Filter Toolbar */
       <Card className="overflow-visible">
         <form
           method="GET"
@@ -161,7 +169,7 @@ export default async function CustomerDossierList({
                 type="text"
                 name="search"
                 defaultValue={f.search}
-                placeholder="Tìm theo tên, SĐT, email, Zalo, Facebook, mã KH..."
+                placeholder={data.readOnlyFallback ? "Tìm theo tên hoặc mã khách hàng..." : "Tìm theo tên, SĐT, email, Zalo, Facebook, mã KH..."}
                 className="w-full h-8 pl-8 pr-3 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] focus:border-[var(--accent)]"
               />
             </div>
@@ -170,6 +178,7 @@ export default async function CustomerDossierList({
             <select
               name="owner"
               defaultValue={f.owner || ''}
+              disabled={data.readOnlyFallback}
               className="h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             >
               <option value="">Tất cả Sale phụ trách</option>
@@ -212,6 +221,7 @@ export default async function CustomerDossierList({
             <select
               name="sort"
               defaultValue={f.sort}
+              disabled={data.readOnlyFallback}
               className="h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
             >
               <option value="updated">Mới cập nhật</option>
@@ -242,6 +252,7 @@ export default async function CustomerDossierList({
                 name="recent"
                 value="1"
                 defaultChecked={!!f.recent}
+                disabled={data.readOnlyFallback}
                 className="rounded border-[var(--border-strong)] text-[var(--accent)] focus:ring-[var(--accent)]"
               />
               <span>Hoạt động 7 ngày qua</span>
@@ -253,6 +264,7 @@ export default async function CustomerDossierList({
                 name="hot"
                 value="1"
                 defaultChecked={!!f.hot}
+                disabled={data.readOnlyFallback}
                 className="rounded border-[var(--border-strong)] text-[var(--accent)] focus:ring-[var(--accent)]"
               />
               <span className="flex items-center gap-1">
@@ -267,6 +279,7 @@ export default async function CustomerDossierList({
                 name="overdue"
                 value="1"
                 defaultChecked={!!f.overdue}
+                disabled={data.readOnlyFallback}
                 className="rounded border-[var(--border-strong)] text-[var(--accent)] focus:ring-[var(--accent)]"
               />
               <span className="flex items-center gap-1">
@@ -338,7 +351,7 @@ export default async function CustomerDossierList({
         <Table>
           <TableHeader>
             <TableRow>
-              <BulkHeader />
+              {data.readOnlyFallback ? <TableHead className="w-[40px]" /> : <BulkHeader />}
               <TableHead className="min-w-[200px]">Khách hàng</TableHead>
               <TableHead className="min-w-[110px]">Giai đoạn</TableHead>
               <TableHead className="min-w-[130px]">Liên hệ</TableHead>
@@ -399,18 +412,22 @@ export default async function CustomerDossierList({
 
                 return (
                   <TableRow key={c.id}>
-                    <BulkCell id={c.id} name={c.name} />
+                    {data.readOnlyFallback ? <TableCell className="w-[40px]" /> : <BulkCell id={c.id} name={c.name} />}
                     {/* Customer Primary Cell */}
                     <TableCell>
                       <div className="flex items-center gap-2.5">
                         <Avatar name={c.name} size="sm" />
                         <div className="min-w-0">
-                          <Link
-                            href={`/customers/${c.id}/dossier`}
-                            className="font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors truncate block"
-                          >
-                            {c.name}
-                          </Link>
+                          {data.readOnlyFallback ? (
+                            <span className="font-medium text-[var(--text-primary)] truncate block">{c.name}</span>
+                          ) : (
+                            <Link
+                              href={`/customers/${c.id}/dossier`}
+                              className="font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors truncate block"
+                            >
+                              {c.name}
+                            </Link>
+                          )}
                           <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-[var(--text-tertiary)] font-mono">
                             <span>{c.customer_code}</span>
                             {c.zalo_name && (
@@ -447,64 +464,80 @@ export default async function CustomerDossierList({
 
                     {/* Facebook / Zalo outreach */}
                     <TableCell>
-                      <Customer360OutreachCell
-                        customerId={c.id}
-                        channel="FACEBOOK"
-                        name={c.facebook_name}
-                        at={c.facebook_outreach_at}
-                        source={c.facebook_outreach_source}
-                      />
+                      {data.readOnlyFallback ? (
+                        <span className="text-xs text-[var(--text-tertiary)]">—</span>
+                      ) : (
+                        <Customer360OutreachCell
+                          customerId={c.id}
+                          channel="FACEBOOK"
+                          name={c.facebook_name}
+                          at={c.facebook_outreach_at}
+                          source={c.facebook_outreach_source}
+                        />
+                      )}
                     </TableCell>
 
                     <TableCell>
-                      <Customer360OutreachCell
-                        customerId={c.id}
-                        channel="ZALO"
-                        name={c.zalo_name}
-                        at={c.zalo_outreach_at}
-                        source={c.zalo_outreach_source}
-                      />
+                      {data.readOnlyFallback ? (
+                        <span className="text-xs text-[var(--text-tertiary)]">—</span>
+                      ) : (
+                        <Customer360OutreachCell
+                          customerId={c.id}
+                          channel="ZALO"
+                          name={c.zalo_name}
+                          at={c.zalo_outreach_at}
+                          source={c.zalo_outreach_source}
+                        />
+                      )}
                     </TableCell>
 
                     {/* Phân công cho Sale (Editable) */}
                     <TableCell>
-                      <Customer360EditableCell
-                        customerId={c.id}
-                        field="assigned_sale_name"
-                        value={c.assigned_sale_name || c.assigned_sale || ''}
-                        placeholder="Nhập tên sale..."
-                        ownerSuggestions={owners.map((o) => o.name)}
-                      />
+                      {data.readOnlyFallback ? <span className="text-xs text-[var(--text-tertiary)]">Chưa có migration</span> : (
+                        <Customer360EditableCell
+                          customerId={c.id}
+                          field="assigned_sale_name"
+                          value={c.assigned_sale_name || c.assigned_sale || ''}
+                          placeholder="Nhập tên sale..."
+                          ownerSuggestions={owners.map((o) => o.name)}
+                        />
+                      )}
                     </TableCell>
 
                     {/* Ghi chú của Sale (Editable) */}
                     <TableCell>
-                      <Customer360EditableCell
-                        customerId={c.id}
-                        field="sale_notes"
-                        value={c.sale_notes || ''}
-                        placeholder="Nhập ghi chú sale..."
-                      />
+                      {data.readOnlyFallback ? <span className="text-xs text-[var(--text-tertiary)]">—</span> : (
+                        <Customer360EditableCell
+                          customerId={c.id}
+                          field="sale_notes"
+                          value={c.sale_notes || ''}
+                          placeholder="Nhập ghi chú sale..."
+                        />
+                      )}
                     </TableCell>
 
                     {/* Ghi chú của Marketing (Editable) */}
                     <TableCell>
-                      <Customer360EditableCell
-                        customerId={c.id}
-                        field="marketing_notes"
-                        value={c.marketing_notes || ''}
-                        placeholder="Nhập ghi chú mkt..."
-                      />
+                      {data.readOnlyFallback ? <span className="text-xs text-[var(--text-tertiary)]">—</span> : (
+                        <Customer360EditableCell
+                          customerId={c.id}
+                          field="marketing_notes"
+                          value={c.marketing_notes || ''}
+                          placeholder="Nhập ghi chú mkt..."
+                        />
+                      )}
                     </TableCell>
 
                     {/* Ghi chú của AI (Editable) */}
                     <TableCell>
-                      <Customer360EditableCell
-                        customerId={c.id}
-                        field="ai_notes"
-                        value={c.ai_notes || c.current_situation || ''}
-                        placeholder="Nhập ghi chú AI..."
-                      />
+                      {data.readOnlyFallback ? <span className="text-xs text-[var(--text-tertiary)]">—</span> : (
+                        <Customer360EditableCell
+                          customerId={c.id}
+                          field="ai_notes"
+                          value={c.ai_notes || c.current_situation || ''}
+                          placeholder="Nhập ghi chú AI..."
+                        />
+                      )}
                     </TableCell>
 
                     {/* Last Interaction */}
@@ -540,11 +573,15 @@ export default async function CustomerDossierList({
 
                     {/* Actions */}
                     <TableCell className="text-right">
-                      <Link href={`/customers/${c.id}/dossier`}>
-                        <Button variant="ghost" size="xs" rightIcon={<ChevronRight className="w-3 h-3" />}>
-                          Hồ sơ
-                        </Button>
-                      </Link>
+                      {data.readOnlyFallback ? (
+                        <span className="text-[11px] text-[var(--text-tertiary)]">Chỉ xem</span>
+                      ) : (
+                        <Link href={`/customers/${c.id}/dossier`}>
+                          <Button variant="ghost" size="xs" rightIcon={<ChevronRight className="w-3 h-3" />}>
+                            Hồ sơ
+                          </Button>
+                        </Link>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
