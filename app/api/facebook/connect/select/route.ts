@@ -4,7 +4,7 @@ import { getActorContext, requireBossAdmin } from '@/lib/auth/context';
 import { isMetaReviewerMfaExempt } from '@/lib/auth/meta-review';
 import {
   clearFacebookConnectSession,
-  configuredFacebookPageIds,
+  configuredLeadAdsPageIds,
   readFacebookConnectSession,
   subscribeManagedPage,
 } from '@/features/omnichannel/facebook/connect';
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       return back(request, 'FACEBOOK_PAGE_NOT_MANAGED');
     }
 
-    const allowedPageIds = configuredFacebookPageIds(actor.companyId);
+    const allowedPageIds = configuredLeadAdsPageIds(companyId);
     if (requestedPageIds.some((pageId) => !allowedPageIds.has(pageId))) {
       return back(request, 'FACEBOOK_PAGE_NOT_ALLOWED_FOR_WORKSPACE');
     }
