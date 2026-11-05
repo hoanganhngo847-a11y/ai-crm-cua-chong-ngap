@@ -1,0 +1,7 @@
+{
+  "atomicBundle": true,
+  "preconditionDriftRollback": true,
+  "postconditionRollback": true,
+  "canonicalLedgerRows": 21,
+  "bundleSha256": "dc2063919a916d1687257d18e5363a075e17c2d97f9903ef2968e912cada698d"
+}

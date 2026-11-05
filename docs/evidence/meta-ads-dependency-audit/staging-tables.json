@@ -1,0 +1,156 @@
+[
+  {
+    "name": "appointments",
+    "relation": "appointments",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "company_bank_accounts",
+    "relation": null,
+    "relkind": null,
+    "relrowsecurity": null,
+    "relforcerowsecurity": null,
+    "owner": null,
+    "anon_select": null,
+    "authenticated_select": null,
+    "service_select": null
+  },
+  {
+    "name": "contracts",
+    "relation": "contracts",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "finance_summaries",
+    "relation": "finance_summaries",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "installations",
+    "relation": "installations",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "operations_outbox",
+    "relation": "operations_outbox",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": false,
+    "service_select": true
+  },
+  {
+    "name": "orders",
+    "relation": "orders",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "payment_transactions",
+    "relation": "payment_transactions",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "price_calculations",
+    "relation": "price_calculations",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "pricing_policies",
+    "relation": "pricing_policies",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "production_orders",
+    "relation": "production_orders",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "survey_photo_operations",
+    "relation": "survey_photo_operations",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": false,
+    "service_select": true
+  },
+  {
+    "name": "surveys",
+    "relation": "surveys",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  },
+  {
+    "name": "warranty_tickets",
+    "relation": "warranty_tickets",
+    "relkind": "r",
+    "relrowsecurity": true,
+    "relforcerowsecurity": false,
+    "owner": "postgres",
+    "anon_select": false,
+    "authenticated_select": true,
+    "service_select": true
+  }
+]

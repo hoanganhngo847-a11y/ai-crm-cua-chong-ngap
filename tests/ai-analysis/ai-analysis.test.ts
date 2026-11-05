@@ -162,7 +162,7 @@ async function setupDatabaseFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A1_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'ext_ai_a1',
+      external_conversation_id: '987654321012345:880000000000051',
       status: 'OPEN',
     },
     {
@@ -178,7 +178,7 @@ async function setupDatabaseFixtures() {
       company_id: COMPANY_B_ID,
       customer_id: CUSTOMER_B1_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'ext_ai_b1',
+      external_conversation_id: '987654321012345:880000000000052',
       status: 'OPEN',
     },
     {
@@ -186,7 +186,7 @@ async function setupDatabaseFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_PAGING_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'ext_ai_pag',
+      external_conversation_id: '987654321012345:880000000000053',
       status: 'OPEN',
     },
   ]);

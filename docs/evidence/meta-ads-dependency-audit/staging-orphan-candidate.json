@@ -1,0 +1,8 @@
+[
+  {
+    "signature": "record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+    "service_execute": true,
+    "authenticated_execute": false,
+    "definition_md5": "84664cdbea425c0f65de0f3400ceb92d"
+  }
+]

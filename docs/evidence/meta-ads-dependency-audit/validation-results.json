@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "source_commit": "48aab3388f69ecd9dd0f8da5546dfb8e25752e22",
+  "checks": [
+    "116 migration source hashes",
+    "2277 executable statement start lines",
+    "risk totals and pending counts",
+    "14 target tables / 33 dynamic function names / 22 live functions",
+    "472 catalog candidate objects",
+    "176 unapproved destructive items / 158 pending",
+    "13 current exact zero-row counts",
+    "staging catalog matches canonical prefix capture",
+    "report file links / all 33 names",
+    "credential-pattern scan"
+  ],
+  "database_writes": 0,
+  "business_mutation_tests_run": false,
+  "regression_database_tests": "Proposed only; execution requires separate approval."
+}

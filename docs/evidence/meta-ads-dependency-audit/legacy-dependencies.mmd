@@ -1,0 +1,57 @@
+flowchart LR
+  subgraph Legacy[Current staging legacy tables]
+    appointments["appointments"]
+    company_bank_accounts["company_bank_accounts (absent)"]
+    contracts["contracts"]
+    finance_summaries["finance_summaries"]
+    installations["installations"]
+    operations_outbox["operations_outbox"]
+    orders["orders"]
+    payment_transactions["payment_transactions"]
+    price_calculations["price_calculations"]
+    pricing_policies["pricing_policies"]
+    production_orders["production_orders"]
+    survey_photo_operations["survey_photo_operations"]
+    surveys["surveys"]
+    warranty_tickets["warranty_tickets"]
+  end
+  appointments -->|FK| companies
+  appointments -->|FK| customers
+  appointments -->|FK| user_profiles
+  contracts -->|FK| companies
+  contracts -->|FK| orders
+  finance_summaries -->|FK| companies
+  finance_summaries -->|FK| orders
+  installations -->|FK| appointments
+  installations -->|FK| companies
+  installations -->|FK| customers
+  installations -->|FK| orders
+  operations_outbox -->|FK| companies
+  operations_outbox -->|FK| orders
+  orders -->|FK| companies
+  orders -->|FK| customers
+  orders -->|FK| price_calculations
+  payment_transactions -->|FK| companies
+  payment_transactions -->|FK| orders
+  price_calculations -->|FK| companies
+  price_calculations -->|FK| customers
+  price_calculations -->|FK| pricing_policies
+  price_calculations -->|FK| surveys
+  pricing_policies -->|FK| companies
+  production_orders -->|FK| companies
+  production_orders -->|FK| orders
+  survey_photo_operations -->|FK| appointments
+  survey_photo_operations -->|FK| user_profiles
+  surveys -->|FK| appointments
+  surveys -->|FK| companies
+  surveys -->|FK| customers
+  surveys -->|FK| user_profiles
+  warranty_tickets -->|FK| companies
+  warranty_tickets -->|FK| customers
+  warranty_tickets -->|FK| installations
+  warranty_tickets -->|FK| orders
+  warranty_tickets -->|FK| user_profiles
+  qc["record_quality_check_atomic: survives cleanup"]
+  qc -.-> orders
+  qc -.-> production_orders
+  qc -.-> ops["operations_actor / operations_audit: removed"]

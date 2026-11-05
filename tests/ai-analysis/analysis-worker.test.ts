@@ -66,7 +66,7 @@ async function setupFixtures() {
     company_id: COMPANY_ID,
     customer_id: CUSTOMER_ID,
     channel: 'FACEBOOK',
-    external_conversation_id: 'fb_ai_worker_test',
+    external_conversation_id: '987654321012345:880000000000054',
     status: 'OPEN',
   });
 

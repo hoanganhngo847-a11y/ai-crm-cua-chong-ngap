@@ -184,6 +184,9 @@ async function dispatchFacebookCanonical(params: {
   if (config.company !== companyId) {
     return { status: 'FAILED', error: 'FACEBOOK_PAGE_COMPANY_MISMATCH' };
   }
+  if (config.leadAdsOnly) {
+    return { status: 'FAILED', error: 'FACEBOOK_PAGE_NOT_ALLOWED' };
+  }
 
   const token = (process.env[config.tokenEnv] || '').trim();
   if (!token) {

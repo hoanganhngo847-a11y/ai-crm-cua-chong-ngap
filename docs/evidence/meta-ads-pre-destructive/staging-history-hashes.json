@@ -1,0 +1,132 @@
+{
+  "project": "qmhfmgkymjgoevwmkidm",
+  "scope": "Read-only stored-SQL hashes. Current source comparison is not retrospective execution attestation.",
+  "migrations": [
+    {
+      "version": "20261030063323",
+      "name": "initial_schema",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "a877e0e3fdf3b127c093b498fcc866b3df5ef37c4972dc778650e6a2d248c920"
+    },
+    {
+      "version": "20261030063347",
+      "name": "rls_foundation",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "447cee608bdcad83c3deac07f967ae2116c2ae39cba9dd557c00ea1119632794"
+    },
+    {
+      "version": "20261030063408",
+      "name": "trusted_server_private_rpc",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "e432723499a195d8e552826782e702799739ad0f60b64c94b3ddce9a6f752712"
+    },
+    {
+      "version": "20261030063429",
+      "name": "private_call_transcripts",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1"
+    },
+    {
+      "version": "20261030063437",
+      "name": "crm_atomic_transactions",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "064d30a05af075e1dbd44d140f54fbb8382926ec06bce0c57717068096844709"
+    },
+    {
+      "version": "20261030063445",
+      "name": "inbox_atomic_persistence",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "5e3b6a36625641670372e2eb2d148af920e5949a4d48bbf455246d98fa5392c3"
+    },
+    {
+      "version": "20261030063500",
+      "name": "0005_survey_atomic_completion",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "86109760fe7073b6965e1e3f7f4a4d0450209db36b111c9b22c2d449d324367d"
+    },
+    {
+      "version": "20261030063510",
+      "name": "operations_atomic_rpcs",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "ae698b8da10c116fdc7907bb709d2921cd5917c5480e09a629c2296c514180f7"
+    },
+    {
+      "version": "20261030063519",
+      "name": "han_facebook_website",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "f085ffb0b87f10a27401dafac30603339db2f47888acc113dacde1bdff068841"
+    },
+    {
+      "version": "20261030063526",
+      "name": "voice_media_pipeline",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "1931ef7d8c695ee3c9a6baa9bf37acd0476409e72883fbd1425661a91830be3c"
+    },
+    {
+      "version": "20261030063534",
+      "name": "openai_realtime",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "b2c52102111284f96200dbf229ddcb50ae159fd0dabec55e985cd8a6c88d78c9"
+    },
+    {
+      "version": "20261030063542",
+      "name": "response_sla_windows",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "a7c28bbe0f7dec02af5ee2e55c75d936fafc42ed7d5201ef1ba2e36a6aef975f"
+    },
+    {
+      "version": "20261030063551",
+      "name": "ai_analysis_worker",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "07574fc776948c4c9c4bfaa4d43e7e722c93ee764e9d1ad5470445587c07ac16"
+    },
+    {
+      "version": "20261030063559",
+      "name": "voice_security_hardening",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "2accd05b59e7b6724646cca20085be49982e1215e952fb7a6a48202e5350ae7a"
+    },
+    {
+      "version": "20261030063608",
+      "name": "sales_style_learning",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "00f1cfaba26f53b7bc2e0c4fd54f8044fc7703ef6524b5621368ee6b34d20fca"
+    },
+    {
+      "version": "20261030063640",
+      "name": "sales_style_activation",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "3b31a8860d1e23a6619300dae95657977d38ef8845cc53b11d9f4c75df4e045c"
+    },
+    {
+      "version": "20261030063647",
+      "name": "analytics_dashboard",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "4b53ad99e047c74addd9b29607fb5bbf6876c9f5ac5ea01bf3b43e96bce0ea76"
+    },
+    {
+      "version": "20261030063654",
+      "name": "survey_integrity_hardening",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "95d43784ebe31b59035513208f7ebbbbcd24561e465610c8742d41b98865efb6"
+    },
+    {
+      "version": "20261030063702",
+      "name": "voice_p0_hardening",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "19faacd37a58ce59445e356c36036220726e45160150bbf67ee24cac3968125f"
+    },
+    {
+      "version": "20261030064055",
+      "name": "inbox_outbox_and_inbound_atomic",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "331c98824fe60db077d680ffc28a10dce4b1bcfe5d152ff00abb8362579acf00"
+    },
+    {
+      "version": "20261030064113",
+      "name": "operations_p0_hardening",
+      "stored_statement_count": 1,
+      "stored_sql_sha256": "edab37eda7f26ce4a398348232014a113a90a2075579e22cfbf750f053cdfa70"
+    }
+  ]
+}

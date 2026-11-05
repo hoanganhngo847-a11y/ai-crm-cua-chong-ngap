@@ -1,0 +1,116 @@
+{
+  "table_name": "price_calculations",
+  "constraints": [
+    {
+      "name": "chk_pc_need_info_amount",
+      "type": "c",
+      "definition": "CHECK (status = 'NEED_INFO'::text AND amount IS NULL OR status <> 'NEED_INFO'::text)",
+      "referenced_table": null,
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "fk_orders_pricing",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, price_calculation_id) REFERENCES price_calculations(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "price_calculations",
+      "referencing_table": "orders"
+    },
+    {
+      "name": "fk_pc_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "fk_pc_policy_version",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, pricing_policy_id, policy_version) REFERENCES pricing_policies(company_id, id, version) ON DELETE RESTRICT",
+      "referenced_table": "pricing_policies",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "fk_pc_survey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, survey_id) REFERENCES surveys(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "surveys",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "price_calculations_amount_check",
+      "type": "c",
+      "definition": "CHECK (amount IS NULL OR amount >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "price_calculations_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "price_calculations_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "price_calculations_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['CALCULATED'::text, 'NEED_INFO'::text, 'EXPIRED'::text, 'SUPERSEDED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "uq_price_calculations_company_customer_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, customer_id, id)",
+      "referenced_table": null,
+      "referencing_table": "price_calculations"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_price_calculations_immutability",
+      "function": "enforce_price_calculations_immutability()",
+      "definition": "CREATE TRIGGER trg_price_calculations_immutability BEFORE DELETE OR UPDATE ON price_calculations FOR EACH ROW EXECUTE FUNCTION enforce_price_calculations_immutability()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_price_calculations_customer",
+      "definition": "CREATE INDEX idx_price_calculations_customer ON public.price_calculations USING btree (company_id, customer_id, created_at DESC)"
+    },
+    {
+      "name": "price_calculations_pkey",
+      "definition": "CREATE UNIQUE INDEX price_calculations_pkey ON public.price_calculations USING btree (id)"
+    },
+    {
+      "name": "uq_price_calculations_company_customer_id",
+      "definition": "CREATE UNIQUE INDEX uq_price_calculations_company_customer_id ON public.price_calculations USING btree (company_id, customer_id, id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "price_calculations_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "price_calculations_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    }
+  ]
+}

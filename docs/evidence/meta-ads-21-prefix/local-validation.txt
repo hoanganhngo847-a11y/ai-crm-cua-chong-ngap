@@ -1,0 +1,285 @@
+Meta Ads 21-prefix compatibility — local validation
+Reference: 3bc50257883957f05cd1fedbd8f57358e058dcee
+Synthetic/disposable local fixtures only. No hosted backup/write/reset/migration/deploy/message.
+
+Meta unit/regression
+✔ TEST 1: fresh phone creates exactly one customer, one contact, one attribution event marked NEW_PHONE (2545.949083ms)
+✔ TEST 2: Campaign B after Campaign A reuses the SAME customer; both campaigns stay visible; replay keeps the verdict (1192.40025ms)
+✔ TEST 3: three campaigns on one phone: one customer, three events, all three campaign associations preserved (1214.578875ms)
+✔ TEST 5: the same phone in two tenants never matches across companies (1177.324167ms)
+✔ TEST 6: multiple profiles owning the same phone: no auto-merge, submission preserved unbound for manual resolution (1170.153375ms)
+✔ TEST 7: invalid phones fail closed at intake; missing phones still preserve the lead safely (1171.228375ms)
+✔ TEST 8: unresolvable campaign stays pending and is safely completed by retry without moving first-touch (1262.687708ms)
+✔ TEST 10: Messenger and Website keep their exact prior semantics while leadgen reuses by phone (1148.889125ms)
+✔ Scenario 1: Legacy Messenger webhook continues working normally without regression (37.566ms)
+✔ Scenario 2: Valid Lead Ads webhook (leadgen) is received and processed with full attribution (3.458792ms)
+✔ Scenario 3: Tampered signature or malformed payload fails closed with 403/400 (2.269667ms)
+✔ Scenario 4: Webhook idempotency retry is deduplicated safely without duplicate entries (2359.3695ms)
+✔ Scenario 5: Unallowed Page fails closed and cannot write data across companies (1.158875ms)
+✔ Scenario 6: Ad accounts of other companies are strictly isolated via RLS (1197.591ms)
+✔ Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and updates snapshots (1183.207834ms)
+✔ Scenario 8: Lead without attribution metadata remains UNATTRIBUTED without guessing campaign (1178.567833ms)
+✔ Scenario 9: Click-to-Messenger referral metadata is extracted and recorded (15.5895ms)
+✔ Scenario 10: Meta API errors (429 rate limit, 500, token expired) are handled safely with backoff (14.229208ms)
+✔ Scenario 11: Identity conflict does not destructively merge customers and flags review (0.492042ms)
+✔ Scenario 12: Sensitive tokens are encrypted at rest (AES-256-GCM) and phone is zero-phone compliant (0.634416ms)
+✔ Scenario 13: Unauthorized roles (SALE, TECHNICIAN) are rejected from admin sync (1183.485875ms)
+✔ Scenario 14: Database migration, foreign keys, and unique constraints are enforced (1131.195292ms)
+✔ Scenario 16: Token security, private schema isolation, and format validation (1254.716167ms)
+✔ Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization and cross-tenant isolation (1121.418166ms)
+✔ Scenario 18: Durable event intake, idempotency, and multi-leadgen batch fault isolation (1042.6525ms)
+✔ Scenario 19: Marketing sync lease concurrency guard and complete pagination check (1029.749041ms)
+✔ Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is strictly immutable (974.735916ms)
+✔ migration versions are unique; applied funnel migration is unchanged; final security migration follows foundation (1.907583ms)
+✔ all attribution and lead endpoints use independent supported versions and Bearer headers (8.55775ms)
+✔ pagination completes beyond ten pages; truncation, malformed pages, hostile links and cycles fail closed (15.615208ms)
+✔ metadata sync stores only attribution fields even when Graph returns budgets, creative and performance data (30.861042ms)
+✔ scheduled metadata sync retries each tenant once, without insights or ad-set requests (18.261375ms)
+✔ URL, upstream response, transport, and database errors never leak access tokens to logs or results (7.375875ms)
+✔ account result counts reflect success, failures, missing credentials, lease errors, and skipped owners (16.54225ms)
+✔ legacy SHA256-derived ciphertext survives explicit previous-key migration and rotates to the primary key (0.471375ms)
+✔ offline key verifier emits only status/counts for verified legacy rows and rejects mismatched keys (423.124458ms)
+✔ discovered asset identifiers are accepted independently and the Page requires an explicit tenant binding (51.39025ms)
+✔ OAuth transport errors cannot echo a credential-bearing token-exchange URL (8.653917ms)
+✔ F-14: parseTokenExpiration parses actual Meta expires_in and detects expired tokens without hardcoding 60 days (4.159125ms)
+✔ FIX A: OAuth token exchange handles long-lived, explicit unsupported, transient errors, malformed responses, and expired fallback (7.582333ms)
+✔ FIX B: subscribeManagedPage handles subscription preservation, read-back verification, and error edge cases (31.262708ms)
+✔ F-06: webhook isolates Lead Ads failures and processes Messenger messages in mixed batch; retries deduplicate safely (60.331333ms)
+✔ lead read degrades exactly once to minimal fields on 400; other failures never invent permission (0.631417ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14368.80825
+
+Native PostgreSQL
+✔ PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and partial retry recovery (15706.48525ms)
+✔ token migration preserves ciphertext, expiry and linked rows; conflicts or incomplete copies roll back (11572.83225ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27677.080167
+
+Exact-prefix isolation and atomic bundle
+✔ exact staging prefix, full-chain regression, isolated Meta catalog and atomic package on disposable PostgreSQL (42451.942417ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 42843.699208
+
+Migration integrity
+[PASS] Real filesystem migrations pass all invariant checks (121 migrations verified)
+[PASS] Appending valid future migrations (19th, 20th+) passes without hardcoded total count
+[PASS] Duplicate timestamp rejected fail-closed
+[PASS] Missing canonical Foundation migration rejected fail-closed
+[PASS] Non-chronological migration order rejected fail-closed
+[PASS] Foundation migration content mutation rejected via SHA-256 baseline checksum
+[PASS] Git guard: historical migration uncommitted modification rejected fail-closed
+[PASS] Git guard: historical migration committed modification rejected fail-closed
+[PASS] Git guard: historical migration deletion rejected fail-closed
+[PASS] Git guard: historical migration rename rejected fail-closed
+[PASS] Git guard: newly added feature migration edited after initial feature commit allowed
+[PASS] Git guard: valid additive file allowed
+[PASS] Git guard: missing baseline fails closed
+[PASS] Git guard: reviewed unapplied duplicate-version rename allowed with frozen SQL
+[PASS] Git guard: SQL mutation within reviewed rename rejected
+[PASS] Git guard: applied funnel mutation within rename rejected
+[PASS] Git guard: deletion without reviewed replacement rejected
+MIGRATION INTEGRITY TEST RESULTS: 17 PASSED, 0 FAILED
+
+Staging readiness
+✔ all canonical source bytes have a reviewable transaction envelope and preserve the 21-entry mapping (144.874959ms)
+✔ transaction inspection handles bodies, strings, Unicode and nested comments without hiding intermediate commits (0.370625ms)
+✔ synthetic backup envelope authenticates ciphertext and key; never returns damaged plaintext (0.589958ms)
+  ✔ QC actual source preserves PASS/REWORK/REJECT, audit, service ACLs and tenant boundaries (1077.107083ms)
+  ✔ all four signed URL categories preserve their TTLs and retrieve authorized bytes (3100.910459ms)
+  ✔ authorization, foreign tenants, AAL2 and technician lifecycle fail before signing (3006.511416ms)
+  ✔ invalid selectors, canonical paths, missing resources, tampering and expiry never succeed empty (2756.082791ms)
+  ✔ native RLS, FK and trigger integrity preserve company boundaries (443.2555ms)
+  ✔ 21 genuinely executed synthetic prefix files map append-only; no copied/fabricated staging history (2855.242083ms)
+  ✔ hash conflicts, duplicate concurrent execution and both transaction failure forms are safe (4575.667542ms)
+  ✔ installed CLI refuses application-time ledger drift in a synthetic-only workspace (97.319333ms)
+  ✔ encrypted pg_dump restores counts/hashes, history, grants, RLS, FK, trigger, sequence and app retrieval (7561.244834ms)
+✔ QC compatibility, signed URLs, ledger atomicity and encrypted restore on synthetic PostgreSQL (28232.645291ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28491.808167
+
+Messenger regression
+✔ 1. Inbound Webhook GET: verification handshake strictly validates hub.mode and verify_token (9.027ms)
+✔ 2. Inbound Webhook POST: signature validation fails closed on tampered or missing signatures (6.94275ms)
+✔ 3. Target Page ID 1026991374010112 binding & strict tenant isolation (1.835667ms)
+✔ 4. Inbound Webhook uses Meta MID as Idempotency Key (p_key = page:mid) (17.547333ms)
+✔ 5. URL-only inbound message preserves full URL in p_content and sanitizes for p_safe (2.629083ms)
+✔ 6. Repeated identical messages/URLs with different Meta MIDs do NOT falsely deduplicate (3.033792ms)
+✔ 7. Webhook retry with identical Meta MID is handled idempotently without duplicates (6.291ms)
+✔ 7b. Pre-filled lead form is ingested with its phone and stored as one Customer 360 note (7.53525ms)
+✔ 8. Outbound routing: uses correct Page ID, correct Page token, and enforces tenant isolation (0.788292ms)
+✔ 9. Data Deletion Endpoint: verifies HMAC-SHA256 signed_request and persists request to DB (6.195833ms)
+✔ 10. Data Deletion Identity Resolution: safe auto-matching, unmapped handling, and zero guessing (0.126125ms)
+✔ 11. Manual Review Completion Route: validates input, enforces authentication & authorization (1.858ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 440.514917
+
+Website/omnichannel regression
+✔ uses the direct Graph profile when it is available (30.138792ms)
+✔ falls back to the Page Conversations API when direct profile lookup is unsupported (1.734167ms)
+✔ returns null and logs no sensitive data when both lookup paths fail (1.72125ms)
+✔ rejects profile names that contain a phone number (4.145792ms)
+✔ polls default folders (inbox, other, pending), ingesting both inbound and Page outbound messages (28.483333ms)
+✔ polls CHD Page other folder and discovers Yen Nguyen conversation (3.356416ms)
+✔ prevents duplicated processing when a conversation appears in multiple folders (2.378625ms)
+✔ handles folder pagination and stops client-side at the lookback boundary (0.951125ms)
+✔ treats an idempotency conflict as an already-ingested message for both inbound and outbound (0.883042ms)
+✔ handles partial folder failures without aborting other folders (1.214083ms)
+✔ handles attachment placeholder and empty message gracefully (0.571375ms)
+✔ dry run mode tallies messages without calling database RPCs (0.614375ms)
+✔ redacts a phone number from the public message and stores it privately (1.0785ms)
+✔ returns a sanitized Graph failure without leaking the Page token (0.654833ms)
+✔ recovers from polling downtime exceeding 5 minutes via checkpoint expansion (0.763417ms)
+✔ performs initial bounded 24h backfill when folder has no checkpoint (0.558041ms)
+✔ missing outbound intake RPC fails closed without manual table writes or checkpoint advancement (0.484292ms)
+✔ detectLeadForm parses a pre-filled Messenger lead form (22.756542ms)
+✔ detectLeadForm recognises Vietnamese field labels (1.222709ms)
+✔ detectLeadForm tolerates required/optional suffixes on field labels (0.528791ms)
+✔ detectLeadForm still recognises the form after phone and email sanitisation (13.337584ms)
+✔ detectLeadForm stays conservative for ordinary chat messages (0.332792ms)
+✔ detectLeadForm accepts an explicit form intro with one known field (0.229458ms)
+✔ formatLeadFormNote never copies the phone number into the note (9.596ms)
+✔ formatLeadFormNote redacts phone-like values from other fields without destroying dates or amounts (0.57275ms)
+✔ persistLeadFormToCustomer360 creates one idempotent note and fills empty dossier fields (8.160667ms)
+✔ persistLeadFormToCustomer360 does not overwrite existing dossier values (0.371208ms)
+✔ readIngestedInteractionId only accepts canonical UUID values (1.404334ms)
+✔ sanitizer preserves measurements, quantities, dates and times; redacts contact data (7.623625ms)
+✔ invalid signatures, wrong page and wrong recipient fail closed (10.897375ms)
+✔ multi-page mapping derives company from server configuration and rejects ambiguity (0.304417ms)
+✔ resource authorization masks wrong-company existence and keeps active-member/role checks (16.123ms)
+✔ CAPTCHA failure never consumes quota; success precedes quota and intake (5.295042ms)
+✔ 24h window, cursor roundtrip and ambiguous provider failures (0.698542ms)
+ℹ tests 34
+ℹ suites 0
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 535.902291
+
+Zalo regression
+32 passed, 0 failed
+✔ AI Zalo switch defaults to enabled when unset (0.461417ms)
+✔ AI Zalo switch recognises explicit off values (0.173542ms)
+✔ sendSystemZaloReply refuses AI sends while the kill switch is engaged (0.170625ms)
+✔ direct messages keep the raw Zalo msgId as external ref (0.660334ms)
+✔ group messages get the group namespace and a sender prefix (0.231709ms)
+✔ group images keep the image marker at the start of a line (0.068375ms)
+✔ group fallback name is produced when Zalo has not resolved the group name yet (0.09225ms)
+✔ rejects a group payload without a numeric group id (0.066416ms)
+✔ rejects malformed payloads instead of dropping them silently in the route (0.062125ms)
+✔ keeps author identity even without a display name and does not invent a member count (0.173958ms)
+✔ keeps unresolved roster IDs and an explicit zero count (0.112292ms)
+✔ history and realtime present the same author, including names with colons (0.547208ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 175.601125
+✔ supervisor routes text/media/group requests to the right process and refuses paused accounts (479.525125ms)
+✔ managed routing cannot fall back to legacy on malformed account prefix (0.942458ms)
+✔ each account has its own process credentials, queue and localhost port (0.834917ms)
+✔ refresh is idempotent; replacement waits for queue owner exit; pause stops routing (2.351792ms)
+✔ normalizes, deduplicates and bounds Zalo friend records without exposing extra fields (1.427542ms)
+✔ accepts object-shaped friend directory responses (0.1475ms)
+✔ includes recent 1:1 non-friend conversations and keeps exact thread UID (3.927875ms)
+✔ falls back to recent direct chats if friend directory read fails (0.26275ms)
+✔ resolves missing display names via getUserInfo when available (0.22425ms)
+✔ handles getUserInfo failure gracefully without losing contacts (1.161708ms)
+✔ fails closed when the pinned ZCAJS API has no supported directory capability (0.855125ms)
+✔ Docker worker patches apply cleanly and idempotently to src/index.mjs (247.817875ms)
+✔ resolves the complete roster beyond the getGroupInfo preview, preserving large string IDs (5.590625ms)
+✔ keeps known member IDs and marks incomplete when profile access is unavailable (0.552084ms)
+✔ refresh bypasses cache and a group event invalidation exposes a rename (1.6265ms)
+✔ deduplicates simultaneous metadata lookups (0.199459ms)
+✔ reconnect scan requests both direct and group history commands (222.09175ms)
+✔ group history re-enters durable ingestion with its author, thread and recovery flag (113.777708ms)
+✔ old and deleted history records do not produce messages or unbounded pagination (105.031583ms)
+✔ retries a transient CRM failure and delivers the same message later (2.828292ms)
+✔ does not stack parallel retries for the same Zalo message (0.601375ms)
+✔ keeps retrying payloads rejected with a 4xx instead of losing the message (0.592541ms)
+✔ treats an HTTP 200 with success=false as a failed delivery (0.248958ms)
+✔ requires an explicit application acknowledgement before removing a message (0.128792ms)
+✔ retains every unacknowledged message when the queue exceeds its warning threshold (56.408208ms)
+✔ persists the original event before group enrichment and retries a failed lookup (32.066334ms)
+✔ keeps a message pending and reports an unwritable queue (15.241792ms)
+✔ stop clears pending retries and does not attempt again (0.546583ms)
+✔ writes the payload to disk before the first CRM attempt (13.187708ms)
+✔ persists an undeliverable message and replays it after a worker restart (14.121333ms)
+✔ preserves malformed queue bytes in a quarantine file before replay rewrites the queue (11.202459ms)
+✔ normalizes inbound text message (4.165875ms)
+✔ preserves the Zalo profile-resolved display name source (0.157458ms)
+✔ normalizes Zalo photo attachment into a safe image marker (0.803208ms)
+✔ normalizes a manual self message as outbound to the peer thread (0.081291ms)
+✔ ignores group messages on the direct-message API (0.0605ms)
+✔ normalizes an inbound group message into the CRM group namespace (0.096958ms)
+✔ keeps group self messages as outbound observations (0.073917ms)
+✔ accepts direct messages when the listener omits the numeric type (0.061292ms)
+✔ keeps attachment-only messages that omit content (0.131375ms)
+✔ normalizes Vietnamese phone formats used by Zalo PC deep links (0.602833ms)
+✔ resolves phone only from the exact requested UID profile (0.324667ms)
+✔ does not borrow a phone from another profile when exact UID has none (0.082625ms)
+✔ recent Zalo REST recovery forwards manually sent self messages (0.464792ms)
+✔ recent Zalo REST recovery runs without waiting for the websocket (0.14175ms)
+ℹ tests 45
+ℹ suites 0
+ℹ pass 45
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 723.431625
+
+Migration security and owner-register invariants
+✔ canonical 21-migration prefix and full chain preserve tenant projection and auth trigger after hardening (18655.672958ms)
+✔ owner decision register preserves all 178 original IDs, keeps approvals false, and maps every pending item to exactly one batch (7.244791ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18945.958291
+
+Typecheck: PASS.
+Lint: PASS, 0 errors / 14 existing warnings; no rule or ignore change.
+Build: PASS using Verify loopback fixtures, no hosted credentials.
+Strict catalog: 365 allowlisted additions, no changed/removed pre-existing objects or grants.
+Legacy comparison: 12 input/authorization cases and actual rows from all 44 pre-existing public/private tables match.
+A/B acceptance on exact prefix: one customer, two events, second duplicate, replay idempotent, no Messenger conversation/outbox.
+Atomic package: ledger/schema drift and postflight DDL injection roll back; all 21 actual ledger rows preserved; no 95 gap entries fabricated.
+Deployment status: BLOCKED pending selective-release ledger integration and hosted checkpoint/acceptance.

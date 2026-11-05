@@ -204,6 +204,14 @@ export function parseSignedRequest(
     }
 }
 
+export type MetaReferral = {
+    source?: string;
+    type?: string;
+    adId?: string;
+    ref?: string;
+    adsContextData?: Record<string, unknown>;
+};
+
 export type MetaEvent = {
     key: string;
     page: string;
@@ -214,7 +222,100 @@ export type MetaEvent = {
     raw: Record<string, unknown>;
     mids: string[];
     watermark: number | null;
+    referral?: MetaReferral | null;
 };
+
+export function extractReferral(
+    event: Record<string, unknown>,
+    message?: Record<string, unknown>,
+): MetaReferral | null {
+    const rawRef =
+        (event.referral && typeof event.referral === 'object' ? event.referral : null) ??
+        (message?.referral && typeof message.referral === 'object' ? message.referral : null) ??
+        (event.postback && typeof event.postback === 'object' && (event.postback as Record<string, unknown>).referral && typeof (event.postback as Record<string, unknown>).referral === 'object' ? (event.postback as Record<string, unknown>).referral : null);
+
+    if (!rawRef) return null;
+    const refObj = rawRef as Record<string, unknown>;
+
+    const source = typeof refObj.source === 'string' ? refObj.source : undefined;
+    const type = typeof refObj.type === 'string' ? refObj.type : undefined;
+    const adId = typeof refObj.ad_id === 'string' && refObj.ad_id.trim() ? refObj.ad_id.trim() : undefined;
+    const ref = typeof refObj.ref === 'string' ? refObj.ref : undefined;
+    const adsContextData =
+        refObj.ads_context_data && typeof refObj.ads_context_data === 'object' && !Array.isArray(refObj.ads_context_data)
+            ? (refObj.ads_context_data as Record<string, unknown>)
+            : undefined;
+
+    return {
+        source,
+        type,
+        adId,
+        ref,
+        adsContextData,
+    };
+}
+
+export type MetaLeadgenChange = {
+    kind: 'LEADGEN';
+    page: string;
+    time: string;
+    leadgenId: string;
+    formId: string;
+    adId: string | null;
+    adgroupId: string | null;
+    createdTime: number;
+    raw: Record<string, unknown>;
+};
+
+export function parseLeadgenChanges(body: unknown, page: string): MetaLeadgenChange[] {
+    const root = object(body);
+    if (root.object !== 'page' || !Array.isArray(root.entry)) {
+        throw new ChannelError('INVALID_WEBHOOK');
+    }
+
+    const result: MetaLeadgenChange[] = [];
+
+    for (const value of root.entry) {
+        const entry = object(value);
+        if (entry.id !== page) {
+            throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+        }
+
+        if (!Array.isArray(entry.changes)) continue;
+
+        for (const item of entry.changes) {
+            const change = object(item);
+            if (change.field !== 'leadgen') continue;
+
+            const val = object(change.value);
+            const leadgenId = text(val.leadgen_id, 100);
+            const formId = text(val.form_id, 100);
+            const pageId = text(val.page_id, 100);
+
+            if (pageId !== page) {
+                throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+            }
+
+            const adId = typeof val.ad_id === 'string' && val.ad_id.trim() ? val.ad_id.trim() : null;
+            const adgroupId = typeof val.adgroup_id === 'string' && val.adgroup_id.trim() ? val.adgroup_id.trim() : null;
+            const createdTime = typeof val.created_time === 'number' ? val.created_time : Math.floor(Date.now() / 1000);
+
+            result.push({
+                kind: 'LEADGEN',
+                page,
+                time: new Date(createdTime * 1000).toISOString(),
+                leadgenId,
+                formId,
+                adId,
+                adgroupId,
+                createdTime,
+                raw: change,
+            });
+        }
+    }
+
+    return result;
+}
 
 export function parseMeta(body: unknown, page: string): MetaEvent[] {
     const root = object(body);
@@ -275,6 +376,7 @@ export function parseMeta(body: unknown, page: string): MetaEvent[] {
             if (event.message) {
                 const message = object(event.message);
                 const mid = text(message.mid, 250);
+                const referral = extractReferral(event, message);
 
                 const content =
                     typeof message.text === 'string' && message.text.trim().length > 0
@@ -288,6 +390,7 @@ export function parseMeta(body: unknown, page: string): MetaEvent[] {
                     content,
                     mids: [],
                     watermark: null,
+                    referral,
                 });
             } else if (event.delivery || event.read) {
                 const data = object(event.delivery || event.read);

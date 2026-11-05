@@ -1,0 +1,5 @@
+SELECT 'finance_summaries' AS table_name,
+(SELECT jsonb_agg(jsonb_build_object('name',conname,'type',contype,'definition',pg_get_constraintdef(oid,true),'referencing_table',conrelid::regclass::text,'referenced_table',nullif(confrelid,0)::regclass::text) ORDER BY conname) FROM pg_constraint WHERE conrelid=to_regclass('public.finance_summaries') OR confrelid=to_regclass('public.finance_summaries')) AS constraints,
+(SELECT jsonb_agg(jsonb_build_object('name',tgname,'function',tgfoid::regprocedure::text,'definition',pg_get_triggerdef(oid,true)) ORDER BY tgname) FROM pg_trigger WHERE tgrelid=to_regclass('public.finance_summaries') AND NOT tgisinternal) AS triggers,
+(SELECT jsonb_agg(jsonb_build_object('name',indexname,'definition',indexdef) ORDER BY indexname) FROM pg_indexes WHERE schemaname='public' AND tablename='finance_summaries') AS indexes,
+(SELECT jsonb_agg(jsonb_build_object('name',policyname,'roles',roles,'command',cmd,'using',qual,'with_check',with_check) ORDER BY policyname) FROM pg_policies WHERE schemaname='public' AND tablename='finance_summaries') AS policies;

@@ -8,6 +8,8 @@ import {
     uuid,
 } from '@/features/omnichannel/facebook/core';
 
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import {
     env,
     errorResponse,
@@ -100,7 +102,7 @@ export async function POST(request: Request) {
 
         const safe = sanitize(lead.need);
 
-        await rpc('han_ingest', {
+        const ingestResult = await rpc('han_ingest', {
             p_company: company,
             p_channel: 'WEBSITE',
             p_external: null,
@@ -115,8 +117,81 @@ export async function POST(request: Request) {
                 name: lead.name,
                 consent: true,
                 consent_version: 'website-lead-v1',
+                ...(lead.utmSource || lead.utmMedium || lead.utmCampaign || lead.utmContent || lead.utmTerm || lead.fbclid
+                    ? {
+                          utm: {
+                              source: lead.utmSource,
+                              medium: lead.utmMedium,
+                              campaign: lead.utmCampaign,
+                              content: lead.utmContent,
+                              term: lead.utmTerm,
+                              fbclid: lead.fbclid,
+                          },
+                      }
+                    : {}),
             },
         });
+
+        // Record attribution touchpoint for website lead
+        if (lead.utmCampaign || lead.utmSource || lead.fbclid) {
+            try {
+                const interactionId =
+                    ingestResult && typeof ingestResult === 'object' && 'interaction_id' in ingestResult
+                        ? String((ingestResult as Record<string, unknown>).interaction_id || '')
+                        : null;
+
+                let customerId: string | null = null;
+                if (interactionId) {
+                    const client = createAdminClient();
+                    const { data: interaction } = await client
+                        .from('interactions')
+                        .select('customer_id')
+                        .eq('id', interactionId)
+                        .maybeSingle();
+                    customerId = interaction?.customer_id ?? null;
+                }
+
+                const attributionStatus = lead.utmCampaign
+                    ? 'ATTRIBUTED'
+                    : lead.fbclid
+                      ? 'INFERRED'
+                      : 'UNATTRIBUTED';
+
+                await rpc('record_lead_attribution_touchpoint', {
+                    p_company: company,
+                    p_customer: customerId,
+                    p_interaction: interactionId,
+                    p_conversation: null,
+                    p_channel: 'WEBSITE',
+                    p_page_id: null,
+                    p_page_name: null,
+                    p_ad_account_id: null,
+                    p_meta_campaign_id: null,
+                    p_campaign_name: lead.utmCampaign ?? null,
+                    p_meta_ad_set_id: null,
+                    p_ad_set_name: null,
+                    p_meta_ad_id: null,
+                    p_ad_name: lead.utmContent ?? null,
+                    p_meta_form_id: null,
+                    p_form_name: null,
+                    p_meta_leadgen_id: null,
+                    p_referral_source: lead.utmSource ?? (lead.fbclid ? 'FACEBOOK' : 'WEBSITE'),
+                    p_referral_type: lead.utmMedium ?? null,
+                    p_ads_context_data: null,
+                    p_utm_source: lead.utmSource ?? null,
+                    p_utm_medium: lead.utmMedium ?? null,
+                    p_utm_campaign: lead.utmCampaign ?? null,
+                    p_utm_content: lead.utmContent ?? null,
+                    p_utm_term: lead.utmTerm ?? null,
+                    p_fbclid: lead.fbclid ?? null,
+                    p_attribution_status: attributionStatus,
+                    p_attribution_method: 'WEBSITE_UTM',
+                    p_occurred: new Date().toISOString(),
+                });
+            } catch (err) {
+                console.warn('[website-lead] touchpoint_recording_failed', err);
+            }
+        }
 
         return Response.json(
             { accepted: true },

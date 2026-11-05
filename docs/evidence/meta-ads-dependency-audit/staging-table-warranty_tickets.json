@@ -1,0 +1,136 @@
+{
+  "table_name": "warranty_tickets",
+  "constraints": [
+    {
+      "name": "fk_wt_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "fk_wt_installation",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id, installation_id) REFERENCES installations(company_id, customer_id, order_id, id) ON DELETE RESTRICT",
+      "referenced_table": "installations",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "fk_wt_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "warranty_tickets_assigned_to_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (assigned_to) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+      "referenced_table": "user_profiles",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "warranty_tickets_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "warranty_tickets_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "warranty_tickets_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['OPEN'::text, 'ASSIGNED'::text, 'IN_PROGRESS'::text, 'RESOLVED'::text, 'CLOSED'::text, 'REOPENED'::text, 'CANCELLED'::text, 'FAILED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "warranty_tickets"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_tenant_mutation_warranty",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_warranty BEFORE UPDATE ON warranty_tickets FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_warranty_tickets",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_warranty_tickets BEFORE UPDATE ON warranty_tickets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_warranty_tickets_assigned",
+      "definition": "CREATE INDEX idx_warranty_tickets_assigned ON public.warranty_tickets USING btree (company_id, assigned_to, status) WHERE (assigned_to IS NOT NULL)"
+    },
+    {
+      "name": "idx_warranty_tickets_status",
+      "definition": "CREATE INDEX idx_warranty_tickets_status ON public.warranty_tickets USING btree (company_id, status)"
+    },
+    {
+      "name": "warranty_tickets_pkey",
+      "definition": "CREATE UNIQUE INDEX warranty_tickets_pkey ON public.warranty_tickets USING btree (id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "warranty_tickets_insert_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "command": "INSERT",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    },
+    {
+      "name": "warranty_tickets_insert_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "command": "INSERT",
+      "with_check": "has_company_role(company_id, 'SALE'::text)"
+    },
+    {
+      "name": "warranty_tickets_select_assigned_technician",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND (assigned_to = auth.uid()))",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "warranty_tickets_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "warranty_tickets_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "warranty_tickets_update_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    }
+  ]
+}

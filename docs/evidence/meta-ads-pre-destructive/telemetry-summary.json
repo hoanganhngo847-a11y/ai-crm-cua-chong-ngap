@@ -1,0 +1,41 @@
+{
+  "project": "qmhfmgkymjgoevwmkidm",
+  "window": {
+    "start": "2026-10-29T10:42:00Z",
+    "end": "2026-10-30T10:42:00Z"
+  },
+  "supabase": [
+    {
+      "events": 6,
+      "qc_query_mentions": 0,
+      "qc_request_paths": 0,
+      "resolver_request_paths": 0,
+      "source": "edge_logs"
+    },
+    {
+      "events": 98,
+      "qc_query_mentions": 0,
+      "qc_request_paths": 0,
+      "resolver_request_paths": 0,
+      "source": "postgres_logs"
+    },
+    {
+      "events": 154,
+      "qc_query_mentions": 0,
+      "qc_request_paths": 0,
+      "resolver_request_paths": 0,
+      "source": "postgrest_logs"
+    }
+  ],
+  "render": {
+    "start": "2026-10-30T00:00:00Z",
+    "end": "2026-10-30T10:45:00Z",
+    "paths": [
+      "/api/*",
+      "/"
+    ],
+    "events": 0,
+    "hasMore": false
+  },
+  "limitation": "Zero matches in limited retained logs are not proof of no consumers. PostgREST logs lack per-request RPC paths; track_functions=none. No raw request/log payloads or secret values persisted."
+}

@@ -27,9 +27,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3
         with:
-          version: latest
+          version: '2.119.0'
       - run: npm ci
       - name: Personal Zalo runtime tests
         run: |

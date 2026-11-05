@@ -1,0 +1,141 @@
+{
+  "table_name": "installations",
+  "constraints": [
+    {
+      "name": "fk_installations_appointment",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "appointments",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "fk_installations_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "fk_installations_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id) REFERENCES orders(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "fk_wt_installation",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, order_id, installation_id) REFERENCES installations(company_id, customer_id, order_id, id) ON DELETE RESTRICT",
+      "referenced_table": "installations",
+      "referencing_table": "warranty_tickets"
+    },
+    {
+      "name": "installations_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "installations_order_id_key",
+      "type": "u",
+      "definition": "UNIQUE (order_id)",
+      "referenced_table": null,
+      "referencing_table": "installations"
+    },
+    {
+      "name": "installations_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "installations"
+    },
+    {
+      "name": "installations_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['SCHEDULED'::text, 'IN_TRANSIT'::text, 'INSTALLING'::text, 'TESTING'::text, 'HANDOVER_PENDING'::text, 'COMPLETED'::text, 'FAILED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "installations"
+    },
+    {
+      "name": "uq_installations_company_customer_order_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, customer_id, order_id, id)",
+      "referenced_table": null,
+      "referencing_table": "installations"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_installations_integrity",
+      "function": "enforce_installations_integrity()",
+      "definition": "CREATE TRIGGER trg_installations_integrity BEFORE INSERT OR UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION enforce_installations_integrity()"
+    },
+    {
+      "name": "trg_tenant_mutation_installations",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_installations BEFORE UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_installations",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_installations BEFORE UPDATE ON installations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_installations_status",
+      "definition": "CREATE INDEX idx_installations_status ON public.installations USING btree (company_id, status)"
+    },
+    {
+      "name": "installations_order_id_key",
+      "definition": "CREATE UNIQUE INDEX installations_order_id_key ON public.installations USING btree (order_id)"
+    },
+    {
+      "name": "installations_pkey",
+      "definition": "CREATE UNIQUE INDEX installations_pkey ON public.installations USING btree (id)"
+    },
+    {
+      "name": "uq_installations_company_customer_order_id",
+      "definition": "CREATE UNIQUE INDEX uq_installations_company_customer_order_id ON public.installations USING btree (company_id, customer_id, order_id, id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "installations_select_assigned_technician",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND is_assigned_technician(appointment_id))",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "installations_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "installations_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "installations_update_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    }
+  ]
+}

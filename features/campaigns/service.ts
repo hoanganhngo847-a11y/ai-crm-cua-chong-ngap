@@ -122,7 +122,7 @@ export async function campaignRead(
 
   let pages: { id: string; name: string; connected: boolean }[] = [];
   try {
-    pages = bindingsForCompany(actor.companyId).map((b) => ({
+    pages = bindingsForCompany(actor.companyId).filter((b) => !b.leadAdsOnly).map((b) => ({
       id: b.page,
       name: b.name || "Facebook Page",
       connected: Boolean(process.env[b.tokenEnv]),

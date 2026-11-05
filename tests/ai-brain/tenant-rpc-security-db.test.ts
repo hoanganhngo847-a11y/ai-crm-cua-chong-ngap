@@ -470,6 +470,25 @@ test('Tenant Isolation: Authenticated Tenant A JWT cannot resolve monitoring ale
   assert.equal(alertRow?.status, 'ACTIVE');
 });
 
+test('Tenant Isolation: Authenticated Tenant A JWT cannot claim orphan Facebook outbox jobs for Tenant B', async () => {
+  await ensureFixture();
+  const { error } = await tenantAClient.rpc('claim_orphan_facebook_browser_jobs', {
+    p_worker_id: 'tenant-a-untrusted-worker',
+    p_limit: 10,
+    p_company_id: TENANT_B_COMPANY_ID,
+  });
+  assertAuthorizationDenied(error, 'claim_orphan_facebook_browser_jobs', 'Tenant A JWT');
+});
+
+test('Tenant Isolation: Authenticated Tenant A JWT cannot resolve an arbitrary Facebook outbox job', async () => {
+  await ensureFixture();
+  const { error } = await tenantAClient.rpc('resolve_reconciled_facebook_browser_job', {
+    p_job_id: randomUUID(),
+    p_resolution: 'RETRY',
+  });
+  assertAuthorizationDenied(error, 'resolve_reconciled_facebook_browser_job', 'Tenant A JWT');
+});
+
 // -----------------------------------------------------------------------------
 // Suite 2: Direct Tenant A JWT Live Settings Update & Upsert Targeting Tenant B
 // (RLS prevents mutation, service snapshot remains enabled, positive own control works)
@@ -569,10 +588,10 @@ test('Tenant Isolation: Direct Tenant A JWT cannot update or upsert Tenant B ai_
 });
 
 // -----------------------------------------------------------------------------
-// Suite 3: Anonymous Client Denied Execution on All 8 Hardened RPCs
+// Suite 3: Anonymous Client Denied Execution on All 10 Hardened RPCs
 // -----------------------------------------------------------------------------
 
-test('Tenant Isolation: Anonymous client is denied execute on all 8 hardened RPCs', async () => {
+test('Tenant Isolation: Anonymous client is denied execute on all 10 hardened RPCs', async () => {
   await ensureFixture();
 
   const dummyUuid = '00000000-0000-4000-8000-000000000001';
@@ -606,6 +625,8 @@ test('Tenant Isolation: Anonymous client is denied execute on all 8 hardened RPC
     },
     { name: 'acknowledge_ai_monitoring_alert', args: { p_company_id: dummyUuid, p_alert_id: dummyUuid, p_user_id: dummyUuid } },
     { name: 'resolve_ai_monitoring_alert', args: { p_company_id: dummyUuid, p_alert_id: dummyUuid, p_user_id: dummyUuid } },
+    { name: 'claim_orphan_facebook_browser_jobs', args: { p_worker_id: 'anon-worker', p_limit: 1, p_company_id: dummyUuid } },
+    { name: 'resolve_reconciled_facebook_browser_job', args: { p_job_id: dummyUuid, p_resolution: 'RETRY' } },
   ];
 
   for (const call of calls) {
@@ -615,11 +636,11 @@ test('Tenant Isolation: Anonymous client is denied execute on all 8 hardened RPC
 });
 
 // -----------------------------------------------------------------------------
-// Suite 4: Trusted Service-Role Intended Operations Work Across All 8 RPCs
+// Suite 4: Trusted Service-Role Intended Operations Work Across All 10 RPCs
 // (Confirms functions exist, parameter signatures match, and service_role succeeds)
 // -----------------------------------------------------------------------------
 
-test('Tenant Isolation: Service-role intended operations succeed across all 8 RPCs', async () => {
+test('Tenant Isolation: Service-role intended operations succeed across all 10 RPCs', async () => {
   await ensureFixture();
 
   // 1. Create Handover Case via service_role
@@ -715,6 +736,23 @@ test('Tenant Isolation: Service-role intended operations succeed across all 8 RP
   });
   assert.ifError(disableErr);
   assert.ok(typeof disabledCount === 'number', 'emergency_disable_ai succeeded for service_role');
+
+  // 9. Backend-only Facebook outbox reconciliation RPCs remain usable by service_role.
+  const isolatedCompanyId = randomUUID();
+  const { data: orphanJobs, error: orphanErr } = await service.rpc('claim_orphan_facebook_browser_jobs', {
+    p_worker_id: 'security-test-worker',
+    p_limit: 1,
+    p_company_id: isolatedCompanyId,
+  });
+  assert.ifError(orphanErr);
+  assert.ok(Array.isArray(orphanJobs), 'claim_orphan_facebook_browser_jobs succeeds for service_role');
+
+  const { data: resolved, error: resolveOrphanErr } = await service.rpc('resolve_reconciled_facebook_browser_job', {
+    p_job_id: randomUUID(),
+    p_resolution: 'RECONCILE_REQUIRED',
+  });
+  assert.ifError(resolveOrphanErr);
+  assert.equal(resolved, false, 'unknown outbox job is safely a no-op for service_role');
 });
 
 // -----------------------------------------------------------------------------
@@ -722,7 +760,7 @@ test('Tenant Isolation: Service-role intended operations succeed across all 8 RP
 // (Directly reads pg_proc catalog aclexplode and has_function_privilege; no secrets printed)
 // -----------------------------------------------------------------------------
 
-test('Tenant Isolation: Native catalog ACL check via local psql confirms all 8 RPCs are revoked from anon/authenticated and service_role only', async () => {
+test('Tenant Isolation: Native catalog ACL check via local psql confirms all 10 RPCs are revoked from anon/authenticated and service_role only', async () => {
   await ensureFixture();
 
   // 1. has_function_privilege catalog check
@@ -744,7 +782,9 @@ test('Tenant Isolation: Native catalog ACL check via local psql confirms all 8 R
           'resume_ai_conversation',
           'record_ai_monitoring_alert',
           'acknowledge_ai_monitoring_alert',
-          'resolve_ai_monitoring_alert'
+          'resolve_ai_monitoring_alert',
+          'claim_orphan_facebook_browser_jobs',
+          'resolve_reconciled_facebook_browser_job'
         )
       ORDER BY p.proname
     ) t;
@@ -755,7 +795,7 @@ test('Tenant Isolation: Native catalog ACL check via local psql confirms all 8 R
   assert.ok(jsonPrivMatch, 'Expected JSON array in psql output for function privilege check');
   const privRows = JSON.parse(jsonPrivMatch[0]) as FunctionPrivilegeRow[];
 
-  assert.equal(privRows.length, 8, 'Catalog must contain all 8 hardened RPCs');
+  assert.equal(privRows.length, 10, 'Catalog must contain all 10 hardened RPCs');
   for (const row of privRows) {
     assert.equal(row.anon_can_execute, false, `Catalog check: ${row.proname} must have anon_can_execute = false`);
     assert.equal(row.auth_can_execute, false, `Catalog check: ${row.proname} must have auth_can_execute = false`);
@@ -781,7 +821,9 @@ test('Tenant Isolation: Native catalog ACL check via local psql confirms all 8 R
           'resume_ai_conversation',
           'record_ai_monitoring_alert',
           'acknowledge_ai_monitoring_alert',
-          'resolve_ai_monitoring_alert'
+          'resolve_ai_monitoring_alert',
+          'claim_orphan_facebook_browser_jobs',
+          'resolve_reconciled_facebook_browser_job'
         )
       ORDER BY p.proname, grantee
     ) a_rows;
@@ -792,7 +834,7 @@ test('Tenant Isolation: Native catalog ACL check via local psql confirms all 8 R
   assert.ok(jsonAclMatch, 'Expected JSON array in psql output for aclexplode check');
   const aclRows = JSON.parse(jsonAclMatch[0]) as AclExplodeRow[];
 
-  assert.ok(aclRows.length >= 8, 'Must return ACL entries for all functions');
+  assert.ok(aclRows.length >= 10, 'Must return ACL entries for all 10 hardened RPCs');
   for (const row of aclRows) {
     assert.ok(
       row.grantee === 'postgres' || row.grantee === 'service_role',

@@ -4,6 +4,7 @@ import { getActorContext, requireBossAdmin } from '@/lib/auth/context';
 import { isMetaReviewerMfaExempt } from '@/lib/auth/meta-review';
 import {
   exchangeCodeForUserAccessToken,
+  listManagedAdAccounts,
   listManagedFacebookPages,
   storeFacebookConnectSession,
   verifyAndClearFacebookOAuthState,
@@ -63,12 +64,20 @@ export async function GET(request: Request) {
     const code = query.get('code');
     if (!code) return back(request, 'FACEBOOK_MISSING_CODE');
 
-    const userAccessToken = await exchangeCodeForUserAccessToken(code);
-    const pages = await listManagedFacebookPages(userAccessToken);
+    const tokenResult = await exchangeCodeForUserAccessToken(code);
+    const userAccessToken = tokenResult.accessToken;
+    const [pages, adAccounts] = await Promise.all([
+      listManagedFacebookPages(userAccessToken),
+      listManagedAdAccounts(userAccessToken),
+    ]);
 
     await storeFacebookConnectSession({
       userAccessToken,
+      tokenExpiresAt: tokenResult.tokenExpiresAt,
+      tokenType: tokenResult.tokenType,
+      isLongLived: tokenResult.isLongLived,
       pages,
+      adAccounts,
       companyId: actor.companyId,
       userId: actor.userId,
     });
@@ -76,7 +85,12 @@ export async function GET(request: Request) {
     const url = publicAdminUrl(request);
     url.searchParams.set('step', 'select');
     return NextResponse.redirect(url);
-  } catch {
-    return back(request, 'FACEBOOK_CONNECT_CALLBACK_FAILED');
+  } catch (error) {
+    const code =
+      error instanceof Error && error.message.startsWith('FACEBOOK_')
+        ? error.message
+        : 'FACEBOOK_CONNECT_CALLBACK_FAILED';
+    console.error('[meta-connect] callback_failed', code);
+    return back(request, code);
   }
 }

@@ -1,0 +1,88 @@
+{
+  "migrations": [
+    {
+      "version": "20261030063323",
+      "name": "initial_schema"
+    },
+    {
+      "version": "20261030063347",
+      "name": "rls_foundation"
+    },
+    {
+      "version": "20261030063408",
+      "name": "trusted_server_private_rpc"
+    },
+    {
+      "version": "20261030063429",
+      "name": "private_call_transcripts"
+    },
+    {
+      "version": "20261030063437",
+      "name": "crm_atomic_transactions"
+    },
+    {
+      "version": "20261030063445",
+      "name": "inbox_atomic_persistence"
+    },
+    {
+      "version": "20261030063500",
+      "name": "0005_survey_atomic_completion"
+    },
+    {
+      "version": "20261030063510",
+      "name": "operations_atomic_rpcs"
+    },
+    {
+      "version": "20261030063519",
+      "name": "han_facebook_website"
+    },
+    {
+      "version": "20261030063526",
+      "name": "voice_media_pipeline"
+    },
+    {
+      "version": "20261030063534",
+      "name": "openai_realtime"
+    },
+    {
+      "version": "20261030063542",
+      "name": "response_sla_windows"
+    },
+    {
+      "version": "20261030063551",
+      "name": "ai_analysis_worker"
+    },
+    {
+      "version": "20261030063559",
+      "name": "voice_security_hardening"
+    },
+    {
+      "version": "20261030063608",
+      "name": "sales_style_learning"
+    },
+    {
+      "version": "20261030063640",
+      "name": "sales_style_activation"
+    },
+    {
+      "version": "20261030063647",
+      "name": "analytics_dashboard"
+    },
+    {
+      "version": "20261030063654",
+      "name": "survey_integrity_hardening"
+    },
+    {
+      "version": "20261030063702",
+      "name": "voice_p0_hardening"
+    },
+    {
+      "version": "20261030064055",
+      "name": "inbox_outbox_and_inbound_atomic"
+    },
+    {
+      "version": "20261030064113",
+      "name": "operations_p0_hardening"
+    }
+  ]
+}

@@ -33,7 +33,7 @@ export interface CustomerRow {
   ai_notes?: string | null;
 }
 export interface TimelineEvent { id: string; kind: string; channel: string; direction: string | null; at: string; content: string | null; source_id: string }
-export interface Page<T> { items: T[]; total: number; page: number; pageSize: number }
+export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; readOnlyFallback?: boolean }
 
 export function sanitizeDossierText(value: string, limit = 2000): string | null {
   const bounded = value.slice(0, Math.min(limit, 4000));
@@ -42,18 +42,116 @@ export function sanitizeDossierText(value: string, limit = 2000): string | null 
   if (!sanitizeCustomerMemory({ content: text, memoryType: 'AI_INFERENCE', verificationStatus: 'UNVERIFIED' }).safe) return null;
   return text.slice(0, limit);
 }
+
+function isMissingRpcFunction(error: unknown, functionName: string): boolean {
+  const value = error as { code?: string; message?: string } | null;
+  const message = String(value?.message || '').toLowerCase();
+  return value?.code === 'PGRST202' || value?.code === '42883'
+    || (message.includes('could not find the function') && message.includes(`public.${functionName.toLowerCase()}`));
+}
+
+async function listCustomersFromCoreTables(
+  db: SupabaseClient,
+  actor: DossierActor,
+  filters: ListFilters,
+  search: string,
+  phoneSearch: boolean,
+): Promise<Page<CustomerRow>> {
+  // Only original CRM columns are exposed in this compatibility mode.
+  // Advanced C360 filters fail closed rather than returning partial/misleading data.
+  if (phoneSearch || filters.owner || filters.hot || filters.overdue || filters.recent
+    || !['updated', 'name'].includes(filters.sort)) {
+    throw new DossierError('CUSTOMER_360_MIGRATION_REQUIRED');
+  }
+
+  let channelCustomerIds: string[] | null = null;
+  if (filters.channel) {
+    const { data: identityRows, error: identityError, count: identityCount } = await db
+      .from('identities')
+      .select('customer_id', { count: 'exact' })
+      .eq('company_id', actor.companyId)
+      .eq('channel', filters.channel)
+      .limit(1001);
+    if (identityError) throw new DossierError('CUSTOMER_LIST_UNAVAILABLE');
+    if ((identityCount ?? identityRows?.length ?? 0) > 1000 || (identityRows?.length ?? 0) > 1000) {
+      throw new DossierError('CUSTOMER_360_FILTER_REQUIRES_MIGRATION');
+    }
+    channelCustomerIds = [...new Set((identityRows || [])
+      .map((row: { customer_id?: string | null }) => row.customer_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    if (channelCustomerIds.length === 0) {
+      return { items: [], total: 0, page: filters.page, pageSize: 25, readOnlyFallback: true };
+    }
+  }
+
+  let query = db.from('customers')
+    .select('id,name,customer_code,stage,source,updated_at', { count: 'exact' })
+    .eq('company_id', actor.companyId);
+  if (search) {
+    const escaped = search.replace(/[%,()]/g, ' ');
+    query = query.or(`name.ilike.%${escaped}%,customer_code.ilike.%${escaped}%`);
+  }
+  if (filters.stage) query = query.eq('stage', filters.stage);
+  if (channelCustomerIds) query = query.in('id', channelCustomerIds);
+  query = query
+    .order(filters.sort === 'name' ? 'name' : 'updated_at', { ascending: filters.sort === 'name' })
+    .order('id', { ascending: true })
+    .range((filters.page - 1) * 25, filters.page * 25 - 1);
+
+  const { data, error, count } = await query;
+  if (error) throw new DossierError('CUSTOMER_LIST_UNAVAILABLE');
+
+  const items: CustomerRow[] = (data || []).map((row) => ({
+    id: String(row.id),
+    name: String(row.name || ''),
+    customer_code: String(row.customer_code || ''),
+    stage: String(row.stage || ''),
+    source: String(row.source || ''),
+    updated_at: String(row.updated_at || ''),
+    zalo_name: null,
+    facebook_name: null,
+    phone: null,
+    email: null,
+    facebook_outreach_at: null,
+    facebook_outreach_source: null,
+    zalo_outreach_at: null,
+    zalo_outreach_source: null,
+    assigned_sale: null,
+    assigned_sale_id: null,
+    current_situation: null,
+    last_interaction: null,
+    lead_score: null,
+    follow_up_at: null,
+    ai_updated_at: null,
+    assigned_sale_name: null,
+    sale_notes: null,
+    marketing_notes: null,
+    ai_notes: null,
+  }));
+  return { items, total: count ?? items.length, page: filters.page, pageSize: 25, readOnlyFallback: true };
+}
+
 export async function listCustomersForActor(db: SupabaseClient, actor: DossierActor, input: unknown): Promise<Page<CustomerRow>> {
   const f = listFilters.parse(input);
   let search = f.search;
-  if (/^[+\d ().-]+$/.test(search)) { try { search = normalizePhone(search); } catch { /* Partial phone search. */ } }
+  const phoneSearch = Boolean(search && /^[+\d ().-]+$/.test(search));
+  if (phoneSearch) { try { search = normalizePhone(search); } catch { /* Partial phone search. */ } }
   const { data, error } = await db.rpc('c360_list', {
     p_company_id: actor.companyId, p_search: search, p_page: f.page, p_owner: f.owner ?? null,
     p_channel: f.channel ?? null, p_stage: f.stage ?? null, p_sort: f.sort,
     p_hot: f.hot === '1', p_overdue: f.overdue === '1', p_recent: f.recent === '1',
     p_include_ai: actor.role === 'BOSS_ADMIN',
   });
-  if (error || !data || !Array.isArray(data.items) || typeof data.total !== 'number') throw new DossierError('CUSTOMER_LIST_UNAVAILABLE');
-  return data as Page<CustomerRow>;
+  if (error) {
+    if (isMissingRpcFunction(error, 'c360_list')) {
+      return listCustomersFromCoreTables(db, actor, f, search, phoneSearch);
+    }
+    throw new DossierError('CUSTOMER_LIST_UNAVAILABLE');
+  }
+  if (!data || !Array.isArray(data.items) || typeof data.total !== 'number') {
+    throw new DossierError('CUSTOMER_LIST_UNAVAILABLE');
+  }
+  return { ...(data as Page<CustomerRow>), readOnlyFallback: false };
 }
 export async function listDossierCustomers(input: unknown) {
   const actor = await recordingActor();

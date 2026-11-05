@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { pageBindings, type PageBinding } from './binding';
 import { sanitize } from './core';
+import { getMetaPageToken } from './page-token-vault';
 import { processFacebookInboundPhonePrivacy } from './phone-intake';
 import {
     detectLeadForm,
@@ -72,6 +73,7 @@ export type FacebookSyncDependencies = {
     fetcher?: typeof fetch;
     now?: Date;
     promoteDisplayName?: typeof promoteFacebookCustomerDisplayName;
+    getPageToken?: (config: PageBinding) => Promise<string>;
 };
 
 export type FacebookSyncFolderResult = {
@@ -339,194 +341,6 @@ async function ingestInboundMessage(
     return 'skipped';
 }
 
-async function ingestOutboundFallback(
-    config: PageBinding,
-    customerPsid: string,
-    mid: string,
-    content: string,
-    safeContent: string | null,
-    safeStatus: string,
-    occurred: string,
-    payload: Record<string, unknown>,
-    client: SupabaseClient,
-    errors: string[],
-): Promise<IngestOutcome> {
-    const key = `${config.page}:${mid}`;
-    const externalId = `${config.page}:${customerPsid}`;
-
-    try {
-        // Idempotency check: interaction already recorded
-        const { data: existing } = await client
-            .from('interactions')
-            .select('id')
-            .eq('company_id', config.company)
-            .eq('channel', 'FACEBOOK')
-            .eq('external_ref', key)
-            .maybeSingle();
-
-        if (existing?.id) return 'duplicate';
-
-        // Reconciliation: check if outbox recorded this mid from CRM send
-        const { data: outbox } = await client
-            .from('han_outbox')
-            .select('interaction_id')
-            .eq('company_id', config.company)
-            .eq('provider_mid', mid)
-            .maybeSingle();
-
-        if (outbox?.interaction_id) {
-            await client
-                .from('interactions')
-                .update({ external_ref: key })
-                .eq('id', outbox.interaction_id)
-                .is('external_ref', null);
-            return 'duplicate';
-        }
-
-        // Resolve customer
-        let customerId: string | null = null;
-        const { data: identity } = await client
-            .from('identities')
-            .select('customer_id')
-            .eq('company_id', config.company)
-            .eq('channel', 'FACEBOOK')
-            .eq('external_id', externalId)
-            .maybeSingle();
-
-        customerId = identity?.customer_id ?? null;
-
-        if (!customerId) {
-            const { data: newCust, error: custErr } = await client
-                .from('customers')
-                .insert({
-                    company_id: config.company,
-                    name: 'Khách Messenger',
-                    source: 'FACEBOOK',
-                    stage: 'awareness',
-                })
-                .select('id')
-                .single();
-
-            if (custErr || !newCust) {
-                errors.push(`outbound_fallback:cust_err=${custErr?.message || 'unknown'}`);
-                return 'skipped';
-            }
-            customerId = newCust.id;
-
-            await client.from('identities').insert({
-                company_id: config.company,
-                customer_id: customerId,
-                channel: 'FACEBOOK',
-                external_id: externalId,
-                verified: false,
-            });
-        }
-
-        // Resolve conversation
-        let conversationId: string | null = null;
-        const { data: conv } = await client
-            .from('conversations')
-            .select('id, last_message_at')
-            .eq('company_id', config.company)
-            .eq('channel', 'FACEBOOK')
-            .eq('external_conversation_id', externalId)
-            .maybeSingle();
-
-        if (conv) {
-            conversationId = conv.id;
-            const currentLast = conv.last_message_at ? new Date(conv.last_message_at).getTime() : 0;
-            if (new Date(occurred).getTime() > currentLast) {
-                await client
-                    .from('conversations')
-                    .update({ last_message_at: occurred })
-                    .eq('id', conversationId);
-            }
-        } else {
-            const { data: newConv, error: convErr } = await client
-                .from('conversations')
-                .insert({
-                    company_id: config.company,
-                    customer_id: customerId,
-                    channel: 'FACEBOOK',
-                    external_conversation_id: externalId,
-                    last_message_at: occurred,
-                    unread_count: 0,
-                })
-                .select('id')
-                .single();
-
-            if (convErr || !newConv) {
-                errors.push(`outbound_fallback:conv_err=${convErr?.message || 'unknown'}`);
-                return 'skipped';
-            }
-            conversationId = newConv.id;
-        }
-
-        // Insert OUTBOUND interaction
-        const { data: interaction, error: intErr } = await client
-            .from('interactions')
-            .insert({
-                company_id: config.company,
-                customer_id: customerId,
-                conversation_id: conversationId,
-                channel: 'FACEBOOK',
-                type: 'MESSAGE',
-                direction: 'OUTBOUND',
-                sanitized_content: safeContent,
-                sanitization_status: safeStatus,
-                sanitized_at: safeStatus === 'SUCCEEDED' ? new Date().toISOString() : null,
-                sanitizer_version: 'han-bounded-v2',
-                external_ref: key,
-                actor_type: 'SALE',
-                created_at: occurred,
-            })
-            .select('id')
-            .single();
-
-        if (intErr) {
-            if (intErr.message?.includes('duplicate key') || intErr.code === '23505') {
-                return 'duplicate';
-            }
-            errors.push(`outbound_fallback:int_err=${intErr.message}`);
-            return 'skipped';
-        }
-
-        if (interaction?.id) {
-            try {
-                await client.from('interaction_raw_contents').insert({
-                    interaction_id: interaction.id,
-                    company_id: config.company,
-                    raw_content: content,
-                    raw_payload: payload,
-                });
-            } catch {
-                // Non-critical raw zone insertion
-            }
-
-            try {
-                await client
-                    .from('response_sla_windows')
-                    .update({
-                        state: 'SALE_RESPONDED',
-                        sale_response_interaction_id: interaction.id,
-                        resolved_at: occurred,
-                        dispatch_state: 'PROVIDER_ACCEPTED',
-                    })
-                    .eq('conversation_id', conversationId)
-                    .eq('state', 'OPEN')
-                    .lte('started_at', occurred);
-            } catch {
-                // Non-critical SLA update
-            }
-        }
-
-        return 'ingested';
-    } catch (err) {
-        errors.push(`outbound_fallback:ex=${err instanceof Error ? err.message : 'unknown'}`);
-        return 'skipped';
-    }
-}
-
 async function ingestOutboundMessage(
     config: PageBinding,
     conversationId: string,
@@ -589,30 +403,10 @@ async function ingestOutboundMessage(
         return 'duplicate';
     }
 
-    // If RPC is missing (e.g. before migration runs on target environment), use graceful fallback
-    const isRpcMissing =
-        error.code === 'PGRST202' ||
-        error.message.includes('Could not find the function') ||
-        error.message.includes('function public.han_ingest_outbound') ||
-        error.message.includes('schema cache');
-
-    if (!isRpcMissing) {
-        errors.push(`han_ingest_outbound:${error.message.slice(0, 120)}`);
-        return 'skipped';
-    }
-
-    return ingestOutboundFallback(
-        config,
-        customerPsid,
-        mid,
-        content,
-        safeContent,
-        safeStatus,
-        occurred,
-        payload,
-        client,
-        errors,
-    );
+    // A missing atomic RPC is a migration/configuration failure. Manual writes
+    // cannot reproduce its raw-content, outbox and SLA transaction guarantees.
+    errors.push('han_ingest_outbound:ATOMIC_RPC_UNAVAILABLE');
+    return 'skipped';
 }
 
 async function syncConversation(
@@ -797,19 +591,26 @@ async function syncPage(
     };
 
     const version = process.env.META_GRAPH_VERSION?.trim();
-    const token = process.env[config.tokenEnv]?.trim();
 
     if (!version || !/^v\d+\.\d+$/.test(version)) {
         pageResult.errors.push('graph_version_missing');
         return pageResult;
     }
 
+    const client = dependencies.client ?? createAdminClient();
+    let token: string | null = null;
+    try {
+        token = dependencies.getPageToken
+            ? await dependencies.getPageToken(config)
+            : await getMetaPageToken(config.company, config.page, config.tokenEnv, client);
+    } catch {
+        token = null;
+    }
+
     if (!token) {
         pageResult.errors.push('page_token_missing');
         return pageResult;
     }
-
-    const client = dependencies.client ?? createAdminClient();
     const fetcher = dependencies.fetcher ?? fetch;
     const promoteDisplayName =
         dependencies.promoteDisplayName ?? promoteFacebookCustomerDisplayName;
@@ -973,7 +774,8 @@ export async function syncFacebookPages(
     const dryRun = Boolean(options.dryRun);
 
     const configs = pageBindings().filter(
-        (config) => selectedPages.size === 0 || selectedPages.has(config.page),
+        (config) => !config.leadAdsOnly
+            && (selectedPages.size === 0 || selectedPages.has(config.page)),
     );
 
     const client = dependencies.client ?? createAdminClient();

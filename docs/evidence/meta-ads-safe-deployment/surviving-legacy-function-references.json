@@ -1,0 +1,107 @@
+[
+  {
+    "signature": "public.record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+    "name": "record_quality_check_atomic",
+    "file": "20260928000001_operations_p0_hardening.sql",
+    "line": 75,
+    "parameters": [
+      {
+        "name": "p_company_id",
+        "argType": {
+          "names": [
+            {
+              "String": {
+                "sval": "uuid"
+              }
+            }
+          ],
+          "typemod": -1,
+          "location": 5720
+        },
+        "mode": "FUNC_PARAM_DEFAULT",
+        "location": 5707
+      },
+      {
+        "name": "p_production_order_id",
+        "argType": {
+          "names": [
+            {
+              "String": {
+                "sval": "uuid"
+              }
+            }
+          ],
+          "typemod": -1,
+          "location": 5747
+        },
+        "mode": "FUNC_PARAM_DEFAULT",
+        "location": 5725
+      },
+      {
+        "name": "p_qc_status",
+        "argType": {
+          "names": [
+            {
+              "String": {
+                "sval": "text"
+              }
+            }
+          ],
+          "typemod": -1,
+          "location": 5764
+        },
+        "mode": "FUNC_PARAM_DEFAULT",
+        "location": 5752
+      },
+      {
+        "name": "p_inspector_id",
+        "argType": {
+          "names": [
+            {
+              "String": {
+                "sval": "uuid"
+              }
+            }
+          ],
+          "typemod": -1,
+          "location": 5784
+        },
+        "mode": "FUNC_PARAM_DEFAULT",
+        "location": 5769
+      },
+      {
+        "name": "p_notes",
+        "argType": {
+          "names": [
+            {
+              "String": {
+                "sval": "text"
+              }
+            }
+          ],
+          "typemod": -1,
+          "location": 5797
+        },
+        "mode": "FUNC_PARAM_DEFAULT",
+        "defexpr": {
+          "A_Const": {
+            "isnull": true,
+            "location": 5810
+          }
+        },
+        "location": 5789
+      }
+    ],
+    "language": "plpgsql",
+    "body": "\nDECLARE p public.production_orders; o public.orders; next_status text;\nBEGIN\n PERFORM public.operations_actor(p_company_id,p_inspector_id,ARRAY['BOSS_ADMIN']);\n SELECT * INTO p FROM public.production_orders WHERE company_id=p_company_id AND id=p_production_order_id FOR UPDATE;\n IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n SELECT * INTO o FROM public.orders WHERE company_id=p_company_id AND id=p.order_id FOR UPDATE;\n IF NOT FOUND THEN RAISE EXCEPTION 'RESOURCE_NOT_FOUND'; END IF;\n IF p.status <> 'QC_IN_PROGRESS' OR o.order_status <> 'IN_PRODUCTION' THEN RAISE EXCEPTION 'INVALID_STATE_TRANSITION'; END IF;\n IF p_qc_status IS NULL OR p_qc_status NOT IN ('PASSED','REWORK_REQUIRED','REJECTED') THEN RAISE EXCEPTION 'INVALID_INPUT'; END IF;\n next_status := CASE WHEN p_qc_status='PASSED' THEN 'READY_FOR_DISPATCH' ELSE 'QC_FAILED' END;\n UPDATE public.production_orders SET status=next_status,qc_status=p_qc_status,updated_at=now() WHERE id=p.id;\n IF p_qc_status='PASSED' THEN UPDATE public.orders SET order_status='READY_FOR_INSTALL',updated_at=now() WHERE id=o.id; END IF;\n PERFORM public.operations_audit(p_company_id,p_inspector_id,'RECORD_QUALITY_CHECK','production_orders',p.id,jsonb_build_object('from_status',p.status,'to_status',next_status,'qc_status',p_qc_status));\n RETURN jsonb_build_object('success',true);\nEND ",
+    "replaces": true,
+    "legacy_table_references": [
+      "orders",
+      "production_orders"
+    ],
+    "legacy_function_references": [
+      "operations_actor",
+      "operations_audit"
+    ]
+  }
+]

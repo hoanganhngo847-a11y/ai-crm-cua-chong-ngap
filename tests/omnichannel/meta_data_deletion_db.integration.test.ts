@@ -136,7 +136,7 @@ async function seedRealDatabase(client: SupabaseClient) {
         company_id: TEST_COMPANY_A,
         customer_id: TEST_CUSTOMER_A,
         channel: 'FACEBOOK',
-        external_conversation_id: 'fb-conv-alpha-001',
+        external_conversation_id: '987654321012345:880000000000041',
         status: 'OPEN',
         unread_count: 1,
     });
@@ -148,7 +148,7 @@ async function seedRealDatabase(client: SupabaseClient) {
         company_id: TEST_COMPANY_B,
         customer_id: TEST_CUSTOMER_B,
         channel: 'FACEBOOK',
-        external_conversation_id: 'fb-conv-beta-001',
+        external_conversation_id: '987654321012345:880000000000042',
         status: 'OPEN',
         unread_count: 1,
     });
@@ -398,7 +398,7 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
                 company_id: TEST_COMPANY_A,
                 customer_id: TEST_CUSTOMER_A2,
                 channel: 'FACEBOOK',
-                external_conversation_id: 'fb-conv-alpha-002',
+                external_conversation_id: '987654321012345:880000000000043',
                 status: 'OPEN',
                 unread_count: 1,
             });
@@ -563,7 +563,7 @@ test('REAL DB Suite: Meta Data Deletion Persistence & Security', async (t) => {
                 company_id: TEST_COMPANY_A,
                 customer_id: TEST_CUSTOMER_A3,
                 channel: 'FACEBOOK',
-                external_conversation_id: 'fb-conv-alpha-003',
+                external_conversation_id: '987654321012345:880000000000044',
                 status: 'OPEN',
                 unread_count: 2,
             });

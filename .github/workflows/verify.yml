@@ -15,6 +15,8 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
       NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
       SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      BACKUP_REQUIRE_LIVE_PG17: '1'
+      CRM_PG17_FALLBACK_IMAGE: postgres:17
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,9 +25,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3
         with:
-          version: latest
+          version: '2.119.0'
       - run: npm ci
       - run: npm run test:customer-360
       - run: npm run test:campaigns
@@ -34,6 +36,11 @@ jobs:
       - run: npm run build:javis-brain
       - run: supabase start -x studio,logflare,vector
       - run: supabase db reset
+      - run: npx tsx --conditions=react-server --test tests/staging/migration-ledger.test.ts tests/staging/migration-security-db.test.ts
+      - run: npm run test:staging-readiness
+      - run: npm run test:meta-staging-preflight
+      - run: npm run test:selective-ledger
+      - run: npm run test:selective-runtime
       - run: npx tsx --conditions=react-server --test tests/ai-brain/zalo-sla-retry-db.test.ts
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db
@@ -55,6 +62,21 @@ jobs:
       - run: npm run test:meta-deletion:db
       - run: npm run test:integration-gate
       - run: npm run test:fixture-repeatability
+      - run: npm run test:meta-ads
+      - run: npm run test:meta-ads:db
+      - name: Start disposable PostgreSQL 17 (Helper #6)
+        run: ./scripts/backup/ci-postgres17.sh start
+      - name: Run backup/restore regression tests (Helpers #1-#6)
+        run: npm run test:backup
+      - name: PostgreSQL 17 diagnostics (on failure)
+        if: failure()
+        run: ./scripts/backup/ci-postgres17.sh logs
+      - name: Teardown disposable PostgreSQL 17
+        if: always()
+        run: ./scripts/backup/ci-postgres17.sh stop
+      - run: npm run test:crm
+      - run: npm run typecheck
+      - run: npm run lint
       - run: npm run test:omnichannel
       - run: npm run test:omnichannel:db
       - run: npm run test:voice

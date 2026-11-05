@@ -31,8 +31,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });
@@ -140,17 +142,17 @@ async function setupDatabaseFixtures() {
   // 3. Conversations
   const { error: errConvo } = await adminClient.from('conversations').upsert([
     { id: CONVO_1_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_1', status: 'OPEN' },
-    { id: CONVO_2_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_2', status: 'OPEN' },
+    { id: CONVO_2_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000022', status: 'OPEN' },
     { id: CONVO_3_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_3', status: 'OPEN' },
-    { id: CONVO_4_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_4', status: 'OPEN' },
+    { id: CONVO_4_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000024', status: 'OPEN' },
     { id: CONVO_5_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_5', status: 'OPEN' },
-    { id: CONVO_CLOSED_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_closed', status: 'CLOSED' },
+    { id: CONVO_CLOSED_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000025', status: 'CLOSED' },
     { id: CONVO_AI_HANDLING_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_ai', status: 'AI_HANDLING' },
-    { id: CONVO_CONCURRENT_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_conc', status: 'OPEN' },
+    { id: CONVO_CONCURRENT_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000026', status: 'OPEN' },
     { id: CONVO_AUDIT_FAIL_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_audit', status: 'OPEN' },
-    { id: CONVO_COMPANY_B_ID, company_id: COMPANY_B_ID, customer_id: CUSTOMER_B_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_b', status: 'OPEN' },
+    { id: CONVO_COMPANY_B_ID, company_id: COMPANY_B_ID, customer_id: CUSTOMER_B_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000027', status: 'OPEN' },
     { id: CONVO_RECLAIM_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'ZALO', external_conversation_id: 'ext_sla_reclaim', status: 'OPEN' },
-    { id: CONVO_CONC_RECLAIM_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: 'ext_sla_creclaim', status: 'OPEN' },
+    { id: CONVO_CONC_RECLAIM_ID, company_id: COMPANY_A_ID, customer_id: CUSTOMER_A_ID, channel: 'FACEBOOK', external_conversation_id: '987654321012345:880000000000028', status: 'OPEN' },
   ]);
   if (errConvo) throw new Error(`Conversations upsert failed: ${errConvo.message}`);
 
@@ -993,7 +995,7 @@ async function runTests() {
       has_function_privilege('service_role', 'public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)', 'EXECUTE') as sr_priv;
   `;
   const privResultRaw = execSync(
-    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${privCheckSql.replace(/"/g, '\\"')}"`,
+    `docker exec -i ${DB_CONTAINER} psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${privCheckSql.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   ).trim();
   const [anonPriv, authPriv, srPriv] = privResultRaw.split(',');
@@ -1008,7 +1010,7 @@ async function runTests() {
       coalesce(to_regprocedure('public.resolve_response_sla_on_sale_reply(uuid, uuid, uuid, timestamptz)')::text, 'MISSING') as new_signature;
   `;
   const overloadResultRaw = execSync(
-    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${overloadCheckSql.replace(/"/g, '\\"')}"`,
+    `docker exec -i ${DB_CONTAINER} psql -t -A -F ',' -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${overloadCheckSql.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   ).trim();
   const [oldOverload, newSignature] = overloadResultRaw.split(',');

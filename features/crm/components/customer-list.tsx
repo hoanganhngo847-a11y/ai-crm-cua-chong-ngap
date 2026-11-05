@@ -69,6 +69,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
   const [search, setSearch] = useState<string>('');
   const [selectedSource, setSelectedSource] = useState<string>('');
   const [selectedStage, setSelectedStage] = useState<string>('');
+  const [selectedCampaign, setSelectedCampaign] = useState<string>('');
   const [page, setPage] = useState<number>(1);
   const [total, setTotal] = useState<number>(0);
   const limit = 15;
@@ -108,6 +109,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
       if (search.trim()) params.set('search', search.trim());
       if (selectedSource) params.set('source', selectedSource);
       if (selectedStage) params.set('stage', selectedStage);
+      if (selectedCampaign.trim()) params.set('campaign', selectedCampaign.trim());
       if (activeTab === 'URGENT_CLOSING') params.set('urgent_closing', 'true');
       params.set('limit', limit.toString());
       params.set('offset', ((page - 1) * limit).toString());
@@ -135,7 +137,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
     } finally {
       setLoading(false);
     }
-  }, [search, selectedSource, selectedStage, page, activeTab]);
+  }, [search, selectedSource, selectedStage, selectedCampaign, page, activeTab]);
 
   useEffect(() => {
     let isMounted = true;
@@ -158,6 +160,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
     setSearch('');
     setSelectedSource('');
     setSelectedStage('');
+    setSelectedCampaign('');
     setActiveTab('ALL');
     setPage(1);
   };
@@ -425,7 +428,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
 
       {/* Filter and Search Bar */}
       <Card className="p-3.5 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5">
           {/* Search Box */}
           <div className="md:col-span-2">
             <form onSubmit={handleSearchSubmit} className="relative">
@@ -460,6 +463,20 @@ export default function CustomerList({ userRole }: CustomerListProps) {
             </select>
           </div>
 
+          {/* Filter by Campaign */}
+          <div>
+            <input
+              type="text"
+              value={selectedCampaign}
+              onChange={(e) => {
+                setSelectedCampaign(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Lọc chiến dịch..."
+              className="w-full h-8 px-2.5 text-xs bg-[var(--surface-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-md transition-colors placeholder:text-[var(--text-disabled)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+            />
+          </div>
+
           {/* Filter by Stage */}
           <div>
             <select
@@ -481,7 +498,7 @@ export default function CustomerList({ userRole }: CustomerListProps) {
         </div>
 
         {/* Active Filters summary & Reset */}
-        {(search || selectedSource || selectedStage) && (
+        {(search || selectedSource || selectedStage || selectedCampaign) && (
           <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] pt-2 border-t border-[var(--border-subtle)]">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] text-[var(--text-tertiary)]">Đang lọc:</span>
@@ -493,6 +510,11 @@ export default function CustomerList({ userRole }: CustomerListProps) {
               {selectedSource && (
                 <span className="px-2 py-0.5 rounded bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[11px]">
                   Nguồn: {SOURCE_LABELS[selectedSource] || selectedSource}
+                </span>
+              )}
+              {selectedCampaign && (
+                <span className="px-2 py-0.5 rounded bg-[var(--surface-secondary)] border border-[var(--border-subtle)] text-[11px]">
+                  Chiến dịch: &ldquo;{selectedCampaign}&rdquo;
                 </span>
               )}
               {selectedStage && (
@@ -597,11 +619,26 @@ export default function CustomerList({ userRole }: CustomerListProps) {
                     <SecurePhoneRow customerId={c.id} maskedPhone={c.phone} />
                   </TableCell>
 
-                  {/* Source */}
+                  {/* Source & Attribution */}
                   <TableCell>
-                    <span className="text-xs text-[var(--text-secondary)]">
-                      {SOURCE_LABELS[c.source] || c.source}
-                    </span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-[var(--text-secondary)] font-medium">
+                        {SOURCE_LABELS[c.source] || c.source}
+                      </span>
+                      {c.first_campaign_name && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] text-accent font-medium truncate max-w-[150px]"
+                          title={`Chiến dịch: ${c.first_campaign_name}${c.first_ad_name ? ` • Ad: ${c.first_ad_name}` : ''}`}
+                        >
+                          🎯 {c.first_campaign_name}
+                        </span>
+                      )}
+                      {c.attribution_status === 'ATTRIBUTED' && !c.first_campaign_name && (
+                        <span className="inline-flex items-center text-[10px] font-medium text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded w-fit">
+                          Attributed
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
 
                   {/* Stage & Urgency */}

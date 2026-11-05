@@ -29,8 +29,10 @@ const anonClient = createClient(SUPABASE_URL, ANON_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function runDockerPsql(sql: string): string {
-  const cmd = `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -v ON_ERROR_STOP=1`;
+  const cmd = `docker exec -i ${DB_CONTAINER} psql -U postgres -d postgres -v ON_ERROR_STOP=1`;
   return execSync(cmd, { input: sql, encoding: 'utf8' });
 }
 
@@ -350,7 +352,18 @@ test('Real Supabase Native: Dispatch guard null/NaN/threshold/source/time/lease/
   runDockerPsql(`UPDATE public.conversations SET ai_mode = 'ACTIVE' WHERE id = '${convId}'::uuid;`);
 
   // C. Strict numeric Page:PSID check
-  runDockerPsql(`UPDATE public.conversations SET external_conversation_id = '${numericPageId}:user-non-numeric' WHERE id = '${convId}'::uuid;`);
+  // Local-only malformed-data fixture: the historical canary seeder rejects
+  // a NULL Page before this negative dispatch test can run. Suspend ONLY that
+  // seed trigger while constructing the bad row, then restore it atomically
+  // BEFORE invoking the unchanged dispatch/security assertions below.
+  runDockerPsql(`BEGIN;
+    ALTER TABLE public.conversations DISABLE TRIGGER trg_seed_messenger_pages_canary;
+    UPDATE public.conversations SET external_conversation_id = '${numericPageId}:user-non-numeric' WHERE id = '${convId}'::uuid;
+    ALTER TABLE public.conversations ENABLE TRIGGER trg_seed_messenger_pages_canary;
+    COMMIT;`);
+  assert.match(runDockerPsql(`SELECT 'CANARY_TRIGGER_RESTORED' WHERE EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgrelid='public.conversations'::regclass
+      AND tgname='trg_seed_messenger_pages_canary' AND tgenabled='O');`), /CANARY_TRIGGER_RESTORED/);
   const { data: fenceNonNumericPsid } = await serviceClient.rpc('start_ai_messenger_live_dispatch', {
     p_delivery_id: delivery.id,
     p_lock_token: lockToken,
@@ -856,7 +869,7 @@ test('Real Supabase Native: Lease crossing expiry while waiting on competing row
 
   // Competing session acquires FOR UPDATE lock on conversations for 2 seconds
   const child = spawn('docker', [
-    'exec', '-i', 'supabase_db_ai-crm-cua-chong-ngap',
+    'exec', '-i', DB_CONTAINER,
     'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'
   ]);
   child.stdin.write(`BEGIN;\nSELECT * FROM public.conversations WHERE id = '${convId}' FOR UPDATE;\nSELECT pg_sleep(2);\nCOMMIT;\n`);

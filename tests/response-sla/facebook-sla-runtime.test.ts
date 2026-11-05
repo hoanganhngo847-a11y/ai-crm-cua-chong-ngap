@@ -31,8 +31,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });
@@ -56,7 +58,7 @@ function queryRawJson<T = OutboxRow[]>(sql: string): T {
   const cleanSql = sql.trim().replace(/;+$/, '');
   const wrapped = `SELECT json_agg(t) FROM (${cleanSql}) t;`;
   const result = execSync(
-    `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -t -A -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${wrapped.replace(/"/g, '\\"')}"`,
+    `docker exec -i ${DB_CONTAINER} psql -t -A -v ON_ERROR_STOP=1 -U postgres -d postgres -c "${wrapped.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   );
   const trimmed = result.trim();

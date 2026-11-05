@@ -1,0 +1,65 @@
+{
+  "capturedAt": "2026-10-30T10:42:01Z",
+  "workspaceId": "tea-db27ttjtqb8s73cdhrj0",
+  "service": {
+    "id": "srv-dbi2f3etlv9c738lkum0",
+    "name": "ai-crm-meta-staging",
+    "branch": "meta_ads_integration",
+    "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+    "autoDeploy": "no",
+    "autoDeployTrigger": "off",
+    "type": "web_service",
+    "updatedAt": "2026-10-30T06:33:18.402421Z"
+  },
+  "workspaceSummary": [
+    {
+      "id": "srv-dbi2f3etlv9c738lkum0",
+      "name": "ai-crm-meta-staging",
+      "type": "web_service",
+      "branch": "meta_ads_integration",
+      "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+      "autoDeployTrigger": "off"
+    },
+    {
+      "id": "srv-dbd1vg8473hc73aj4ngg",
+      "name": "javis-runtime",
+      "type": "web_service",
+      "branch": "main",
+      "repo": "https://github.com/blogminhquy/javis-os",
+      "autoDeployTrigger": "commit"
+    },
+    {
+      "id": "srv-dbd1bh6i0phs73bacih0",
+      "name": "javis-brain",
+      "type": "web_service",
+      "branch": "main",
+      "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+      "autoDeployTrigger": "off"
+    },
+    {
+      "id": "srv-dba20juq1p3s73a0re10",
+      "name": "ai-crm-zalo-zcajs-worker-prod",
+      "type": "web_service",
+      "branch": "main",
+      "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+      "autoDeployTrigger": "off"
+    },
+    {
+      "id": "srv-dba206eq1p3s73a0q3r0",
+      "name": "ai-crm-zalo-zcajs-worker",
+      "type": "web_service",
+      "branch": "main",
+      "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+      "autoDeployTrigger": "commit"
+    },
+    {
+      "id": "srv-db2dcguk1f9s73a289cg",
+      "name": "ai-crm-cua-chong-ngap",
+      "type": "web_service",
+      "branch": "main",
+      "repo": "https://github.com/hoanganhngo847-a11y/ai-crm-cua-chong-ngap",
+      "autoDeployTrigger": "commit"
+    }
+  ],
+  "scope": "Workspace metadata only. No production service-specific calls, logs, credentials or environment variables were requested."
+}

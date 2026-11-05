@@ -70,6 +70,8 @@ export async function GET(request: NextRequest, context?: unknown) {
     const search = searchParams.get('search')?.trim() || '';
     const stage = searchParams.get('stage') as CustomerStage | null;
     const source = searchParams.get('source') as CustomerSource | null;
+    const campaign = searchParams.get('campaign')?.trim() || '';
+    const attributionStatus = searchParams.get('attribution_status')?.trim() || '';
     const urgentClosing =
       searchParams.get('urgent_closing') === 'true' || searchParams.get('queue') === 'urgent_closing';
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10), 1), 100);
@@ -156,6 +158,12 @@ export async function GET(request: NextRequest, context?: unknown) {
     }
     if (source) {
       query = query.eq('source', source);
+    }
+    if (campaign) {
+      query = query.or(`first_campaign_name.ilike.%${campaign}%,latest_campaign_name.ilike.%${campaign}%`);
+    }
+    if (attributionStatus) {
+      query = query.eq('attribution_status', attributionStatus);
     }
 
     query = query

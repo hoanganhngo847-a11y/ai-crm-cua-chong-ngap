@@ -43,8 +43,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });
@@ -238,7 +240,7 @@ async function setupDatabaseFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'ext_style_a',
+      external_conversation_id: '987654321012345:880000000000011',
       status: 'OPEN',
     },
     {

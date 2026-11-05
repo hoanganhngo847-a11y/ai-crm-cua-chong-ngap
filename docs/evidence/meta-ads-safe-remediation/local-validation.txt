@@ -1,0 +1,143 @@
+Local validation, 2026-10-31 (Asia/Ho_Chi_Minh)
+Reference: 012e776ca5258848b421cc8a9b4ed58712a3babe
+Synthetic fixtures only; no hosted writes or Supabase reset.
+
+Meta unit/regression
+✔ TEST 1: fresh phone creates exactly one customer, one contact, one attribution event marked NEW_PHONE (5141.316583ms)
+✔ TEST 2: Campaign B after Campaign A reuses the SAME customer; both campaigns stay visible; replay keeps the verdict (2177.029334ms)
+✔ TEST 3: three campaigns on one phone: one customer, three events, all three campaign associations preserved (1284.005166ms)
+✔ TEST 5: the same phone in two tenants never matches across companies (1161.815542ms)
+✔ TEST 6: multiple profiles owning the same phone: no auto-merge, submission preserved unbound for manual resolution (1283.245542ms)
+✔ TEST 7: invalid phones fail closed at intake; missing phones still preserve the lead safely (1315.493791ms)
+✔ TEST 8: unresolvable campaign stays pending and is safely completed by retry without moving first-touch (1268.185625ms)
+✔ TEST 10: Messenger and Website keep their exact prior semantics while leadgen reuses by phone (1279.22825ms)
+✔ Scenario 1: Legacy Messenger webhook continues working normally without regression (233.33525ms)
+✔ Scenario 2: Valid Lead Ads webhook (leadgen) is received and processed with full attribution (21.520458ms)
+✔ Scenario 3: Tampered signature or malformed payload fails closed with 403/400 (1.094459ms)
+✔ Scenario 4: Webhook idempotency retry is deduplicated safely without duplicate entries (4787.495833ms)
+✔ Scenario 5: Unallowed Page fails closed and cannot write data across companies (1.216584ms)
+✔ Scenario 6: Ad accounts of other companies are strictly isolated via RLS (2012.724458ms)
+✔ Scenario 7: Lead with ad ID correctly maps to campaign/ad metadata and updates snapshots (1272.05825ms)
+✔ Scenario 8: Lead without attribution metadata remains UNATTRIBUTED without guessing campaign (1127.5325ms)
+✔ Scenario 9: Click-to-Messenger referral metadata is extracted and recorded (11.501417ms)
+✔ Scenario 10: Meta API errors (429 rate limit, 500, token expired) are handled safely with backoff (17.441375ms)
+✔ Scenario 11: Identity conflict does not destructively merge customers and flags review (0.686541ms)
+✔ Scenario 12: Sensitive tokens are encrypted at rest (AES-256-GCM) and phone is zero-phone compliant (0.939958ms)
+✔ Scenario 13: Unauthorized roles (SALE, TECHNICIAN) are rejected from admin sync (1312.137792ms)
+✔ Scenario 14: Database migration, foreign keys, and unique constraints are enforced (1266.938542ms)
+✔ Scenario 16: Token security, private schema isolation, and format validation (1342.952ms)
+✔ Scenario 17: SECURITY DEFINER RPCs enforce strict company authorization and cross-tenant isolation (1226.904125ms)
+✔ Scenario 18: Durable event intake, idempotency, and multi-leadgen batch fault isolation (1038.146292ms)
+✔ Scenario 19: Marketing sync lease concurrency guard and complete pagination check (1149.045166ms)
+✔ Scenario 20: Unmapped ad remains UNATTRIBUTED; First-touch snapshot is strictly immutable (1062.733583ms)
+✔ migration versions are unique; applied funnel migration is unchanged; final security migration follows foundation (1.463041ms)
+✔ all attribution and lead endpoints use independent supported versions and Bearer headers (13.215417ms)
+✔ pagination completes beyond ten pages; truncation, malformed pages, hostile links and cycles fail closed (15.226125ms)
+✔ metadata sync stores only attribution fields even when Graph returns budgets, creative and performance data (15.67675ms)
+✔ scheduled metadata sync retries each tenant once, without insights or ad-set requests (17.163834ms)
+✔ URL, upstream response, transport, and database errors never leak access tokens to logs or results (31.734167ms)
+✔ account result counts reflect success, failures, missing credentials, lease errors, and skipped owners (39.81075ms)
+✔ legacy SHA256-derived ciphertext survives explicit previous-key migration and rotates to the primary key (2.311959ms)
+✔ offline key verifier emits only status/counts for verified legacy rows and rejects mismatched keys (518.045167ms)
+✔ discovered asset identifiers are accepted independently and the Page requires an explicit tenant binding (13.08725ms)
+✔ OAuth transport errors cannot echo a credential-bearing token-exchange URL (0.698417ms)
+✔ F-14: parseTokenExpiration parses actual Meta expires_in and detects expired tokens without hardcoding 60 days (0.139208ms)
+✔ FIX A: OAuth token exchange handles long-lived, explicit unsupported, transient errors, malformed responses, and expired fallback (6.784958ms)
+✔ FIX B: subscribeManagedPage handles subscription preservation, read-back verification, and error edge cases (7.472292ms)
+✔ F-06: webhook isolates Lead Ads failures and processes Messenger messages in mixed batch; retries deduplicate safely (75.033333ms)
+✔ lead read degrades exactly once to minimal fields on 400; other failures never invent permission (0.533875ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18695.637458
+
+Native PostgreSQL tokens/RPC/webhook
+✔ PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and partial retry recovery (9236.78675ms)
+✔ token migration preserves ciphertext, expiry and linked rows; conflicts or incomplete copies roll back (10646.969208ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 20362.723791
+
+Migration integrity
+[PASS] Real filesystem migrations pass all invariant checks (121 migrations verified)
+[PASS] Appending valid future migrations (19th, 20th+) passes without hardcoded total count
+[PASS] Duplicate timestamp rejected fail-closed
+[PASS] Missing canonical Foundation migration rejected fail-closed
+[PASS] Non-chronological migration order rejected fail-closed
+[PASS] Foundation migration content mutation rejected via SHA-256 baseline checksum
+[PASS] Git guard: historical migration uncommitted modification rejected fail-closed
+[PASS] Git guard: historical migration committed modification rejected fail-closed
+[PASS] Git guard: historical migration deletion rejected fail-closed
+[PASS] Git guard: historical migration rename rejected fail-closed
+[PASS] Git guard: newly added feature migration edited after initial feature commit allowed
+[PASS] Git guard: valid additive file allowed
+[PASS] Git guard: missing baseline fails closed
+[PASS] Git guard: reviewed unapplied duplicate-version rename allowed with frozen SQL
+[PASS] Git guard: SQL mutation within reviewed rename rejected
+[PASS] Git guard: applied funnel mutation within rename rejected
+[PASS] Git guard: deletion without reviewed replacement rejected
+
+Staging preflight
+✔ exact staging prefix, full chain and Meta-only shortcut on disposable PostgreSQL (26687.18425ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27255.817334
+
+Staging readiness/rehearsal
+✔ all canonical source bytes have a reviewable transaction envelope and preserve the 21-entry mapping (141.873167ms)
+✔ transaction inspection handles bodies, strings, Unicode and nested comments without hiding intermediate commits (0.371ms)
+✔ synthetic backup envelope authenticates ciphertext and key; never returns damaged plaintext (0.588375ms)
+  ✔ QC actual source preserves PASS/REWORK/REJECT, audit, service ACLs and tenant boundaries (1321.911625ms)
+  ✔ all four signed URL categories preserve their TTLs and retrieve authorized bytes (16412.589333ms)
+  ✔ authorization, foreign tenants, AAL2 and technician lifecycle fail before signing (12548.867333ms)
+  ✔ invalid selectors, canonical paths, missing resources, tampering and expiry never succeed empty (11786.982416ms)
+  ✔ native RLS, FK and trigger integrity preserve company boundaries (458.822292ms)
+  ✔ 21 genuinely executed synthetic prefix files map append-only; no copied/fabricated staging history (2063.257375ms)
+  ✔ hash conflicts, duplicate concurrent execution and both transaction failure forms are safe (4200.695916ms)
+  ✔ installed CLI refuses application-time ledger drift in a synthetic-only workspace (137.655708ms)
+  ✔ encrypted pg_dump restores counts/hashes, history, grants, RLS, FK, trigger, sequence and app retrieval (7379.391209ms)
+✔ QC compatibility, signed URLs, ledger atomicity and encrypted restore on synthetic PostgreSQL (58095.341542ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58355.038667
+
+Owner consistency/ledger/security
+✔ MCP apply timestamps are matched by unique names and require schema proof (1.594709ms)
+✔ ambiguous versions/names, unknown entries and skipped predecessors fail closed (13.23825ms)
+✔ captured staging ledger is the first canonical prefix; names never cause activation replay (3.156709ms)
+✔ canonical 21-migration prefix and full chain preserve tenant projection and auth trigger after hardening (20795.466375ms)
+✔ owner decision register preserves all 178 original IDs, keeps approvals false, and maps every pending item to exactly one batch (5.865958ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21313.960041
+
+Scanner: PASS in disposable Git fixture; dynamic imports loaded, output JSON and literal RPC reference verified.
+Typecheck: PASS (next typegen && tsc --noEmit).
+Build: PASS using the loopback Supabase values from Verify workflow; no hosted credentials.
+Initial build without those env values failed its configuration check; corrected invocation passed.
+ESLint: PASS, 0 errors / 14 existing warnings; no rule or ignore change.
+No real Meta Graph request, test lead, customer send, hosted migration, merge or deployment.

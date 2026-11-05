@@ -59,8 +59,10 @@ function createAnonClient(): SupabaseClient {
   });
 }
 
+const DB_CONTAINER = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
+
 function executeRawSql(sql: string) {
-  execSync('docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -v ON_ERROR_STOP=1 -U postgres -d postgres', {
+  execSync(`docker exec -i ${DB_CONTAINER} psql -v ON_ERROR_STOP=1 -U postgres -d postgres`, {
     input: sql,
     encoding: 'utf8',
   });
@@ -204,7 +206,7 @@ async function setupFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'fb_convo_a',
+      external_conversation_id: '987654321012345:880000000000060',
       status: 'OPEN',
     },
     {
@@ -212,7 +214,7 @@ async function setupFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'fb_convo_b',
+      external_conversation_id: '987654321012345:880000000000061',
       status: 'OPEN',
     },
     {
@@ -220,7 +222,7 @@ async function setupFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'fb_convo_c',
+      external_conversation_id: '987654321012345:880000000000062',
       status: 'OPEN',
     },
     {
@@ -228,7 +230,7 @@ async function setupFixtures() {
       company_id: COMPANY_A_ID,
       customer_id: CUSTOMER_A_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: 'fb_convo_d',
+      external_conversation_id: '987654321012345:880000000000063',
       status: 'OPEN',
     },
     {
@@ -638,7 +640,7 @@ async function runAllScenarios() {
 
     assert(pipelineResult !== null, 'Scenario E: Pipeline produced analysis record');
     assert(pipelineResult.modelVersion === 'trusted-ai-model-v1', 'Scenario E: Trusted modelVersion persisted');
-    assert(pipelineResult.stageSuggestion === 'SURVEY_SCHEDULED', 'Scenario E: Stage suggestion recorded');
+    assert(pipelineResult.stageSuggestion === 'interested', `Scenario E: Legacy SURVEY_SCHEDULED suggestion is canonicalized (got ${pipelineResult.stageSuggestion})`);
 
     // Verify Customer.stage was NOT mutated by AI analysis (AI cannot mutate stage directly)
     const { data: custAfter } = await adminClient

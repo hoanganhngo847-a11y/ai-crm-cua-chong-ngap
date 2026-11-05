@@ -1,0 +1,3092 @@
+{
+  "sourceCommit": "bdb4ee6b4a42d6e875e96926a6f53c1938f4ccc8",
+  "scope": "New disposable local databases only; no remote executor/history writes or real backup.",
+  "container": "supabase_db_ai-crm-cua-chong-ngap",
+  "databases": [
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_prefix",
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_full",
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_meta"
+  ],
+  "tests": {
+    "A": {
+      "migrations": [
+        {
+          "file": "20260914000001_initial_schema.sql",
+          "sha256": "a877e0e3fdf3b127c093b498fcc866b3df5ef37c4972dc778650e6a2d248c920",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 260,
+          "recordedVersion": "20261030063323"
+        },
+        {
+          "file": "20260915000001_rls_foundation.sql",
+          "sha256": "447cee608bdcad83c3deac07f967ae2116c2ae39cba9dd557c00ea1119632794",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 124,
+          "recordedVersion": "20261030063347"
+        },
+        {
+          "file": "20260915000002_trusted_server_private_rpc.sql",
+          "sha256": "e432723499a195d8e552826782e702799739ad0f60b64c94b3ddce9a6f752712",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 80,
+          "recordedVersion": "20261030063408"
+        },
+        {
+          "file": "20260916000001_private_call_transcripts.sql",
+          "sha256": "1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 90,
+          "recordedVersion": "20261030063429"
+        },
+        {
+          "file": "20260916000002_crm_atomic_transactions.sql",
+          "sha256": "064d30a05af075e1dbd44d140f54fbb8382926ec06bce0c57717068096844709",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 75,
+          "recordedVersion": "20261030063437"
+        },
+        {
+          "file": "20260916000003_inbox_atomic_persistence.sql",
+          "sha256": "5e3b6a36625641670372e2eb2d148af920e5949a4d48bbf455246d98fa5392c3",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 75,
+          "recordedVersion": "20261030063445"
+        },
+        {
+          "file": "20260917000001_0005_survey_atomic_completion.sql",
+          "sha256": "86109760fe7073b6965e1e3f7f4a4d0450209db36b111c9b22c2d449d324367d",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 57,
+          "recordedVersion": "20261030063500"
+        },
+        {
+          "file": "20260920000002_operations_atomic_rpcs.sql",
+          "sha256": "ae698b8da10c116fdc7907bb709d2921cd5917c5480e09a629c2296c514180f7",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55,
+          "recordedVersion": "20261030063510"
+        },
+        {
+          "file": "20260920000005_han_facebook_website.sql",
+          "sha256": "f085ffb0b87f10a27401dafac30603339db2f47888acc113dacde1bdff068841",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 77,
+          "recordedVersion": "20261030063519"
+        },
+        {
+          "file": "20260921000001_voice_media_pipeline.sql",
+          "sha256": "1931ef7d8c695ee3c9a6baa9bf37acd0476409e72883fbd1425661a91830be3c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 63,
+          "recordedVersion": "20261030063526"
+        },
+        {
+          "file": "20260921000002_openai_realtime.sql",
+          "sha256": "b2c52102111284f96200dbf229ddcb50ae159fd0dabec55e985cd8a6c88d78c9",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60,
+          "recordedVersion": "20261030063534"
+        },
+        {
+          "file": "20260922000001_response_sla_windows.sql",
+          "sha256": "a7c28bbe0f7dec02af5ee2e55c75d936fafc42ed7d5201ef1ba2e36a6aef975f",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 76,
+          "recordedVersion": "20261030063542"
+        },
+        {
+          "file": "20260922000002_ai_analysis_worker.sql",
+          "sha256": "07574fc776948c4c9c4bfaa4d43e7e722c93ee764e9d1ad5470445587c07ac16",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 70,
+          "recordedVersion": "20261030063551"
+        },
+        {
+          "file": "20260922000003_voice_security_hardening.sql",
+          "sha256": "2accd05b59e7b6724646cca20085be49982e1215e952fb7a6a48202e5350ae7a",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 70,
+          "recordedVersion": "20261030063559"
+        },
+        {
+          "file": "20260923000001_sales_style_learning.sql",
+          "sha256": "00f1cfaba26f53b7bc2e0c4fd54f8044fc7703ef6524b5621368ee6b34d20fca",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 57,
+          "recordedVersion": "20261030063608"
+        },
+        {
+          "file": "20260923000002_sales_style_activation.sql",
+          "sha256": "3b31a8860d1e23a6619300dae95657977d38ef8845cc53b11d9f4c75df4e045c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 63,
+          "recordedVersion": "20261030063640"
+        },
+        {
+          "file": "20260923000003_analytics_dashboard.sql",
+          "sha256": "4b53ad99e047c74addd9b29607fb5bbf6876c9f5ac5ea01bf3b43e96bce0ea76",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 54,
+          "recordedVersion": "20261030063647"
+        },
+        {
+          "file": "20260924000001_survey_integrity_hardening.sql",
+          "sha256": "95d43784ebe31b59035513208f7ebbbbcd24561e465610c8742d41b98865efb6",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 69,
+          "recordedVersion": "20261030063654"
+        },
+        {
+          "file": "20260925000001_voice_p0_hardening.sql",
+          "sha256": "19faacd37a58ce59445e356c36036220726e45160150bbf67ee24cac3968125f",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 92,
+          "recordedVersion": "20261030063702"
+        },
+        {
+          "file": "20260927000001_inbox_outbox_and_inbound_atomic.sql",
+          "sha256": "331c98824fe60db077d680ffc28a10dce4b1bcfe5d152ff00abb8362579acf00",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 100,
+          "recordedVersion": "20261030064055"
+        },
+        {
+          "file": "20260928000001_operations_p0_hardening.sql",
+          "sha256": "edab37eda7f26ce4a398348232014a113a90a2075579e22cfbf750f053cdfa70",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 90,
+          "recordedVersion": "20261030064113"
+        }
+      ],
+      "catalog": [
+        {
+          "category": "columns",
+          "object_count": 460,
+          "fingerprint": "9628c8da028e678629c190380d9efb5d"
+        },
+        {
+          "category": "constraints",
+          "object_count": 298,
+          "fingerprint": "e912bdd2add0deb1a097dd81567457c0"
+        },
+        {
+          "category": "function_grants",
+          "object_count": 276,
+          "fingerprint": "eaea5a83dc0aaf7859a6ef9908241f36"
+        },
+        {
+          "category": "functions",
+          "object_count": 92,
+          "fingerprint": "982e28b266370e0537ed24365b1576bd"
+        },
+        {
+          "category": "indexes",
+          "object_count": 154,
+          "fingerprint": "cad7457128356ef2eaa261af0e06a7ad"
+        },
+        {
+          "category": "policies",
+          "object_count": 86,
+          "fingerprint": "aa0f15c44b9701a9e9538b221da0c583"
+        },
+        {
+          "category": "relations",
+          "object_count": 45,
+          "fingerprint": "cd2550814770bef655d1b026b7886909"
+        },
+        {
+          "category": "schema_grants",
+          "object_count": 12,
+          "fingerprint": "9db16a4edb48127e127f564811706054"
+        },
+        {
+          "category": "table_grants",
+          "object_count": 945,
+          "fingerprint": "e772b1219499ec4a90e0b200fd1db806"
+        },
+        {
+          "category": "triggers",
+          "object_count": 63,
+          "fingerprint": "0ed008353955c866921cf3bc8b68b213"
+        }
+      ],
+      "remoteDifferences": [],
+      "watched": {
+        "cron_job": null,
+        "meta_events": null,
+        "page_helper": null,
+        "touchpoints": null,
+        "canary_table": null,
+        "seed_triggers": 0,
+        "sla_signature": "open_response_sla_window(uuid,uuid,uuid)",
+        "seed_functions": 0,
+        "canary_settings": null,
+        "zalo_oa_configs": null,
+        "pg_net_installed": false,
+        "pg_cron_installed": false
+      },
+      "messenger": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "e61b1039-1321-4de9-8d1d-5d91e7fbfaf7"
+        },
+        "sla_count": 0,
+        "customer_count": 1,
+        "interaction_count": 1
+      },
+      "website": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "49ca22f5-b7d5-4521-bd07-6409c624dc0b"
+        },
+        "sla_count": 0,
+        "customer_count": 1,
+        "interaction_count": 1
+      }
+    },
+    "B": {
+      "migrations": [
+        {
+          "file": "20260914000001_initial_schema.sql",
+          "sha256": "a877e0e3fdf3b127c093b498fcc866b3df5ef37c4972dc778650e6a2d248c920",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 215
+        },
+        {
+          "file": "20260915000001_rls_foundation.sql",
+          "sha256": "447cee608bdcad83c3deac07f967ae2116c2ae39cba9dd557c00ea1119632794",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 147
+        },
+        {
+          "file": "20260915000002_trusted_server_private_rpc.sql",
+          "sha256": "e432723499a195d8e552826782e702799739ad0f60b64c94b3ddce9a6f752712",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 104
+        },
+        {
+          "file": "20260916000001_private_call_transcripts.sql",
+          "sha256": "1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 81
+        },
+        {
+          "file": "20260916000002_crm_atomic_transactions.sql",
+          "sha256": "064d30a05af075e1dbd44d140f54fbb8382926ec06bce0c57717068096844709",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 72
+        },
+        {
+          "file": "20260916000003_inbox_atomic_persistence.sql",
+          "sha256": "5e3b6a36625641670372e2eb2d148af920e5949a4d48bbf455246d98fa5392c3",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 100
+        },
+        {
+          "file": "20260917000001_0005_survey_atomic_completion.sql",
+          "sha256": "86109760fe7073b6965e1e3f7f4a4d0450209db36b111c9b22c2d449d324367d",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 102
+        },
+        {
+          "file": "20260920000002_operations_atomic_rpcs.sql",
+          "sha256": "ae698b8da10c116fdc7907bb709d2921cd5917c5480e09a629c2296c514180f7",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 79
+        },
+        {
+          "file": "20260920000005_han_facebook_website.sql",
+          "sha256": "f085ffb0b87f10a27401dafac30603339db2f47888acc113dacde1bdff068841",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 110
+        },
+        {
+          "file": "20260921000001_voice_media_pipeline.sql",
+          "sha256": "1931ef7d8c695ee3c9a6baa9bf37acd0476409e72883fbd1425661a91830be3c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 79
+        },
+        {
+          "file": "20260921000002_openai_realtime.sql",
+          "sha256": "b2c52102111284f96200dbf229ddcb50ae159fd0dabec55e985cd8a6c88d78c9",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 70
+        },
+        {
+          "file": "20260922000001_response_sla_windows.sql",
+          "sha256": "a7c28bbe0f7dec02af5ee2e55c75d936fafc42ed7d5201ef1ba2e36a6aef975f",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 75
+        },
+        {
+          "file": "20260922000002_ai_analysis_worker.sql",
+          "sha256": "07574fc776948c4c9c4bfaa4d43e7e722c93ee764e9d1ad5470445587c07ac16",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 110
+        },
+        {
+          "file": "20260922000003_voice_security_hardening.sql",
+          "sha256": "2accd05b59e7b6724646cca20085be49982e1215e952fb7a6a48202e5350ae7a",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 158
+        },
+        {
+          "file": "20260923000001_sales_style_learning.sql",
+          "sha256": "00f1cfaba26f53b7bc2e0c4fd54f8044fc7703ef6524b5621368ee6b34d20fca",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 188
+        },
+        {
+          "file": "20260923000002_sales_style_activation.sql",
+          "sha256": "3b31a8860d1e23a6619300dae95657977d38ef8845cc53b11d9f4c75df4e045c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 483
+        },
+        {
+          "file": "20260923000003_analytics_dashboard.sql",
+          "sha256": "4b53ad99e047c74addd9b29607fb5bbf6876c9f5ac5ea01bf3b43e96bce0ea76",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 106
+        },
+        {
+          "file": "20260924000001_survey_integrity_hardening.sql",
+          "sha256": "95d43784ebe31b59035513208f7ebbbbcd24561e465610c8742d41b98865efb6",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 71
+        },
+        {
+          "file": "20260925000001_voice_p0_hardening.sql",
+          "sha256": "19faacd37a58ce59445e356c36036220726e45160150bbf67ee24cac3968125f",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 90
+        },
+        {
+          "file": "20260927000001_inbox_outbox_and_inbound_atomic.sql",
+          "sha256": "331c98824fe60db077d680ffc28a10dce4b1bcfe5d152ff00abb8362579acf00",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 78
+        },
+        {
+          "file": "20260928000001_operations_p0_hardening.sql",
+          "sha256": "edab37eda7f26ce4a398348232014a113a90a2075579e22cfbf750f053cdfa70",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 92
+        },
+        {
+          "file": "20260928000002_tv9_post_merge_hardening.sql",
+          "sha256": "1a1d1b2e1b1446a4d4bac4339acd0c2684e702ab57a2e9415b7938aca6233fe5",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 80
+        },
+        {
+          "file": "20260929120001_zalo_ingress_and_care.sql",
+          "sha256": "11dde63a28976695d23a8d6ee64d6cdd6c4c1e11f6624d3ff99562f8f5c57307",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 77
+        },
+        {
+          "file": "20260929120002_zalo_hardening_remediation.sql",
+          "sha256": "c7221c58fc6d9140f0afde2f4d6f68dd9e940cb07fa9f54836ebe04b9a33ab73",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 87
+        },
+        {
+          "file": "20260929120003_zalo_round3_remediation.sql",
+          "sha256": "c0a5418a9e7b7eaf106d88d058985afe56df18409b9ff26f7bc52bb3165fe1f4",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 116
+        },
+        {
+          "file": "20260929220001_pricing_payment_contract_base.sql",
+          "sha256": "eb0d3f9863de3a25182e40993138f940226a40b3fc966cfc1ad47796ec718517",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 78
+        },
+        {
+          "file": "20260929220002_commercial_atomic_rpcs.sql",
+          "sha256": "6baf932f3152fb8235c5d2f110e3c903a8bfd9e1aa4499dfadb504ba08bc27d6",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60
+        },
+        {
+          "file": "20260929220003_commercial_security_hardening.sql",
+          "sha256": "f077183bc60c0355f5aba4f557bd4626ab3afdbfe1dfc51309dfa136b268ebc9",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 79
+        },
+        {
+          "file": "20260929220004_contract_storage_hardening.sql",
+          "sha256": "7347666e02e2714e375062733f39b1d8a101724fa70cf6e03a4f6d9faa7b5707",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 90
+        },
+        {
+          "file": "20260930000001_p0_security_acl_hardening.sql",
+          "sha256": "7e25ceb675ae8ee0a16ff611166668efb94bbab4cfaf0e9efd285929485a89ab",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 82
+        },
+        {
+          "file": "20260930120001_p1_backend_remediation.sql",
+          "sha256": "a05f7bb2a7f62af0022c0b3e18139fb7e7bf707d73b2b2e89a94b73c56bf8177",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 99
+        },
+        {
+          "file": "20261001100001_ai_interaction_raw_content_rpc.sql",
+          "sha256": "d00b1c74694c0d3bc9a98697d9bd6782c4ab2b0588117364a01f570748a36f67",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 64
+        },
+        {
+          "file": "20261001140001_ai_outbound_delivery_atomic.sql",
+          "sha256": "5d817307a9e5cc852eeb8ea0918ea179e610cf6636de7e00c4ab4e72537b10bd",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 234
+        },
+        {
+          "file": "20261001150001_ai_durable_dispatch_hardening.sql",
+          "sha256": "45509184847e2ca21a41eb4d8c9bbe95ec0dac2bb093d2053d22c4d82bca7319",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 81
+        },
+        {
+          "file": "20261001160001_ai_sale_fencing_linearization.sql",
+          "sha256": "3726836f2bfd48f41ddce5237dd68703069ee91c59cf760005939b3ac2792272",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 100
+        },
+        {
+          "file": "20261001170001_cross_actor_dispatch_linearization.sql",
+          "sha256": "dfbcef1a89b428030caa274357f0bcdd1196890df5e3ea21ac3c980255acb0ad",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 91
+        },
+        {
+          "file": "20261001180001_sale_same_actor_dispatch_concurrency.sql",
+          "sha256": "96cd5b94790c1c521a2b261d512bcf0afa7ce3b09ace72113804c7e423b360c9",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 81
+        },
+        {
+          "file": "20261001190001_provider_accepted_irreversibility_and_dispatch_recovery.sql",
+          "sha256": "6b04dba5dc958a2b598fce216838c41b432a5ad3d9dac5eba3b82f0c76890e1b",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 70
+        },
+        {
+          "file": "20261001200001_zalo_uncertain_reconciliation_authority_and_care_unknown.sql",
+          "sha256": "f357d321fedfb44addbd65f2dfa0642d6ddcbfbd49268d2918fcaeaa10a57f3e",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 115
+        },
+        {
+          "file": "20261002100001_han_finish_send_read_receipt_schema_fix.sql",
+          "sha256": "76e0eb376411752f6611bbedb5c5e51342d8f659af5cbc53a4d1282febf7ef59",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 71
+        },
+        {
+          "file": "20261002220001_commercial_exactly_once_and_recovery.sql",
+          "sha256": "dfb4dd29bfb840cc7a67cf8a620ef1610ee56cff94810943f123004814cf4923",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 73
+        },
+        {
+          "file": "20261004180001_installation_product_journey.sql",
+          "sha256": "8df54245de76fd04532a95131ac8c1cf8ade5cc94b0f4866670de42d0b80619f",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 126
+        },
+        {
+          "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+          "sha256": "907e8752aca9d81dfe144fe6ae0ed92f1bbb969ba561effaba6005e7944f2f57",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 179
+        },
+        {
+          "file": "20261005100001_staging_storage_bucket_provisioning.sql",
+          "sha256": "79484c80a80501dadd3c9ecc3c55485dcace6ce61656dd24c0f47c2e93e9a958",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 65
+        },
+        {
+          "file": "20261006143500_service_role_core_acl_restore.sql",
+          "sha256": "c4db2112b772ea7bdee2aff6f0bf480d10f3e8c94055be2162c3ed3ebf8cadf2",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 80
+        },
+        {
+          "file": "20261006210001_auth_runtime_select_acl.sql",
+          "sha256": "5b717a01ade890ff604622d0c5ecc9e06a3b89b70ad584d9337bf9ca189a53b0",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 68
+        },
+        {
+          "file": "20261007172000_inbox_audit_actor_compatibility.sql",
+          "sha256": "c4ecb27d275d12a14ba19115d9b802bf9632f59665604649d7d2e48368f43e5c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 65
+        },
+        {
+          "file": "20261012100001_facebook_browser_inbox_sync.sql",
+          "sha256": "de5576f22489484d4c58e3581bba29d8284c66595e39dd60ea53bedd98650463",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 74
+        },
+        {
+          "file": "20261012110001_facebook_browser_outbox_queue.sql",
+          "sha256": "0a517eccb650d0b62153f96f099f941fe8a1caf17d2aeed4a5bd06e4703ce1d6",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 75
+        },
+        {
+          "file": "20261012113001_facebook_browser_outbox_hardening.sql",
+          "sha256": "f5734161275a0c224d60b50ec1a283ed355ad5c80832b6331c739f9018ddd989",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 73
+        },
+        {
+          "file": "20261013100001_update_facebook_customer_display_name.sql",
+          "sha256": "c0ed3671b5ddc8f8987902d06a806b55ccb48013815d498f2956e5e3874fb2bc",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60
+        },
+        {
+          "file": "20261013180001_inbox_realtime_publication.sql",
+          "sha256": "7d7b6ebcf0559ccd32bb31553e568481d57bb713b443682248fa9e0e97268e23",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 66
+        },
+        {
+          "file": "20261013230001_dual_fingerprint_idempotency.sql",
+          "sha256": "0407860cb48a8a08bb69d9c972fe49b3ae5be606681a53e36a55589867ebf91d",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 63
+        },
+        {
+          "file": "20261016180001_meta_user_data_deletion.sql",
+          "sha256": "ba083a8c8915b2ab6b5984d036573a7c0567fe09b03b296b6c1a985d304f6231",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 88
+        },
+        {
+          "file": "20261018221000_zcajs_observed_outbound.sql",
+          "sha256": "fbbee8aad4e9e7430c3aaf750a1d1fde2cc97087c473389b76e32523fdca4139",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 82
+        },
+        {
+          "file": "20261019073443_voice_business_app_calls.sql",
+          "sha256": "cfb17864e1945ef0611f0dadd2d62bec6c183619a8d003705c4cc9672d2d4aeb",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 110
+        },
+        {
+          "file": "20261020073819_zalo_personal_recordings.sql",
+          "sha256": "66d875f52bd40868673e30a509a4c95204bf892a1b0643eae38739fe01f06daf",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 99
+        },
+        {
+          "file": "20261020203000_zalo_outbound_call_requests.sql",
+          "sha256": "ce6d365c7619717c929c6fe19059ffd5dc70b9f0e40b76170910e62bbb074096",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 86
+        },
+        {
+          "file": "20261020220000_zalo_agent_heartbeat.sql",
+          "sha256": "514e609ec78f5f3451e674a52201a117f1b7bb12caceb563de2d6f0d248c43e5",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 73
+        },
+        {
+          "file": "20261020220001_fix_outbound_customer_metadata.sql",
+          "sha256": "50ce1aa46a086df6a037af78b692d9e66b7cb5d4c6a5530367dc0b752b2af08c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 72
+        },
+        {
+          "file": "20261020220003_restore_outbound_delivery_status_contract.sql",
+          "sha256": "e1dd8da38a96bcbf4bf8b1c20cb8a1b1a5ea3355aff8dc666128f6ac23d6493c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 68
+        },
+        {
+          "file": "20261020220004_restore_rpc_only_domain_acls.sql",
+          "sha256": "addbdae17a01186cf5b1d9758160834059db37304b7cbe545114c50624ab66b2",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 72
+        },
+        {
+          "file": "20261020220005_zalo_outbound_recording_hardening.sql",
+          "sha256": "163fa55a022d00b4dfd9a4c2601cc0ad00baf06315c2de699c39a1e4c19aa45c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 83
+        },
+        {
+          "file": "20261021120000_zalo_call_transcription.sql",
+          "sha256": "440f92007fb803f79aceecbed0a31b3336c89921ee461690441788efeb61b2dd",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 94
+        },
+        {
+          "file": "20261021150000_zalo_transcription_provider_model.sql",
+          "sha256": "61a570d59fca43a3944c50cb0f593ab7f9833d164700daf7f5d16a04e3d33095",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 62
+        },
+        {
+          "file": "20261021160000_zalo_targeted_transcription_claim.sql",
+          "sha256": "b069be0310755c1c3bb1904838331540987b573af03c2939c5b2055339a05468",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 101
+        },
+        {
+          "file": "20261021160001_zalo_bulk_transcription_lease_recovery.sql",
+          "sha256": "5463a7e93e1d615adb04ff27b86c6fd5430fb8e24f6dbd679876478430e91376",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 71
+        },
+        {
+          "file": "20261021200000_zalo_call_ai_summaries.sql",
+          "sha256": "387a7a9dfa21f18d70d27aac18170f046ba996eb293fa55761ff16543adda9f6",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 84
+        },
+        {
+          "file": "20261021200001_zalo_summary_failure_parent_sync.sql",
+          "sha256": "e8fdca995dab906dd22a176a0658a06396e9232fc5e8ac9c01024f4de2da49f7",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 70
+        },
+        {
+          "file": "20261022090000_gemini_api_key_pool.sql",
+          "sha256": "2f572f563c37df842478aefbcd627ff840f238194707be7063a1a726f60a056e",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 84
+        },
+        {
+          "file": "20261022130000_zalo_transcription_channel_checkpoints.sql",
+          "sha256": "d61e8e8fe58112e2a1ab24b180e0b9fc1ae4e3c0b6236b3bf1e6b18b229715d8",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 133
+        },
+        {
+          "file": "20261022170000_ai_brain_memory_foundation.sql",
+          "sha256": "06035321688855a33d72f975999902641d8791a0f469f9b88b21511df27caf8b",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 124
+        },
+        {
+          "file": "20261022173000_ai_brain_shadow_foundation.sql",
+          "sha256": "da81673756d38e3385a792ad92fa92c6a9a57b5c263d6902a4d8bed315713840",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 114
+        },
+        {
+          "file": "20261022180000_ai_brain_zalo_live_delivery.sql",
+          "sha256": "eacb41571e7daae21c5e29609a9135afd8ae185722731df73ecfd7395929d9c1",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 103
+        },
+        {
+          "file": "20261023010000_ai_brain_live_zalo_scheduler.sql",
+          "sha256": "6ba94ba6ed0651d0fcc1ffc828a048d93a7cc8f90ba23d093168238b5b1c88a2",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 155
+        },
+        {
+          "file": "20261023100000_ai_handover_workflow.sql",
+          "sha256": "90f3a848091691d06aa93c744121f10de6e44bef79f834f42c7c51bd9b466845",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 92
+        },
+        {
+          "file": "20261023140000_ai_control_center_foundation.sql",
+          "sha256": "af6977c568db9671c1daefa8b9ca47be74ccadc90482df769bad82d98fbb7741",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 76
+        },
+        {
+          "file": "20261023150000_ai_monitoring_alerting.sql",
+          "sha256": "38370d338e5856e8762e24f3547fc824f1a62b002b4a449f28e29d5c61cf97f5",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 103
+        },
+        {
+          "file": "20261023160000_ai_brain_messenger_live_delivery.sql",
+          "sha256": "d9a9760714caa8297f585e72d9f56a1eef16f291495131b1049c2699f1644fda",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 56
+        },
+        {
+          "file": "20261023170000_ai_brain_messenger_live_canary_and_scheduler.sql",
+          "sha256": "14a7d10522275f8525829572e257c8717b804e5318c8ed8fe523f74d145eff8a",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 72
+        },
+        {
+          "file": "20261023180000_ai_channel_scheduler_health_rpc.sql",
+          "sha256": "0d5f1c555face83421a9d6b9ad48deb36f353dbfde0fdad9bdf0366c3e0e0ef4",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 58
+        },
+        {
+          "file": "20261023190000_ai_brain_tenant_isolation_hardening.sql",
+          "sha256": "fe59e14900b25c93c2723522c3a0f34dcc85530b5533b32a686265665d28d0f3",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 54
+        },
+        {
+          "file": "20261023200000_customer_360_ai_dossier.sql",
+          "sha256": "1fad07811c7eead28fc4c65eb2166c071455eb2e1ac4879529066f3adf47efb6",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 79
+        },
+        {
+          "file": "20261024041037_bulk_messaging_campaigns.sql",
+          "sha256": "275c8b83bcefdfa69b81b96399cc4d79e5100cb5103d970f8b92384bec3bc76b",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 96
+        },
+        {
+          "file": "20261024233000_campaign_authoring_without_delivery.sql",
+          "sha256": "c8871a246f99748db0b9a1e17a1db2f848b8c421805b5fbd5990a47cc2cf04d8",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 51
+        },
+        {
+          "file": "20261025021000_zalo_personal_contact_linking.sql",
+          "sha256": "88de59b35e9cb35d1ab3db80954e50f42e0aef05ed7d9b4ca56a462c26c5b191",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 58
+        },
+        {
+          "file": "20261025022000_zalo_personal_campaign_5min.sql",
+          "sha256": "8bd90ad5ee1cb87360e4c5db13335c123c8f002c7a3050f2c360767296143dab",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 66
+        },
+        {
+          "file": "20261025022500_zalo_personal_strict_sender_spacing.sql",
+          "sha256": "747cf3c1e3192ee060eb1305325a79df92db143ba5698e4ff06c1897a15f8c58",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 49
+        },
+        {
+          "file": "20261025023000_zalo_personal_conversation_identity.sql",
+          "sha256": "a18cb57a9dae01fdfba84d06a5cadafdf62568b2df94aaf61a39e5037e9a6e0f",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 54
+        },
+        {
+          "file": "20261025051000_zalo_personal_zero_touch_customer_sync.sql",
+          "sha256": "78710749dd0bd900390b19eb6462f88d7bfc6d0b6658f051800f0e506249a1ca",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 67
+        },
+        {
+          "file": "20261025062000_zalo_personal_legacy_identity_upgrade.sql",
+          "sha256": "d74628bee2a43d9aac8eb82cb2aafa4e11def08edb45c78d265d61d0e9ab3eec",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60
+        },
+        {
+          "file": "20261025124107_zalo_brain_sla_and_terminal_failures.sql",
+          "sha256": "fcb754511d24a70ecfa0ba406b0fc01b931f980b286ee3f29c96c0ffdbdc917c",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 59
+        },
+        {
+          "file": "20261025160000_zalo_brain_one_minute_sla.sql",
+          "sha256": "cd6d6beae494fd3b32340b3adb49d310c353bbd9a33fca5503c18a9a8da8abf5",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 52
+        },
+        {
+          "file": "20261026075500_zalo_auto_link_unique_customer.sql",
+          "sha256": "fdf72b3443507bed6597b66c8f5b9ba319a8b34707df6de09789a4cf9ab8dd87",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60
+        },
+        {
+          "file": "20261026083543_zalo_personal_live_voice_bridge.sql",
+          "sha256": "6a45f3aefdf87b452dcf45be488b7a9e05bf50335d3d57806220a98905c704dd",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55
+        },
+        {
+          "file": "20261026092307_zalo_personal_inbound_live_voice.sql",
+          "sha256": "47ae3f71512856d2b90b097e5273f2a1baeba46ae204ebf96df5d51518259236",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 51
+        },
+        {
+          "file": "20261026111500_zalo_personal_inbound_live_voice_hardening.sql",
+          "sha256": "888fe930c822f60deb3aaf320ad78d3204b9a6ecc8e0413024f495373f5ec3d5",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 53
+        },
+        {
+          "file": "20261027130000_zalo_display_name_repair.sql",
+          "sha256": "7faa5693fe813633199b4d7e2480acf355fdb23f50fce41dde123e652b123c52",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55
+        },
+        {
+          "file": "20261027140000_botcake_messenger_page_and_du_hoc_ai.sql",
+          "sha256": "c2c759b1c6b40bb4aabe52b3b754aceea23e7790fa1f81d8998a4ef02e53ba7c",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 52
+        },
+        {
+          "file": "20261027183000_han_ingest_outbound.sql",
+          "sha256": "ec1832174424b4b74e6b4ebd3e7dd69810c7c945651b3977e7168941d3110918",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 53
+        },
+        {
+          "file": "20261027184500_facebook_sync_checkpoints.sql",
+          "sha256": "ca296a49adbafd7e81a252a5fdac3fcdf5be454c33fec3aa14d63e2392b8059e",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 58
+        },
+        {
+          "file": "20261027210000_study_abroad_stages.sql",
+          "sha256": "56d8831dd92fbde6031dcc451926512788aae3183f5274e20e07c2790ee760e8",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 53
+        },
+        {
+          "file": "20261028120000_canary_allowlist_foundation_backfill.sql",
+          "sha256": "3266f4934062bee1acd65b4b8de911c49b29a2c3a5a8cc3acf11ce7d01d79a04",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 60
+        },
+        {
+          "file": "20261028130000_customer_funnel_six_stages.sql",
+          "sha256": "44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 76
+        },
+        {
+          "file": "20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql",
+          "sha256": "98bd13f4c058bcc8e40992a2eb0b9bacd633a76af7ba2eac9e3a095912506ba8",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 74
+        },
+        {
+          "file": "20261028140000_fix_messenger_confidence_and_sla_resolution.sql",
+          "sha256": "684efe87b6170086cb0158eb6c47c116fc43bed5d081e6e1e1431351e9ee880e",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 51
+        },
+        {
+          "file": "20261028150000_always_reply_messenger_fallback_and_no_pause.sql",
+          "sha256": "d46e8361c1d14f5dd3da5a4bde54424d6a645a29bd4d36c1be487e2d9f482b83",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 52
+        },
+        {
+          "file": "20261028160000_c360_editable_notes_and_sale_name.sql",
+          "sha256": "ffc33cb11b597d9f2b810018e583879a0b19feb3d7ebc2052a1e891db5802084",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 56
+        },
+        {
+          "file": "20261029100000_c360_channel_outreach.sql",
+          "sha256": "16f4d3b12c7dff99ebbbf4d279268d8fdcc2fff788586ac7f14a6ba97004c767",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 53
+        },
+        {
+          "file": "20261029120000_zcajs_groups_and_zalo_ai_pause.sql",
+          "sha256": "4ae0402a7303104dd4bc0539028ab25ce8740f63c4911c0af4e1a8137a53b8e3",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 51
+        },
+        {
+          "file": "20261029154354_zalo_group_message_authors.sql",
+          "sha256": "6a2fabb52faf11bfdcdfd3c7302e8db1bf949404dae6fe5a77db8882b8396170",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55
+        },
+        {
+          "file": "20261029154410_zcajs_history_ingest.sql",
+          "sha256": "83d9bf69f46106b29f42f234b5234573122d959525378b5e8fae9385a42afd70",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55
+        },
+        {
+          "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+          "sha256": "f9e135d22b21e9a1812a275759eadba0fbdfe5c2af16d28c3508abd2b6627dd4",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 84
+        },
+        {
+          "file": "20261029164514_zalo_account_onboarding.sql",
+          "sha256": "d14a1d49512296e4ce74a132fcd84951c1a227ac4233ddde4ed3980005ae2ae6",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 59
+        },
+        {
+          "file": "20261029170648_zalo_account_guard_privileges.sql",
+          "sha256": "ec57b60e2538c89f47ff337f0259f51666874d4ae23be817f735ee6bd7fac4bc",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 47
+        },
+        {
+          "file": "20261030090000_meta_ads_lead_attribution.sql",
+          "sha256": "f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 74
+        },
+        {
+          "file": "20261030100000_meta_ads_hardening.sql",
+          "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 67
+        },
+        {
+          "file": "20261030110000_meta_ads_final_remediation.sql",
+          "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 58
+        },
+        {
+          "file": "20261030120000_meta_ads_attribution_rpc_security.sql",
+          "sha256": "a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 51
+        },
+        {
+          "file": "20261030120001_staging_function_security_hardening.sql",
+          "sha256": "cace68d93fa4f681b9895c9fd2172d13b58985703e4f678ae10fce6dc9e356ef",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 48
+        },
+        {
+          "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+          "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 57
+        }
+      ],
+      "destructiveBoundaryChanges": [
+        {
+          "file": "20260915000001_rls_foundation.sql",
+          "removed": [],
+          "changed": [
+            "table:public.calls",
+            "table:public.orders",
+            "table:public.surveys",
+            "table:public.companies",
+            "table:public.contracts",
+            "table:public.customers",
+            "table:public.audit_logs",
+            "table:public.identities",
+            "table:public.ai_analyses",
+            "table:public.appointments",
+            "table:public.interactions",
+            "table:public.call_attempts",
+            "table:public.conversations",
+            "table:public.installations",
+            "table:public.user_profiles",
+            "table:public.care_campaigns",
+            "table:public.care_schedules",
+            "table:public.order_code_seq",
+            "table:public.care_deliveries",
+            "table:public.company_members",
+            "table:public.call_transcripts",
+            "table:public.pricing_policies",
+            "table:public.warranty_tickets",
+            "table:public.customer_code_seq",
+            "table:public.finance_summaries",
+            "table:public.production_orders",
+            "table:public.price_calculations",
+            "function:public.handle_new_user()",
+            "table:public.payment_transactions",
+            "table:public.sales_style_profiles",
+            "function:public.generate_order_code()",
+            "function:public.normalize_phone(text)",
+            "table:public.customer_stage_histories",
+            "table:private.interaction_raw_contents",
+            "table:private.customer_private_contacts",
+            "function:public.generate_customer_code()",
+            "function:public.prevent_tenant_mutation()",
+            "function:public.enforce_cpc_immutability()",
+            "function:public.update_updated_at_column()",
+            "function:public.enforce_surveys_integrity()",
+            "function:public.jsonb_has_phone_data(jsonb)",
+            "function:public.enforce_strict_append_only()",
+            "function:public.enforce_orders_immutability()",
+            "function:public.enforce_contracts_immutability()",
+            "function:public.enforce_customers_immutability()",
+            "function:public.enforce_installations_integrity()",
+            "function:public.enforce_appointments_immutability()",
+            "function:public.enforce_payment_facts_immutability()",
+            "function:public.enforce_user_profiles_immutability()",
+            "function:public.enforce_care_deliveries_immutability()",
+            "function:public.enforce_company_members_immutability()",
+            "function:public.enforce_pricing_policies_immutability()",
+            "function:public.enforce_price_calculations_immutability()"
+          ],
+          "added": [
+            "table:public.safe_staff_directory",
+            "policy:public.calls.calls_select_sale",
+            "function:public.is_active_member(uuid)",
+            "function:public.is_self_membership(uuid)",
+            "policy:public.surveys.surveys_select_sale",
+            "function:public.has_company_role(uuid,text)",
+            "policy:public.calls.calls_select_boss_admin",
+            "function:public.is_assigned_technician(uuid)",
+            "policy:public.contracts.contracts_select_sale",
+            "policy:public.customers.customers_insert_sale",
+            "policy:public.customers.customers_select_sale",
+            "policy:public.customers.customers_update_sale",
+            "policy:public.orders.orders_select_boss_admin",
+            "policy:public.identities.identities_insert_sale",
+            "policy:public.identities.identities_select_sale",
+            "policy:public.identities.identities_update_sale",
+            "policy:public.surveys.surveys_insert_boss_admin",
+            "policy:public.surveys.surveys_select_boss_admin",
+            "policy:public.surveys.surveys_update_boss_admin",
+            "policy:public.ai_analyses.ai_analyses_select_sale",
+            "policy:public.appointments.appointments_insert_sale",
+            "policy:public.appointments.appointments_select_sale",
+            "policy:public.appointments.appointments_update_sale",
+            "policy:public.companies.companies_update_boss_admin",
+            "policy:public.contracts.contracts_select_boss_admin",
+            "policy:public.contracts.contracts_update_boss_admin",
+            "policy:public.customers.customers_insert_boss_admin",
+            "policy:public.customers.customers_select_boss_admin",
+            "policy:public.customers.customers_update_boss_admin",
+            "policy:public.interactions.interactions_select_sale",
+            "policy:public.audit_logs.audit_logs_select_boss_admin",
+            "policy:public.call_attempts.call_attempts_select_sale",
+            "policy:public.conversations.conversations_insert_sale",
+            "policy:public.conversations.conversations_select_sale",
+            "policy:public.conversations.conversations_update_sale",
+            "policy:public.identities.identities_insert_boss_admin",
+            "policy:public.identities.identities_select_boss_admin",
+            "policy:public.identities.identities_update_boss_admin",
+            "policy:public.installations.installations_select_sale",
+            "policy:public.user_profiles.user_profiles_select_self",
+            "policy:public.user_profiles.user_profiles_update_self",
+            "function:public.prevent_user_profile_status_mutation()",
+            "policy:public.companies.companies_select_active_member",
+            "policy:public.ai_analyses.ai_analyses_select_boss_admin",
+            "policy:public.care_campaigns.care_campaigns_insert_sale",
+            "policy:public.care_campaigns.care_campaigns_select_sale",
+            "policy:public.care_campaigns.care_campaigns_update_sale",
+            "policy:public.care_schedules.care_schedules_insert_sale",
+            "policy:public.care_schedules.care_schedules_select_sale",
+            "policy:public.care_schedules.care_schedules_update_sale",
+            "policy:public.surveys.surveys_insert_assigned_technician",
+            "policy:public.surveys.surveys_select_assigned_technician",
+            "policy:public.surveys.surveys_update_assigned_technician",
+            "policy:public.appointments.appointments_insert_boss_admin",
+            "policy:public.appointments.appointments_select_boss_admin",
+            "policy:public.appointments.appointments_update_boss_admin",
+            "policy:public.care_deliveries.care_deliveries_select_sale",
+            "policy:public.company_members.company_members_select_self",
+            "policy:public.interactions.interactions_select_boss_admin",
+            "policy:public.call_attempts.call_attempts_select_boss_admin",
+            "policy:public.conversations.conversations_insert_boss_admin",
+            "policy:public.conversations.conversations_select_boss_admin",
+            "policy:public.conversations.conversations_update_boss_admin",
+            "policy:public.installations.installations_select_boss_admin",
+            "policy:public.installations.installations_update_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_insert_sale",
+            "policy:public.warranty_tickets.warranty_tickets_select_sale",
+            "policy:public.care_campaigns.care_campaigns_insert_boss_admin",
+            "policy:public.care_campaigns.care_campaigns_select_boss_admin",
+            "policy:public.care_campaigns.care_campaigns_update_boss_admin",
+            "policy:public.care_schedules.care_schedules_insert_boss_admin",
+            "policy:public.care_schedules.care_schedules_select_boss_admin",
+            "policy:public.care_schedules.care_schedules_update_boss_admin",
+            "policy:public.production_orders.production_orders_select_sale",
+            "trigger:public.user_profiles.trg_user_profiles_status_mutation",
+            "policy:public.care_deliveries.care_deliveries_select_boss_admin",
+            "policy:public.company_members.company_members_select_boss_admin",
+            "policy:public.price_calculations.price_calculations_select_sale",
+            "policy:public.call_transcripts.call_transcripts_select_boss_admin",
+            "policy:public.pricing_policies.pricing_policies_insert_boss_admin",
+            "policy:public.pricing_policies.pricing_policies_select_boss_admin",
+            "policy:public.pricing_policies.pricing_policies_update_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_insert_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_select_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_update_boss_admin",
+            "policy:public.appointments.appointments_select_assigned_technician",
+            "policy:public.finance_summaries.finance_summaries_select_boss_admin",
+            "policy:public.production_orders.production_orders_select_boss_admin",
+            "policy:public.sales_style_profiles.sales_style_profiles_select_sale",
+            "policy:public.installations.installations_select_assigned_technician",
+            "policy:public.price_calculations.price_calculations_select_boss_admin",
+            "policy:public.payment_transactions.payment_transactions_select_boss_admin",
+            "policy:public.sales_style_profiles.sales_style_profiles_select_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_select_assigned_technician",
+            "policy:public.customer_stage_histories.customer_stage_histories_select_sale",
+            "policy:public.customer_stage_histories.customer_stage_histories_select_boss_admin"
+          ]
+        },
+        {
+          "file": "20260916000001_private_call_transcripts.sql",
+          "removed": [
+            "table:public.call_transcripts",
+            "column:public.call_transcripts.id",
+            "index:public.call_transcripts_pkey",
+            "column:public.call_transcripts.call_id",
+            "column:public.call_transcripts.language",
+            "column:public.call_transcripts.speakers",
+            "column:public.call_transcripts.company_id",
+            "column:public.call_transcripts.created_at",
+            "column:public.call_transcripts.transcript",
+            "index:public.call_transcripts_call_id_key",
+            "column:public.call_transcripts.processed_at",
+            "constraint:public.call_transcripts.call_transcripts_pkey",
+            "constraint:public.call_transcripts.fk_call_transcripts_call",
+            "constraint:public.call_transcripts.call_transcripts_call_id_key",
+            "policy:public.call_transcripts.call_transcripts_select_boss_admin",
+            "constraint:public.call_transcripts.call_transcripts_company_id_fkey"
+          ],
+          "changed": [],
+          "added": [
+            "table:private.call_transcripts",
+            "column:private.call_transcripts.id",
+            "index:private.call_transcripts_pkey",
+            "column:private.call_transcripts.call_id",
+            "column:private.call_transcripts.language",
+            "column:private.call_transcripts.speakers",
+            "column:private.call_transcripts.company_id",
+            "column:private.call_transcripts.created_at",
+            "column:private.call_transcripts.transcript",
+            "index:private.call_transcripts_call_id_key",
+            "column:private.call_transcripts.processed_at",
+            "function:public.get_call_transcript(uuid,uuid)",
+            "constraint:private.private.call_transcripts.call_transcripts_pkey",
+            "constraint:private.private.call_transcripts.fk_call_transcripts_call",
+            "constraint:private.private.call_transcripts.call_transcripts_call_id_key",
+            "constraint:private.private.call_transcripts.call_transcripts_company_id_fkey"
+          ]
+        },
+        {
+          "file": "20260917000001_0005_survey_atomic_completion.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "index:public.unique_survey_appointment",
+            "constraint:public.surveys.unique_survey_appointment",
+            "function:public.complete_survey_atomic(uuid,uuid,jsonb)"
+          ]
+        },
+        {
+          "file": "20260920000002_operations_atomic_rpcs.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.warranty_tickets.warranty_tickets_status_check"
+          ],
+          "added": [
+            "function:public.record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+            "function:public.complete_installation_atomic(uuid,uuid,uuid,timestamp with time zone)"
+          ]
+        },
+        {
+          "file": "20260921000002_openai_realtime.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.voice_media_jobs.voice_media_jobs_job_type_check"
+          ],
+          "added": [
+            "table:public.openai_realtime_events",
+            "index:public.openai_realtime_events_pkey",
+            "column:public.openai_realtime_events.status",
+            "column:public.openai_realtime_events.event_id",
+            "column:public.openai_realtime_events.company_id",
+            "column:public.openai_realtime_events.created_at",
+            "column:public.openai_realtime_events.error_code",
+            "column:public.openai_realtime_events.processed_at",
+            "column:public.openai_realtime_events.openai_call_id",
+            "column:public.openai_realtime_events.last_attempt_at",
+            "index:public.openai_realtime_events_openai_call_id_key",
+            "function:public.get_call_transcript_for_voice_worker(uuid,uuid)",
+            "constraint:public.openai_realtime_events.openai_realtime_events_pkey",
+            "constraint:public.openai_realtime_events.openai_realtime_events_status_check",
+            "constraint:public.openai_realtime_events.openai_realtime_events_company_id_fkey",
+            "constraint:public.openai_realtime_events.openai_realtime_events_openai_call_id_key"
+          ]
+        },
+        {
+          "file": "20260924000001_survey_integrity_hardening.sql",
+          "removed": [
+            "policy:public.surveys.surveys_insert_boss_admin",
+            "policy:public.surveys.surveys_update_boss_admin",
+            "policy:public.surveys.surveys_insert_assigned_technician",
+            "policy:public.surveys.surveys_update_assigned_technician"
+          ],
+          "changed": [
+            "table:public.surveys",
+            "function:public.complete_survey_atomic(uuid,uuid,jsonb)"
+          ],
+          "added": [
+            "table:public.survey_photo_operations",
+            "index:public.survey_photo_operations_pkey",
+            "column:public.survey_photo_operations.token",
+            "column:public.survey_photo_operations.actor_id",
+            "column:public.survey_photo_operations.expires_at",
+            "column:public.survey_photo_operations.started_at",
+            "function:public.guard_survey_appointment_write()",
+            "column:public.survey_photo_operations.appointment_id",
+            "function:public.end_survey_photo_operation(uuid,uuid)",
+            "function:public.begin_survey_photo_operation(uuid,uuid)",
+            "trigger:public.appointments.guard_survey_appointment_write",
+            "constraint:public.survey_photo_operations.survey_photo_operations_pkey",
+            "constraint:public.survey_photo_operations.survey_photo_operations_actor_id_fkey",
+            "constraint:public.survey_photo_operations.survey_photo_operations_appointment_id_fkey"
+          ]
+        },
+        {
+          "file": "20260927000001_inbox_outbox_and_inbound_atomic.sql",
+          "removed": [
+            "function:public.record_outbound_interaction_atomic(uuid,uuid,uuid,text,text,text,text,jsonb)"
+          ],
+          "changed": [],
+          "added": [
+            "table:public.outbound_deliveries",
+            "column:public.outbound_deliveries.id",
+            "index:public.outbound_deliveries_pkey",
+            "column:public.outbound_deliveries.channel",
+            "column:public.outbound_deliveries.locked_at",
+            "column:public.outbound_deliveries.locked_by",
+            "index:public.uq_outbound_deliveries_command",
+            "column:public.outbound_deliveries.company_id",
+            "column:public.outbound_deliveries.created_at",
+            "column:public.outbound_deliveries.updated_at",
+            "index:public.idx_outbound_deliveries_command",
+            "index:public.idx_outbound_deliveries_pending",
+            "column:public.outbound_deliveries.retry_count",
+            "column:public.outbound_deliveries.error_message",
+            "column:public.outbound_deliveries.interaction_id",
+            "index:public.idx_outbound_deliveries_interaction",
+            "column:public.outbound_deliveries.conversation_id",
+            "column:public.outbound_deliveries.delivery_status",
+            "index:public.idx_outbound_deliveries_conversation",
+            "column:public.outbound_deliveries.client_command_id",
+            "column:public.outbound_deliveries.provider_message_id",
+            "column:public.outbound_deliveries.request_fingerprint",
+            "constraint:public.outbound_deliveries.outbound_deliveries_pkey",
+            "constraint:public.outbound_deliveries.uq_outbound_deliveries_command",
+            "function:public.claim_pending_outbound_deliveries(uuid,text,integer)",
+            "constraint:public.outbound_deliveries.outbound_deliveries_channel_check",
+            "constraint:public.outbound_deliveries.outbound_deliveries_company_id_fkey",
+            "constraint:public.outbound_deliveries.outbound_deliveries_interaction_id_fkey",
+            "constraint:public.outbound_deliveries.outbound_deliveries_conversation_id_fkey",
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check",
+            "function:public.record_outbound_interaction_atomic(uuid,uuid,uuid,text,text,text,text,jsonb,uuid,uuid)",
+            "function:public.ingest_provider_message_atomic(uuid,text,text,text,text,text,text,text,text,jsonb,text,uuid)"
+          ]
+        },
+        {
+          "file": "20260928000001_operations_p0_hardening.sql",
+          "removed": [
+            "function:public.complete_installation_atomic(uuid,uuid,uuid,timestamp with time zone)"
+          ],
+          "changed": [
+            "function:public.record_quality_check_atomic(uuid,uuid,text,uuid,text)"
+          ],
+          "added": [
+            "table:public.operations_outbox",
+            "column:public.operations_outbox.id",
+            "index:public.operations_outbox_pkey",
+            "column:public.operations_outbox.payload",
+            "column:public.operations_outbox.order_id",
+            "column:public.operations_outbox.company_id",
+            "column:public.operations_outbox.created_at",
+            "column:public.operations_outbox.event_type",
+            "function:public.operations_actor(uuid,uuid,text[])",
+            "constraint:public.operations_outbox.operations_outbox_pkey",
+            "function:public.operations_evidence_ref(uuid,uuid,text,text)",
+            "constraint:public.operations_outbox.operations_outbox_order_fk",
+            "function:public.operations_audit(uuid,uuid,text,text,uuid,jsonb)",
+            "index:public.operations_outbox_company_id_order_id_event_type_key",
+            "constraint:public.operations_outbox.operations_outbox_company_id_fkey",
+            "constraint:public.operations_outbox.operations_outbox_event_type_check",
+            "function:public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+            "function:public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+            "function:public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+            "function:public.schedule_installation_atomic(uuid,uuid,uuid,uuid,jsonb,uuid)",
+            "function:public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+            "constraint:public.operations_outbox.operations_outbox_company_id_order_id_event_type_key",
+            "function:public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamp with time zone)"
+          ]
+        },
+        {
+          "file": "20260928000002_tv9_post_merge_hardening.sql",
+          "removed": [
+            "function:public.resolve_response_sla_on_sale_reply(uuid,uuid,uuid)"
+          ],
+          "changed": [
+            "function:public.activate_sales_style_profile(uuid)",
+            "function:public.claim_response_sla_for_ai(uuid,uuid)",
+            "function:public.han_finish_send(uuid,uuid,text,text)",
+            "function:public.han_prepare_send(uuid,uuid,uuid,uuid,text,text,text,uuid)",
+            "function:public.han_ingest(uuid,text,text,text,text,text,text,text,text,timestamp with time zone,jsonb)"
+          ],
+          "added": [
+            "column:private.han_outbox.sent_at",
+            "function:public.resolve_response_sla_on_ai_reply(uuid,uuid,uuid,uuid)",
+            "function:public.resolve_response_sla_on_sale_reply(uuid,uuid,uuid,timestamp with time zone)"
+          ]
+        },
+        {
+          "file": "20260929120002_zalo_hardening_remediation.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.zalo_outbound_deliveries.zalo_outbound_deliveries_status_check"
+          ],
+          "added": [
+            "table:private.zalo_oa_secrets",
+            "column:private.zalo_oa_secrets.id",
+            "index:private.zalo_oa_secrets_pkey",
+            "index:private.uq_zalo_oa_secrets_oa",
+            "column:private.zalo_oa_secrets.oa_id",
+            "index:public.idx_zalo_outbound_command",
+            "column:private.zalo_oa_secrets.app_secret",
+            "column:private.zalo_oa_secrets.company_id",
+            "column:private.zalo_oa_secrets.created_at",
+            "column:private.zalo_oa_secrets.updated_at",
+            "column:public.care_deliveries.lease_until",
+            "index:public.idx_zalo_ingress_events_lease",
+            "column:private.zalo_oa_secrets.access_token",
+            "column:public.care_deliveries.attempt_count",
+            "column:public.zalo_oa_configs.secret_ref_id",
+            "index:private.uq_zalo_oa_secrets_company_oa",
+            "column:private.zalo_oa_secrets.refresh_token",
+            "column:private.zalo_oa_secrets.token_version",
+            "column:public.zalo_ingress_events.last_error",
+            "column:public.zalo_ingress_events.updated_at",
+            "column:public.zalo_ingress_events.lease_until",
+            "column:public.zalo_ingress_events.retry_count",
+            "index:public.uq_care_deliveries_schedule_date",
+            "column:public.care_deliveries.care_schedule_id",
+            "column:public.care_deliveries.send_target_date",
+            "column:public.zalo_outbound_deliveries.channel",
+            "column:private.zalo_oa_secrets.token_expires_at",
+            "column:public.zalo_outbound_deliveries.command_id",
+            "column:public.zalo_outbound_deliveries.lease_until",
+            "constraint:private.private.zalo_oa_secrets.zalo_oa_secrets_pkey",
+            "constraint:private.private.zalo_oa_secrets.uq_zalo_oa_secrets_oa",
+            "constraint:public.care_deliveries.uq_care_deliveries_schedule_date",
+            "constraint:public.zalo_oa_configs.zalo_oa_configs_secret_ref_id_fkey",
+            "constraint:public.care_deliveries.care_deliveries_care_schedule_id_fkey",
+            "function:public.care_scheduler_claim_delivery(uuid,uuid,uuid,date,text)",
+            "function:public.zalo_claim_ingress_event(uuid,text,text,text,text,text)",
+            "constraint:private.private.zalo_oa_secrets.uq_zalo_oa_secrets_company_oa",
+            "constraint:private.private.zalo_oa_secrets.zalo_oa_secrets_company_id_fkey",
+            "function:public.zalo_finalize_outbound_reply(uuid,uuid,uuid,uuid,text,text,text,text,text,uuid,jsonb)",
+            "function:public.zalo_process_ingress_message(uuid,text,text,text,text,text,text,text,text,boolean,text,text,jsonb,bigint)"
+          ]
+        },
+        {
+          "file": "20260929120003_zalo_round3_remediation.sql",
+          "removed": [
+            "index:public.idx_zalo_outbound_command",
+            "column:public.zalo_oa_configs.app_secret",
+            "column:public.zalo_oa_configs.access_token",
+            "column:public.zalo_oa_configs.refresh_token",
+            "column:public.zalo_oa_configs.token_version",
+            "column:public.zalo_oa_configs.token_expires_at",
+            "function:public.care_scheduler_claim_delivery(uuid,uuid,uuid,date,text)",
+            "function:public.zalo_claim_ingress_event(uuid,text,text,text,text,text)",
+            "function:public.zalo_finalize_outbound_reply(uuid,uuid,uuid,uuid,text,text,text,text,text,uuid,jsonb)",
+            "function:public.zalo_process_ingress_message(uuid,text,text,text,text,text,text,text,text,boolean,text,text,jsonb,bigint)"
+          ],
+          "changed": [
+            "table:private.zalo_oa_secrets",
+            "constraint:public.care_deliveries.care_deliveries_status_check",
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check",
+            "constraint:public.zalo_outbound_deliveries.zalo_outbound_deliveries_status_check"
+          ],
+          "added": [
+            "column:public.care_deliveries.oa_id",
+            "table:private.zalo_outbound_payloads",
+            "index:public.uq_zalo_outbound_command",
+            "index:public.uq_care_campaigns_periodic",
+            "column:public.care_deliveries.error_code",
+            "column:public.care_deliveries.claim_token",
+            "index:private.zalo_outbound_payloads_pkey",
+            "column:public.care_deliveries.error_message",
+            "column:public.zalo_outbound_deliveries.oa_id",
+            "function:public.zalo_resolve_oa_tenant(text)",
+            "column:private.zalo_oa_secrets.webhook_secret",
+            "column:public.zalo_ingress_events.claim_token",
+            "column:public.zalo_ingress_events.processed_at",
+            "column:private.zalo_outbound_payloads.company_id",
+            "column:private.zalo_outbound_payloads.created_at",
+            "column:public.zalo_ingress_events.interaction_id",
+            "column:private.zalo_outbound_payloads.delivery_id",
+            "column:private.zalo_outbound_payloads.raw_content",
+            "column:public.zalo_outbound_deliveries.actor_type",
+            "index:public.idx_zalo_outbound_canonical_delivery",
+            "column:private.zalo_oa_secrets.refresh_lease_token",
+            "column:private.zalo_oa_secrets.refresh_lease_until",
+            "column:public.zalo_outbound_deliveries.claim_token",
+            "function:private.private.zalo_lock_user(uuid,text)",
+            "function:public.zalo_get_oa_credentials(uuid,text)",
+            "column:public.zalo_outbound_deliveries.finalized_at",
+            "column:public.zalo_outbound_deliveries.actor_user_id",
+            "column:public.zalo_outbound_deliveries.content_sha256",
+            "function:public.zalo_finalize_outbound_delivery(uuid)",
+            "function:public.zalo_fail_ingress_event(uuid,uuid,text)",
+            "column:public.zalo_outbound_deliveries.provider_accepted_at",
+            "function:public.zalo_begin_token_refresh(uuid,text,integer)",
+            "column:public.zalo_outbound_deliveries.canonical_delivery_id",
+            "function:private.private.zalo_resolve_customer_oa(uuid,uuid)",
+            "function:public.zalo_abort_token_refresh(uuid,text,uuid,text)",
+            "function:public.zalo_claim_canonical_delivery(uuid,text,text)",
+            "function:public.zalo_finalize_canonical_outbound(uuid,text,text)",
+            "function:public.zalo_record_canonical_failure(uuid,text,boolean)",
+            "function:public.zalo_set_oa_connection_status(uuid,text,text,uuid)",
+            "function:public.care_complete_delivery(uuid,uuid,text,text,text,text)",
+            "constraint:public.zalo_outbound_deliveries.chk_zalo_outbound_actor_type",
+            "function:public.care_claim_campaign_delivery(uuid,uuid,integer,integer)",
+            "constraint:private.private.zalo_outbound_payloads.zalo_outbound_payloads_pkey",
+            "constraint:public.zalo_ingress_events.zalo_ingress_events_interaction_id_fkey",
+            "function:private.private.care_advance_schedule(uuid,timestamp with time zone)",
+            "function:public.zalo_claim_ingress_event(uuid,text,text,text,text,text,integer)",
+            "function:private.private.zalo_lock_owned_ingress_event(uuid,uuid,uuid,text,text)",
+            "function:public.zalo_record_outbound_provider_result(uuid,uuid,text,text,text,text)",
+            "constraint:public.zalo_outbound_deliveries.zalo_outbound_deliveries_actor_user_id_fkey",
+            "constraint:private.private.zalo_outbound_payloads.zalo_outbound_payloads_company_id_fkey",
+            "constraint:private.private.zalo_outbound_payloads.zalo_outbound_payloads_delivery_id_fkey",
+            "constraint:public.zalo_outbound_deliveries.zalo_outbound_deliveries_canonical_delivery_id_fkey",
+            "function:public.care_reactivate_schedule(uuid,uuid,uuid,text,integer,timestamp with time zone)",
+            "function:public.zalo_complete_token_refresh(uuid,text,uuid,text,text,timestamp with time zone)",
+            "function:public.zalo_claim_outbound_delivery(uuid,uuid,text,text,uuid,text,text,text,text,integer)",
+            "function:public.care_claim_schedule_delivery(uuid,uuid,text,timestamp with time zone,integer,integer)",
+            "function:public.zalo_upsert_oa_connection(uuid,text,text,text,text,text,timestamp with time zone,text,uuid)",
+            "function:public.zalo_process_ingress_status_event(uuid,uuid,uuid,text,text,text,text,text[],timestamp with time zone)",
+            "function:public.zalo_process_ingress_message(uuid,uuid,uuid,text,text,text,text,text,text,text,text,boolean,text,text,jsonb,timestamp with time zone,boolean)"
+          ]
+        },
+        {
+          "file": "20260929220001_pricing_payment_contract_base.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "table:public.company_bank_accounts",
+            "column:public.company_bank_accounts.id",
+            "index:public.company_bank_accounts_pkey",
+            "index:public.idx_contracts_company_order",
+            "column:public.company_bank_accounts.provider",
+            "index:public.idx_company_bank_accounts_lookup",
+            "column:public.company_bank_accounts.company_id",
+            "column:public.company_bank_accounts.created_at",
+            "column:public.payment_transactions.payload_hash",
+            "index:public.idx_orders_payment_reference_company",
+            "column:public.company_bank_accounts.provider_account",
+            "column:public.payment_transactions.payment_reference",
+            "index:public.company_bank_accounts_provider_provider_account_key",
+            "constraint:public.company_bank_accounts.company_bank_accounts_pkey",
+            "constraint:public.company_bank_accounts.company_bank_accounts_company_id_fkey",
+            "policy:public.company_bank_accounts.Users can view their company bank accounts",
+            "constraint:public.company_bank_accounts.company_bank_accounts_provider_provider_account_key"
+          ]
+        },
+        {
+          "file": "20260929220004_contract_storage_hardening.sql",
+          "removed": [],
+          "changed": [],
+          "added": []
+        },
+        {
+          "file": "20260930000001_p0_security_acl_hardening.sql",
+          "removed": [
+            "policy:public.contracts.contracts_update_boss_admin"
+          ],
+          "changed": [
+            "table:public.contracts",
+            "function:public.han_finish_send(uuid,uuid,text,text)",
+            "function:public.han_prepare_send(uuid,uuid,uuid,uuid,text,text,text,uuid)"
+          ],
+          "added": []
+        },
+        {
+          "file": "20260930120001_p1_backend_remediation.sql",
+          "removed": [
+            "function:public.claim_voice_media_jobs(integer)"
+          ],
+          "changed": [
+            "function:public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamp with time zone)"
+          ],
+          "added": [
+            "function:public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)"
+          ]
+        },
+        {
+          "file": "20261001140001_ai_outbound_delivery_atomic.sql",
+          "removed": [],
+          "changed": [
+            "column:public.outbound_deliveries.interaction_id"
+          ],
+          "added": [
+            "function:public.get_due_response_sla_windows(uuid,integer)",
+            "function:public.record_ai_outbound_delivery_failed(uuid,uuid,text)",
+            "function:public.create_ai_outbound_delivery_pending(uuid,uuid,text,uuid,text)",
+            "function:public.finalize_ai_outbound_delivery_atomic(uuid,uuid,uuid,uuid,uuid,uuid,text,text,text,jsonb)"
+          ]
+        },
+        {
+          "file": "20261001150001_ai_durable_dispatch_hardening.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check",
+            "function:public.finalize_ai_outbound_delivery_atomic(uuid,uuid,uuid,uuid,uuid,uuid,text,text,text,jsonb)"
+          ],
+          "added": [
+            "column:public.outbound_deliveries.window_id",
+            "index:public.idx_outbound_deliveries_window",
+            "column:public.outbound_deliveries.lease_until",
+            "function:public.guard_ai_pre_dispatch(uuid,uuid,uuid,uuid,uuid,text,integer)",
+            "function:public.record_ai_outbound_provider_result(uuid,uuid,text,text,text)",
+            "function:public.finalize_ai_zalo_sla_atomic(uuid,uuid,uuid,uuid,uuid,text,jsonb)"
+          ]
+        },
+        {
+          "file": "20261001160001_ai_sale_fencing_linearization.sql",
+          "removed": [
+            "function:public.record_ai_outbound_provider_result(uuid,uuid,text,text,text)"
+          ],
+          "changed": [
+            "function:public.guard_ai_pre_dispatch(uuid,uuid,uuid,uuid,uuid,text,integer)",
+            "function:public.finalize_ai_zalo_sla_atomic(uuid,uuid,uuid,uuid,uuid,text,jsonb)",
+            "function:public.resolve_response_sla_on_sale_reply(uuid,uuid,uuid,timestamp with time zone)",
+            "function:public.finalize_ai_outbound_delivery_atomic(uuid,uuid,uuid,uuid,uuid,uuid,text,text,text,jsonb)"
+          ],
+          "added": [
+            "column:public.outbound_deliveries.dispatch_token",
+            "column:public.response_sla_windows.ai_dispatch_token",
+            "column:public.response_sla_windows.ai_dispatch_delivery_id",
+            "column:public.response_sla_windows.ai_dispatch_fenced_until",
+            "function:public.record_ai_outbound_provider_result(uuid,uuid,text,uuid,text,text)"
+          ]
+        },
+        {
+          "file": "20261004210001_installation_rls_and_scheduling_authority.sql",
+          "removed": [
+            "function:public.schedule_installation_atomic(uuid,uuid,uuid,uuid,jsonb,uuid)"
+          ],
+          "changed": [
+            "policy:public.appointments.appointments_insert_sale",
+            "policy:public.appointments.appointments_update_sale",
+            "policy:public.appointments.appointments_insert_boss_admin",
+            "policy:public.appointments.appointments_update_boss_admin",
+            "function:public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+            "function:public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamp with time zone,text,jsonb)"
+          ],
+          "added": []
+        },
+        {
+          "file": "20261005100001_staging_storage_bucket_provisioning.sql",
+          "removed": [],
+          "changed": [],
+          "added": []
+        },
+        {
+          "file": "20261012110001_facebook_browser_outbox_queue.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check",
+            "function:public.record_outbound_interaction_atomic(uuid,uuid,uuid,text,text,text,text,jsonb,uuid,uuid)"
+          ],
+          "added": [
+            "column:public.outbound_deliveries.status",
+            "column:public.outbound_deliveries.content",
+            "column:public.outbound_deliveries.sent_at",
+            "column:public.outbound_deliveries.metadata",
+            "column:public.outbound_deliveries.provider",
+            "column:public.outbound_deliveries.last_error",
+            "column:public.outbound_deliveries.attempt_count",
+            "column:public.outbound_deliveries.next_retry_at",
+            "column:public.outbound_deliveries.idempotency_key",
+            "index:public.idx_outbound_deliveries_idempotency_key",
+            "index:public.idx_outbound_deliveries_fb_browser_queue",
+            "function:public.retry_facebook_browser_outbox_job_manual(uuid)",
+            "function:public.complete_facebook_browser_outbox_job(uuid,text)",
+            "function:public.claim_facebook_browser_outbox_jobs(text,integer,uuid)",
+            "constraint:public.outbound_deliveries.outbound_deliveries_status_check",
+            "function:public.fail_facebook_browser_outbox_job(uuid,text,boolean,integer)"
+          ]
+        },
+        {
+          "file": "20261012113001_facebook_browser_outbox_hardening.sql",
+          "removed": [],
+          "changed": [
+            "function:public.claim_facebook_browser_outbox_jobs(text,integer,uuid)",
+            "constraint:public.outbound_deliveries.outbound_deliveries_status_check",
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check"
+          ],
+          "added": [
+            "column:public.outbound_deliveries.lease_expires_at",
+            "index:public.idx_outbound_deliveries_fb_browser_orphan",
+            "column:public.outbound_deliveries.processing_started_at",
+            "column:public.outbound_deliveries.reconciliation_status",
+            "function:public.claim_orphan_facebook_browser_jobs(text,integer,uuid)",
+            "function:public.resolve_reconciled_facebook_browser_job(uuid,text,text,text)",
+            "constraint:public.outbound_deliveries.outbound_deliveries_reconciliation_status_check"
+          ]
+        },
+        {
+          "file": "20261016180001_meta_user_data_deletion.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "index:public.idx_meta_data_deletion_code",
+            "index:public.idx_meta_data_deletion_user",
+            "table:public.meta_data_deletion_requests",
+            "column:public.meta_data_deletion_requests.id",
+            "index:public.meta_data_deletion_requests_pkey",
+            "column:public.meta_data_deletion_requests.status",
+            "column:public.meta_data_deletion_requests.details",
+            "function:public.han_get_data_deletion_status(text)",
+            "index:public.idx_meta_data_deletion_company_status",
+            "function:public._han_purge_customer_data(uuid,uuid)",
+            "column:public.meta_data_deletion_requests.company_id",
+            "column:public.meta_data_deletion_requests.created_at",
+            "column:public.meta_data_deletion_requests.updated_at",
+            "column:public.meta_data_deletion_requests.customer_id",
+            "column:public.meta_data_deletion_requests.raw_request",
+            "column:public.meta_data_deletion_requests.meta_user_id",
+            "column:public.meta_data_deletion_requests.processed_at",
+            "index:public.uq_meta_data_deletion_company_fingerprint",
+            "column:public.meta_data_deletion_requests.confirmation_code",
+            "column:public.meta_data_deletion_requests.request_fingerprint",
+            "column:public.meta_data_deletion_requests.resolution_strategy",
+            "index:public.meta_data_deletion_requests_confirmation_code_key",
+            "function:public.han_record_data_deletion_request(uuid,text,text,jsonb,text)",
+            "trigger:public.meta_data_deletion_requests.trg_updated_at_meta_data_deletion",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_pkey",
+            "constraint:public.meta_data_deletion_requests.chk_meta_data_deletion_code_format",
+            "function:public.han_resolve_data_deletion_request(uuid,text,text,uuid,text,uuid)",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_status_check",
+            "policy:public.meta_data_deletion_requests.meta_data_deletion_requests_select_boss_admin",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_company_id_fkey",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_customer_id_fkey",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_confirmation_code_key",
+            "constraint:public.meta_data_deletion_requests.meta_data_deletion_requests_resolution_strategy_check"
+          ]
+        },
+        {
+          "file": "20261020220003_restore_outbound_delivery_status_contract.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.outbound_deliveries.outbound_deliveries_delivery_status_check"
+          ],
+          "added": []
+        },
+        {
+          "file": "20261021200000_zalo_call_ai_summaries.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "table:public.zalo_call_ai_summaries",
+            "column:public.zalo_call_ai_summaries.id",
+            "index:public.zalo_call_ai_summaries_pkey",
+            "index:public.uq_zalo_call_ai_summaries_tx",
+            "column:public.zalo_call_ai_summaries.model",
+            "index:public.idx_zalo_call_ai_summaries_tx",
+            "column:public.zalo_call_ai_summaries.status",
+            "index:public.idx_zalo_call_ai_summaries_due",
+            "column:public.zalo_call_ai_summaries.call_id",
+            "column:public.zalo_call_ai_summaries.summary",
+            "index:public.idx_zalo_call_ai_summaries_call",
+            "column:public.zalo_call_ai_summaries.attempts",
+            "column:public.zalo_call_ai_summaries.provider",
+            "column:public.zalo_call_ai_summaries.locked_at",
+            "column:public.zalo_call_ai_summaries.locked_by",
+            "column:public.zalo_call_ai_summaries.company_id",
+            "column:public.zalo_call_ai_summaries.confidence",
+            "column:public.zalo_call_ai_summaries.created_at",
+            "column:public.zalo_call_ai_summaries.error_code",
+            "column:public.zalo_call_ai_summaries.key_points",
+            "column:public.zalo_call_ai_summaries.lock_token",
+            "column:public.zalo_call_ai_summaries.objections",
+            "column:public.zalo_call_ai_summaries.started_at",
+            "column:public.zalo_call_ai_summaries.updated_at",
+            "column:public.zalo_call_ai_summaries.next_run_at",
+            "column:public.zalo_personal_calls.summary_status",
+            "column:public.zalo_call_ai_summaries.completed_at",
+            "column:public.zalo_call_ai_summaries.max_attempts",
+            "column:public.zalo_call_ai_summaries.next_actions",
+            "column:public.zalo_call_ai_summaries.error_message",
+            "column:public.zalo_call_ai_summaries.customer_needs",
+            "column:public.zalo_call_ai_summaries.prompt_version",
+            "index:public.idx_zalo_call_transcriptions_reconcile",
+            "column:public.zalo_call_ai_summaries.follow_up_reason",
+            "column:public.zalo_call_ai_summaries.lead_temperature",
+            "column:public.zalo_call_ai_summaries.lease_expires_at",
+            "column:public.zalo_call_ai_summaries.transcription_id",
+            "column:public.zalo_call_ai_summaries.follow_up_required",
+            "function:public.zalo_retry_call_summary(uuid,uuid,uuid)",
+            "column:public.zalo_call_ai_summaries.follow_up_suggested_time",
+            "constraint:public.zalo_call_ai_summaries.fk_zalo_ai_summary_call",
+            "policy:public.zalo_call_ai_summaries.zalo_call_ai_summaries_read",
+            "function:public.zalo_claim_call_summary_jobs(integer,text,integer)",
+            "function:public.zalo_claim_call_summary_job(uuid,uuid,text,integer)",
+            "function:public.zalo_enqueue_call_summary(uuid,uuid,text,text,text)",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_pkey",
+            "constraint:public.zalo_call_ai_summaries.uq_zalo_call_ai_summaries_tx",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_status_check",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_attempts_check",
+            "constraint:public.zalo_personal_calls.zalo_personal_calls_summary_status_check",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_company_id_fkey",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_confidence_check",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_max_attempts_check",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_transcription_id_fkey",
+            "constraint:public.zalo_call_ai_summaries.zalo_call_ai_summaries_lead_temperature_check",
+            "function:public.zalo_fail_call_summary(uuid,uuid,uuid,text,text,boolean,timestamp with time zone)",
+            "function:public.zalo_reconcile_missing_call_summaries(integer,text,text,timestamp with time zone)",
+            "function:public.zalo_complete_call_summary(uuid,uuid,uuid,text,jsonb,jsonb,jsonb,jsonb,text,boolean,text,text,text,text,text,text)"
+          ]
+        },
+        {
+          "file": "20261023140000_ai_control_center_foundation.sql",
+          "removed": [],
+          "changed": [
+            "table:public.ai_brain_live_settings",
+            "table:public.ai_brain_live_deliveries",
+            "constraint:public.ai_brain_live_settings.ai_brain_live_settings_channel_check",
+            "constraint:public.ai_brain_live_deliveries.ai_brain_live_deliveries_channel_check"
+          ],
+          "added": [
+            "function:public.emergency_disable_ai(uuid)",
+            "column:public.ai_brain_live_settings.voice_mode",
+            "function:public.resolve_ai_handover_case(uuid,uuid,uuid)",
+            "column:public.ai_brain_live_settings.model_routing_profile",
+            "policy:public.ai_brain_live_settings.ai_brain_live_settings_insert_tenant",
+            "policy:public.ai_brain_live_settings.ai_brain_live_settings_select_tenant",
+            "policy:public.ai_brain_live_settings.ai_brain_live_settings_update_tenant",
+            "policy:public.ai_brain_live_deliveries.ai_brain_live_deliveries_select_tenant",
+            "constraint:public.ai_brain_live_settings.ai_brain_live_settings_voice_mode_check",
+            "constraint:public.ai_brain_live_settings.ai_brain_live_settings_model_routing_profile_check"
+          ]
+        },
+        {
+          "file": "20261023150000_ai_monitoring_alerting.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "table:public.ai_monitoring_alerts",
+            "column:public.ai_monitoring_alerts.id",
+            "index:public.ai_monitoring_alerts_pkey",
+            "column:public.ai_monitoring_alerts.title",
+            "column:public.ai_monitoring_alerts.status",
+            "column:public.ai_monitoring_alerts.channel",
+            "column:public.ai_monitoring_alerts.metadata",
+            "column:public.ai_monitoring_alerts.severity",
+            "column:public.ai_monitoring_alerts.alert_type",
+            "column:public.ai_monitoring_alerts.company_id",
+            "column:public.ai_monitoring_alerts.created_at",
+            "column:public.ai_monitoring_alerts.updated_at",
+            "column:public.ai_monitoring_alerts.description",
+            "column:public.ai_monitoring_alerts.fingerprint",
+            "column:public.ai_monitoring_alerts.resolved_at",
+            "column:public.ai_monitoring_alerts.trigger_count",
+            "column:public.ai_monitoring_alerts.acknowledged_at",
+            "column:public.ai_monitoring_alerts.acknowledged_by",
+            "column:public.ai_monitoring_alerts.last_triggered_at",
+            "index:public.idx_ai_monitoring_alerts_company_status",
+            "index:public.idx_ai_monitoring_alerts_last_triggered",
+            "column:public.ai_monitoring_alerts.first_triggered_at",
+            "index:public.idx_ai_monitoring_alerts_company_fingerprint",
+            "function:public.resolve_ai_monitoring_alert(uuid,uuid,uuid)",
+            "function:public.acknowledge_ai_monitoring_alert(uuid,uuid,uuid)",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_pkey",
+            "policy:public.ai_monitoring_alerts.ai_monitoring_alerts_insert_tenant",
+            "policy:public.ai_monitoring_alerts.ai_monitoring_alerts_select_tenant",
+            "policy:public.ai_monitoring_alerts.ai_monitoring_alerts_update_tenant",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_status_check",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_channel_check",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_severity_check",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_company_id_fkey",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_alert_type_check",
+            "constraint:public.ai_monitoring_alerts.ai_monitoring_alerts_acknowledged_by_fkey",
+            "function:public.record_ai_monitoring_alert(uuid,text,text,text,text,text,text,jsonb)"
+          ]
+        },
+        {
+          "file": "20261023160000_ai_brain_messenger_live_delivery.sql",
+          "removed": [
+            "function:public.claim_ai_brain_live_deliveries(integer,uuid)"
+          ],
+          "changed": [
+            "function:public.enqueue_ai_brain_live_delivery()"
+          ],
+          "added": [
+            "function:public.claim_ai_brain_live_deliveries(integer,uuid,text)",
+            "function:public.record_ai_messenger_live_outbound(uuid,uuid,uuid,uuid,uuid,text,text,text)"
+          ]
+        },
+        {
+          "file": "20261023170000_ai_brain_messenger_live_canary_and_scheduler.sql",
+          "removed": [],
+          "changed": [
+            "function:public.enqueue_ai_brain_live_delivery()",
+            "function:public.claim_ai_brain_live_deliveries(integer,uuid,text)",
+            "function:public.finish_ai_brain_live_delivery(uuid,uuid,text,text,numeric,text,text,uuid)",
+            "function:public.record_ai_messenger_live_outbound(uuid,uuid,uuid,uuid,uuid,text,text,text)"
+          ],
+          "added": [
+            "table:public.ai_brain_live_canary_allowlist",
+            "index:public.idx_ai_brain_live_canary_lookup",
+            "index:public.uq_ai_brain_live_canary_allowlist",
+            "column:public.ai_brain_live_canary_allowlist.id",
+            "index:public.ai_brain_live_canary_allowlist_pkey",
+            "column:public.ai_brain_live_canary_allowlist.channel",
+            "column:public.ai_brain_live_canary_allowlist.enabled",
+            "column:public.ai_brain_live_canary_allowlist.page_id",
+            "index:public.idx_ai_brain_live_deliveries_outbound_int",
+            "column:public.ai_brain_live_canary_allowlist.company_id",
+            "column:public.ai_brain_live_canary_allowlist.created_at",
+            "column:public.ai_brain_live_canary_allowlist.updated_at",
+            "column:public.ai_brain_live_deliveries.brain_latency_ms",
+            "index:public.idx_ai_brain_live_deliveries_dispatch_fence",
+            "column:public.ai_brain_live_deliveries.dispatch_started_at",
+            "column:public.ai_brain_live_canary_allowlist.conversation_id",
+            "column:public.ai_brain_live_deliveries.outbound_interaction_id",
+            "policy:public.ai_brain_live_canary_allowlist.ai_brain_live_canary_select_tenant",
+            "constraint:public.ai_brain_live_canary_allowlist.uq_ai_brain_live_canary_allowlist",
+            "constraint:public.ai_brain_live_canary_allowlist.ai_brain_live_canary_allowlist_pkey",
+            "constraint:public.ai_brain_live_canary_allowlist.fk_ai_brain_live_canary_conversation",
+            "constraint:public.ai_brain_live_canary_allowlist.chk_ai_brain_live_canary_page_id_numeric",
+            "constraint:public.ai_brain_live_deliveries.ai_brain_live_deliveries_brain_latency_ms_check",
+            "trigger:public.ai_brain_live_canary_allowlist.trg_ai_brain_live_canary_allowlist_updated_at",
+            "constraint:public.ai_brain_live_canary_allowlist.ai_brain_live_canary_allowlist_channel_check",
+            "constraint:public.ai_brain_live_canary_allowlist.ai_brain_live_canary_allowlist_company_id_fkey",
+            "constraint:public.ai_brain_live_deliveries.ai_brain_live_deliveries_outbound_interaction_id_fkey",
+            "function:public.start_ai_messenger_live_dispatch(uuid,uuid,uuid,uuid,uuid,uuid,text,numeric,numeric)",
+            "function:public.finish_ai_brain_live_delivery_extended(uuid,uuid,text,text,numeric,text,text,uuid,integer)"
+          ]
+        },
+        {
+          "file": "20261023180000_ai_channel_scheduler_health_rpc.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "function:public.get_ai_channel_scheduler_health(text,integer)"
+          ]
+        },
+        {
+          "file": "20261023200000_customer_360_ai_dossier.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.identities.identities_channel_check"
+          ],
+          "added": [
+            "index:public.c360_owner",
+            "index:public.c360_follow_up",
+            "index:public.c360_refresh_due",
+            "index:public.c360_identity_names",
+            "index:public.c360_identity_scope",
+            "function:public.c360_mark_dirty()",
+            "index:public.c360_latest_snapshot",
+            "table:public.customer_ai_snapshots",
+            "index:public.c360_interaction_cursor",
+            "column:public.identities.display_name",
+            "table:public.customer_dossier_refresh",
+            "column:public.customer_ai_snapshots.id",
+            "function:public.c360_emails(uuid,uuid)",
+            "table:private.customer_identity_values",
+            "table:public.customer_dossier_profiles",
+            "table:public.customer_dossier_settings",
+            "index:public.customer_ai_snapshots_pkey",
+            "function:public.c360_contacts(uuid,uuid)",
+            "table:public.customer_identity_conflicts",
+            "column:public.customer_ai_snapshots.model",
+            "index:public.customer_dossier_refresh_pkey",
+            "column:public.customer_ai_snapshots.version",
+            "index:private.customer_identity_values_pkey",
+            "index:public.customer_dossier_profiles_pkey",
+            "index:public.customer_dossier_settings_pkey",
+            "column:public.customer_ai_snapshots.provider",
+            "column:public.customer_ai_snapshots.snapshot",
+            "column:public.customer_identity_conflicts.id",
+            "constraint:public.identities.c360_email_hmac",
+            "trigger:public.customers.c360_customer_dirty",
+            "column:public.customer_dossier_refresh.due_at",
+            "function:public.c360_claim_refresh(uuid,uuid)",
+            "index:public.customer_identity_conflicts_pkey",
+            "trigger:public.identities.c360_identity_dirty",
+            "column:public.customer_ai_snapshots.company_id",
+            "column:public.customer_ai_snapshots.lead_score",
+            "column:public.customer_ai_snapshots.customer_id",
+            "column:public.customer_dossier_profiles.address",
+            "column:public.customer_dossier_refresh.attempts",
+            "column:public.customer_dossier_settings.enabled",
+            "function:public.c360_request_refresh(uuid,uuid)",
+            "column:public.customer_ai_snapshots.follow_up_at",
+            "column:public.customer_ai_snapshots.generated_at",
+            "column:public.customer_identity_conflicts.status",
+            "constraint:public.identities.c360_identity_scope",
+            "column:public.customer_dossier_refresh.company_id",
+            "column:public.customer_dossier_refresh.error_code",
+            "column:public.customer_dossier_refresh.lock_token",
+            "column:public.customer_dossier_refresh.updated_at",
+            "column:private.customer_identity_values.company_id",
+            "column:public.customer_dossier_profiles.birth_year",
+            "column:public.customer_dossier_profiles.company_id",
+            "column:public.customer_dossier_profiles.updated_at",
+            "column:public.customer_dossier_profiles.updated_by",
+            "column:public.customer_dossier_refresh.customer_id",
+            "column:public.customer_dossier_refresh.lease_until",
+            "column:public.customer_dossier_settings.company_id",
+            "trigger:public.interactions.c360_interaction_dirty",
+            "trigger:public.zalo_personal_calls.c360_call_dirty",
+            "column:private.customer_identity_values.customer_id",
+            "column:private.customer_identity_values.identity_id",
+            "column:public.customer_dossier_profiles.customer_id",
+            "column:public.customer_ai_snapshots.contract_version",
+            "column:public.customer_ai_snapshots.source_watermark",
+            "column:public.customer_identity_conflicts.company_id",
+            "column:public.customer_identity_conflicts.created_at",
+            "column:private.customer_identity_values.display_value",
+            "column:public.customer_dossier_profiles.special_notes",
+            "column:public.customer_dossier_refresh.last_manual_at",
+            "column:public.customer_identity_conflicts.customer_id",
+            "column:public.customer_identity_conflicts.identity_id",
+            "column:public.customer_dossier_refresh.claimed_version",
+            "column:private.customer_identity_values.normalized_value",
+            "column:public.customer_dossier_profiles.assigned_sale_id",
+            "column:public.customer_dossier_refresh.completed_version",
+            "column:public.customer_dossier_refresh.requested_version",
+            "constraint:public.identities.identities_display_name_check",
+            "column:public.customer_identity_conflicts.other_customer_id",
+            "trigger:public.customer_dossier_profiles.c360_profile_dirty",
+            "trigger:public.zalo_call_transcriptions.c360_transcript_dirty",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_pkey",
+            "function:public.c360_timeline(uuid,uuid,integer,text,uuid,boolean)",
+            "index:public.customer_ai_snapshots_company_id_customer_id_version_key",
+            "index:private.customer_identity_values_company_id_normalized_value_key",
+            "constraint:public.customer_dossier_refresh.customer_dossier_refresh_pkey",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_model_check",
+            "constraint:public.customer_dossier_refresh.customer_dossier_refresh_check",
+            "function:public.c360_bind_identity(uuid,uuid,text,text,text,boolean,text)",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_pkey",
+            "constraint:public.customer_dossier_settings.customer_dossier_settings_pkey",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_version_check",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_provider_check",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_snapshot_check",
+            "index:public.customer_identity_conflicts_company_id_customer_id_identity_key",
+            "function:public.c360_finish_refresh(uuid,uuid,uuid,bigint,jsonb,text,integer)",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_lead_score_check",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_pkey",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_check",
+            "constraint:private.private.customer_identity_values.customer_identity_values_pkey",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_address_check",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_contract_version_check",
+            "constraint:public.customer_dossier_refresh.customer_dossier_refresh_error_code_check",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_updated_by_fkey",
+            "constraint:public.customer_dossier_settings.customer_dossier_settings_company_id_fkey",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_birth_year_check",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_status_check",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_company_id_customer_id_fkey",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_special_notes_check",
+            "constraint:public.customer_dossier_refresh.customer_dossier_refresh_company_id_customer_id_fkey",
+            "constraint:private.private.customer_identity_values.customer_identity_values_display_value_check",
+            "constraint:public.customer_ai_snapshots.customer_ai_snapshots_company_id_customer_id_version_key",
+            "function:public.c360_list(uuid,text,integer,uuid,text,text,boolean,boolean,boolean,text,boolean)",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_company_id_customer_id_fkey",
+            "constraint:private.private.customer_identity_values.customer_identity_values_normalized_value_check",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_company_id_customer_id_fkey",
+            "constraint:public.customer_dossier_profiles.customer_dossier_profiles_company_id_assigned_sale_id_fkey",
+            "constraint:private.private.customer_identity_values.customer_identity_values_company_id_customer_id_fkey",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_company_id_other_customer_id_fkey",
+            "constraint:private.private.customer_identity_values.customer_identity_values_company_id_normalized_value_key",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_company_id_customer_id_identity_key",
+            "constraint:public.customer_identity_conflicts.customer_identity_conflicts_company_id_other_customer_id_i_fkey",
+            "constraint:private.private.customer_identity_values.customer_identity_values_company_id_customer_id_identity_i_fkey"
+          ]
+        },
+        {
+          "file": "20261025022000_zalo_personal_campaign_5min.sql",
+          "removed": [],
+          "changed": [
+            "function:public.campaign_claim(uuid,text)",
+            "function:public.campaign_eligibility(uuid,uuid)",
+            "function:public.campaign_command(uuid,uuid,text,jsonb)",
+            "function:public.campaign_sync_senders(uuid,uuid,jsonb)",
+            "constraint:public.message_templates.message_templates_check",
+            "function:public.campaign_finish(uuid,uuid,uuid,text,text,text)",
+            "constraint:public.message_templates.message_templates_channel_check",
+            "constraint:public.messaging_campaigns.messaging_campaigns_channel_check",
+            "constraint:public.message_templates.message_templates_template_type_check",
+            "constraint:public.messaging_suppressions.messaging_suppressions_channel_check",
+            "constraint:public.messaging_sender_accounts.messaging_sender_accounts_channel_check"
+          ],
+          "added": [
+            "function:public.campaign_claim_before_personal(uuid,text)",
+            "function:public.campaign_eligibility_before_personal(uuid,uuid)",
+            "function:public.campaign_command_before_personal(uuid,uuid,text,jsonb)",
+            "function:public.campaign_sync_senders_before_personal(uuid,uuid,jsonb)",
+            "function:public.campaign_finish_before_personal(uuid,uuid,uuid,text,text,text)"
+          ]
+        },
+        {
+          "file": "20261025124107_zalo_brain_sla_and_terminal_failures.sql",
+          "removed": [],
+          "changed": [
+            "function:public.claim_ai_brain_live_deliveries(integer,uuid,text)"
+          ],
+          "added": [
+            "column:public.ai_brain_live_deliveries.retryable",
+            "function:public.ai_brain_live_retry_and_sla_guard()",
+            "function:public.ai_brain_live_zalo_is_eligible(uuid,uuid)",
+            "trigger:public.ai_brain_live_deliveries.ai_brain_live_retry_and_sla_guard"
+          ]
+        },
+        {
+          "file": "20261025160000_zalo_brain_one_minute_sla.sql",
+          "removed": [],
+          "changed": [
+            "function:public.ai_brain_live_retry_and_sla_guard()",
+            "function:public.ai_brain_live_zalo_is_eligible(uuid,uuid)",
+            "function:public.claim_ai_brain_live_deliveries(integer,uuid,text)"
+          ],
+          "added": []
+        },
+        {
+          "file": "20261026092307_zalo_personal_inbound_live_voice.sql",
+          "removed": [],
+          "changed": [
+            "column:public.zalo_personal_live_voice_sessions.provider",
+            "column:public.zalo_personal_live_voice_sessions.customer_id",
+            "column:public.zalo_personal_live_voice_sessions.outbound_request_id",
+            "constraint:public.zalo_personal_live_voice_sessions.zalo_personal_live_voice_sessions_provider_check"
+          ],
+          "added": [
+            "column:public.zalo_personal_live_voice_sessions.direction",
+            "column:public.zalo_personal_live_voice_sessions.remote_display_name",
+            "function:public.zalo_begin_inbound_live_voice_session(uuid,text,uuid,text)",
+            "constraint:public.zalo_personal_live_voice_sessions.zalo_personal_live_voice_sessions_direction_check",
+            "constraint:public.zalo_personal_live_voice_sessions.zalo_personal_live_voice_sessions_remote_display_name_check"
+          ]
+        },
+        {
+          "file": "20261027140000_botcake_messenger_page_and_du_hoc_ai.sql",
+          "removed": [],
+          "changed": [],
+          "added": [
+            "function:public.seed_du_hoc_messenger_canary()",
+            "function:public.ai_messenger_page_id(text,jsonb)",
+            "function:public.ai_messenger_recipient_id(text,jsonb)",
+            "function:public.repair_messenger_external_conversation_id()",
+            "trigger:public.conversations.trg_seed_du_hoc_messenger_canary",
+            "trigger:public.conversations.trg_repair_messenger_external_conversation_id"
+          ]
+        },
+        {
+          "file": "20261027210000_study_abroad_stages.sql",
+          "removed": [],
+          "changed": [
+            "constraint:public.customers.customers_stage_check"
+          ],
+          "added": []
+        },
+        {
+          "file": "20261028120000_canary_allowlist_foundation_backfill.sql",
+          "removed": [],
+          "changed": [],
+          "added": []
+        },
+        {
+          "file": "20261028130000_customer_funnel_six_stages.sql",
+          "removed": [
+            "function:public.update_customer_stage_atomic(uuid,uuid,text,text,uuid,text,text)",
+            "function:public.record_ai_analysis(uuid,uuid,jsonb,text,text,text,jsonb,text,numeric,text,text)"
+          ],
+          "changed": [
+            "constraint:public.customers.customers_stage_check"
+          ],
+          "added": [
+            "column:public.ai_analyses.reason",
+            "index:public.uq_ai_analyses_dedupe",
+            "column:public.ai_analyses.dedupe_key",
+            "column:public.ai_analyses.verified_at",
+            "column:public.ai_analyses.verified_by",
+            "column:public.ai_analyses.current_stage",
+            "column:public.ai_analyses.evidence_items",
+            "column:public.ai_analyses.verification_note",
+            "table:public.customer_stage_migration_audit",
+            "column:public.ai_analyses.classifier_version",
+            "column:public.ai_analyses.verification_status",
+            "column:public.ai_analyses.previous_analysis_id",
+            "function:public.canonical_customer_stage(text)",
+            "column:public.ai_analyses.requires_verification",
+            "column:public.customer_stage_histories.evidence",
+            "column:public.customer_stage_migration_audit.id",
+            "index:public.customer_stage_migration_audit_pkey",
+            "column:public.customer_stage_histories.confidence",
+            "index:public.idx_customers_company_canonical_stage",
+            "column:public.customer_stage_migration_audit.action",
+            "index:public.idx_customer_stage_migration_audit_key",
+            "column:public.customer_stage_migration_audit.company_id",
+            "column:public.customer_stage_migration_audit.created_at",
+            "column:public.customer_stage_migration_audit.legacy_stage",
+            "column:public.customer_stage_histories.verification_status",
+            "column:public.customer_stage_migration_audit.migration_key",
+            "constraint:public.ai_analyses.ai_analyses_verified_by_fkey",
+            "column:public.customer_stage_migration_audit.customer_count",
+            "column:public.customer_stage_migration_audit.canonical_stage",
+            "function:public.get_customer_stage_suggestions(uuid,uuid,integer)",
+            "constraint:public.ai_analyses.ai_analyses_verification_status_check",
+            "function:public.get_customer_call_transcript_input(uuid,uuid,integer)",
+            "function:public.verify_ai_stage_suggestion(uuid,uuid,text,uuid,text,text,uuid)",
+            "constraint:public.customer_stage_histories.customer_stage_histories_confidence_check",
+            "constraint:public.customer_stage_migration_audit.customer_stage_migration_audit_pkey",
+            "constraint:public.customer_stage_migration_audit.customer_stage_migration_audit_action_check",
+            "constraint:public.customer_stage_histories.customer_stage_histories_verification_status_check",
+            "constraint:public.customer_stage_migration_audit.customer_stage_migration_audit_company_id_fkey",
+            "function:public.update_customer_stage_atomic(uuid,uuid,text,text,uuid,text,text,text,text,numeric)",
+            "constraint:public.customer_stage_migration_audit.customer_stage_migration_audit_customer_count_check",
+            "function:public.get_customer_stage_counts(uuid,timestamp with time zone,timestamp with time zone,text,text)",
+            "function:public.record_ai_analysis(uuid,uuid,jsonb,text,text,text,jsonb,text,numeric,text,text,text,text,boolean,jsonb,text,text,uuid)"
+          ]
+        },
+        {
+          "file": "20261028130001_remove_messenger_pending_sale_gate_and_enable_pages.sql",
+          "removed": [
+            "trigger:public.conversations.trg_seed_du_hoc_messenger_canary"
+          ],
+          "changed": [
+            "function:public.enqueue_ai_brain_live_delivery()",
+            "function:public.start_ai_messenger_live_dispatch(uuid,uuid,uuid,uuid,uuid,uuid,text,numeric,numeric)",
+            "function:public.finish_ai_brain_live_delivery_extended(uuid,uuid,text,text,numeric,text,text,uuid,integer)"
+          ],
+          "added": [
+            "function:public.seed_messenger_pages_canary()",
+            "index:public.idx_ai_brain_live_deliveries_dispatch_started",
+            "trigger:public.conversations.trg_seed_messenger_pages_canary"
+          ]
+        },
+        {
+          "file": "20261029160000_remove_legacy_flood_barrier_schema.sql",
+          "syntheticSeed": {
+            "pricingRows": "1",
+            "customerRows": "1"
+          },
+          "removed": [
+            "table:public.orders",
+            "table:public.surveys",
+            "table:public.contracts",
+            "column:public.orders.id",
+            "column:public.surveys.id",
+            "index:public.orders_pkey",
+            "index:public.surveys_pkey",
+            "table:public.appointments",
+            "column:public.contracts.id",
+            "table:public.installations",
+            "column:public.surveys.notes",
+            "index:public.contracts_pkey",
+            "column:public.surveys.photos",
+            "column:public.appointments.id",
+            "table:public.pricing_policies",
+            "table:public.warranty_tickets",
+            "column:public.contracts.status",
+            "column:public.installations.id",
+            "index:public.appointments_pkey",
+            "index:public.idx_orders_status",
+            "table:public.finance_summaries",
+            "table:public.operations_outbox",
+            "table:public.production_orders",
+            "column:public.appointments.type",
+            "column:public.orders.company_id",
+            "column:public.orders.created_at",
+            "column:public.orders.order_code",
+            "column:public.orders.updated_at",
+            "index:public.installations_pkey",
+            "table:public.price_calculations",
+            "column:public.contracts.order_id",
+            "column:public.installations.crew",
+            "column:public.orders.customer_id",
+            "column:public.surveys.company_id",
+            "column:public.surveys.created_at",
+            "column:public.surveys.updated_at",
+            "index:public.idx_orders_customer",
+            "column:public.appointments.status",
+            "column:public.contracts.signed_at",
+            "column:public.orders.final_amount",
+            "column:public.orders.order_status",
+            "column:public.pricing_policies.id",
+            "column:public.surveys.customer_id",
+            "column:public.warranty_tickets.id",
+            "index:public.idx_contracts_status",
+            "index:public.uq_orders_company_id",
+            "table:public.payment_transactions",
+            "column:public.appointments.address",
+            "column:public.contracts.company_id",
+            "column:public.contracts.created_at",
+            "column:public.contracts.is_current",
+            "column:public.contracts.updated_at",
+            "column:public.installations.photos",
+            "column:public.installations.status",
+            "column:public.operations_outbox.id",
+            "column:public.production_orders.id",
+            "column:public.surveys.completed_at",
+            "column:public.surveys.completed_by",
+            "column:public.surveys.measurements",
+            "index:public.pricing_policies_pkey",
+            "index:public.warranty_tickets_pkey",
+            "table:public.company_bank_accounts",
+            "column:public.contracts.revision_no",
+            "column:public.orders.deposit_status",
+            "column:public.price_calculations.id",
+            "index:public.finance_summaries_pkey",
+            "index:public.operations_outbox_pkey",
+            "index:public.production_orders_pkey",
+            "column:public.installations.order_id",
+            "column:public.surveys.appointment_id",
+            "column:public.surveys.site_condition",
+            "column:public.warranty_tickets.issue",
+            "column:public.warranty_tickets.notes",
+            "constraint:public.orders.orders_pkey",
+            "index:public.price_calculations_pkey",
+            "table:public.survey_photo_operations",
+            "column:public.appointments.company_id",
+            "column:public.appointments.created_at",
+            "column:public.appointments.start_time",
+            "column:public.appointments.updated_at",
+            "column:public.payment_transactions.id",
+            "column:public.pricing_policies.status",
+            "column:public.production_orders.specs",
+            "column:public.warranty_tickets.status",
+            "function:public.generate_order_code()",
+            "index:public.idx_installations_status",
+            "column:public.appointments.assignee_id",
+            "column:public.appointments.customer_id",
+            "column:public.company_bank_accounts.id",
+            "column:public.contracts.contract_value",
+            "column:public.installations.company_id",
+            "column:public.installations.created_at",
+            "column:public.installations.updated_at",
+            "column:public.orders.payment_reference",
+            "column:public.pricing_policies.version",
+            "column:public.production_orders.status",
+            "constraint:public.surveys.surveys_pkey",
+            "index:public.payment_transactions_pkey",
+            "index:public.unique_survey_appointment",
+            "column:public.contracts.signed_file_ref",
+            "column:public.installations.customer_id",
+            "column:public.operations_outbox.payload",
+            "column:public.price_calculations.amount",
+            "column:public.price_calculations.status",
+            "column:public.warranty_tickets.order_id",
+            "index:public.company_bank_accounts_pkey",
+            "index:public.installations_order_id_key",
+            "index:public.uq_contracts_order_current",
+            "index:public.uq_pt_company_provider_ref",
+            "column:public.contracts.template_version",
+            "column:public.finance_summaries.order_id",
+            "column:public.installations.completed_at",
+            "column:public.installations.handover_ref",
+            "column:public.operations_outbox.order_id",
+            "column:public.production_orders.deadline",
+            "column:public.production_orders.order_id",
+            "column:public.warranty_tickets.opened_at",
+            "index:public.idx_appointments_technician",
+            "index:public.idx_contracts_company_order",
+            "index:public.idx_pricing_policies_active",
+            "index:public.idx_warranty_tickets_status",
+            "index:public.uq_contracts_order_revision",
+            "index:public.uq_pricing_policies_version",
+            "column:public.orders.price_calculation_id",
+            "column:public.payment_transactions.amount",
+            "column:public.payment_transactions.status",
+            "column:public.pricing_policies.company_id",
+            "column:public.pricing_policies.conditions",
+            "column:public.pricing_policies.created_at",
+            "column:public.pricing_policies.updated_at",
+            "column:public.production_orders.materials",
+            "column:public.production_orders.qc_status",
+            "column:public.warranty_tickets.company_id",
+            "column:public.warranty_tickets.created_at",
+            "column:public.warranty_tickets.updated_at",
+            "index:public.idx_production_orders_status",
+            "index:public.survey_photo_operations_pkey",
+            "index:public.uq_orders_company_order_code",
+            "index:public.uq_orders_company_price_calc",
+            "policy:public.surveys.surveys_select_sale",
+            "column:public.contracts.generated_file_ref",
+            "column:public.finance_summaries.company_id",
+            "column:public.finance_summaries.updated_at",
+            "column:public.installations.appointment_id",
+            "column:public.operations_outbox.company_id",
+            "column:public.operations_outbox.created_at",
+            "column:public.operations_outbox.event_type",
+            "column:public.price_calculations.survey_id",
+            "column:public.pricing_policies.price_rules",
+            "column:public.production_orders.company_id",
+            "column:public.production_orders.created_at",
+            "column:public.production_orders.updated_at",
+            "column:public.warranty_tickets.assigned_to",
+            "column:public.warranty_tickets.customer_id",
+            "column:public.warranty_tickets.resolved_at",
+            "constraint:public.contracts.contracts_pkey",
+            "constraint:public.orders.fk_orders_pricing",
+            "index:public.idx_finance_summaries_company",
+            "index:public.idx_orders_company_created_at",
+            "index:public.idx_warranty_tickets_assigned",
+            "index:public.uq_orders_company_customer_id",
+            "index:public.uq_orders_company_payment_ref",
+            "column:public.payment_transactions.provider",
+            "column:public.price_calculations.company_id",
+            "column:public.price_calculations.created_at",
+            "column:public.price_calculations.input_data",
+            "column:public.pricing_policies.effective_at",
+            "column:public.survey_photo_operations.token",
+            "constraint:public.orders.fk_orders_customer",
+            "function:public.enforce_surveys_integrity()",
+            "index:public.production_orders_order_id_key",
+            "index:public.uq_surveys_company_customer_id",
+            "trigger:public.orders.trg_updated_at_orders",
+            "column:public.company_bank_accounts.provider",
+            "column:public.price_calculations.customer_id",
+            "function:public.is_assigned_technician(uuid)",
+            "index:public.idx_payment_transactions_status",
+            "index:public.idx_price_calculations_customer",
+            "trigger:public.surveys.trg_surveys_integrity",
+            "column:public.payment_transactions.company_id",
+            "column:public.payment_transactions.created_at",
+            "column:public.payment_transactions.updated_at",
+            "constraint:public.orders.uq_orders_company_id",
+            "constraint:public.surveys.fk_surveys_customer",
+            "function:public.enforce_orders_immutability()",
+            "index:public.idx_company_bank_accounts_lookup",
+            "index:public.idx_payment_transactions_matched",
+            "index:public.idx_surveys_company_completed_at",
+            "policy:public.contracts.contracts_select_sale",
+            "policy:public.orders.orders_select_boss_admin",
+            "trigger:public.orders.trg_orders_immutability",
+            "trigger:public.surveys.trg_updated_at_surveys",
+            "column:public.company_bank_accounts.company_id",
+            "column:public.company_bank_accounts.created_at",
+            "column:public.finance_summaries.contract_value",
+            "column:public.payment_transactions.occurred_at",
+            "column:public.survey_photo_operations.actor_id",
+            "column:public.warranty_tickets.installation_id",
+            "constraint:public.contracts.fk_contracts_order",
+            "constraint:public.warranty_tickets.fk_wt_order",
+            "column:public.payment_transactions.payload_hash",
+            "column:public.payment_transactions.provider_ref",
+            "column:public.price_calculations.missing_fields",
+            "column:public.price_calculations.policy_version",
+            "constraint:public.orders.orders_company_id_fkey",
+            "policy:public.surveys.surveys_select_boss_admin",
+            "column:public.finance_summaries.collected_amount",
+            "column:public.survey_photo_operations.expires_at",
+            "column:public.survey_photo_operations.started_at",
+            "constraint:public.appointments.appointments_pkey",
+            "constraint:public.surveys.fk_surveys_appointment",
+            "function:public.enforce_contracts_immutability()",
+            "function:public.guard_survey_appointment_write()",
+            "index:public.uq_appointments_company_customer_id",
+            "trigger:public.orders.trg_tenant_mutation_orders",
+            "column:public.finance_summaries.completed_revenue",
+            "column:public.finance_summaries.receivable_amount",
+            "constraint:public.price_calculations.fk_pc_survey",
+            "constraint:public.surveys.surveys_company_id_fkey",
+            "constraint:public.warranty_tickets.fk_wt_customer",
+            "function:public.enforce_installations_integrity()",
+            "index:public.idx_orders_payment_reference_company",
+            "trigger:public.contracts.trg_updated_at_contracts",
+            "column:public.price_calculations.pricing_policy_id",
+            "constraint:public.contracts.contracts_status_check",
+            "constraint:public.installations.installations_pkey",
+            "constraint:public.orders.orders_final_amount_check",
+            "constraint:public.orders.orders_order_status_check",
+            "function:public.operations_actor(uuid,uuid,text[])",
+            "trigger:public.surveys.trg_tenant_mutation_surveys",
+            "column:public.payment_transactions.match_confidence",
+            "column:public.payment_transactions.matched_order_id",
+            "column:public.payment_transactions.provider_account",
+            "column:public.payment_transactions.transfer_content",
+            "constraint:public.price_calculations.fk_pc_customer",
+            "constraint:public.surveys.surveys_completed_by_fkey",
+            "constraint:public.surveys.unique_survey_appointment",
+            "function:public.enforce_appointments_immutability()",
+            "index:public.uq_pricing_policies_company_id_version",
+            "policy:public.appointments.appointments_insert_sale",
+            "policy:public.appointments.appointments_select_sale",
+            "policy:public.appointments.appointments_update_sale",
+            "policy:public.contracts.contracts_select_boss_admin",
+            "trigger:public.contracts.trg_contracts_immutability",
+            "column:public.company_bank_accounts.provider_account",
+            "column:public.payment_transactions.payment_reference",
+            "column:public.survey_photo_operations.appointment_id",
+            "constraint:public.orders.orders_deposit_status_check",
+            "function:public.enforce_payment_facts_immutability()",
+            "index:public.idx_appointments_company_survey_created",
+            "constraint:public.contracts.contracts_company_id_fkey",
+            "constraint:public.orders.uq_orders_company_order_code",
+            "constraint:public.orders.uq_orders_company_price_calc",
+            "constraint:public.warranty_tickets.fk_wt_installation",
+            "function:public.end_survey_photo_operation(uuid,uuid)",
+            "policy:public.installations.installations_select_sale",
+            "constraint:public.appointments.appointments_type_check",
+            "constraint:public.installations.fk_installations_order",
+            "constraint:public.orders.uq_orders_company_customer_id",
+            "constraint:public.orders.uq_orders_company_payment_ref",
+            "index:public.uq_price_calculations_company_customer_id",
+            "trigger:public.contracts.trg_tenant_mutation_contracts",
+            "constraint:public.appointments.fk_appointments_customer",
+            "constraint:public.contracts.contracts_revision_no_check",
+            "constraint:public.contracts.uq_contracts_order_revision",
+            "function:public.begin_survey_photo_operation(uuid,uuid)",
+            "function:public.complete_survey_atomic(uuid,uuid,jsonb)",
+            "function:public.enforce_pricing_policies_immutability()",
+            "index:public.uq_installations_company_customer_order_id",
+            "trigger:public.appointments.trg_updated_at_appointments",
+            "constraint:public.appointments.appointments_status_check",
+            "constraint:public.pricing_policies.pricing_policies_pkey",
+            "constraint:public.surveys.uq_surveys_company_customer_id",
+            "constraint:public.warranty_tickets.warranty_tickets_pkey",
+            "policy:public.surveys.surveys_select_assigned_technician",
+            "trigger:public.installations.trg_installations_integrity",
+            "constraint:public.installations.fk_installations_customer",
+            "constraint:public.price_calculations.fk_pc_policy_version",
+            "function:public.enforce_price_calculations_immutability()",
+            "policy:public.appointments.appointments_insert_boss_admin",
+            "policy:public.appointments.appointments_select_boss_admin",
+            "policy:public.appointments.appointments_update_boss_admin",
+            "trigger:public.appointments.trg_appointments_immutability",
+            "trigger:public.installations.trg_updated_at_installations",
+            "constraint:public.contracts.contracts_contract_value_check",
+            "constraint:public.finance_summaries.finance_summaries_pkey",
+            "constraint:public.installations.installations_order_id_key",
+            "constraint:public.installations.installations_status_check",
+            "constraint:public.operations_outbox.operations_outbox_pkey",
+            "constraint:public.payment_transactions.fk_pt_matched_order",
+            "constraint:public.production_orders.production_orders_pkey",
+            "trigger:public.appointments.guard_survey_appointment_write",
+            "constraint:public.appointments.appointments_company_id_fkey",
+            "policy:public.installations.installations_select_boss_admin",
+            "policy:public.installations.installations_update_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_insert_sale",
+            "policy:public.warranty_tickets.warranty_tickets_select_sale",
+            "trigger:public.pricing_policies.trg_tenant_mutation_pricing",
+            "constraint:public.appointments.appointments_assignee_id_fkey",
+            "constraint:public.installations.fk_installations_appointment",
+            "constraint:public.price_calculations.chk_pc_need_info_amount",
+            "constraint:public.price_calculations.price_calculations_pkey",
+            "function:public.operations_evidence_ref(uuid,uuid,text,text)",
+            "trigger:public.appointments.trg_tenant_mutation_appointments",
+            "trigger:public.finance_summaries.trg_tenant_mutation_finance",
+            "trigger:public.warranty_tickets.trg_tenant_mutation_warranty",
+            "constraint:public.installations.installations_company_id_fkey",
+            "policy:public.production_orders.production_orders_select_sale",
+            "constraint:public.finance_summaries.fk_finance_summaries_order",
+            "constraint:public.operations_outbox.operations_outbox_order_fk",
+            "constraint:public.pricing_policies.uq_pricing_policies_version",
+            "constraint:public.production_orders.fk_production_orders_order",
+            "function:public.start_installation_work_atomic(uuid,uuid,uuid)",
+            "trigger:public.installations.trg_tenant_mutation_installations",
+            "function:public.finalize_generated_contract_rpc(uuid,uuid,text)",
+            "policy:public.price_calculations.price_calculations_select_sale",
+            "trigger:public.pricing_policies.trg_updated_at_pricing_policies",
+            "trigger:public.production_orders.trg_tenant_mutation_production",
+            "trigger:public.warranty_tickets.trg_updated_at_warranty_tickets",
+            "constraint:public.payment_transactions.payment_transactions_pkey",
+            "constraint:public.pricing_policies.pricing_policies_status_check",
+            "constraint:public.warranty_tickets.warranty_tickets_status_check",
+            "function:public.claim_contract_generation_rpc(uuid,uuid,boolean)",
+            "function:public.operations_audit(uuid,uuid,text,text,uuid,jsonb)",
+            "index:public.company_bank_accounts_provider_provider_account_key",
+            "trigger:public.payment_transactions.trg_tenant_mutation_payments",
+            "constraint:public.payment_transactions.uq_pt_company_provider_ref",
+            "index:public.operations_outbox_company_id_order_id_event_type_key",
+            "policy:public.pricing_policies.pricing_policies_insert_boss_admin",
+            "policy:public.pricing_policies.pricing_policies_select_boss_admin",
+            "policy:public.pricing_policies.pricing_policies_update_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_insert_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_select_boss_admin",
+            "policy:public.warranty_tickets.warranty_tickets_update_boss_admin",
+            "trigger:public.finance_summaries.trg_updated_at_finance_summaries",
+            "trigger:public.pricing_policies.trg_pricing_policies_immutability",
+            "trigger:public.production_orders.trg_updated_at_production_orders",
+            "constraint:public.appointments.uq_appointments_company_customer_id",
+            "constraint:public.company_bank_accounts.company_bank_accounts_pkey",
+            "constraint:public.production_orders.production_orders_order_id_key",
+            "constraint:public.production_orders.production_orders_status_check",
+            "policy:public.appointments.appointments_select_assigned_technician",
+            "trigger:public.payment_transactions.trg_payment_facts_immutability",
+            "constraint:public.pricing_policies.pricing_policies_company_id_fkey",
+            "constraint:public.warranty_tickets.warranty_tickets_company_id_fkey",
+            "policy:public.finance_summaries.finance_summaries_select_boss_admin",
+            "policy:public.production_orders.production_orders_select_boss_admin",
+            "constraint:public.price_calculations.price_calculations_amount_check",
+            "constraint:public.price_calculations.price_calculations_status_check",
+            "constraint:public.warranty_tickets.warranty_tickets_assigned_to_fkey",
+            "policy:public.installations.installations_select_assigned_technician",
+            "constraint:public.finance_summaries.finance_summaries_company_id_fkey",
+            "constraint:public.operations_outbox.operations_outbox_company_id_fkey",
+            "constraint:public.production_orders.production_orders_company_id_fkey",
+            "constraint:public.production_orders.production_orders_qc_status_check",
+            "function:public.update_order_deposit_rpc(uuid,uuid,uuid,numeric,text)",
+            "policy:public.price_calculations.price_calculations_select_boss_admin",
+            "trigger:public.price_calculations.trg_price_calculations_immutability",
+            "constraint:public.operations_outbox.operations_outbox_event_type_check",
+            "constraint:public.survey_photo_operations.survey_photo_operations_pkey",
+            "function:public.accept_installation_appointment_atomic(uuid,uuid,uuid)",
+            "function:public.update_production_progress_atomic(uuid,uuid,uuid,text)",
+            "constraint:public.price_calculations.price_calculations_company_id_fkey",
+            "function:public.complete_installation_atomic(uuid,uuid,uuid,jsonb,text)",
+            "function:public.finalize_contract_signing_rpc(uuid,uuid,uuid,text,text)",
+            "trigger:public.payment_transactions.trg_updated_at_payment_transactions",
+            "constraint:public.payment_transactions.payment_transactions_amount_check",
+            "constraint:public.payment_transactions.payment_transactions_status_check",
+            "constraint:public.pricing_policies.uq_pricing_policies_company_id_version",
+            "function:public.mutate_installation_atomic(uuid,uuid,uuid,text,text,text)",
+            "policy:public.payment_transactions.payment_transactions_select_boss_admin",
+            "constraint:public.finance_summaries.finance_summaries_contract_value_check",
+            "constraint:public.installations.uq_installations_company_customer_order_id",
+            "policy:public.warranty_tickets.warranty_tickets_select_assigned_technician",
+            "constraint:public.payment_transactions.payment_transactions_company_id_fkey",
+            "function:public.create_order_from_calculation_rpc(uuid,uuid,uuid,text,uuid)",
+            "constraint:public.finance_summaries.finance_summaries_collected_amount_check",
+            "constraint:public.company_bank_accounts.company_bank_accounts_company_id_fkey",
+            "constraint:public.finance_summaries.finance_summaries_completed_revenue_check",
+            "constraint:public.finance_summaries.finance_summaries_receivable_amount_check",
+            "constraint:public.price_calculations.uq_price_calculations_company_customer_id",
+            "policy:public.company_bank_accounts.Users can view their company bank accounts",
+            "constraint:public.survey_photo_operations.survey_photo_operations_actor_id_fkey",
+            "constraint:public.payment_transactions.payment_transactions_match_confidence_check",
+            "constraint:public.survey_photo_operations.survey_photo_operations_appointment_id_fkey",
+            "function:public.create_warranty_ticket_atomic(uuid,uuid,uuid,uuid,uuid,text,text,text)",
+            "function:public.update_warranty_status_atomic(uuid,uuid,uuid,text,text,text,uuid,text)",
+            "constraint:public.operations_outbox.operations_outbox_company_id_order_id_event_type_key",
+            "constraint:public.company_bank_accounts.company_bank_accounts_provider_provider_account_key",
+            "function:public.save_price_calculation_rpc(uuid,uuid,uuid,uuid,text,jsonb,numeric,text,jsonb)",
+            "function:public.create_production_order_atomic(uuid,uuid,uuid,jsonb,jsonb,timestamp with time zone)",
+            "function:public.process_payment_webhook_rpc(text,text,text,numeric,timestamp with time zone,text,text)",
+            "function:public.create_installation_schedule_atomic(uuid,uuid,uuid,uuid,timestamp with time zone,text,jsonb)"
+          ],
+          "changed": [
+            "function:public.c360_timeline(uuid,uuid,integer,text,uuid,boolean)",
+            "function:public.get_company_analytics_overview(uuid,timestamp with time zone,timestamp with time zone)",
+            "function:public.get_company_analytics_daily_series(uuid,timestamp with time zone,timestamp with time zone)"
+          ],
+          "added": []
+        },
+        {
+          "file": "20261030100000_meta_ads_hardening.sql",
+          "removed": [
+            "column:public.meta_ad_accounts.access_token",
+            "column:public.meta_ad_accounts.token_expires_at"
+          ],
+          "changed": [
+            "function:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone)"
+          ],
+          "added": [
+            "table:private.meta_leadgen_events",
+            "table:private.meta_ad_account_tokens",
+            "column:private.meta_leadgen_events.id",
+            "index:private.meta_leadgen_events_pkey",
+            "column:private.meta_ad_account_tokens.id",
+            "column:private.meta_leadgen_events.ad_id",
+            "column:private.meta_leadgen_events.status",
+            "index:private.meta_ad_account_tokens_pkey",
+            "column:private.meta_leadgen_events.form_id",
+            "column:private.meta_leadgen_events.page_id",
+            "index:private.uq_meta_leadgen_company_lead",
+            "index:private.idx_meta_leadgen_events_lookup",
+            "column:private.meta_leadgen_events.company_id",
+            "column:private.meta_leadgen_events.created_at",
+            "column:private.meta_leadgen_events.leadgen_id",
+            "column:private.meta_leadgen_events.updated_at",
+            "column:private.meta_leadgen_events.customer_id",
+            "column:private.meta_leadgen_events.occurred_at",
+            "column:private.meta_leadgen_events.retry_count",
+            "column:public.meta_ad_accounts.sync_lease_token",
+            "column:public.meta_ad_accounts.sync_lease_until",
+            "column:private.meta_ad_account_tokens.company_id",
+            "column:private.meta_ad_account_tokens.created_at",
+            "column:private.meta_ad_account_tokens.updated_at",
+            "column:private.meta_leadgen_events.error_message",
+            "index:private.idx_meta_ad_account_tokens_company",
+            "column:private.meta_leadgen_events.interaction_id",
+            "column:private.meta_ad_account_tokens.ad_account_id",
+            "function:public.get_meta_ad_account_token(uuid,text)",
+            "column:private.meta_ad_account_tokens.token_expires_at",
+            "index:private.uq_meta_ad_account_tokens_company_account",
+            "column:private.meta_ad_account_tokens.encrypted_access_token",
+            "function:public.acquire_meta_ad_account_sync_lease(uuid,text,integer)",
+            "constraint:private.private.meta_leadgen_events.meta_leadgen_events_pkey",
+            "function:public.finalize_meta_leadgen_event(uuid,text,text,uuid,uuid,text)",
+            "constraint:private.private.meta_leadgen_events.uq_meta_leadgen_company_lead",
+            "function:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text)",
+            "constraint:private.private.meta_ad_account_tokens.meta_ad_account_tokens_pkey",
+            "constraint:private.private.meta_leadgen_events.meta_leadgen_events_status_check",
+            "constraint:private.private.meta_leadgen_events.meta_leadgen_events_company_id_fkey",
+            "constraint:private.private.meta_leadgen_events.meta_leadgen_events_customer_id_fkey",
+            "function:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone)",
+            "constraint:private.private.meta_leadgen_events.meta_leadgen_events_interaction_id_fkey",
+            "constraint:private.private.meta_ad_account_tokens.meta_ad_account_tokens_company_id_fkey",
+            "constraint:private.private.meta_ad_account_tokens.uq_meta_ad_account_tokens_company_account",
+            "function:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone)"
+          ]
+        },
+        {
+          "file": "20261030110000_meta_ads_final_remediation.sql",
+          "removed": [
+            "function:public.finalize_meta_leadgen_event(uuid,text,text,uuid,uuid,text)"
+          ],
+          "changed": [
+            "table:public.meta_ads",
+            "table:public.meta_campaigns",
+            "table:public.meta_lead_forms",
+            "table:public.meta_ad_accounts",
+            "table:public.lead_attribution_touchpoints",
+            "function:public.seed_messenger_pages_canary()",
+            "function:public.get_meta_ad_account_token(uuid,text)",
+            "function:public.acquire_meta_ad_account_sync_lease(uuid,text,integer)",
+            "function:public.release_meta_ad_account_sync_lease(uuid,text,uuid,text,text)",
+            "function:public.store_meta_ad_account_token(uuid,text,text,timestamp with time zone)",
+            "function:public.claim_meta_leadgen_event(uuid,text,text,text,text,timestamp with time zone)",
+            "function:public.han_ingest(uuid,text,text,text,text,text,text,text,text,timestamp with time zone,jsonb)",
+            "function:public.record_lead_attribution_touchpoint(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,timestamp with time zone)"
+          ],
+          "added": [
+            "column:private.meta_leadgen_events.claim_token",
+            "column:private.meta_leadgen_events.ingest_args",
+            "column:private.meta_leadgen_events.lease_until",
+            "function:public.ingest_meta_leadgen_event(uuid,text,uuid,jsonb)",
+            "function:public.finalize_meta_leadgen_event(uuid,text,uuid,text,uuid,uuid,text)"
+          ]
+        }
+      ],
+      "watched": {
+        "cron_job": null,
+        "meta_events": "private.meta_leadgen_events",
+        "page_helper": "ai_messenger_page_id(text,jsonb)",
+        "touchpoints": "lead_attribution_touchpoints",
+        "canary_table": "ai_brain_live_canary_allowlist",
+        "seed_triggers": 1,
+        "sla_signature": "open_response_sla_window(uuid,uuid,uuid)",
+        "seed_functions": 1,
+        "canary_settings": "ai_brain_live_settings",
+        "zalo_oa_configs": "zalo_oa_configs",
+        "pg_net_installed": false,
+        "pg_cron_installed": false
+      },
+      "catalog": [
+        {
+          "category": "columns",
+          "object_count": 1115,
+          "fingerprint": "7e294a5f4909c644ff500c8db3edd020"
+        },
+        {
+          "category": "constraints",
+          "object_count": 632,
+          "fingerprint": "c1eef3e3c66d0c04faee63fe5e745717"
+        },
+        {
+          "category": "function_grants",
+          "object_count": 720,
+          "fingerprint": "a45670d2e8a55fd8a226a6f8c9d2cf85"
+        },
+        {
+          "category": "functions",
+          "object_count": 240,
+          "fingerprint": "45156847130231e5c60b98d31665261f"
+        },
+        {
+          "category": "indexes",
+          "object_count": 307,
+          "fingerprint": "dbc6fb849a3c1546ae3af52a27a70afb"
+        },
+        {
+          "category": "policies",
+          "object_count": 74,
+          "fingerprint": "4c779ba5e58eebe2bc9a764a20348f1d"
+        },
+        {
+          "category": "relations",
+          "object_count": 87,
+          "fingerprint": "d3a575f4fef38d9a1800cf94fc1fdfbc"
+        },
+        {
+          "category": "schema_grants",
+          "object_count": 12,
+          "fingerprint": "1c53d2a350615ec413e271d3058a8533"
+        },
+        {
+          "category": "table_grants",
+          "object_count": 1827,
+          "fingerprint": "22a021a17bd3740faca27dea69b383fb"
+        },
+        {
+          "category": "triggers",
+          "object_count": 57,
+          "fingerprint": "de4a09f63cef0f637ea39d24402046d7"
+        }
+      ],
+      "survivingCustomers": "1",
+      "retainedQc": "record_quality_check_atomic(uuid,uuid,text,uuid,text)",
+      "qcRuntime": {
+        "ok": false,
+        "error": "type \"public.production_orders\" does not exist",
+        "context": "compilation of PL/pgSQL function \"record_quality_check_atomic\" near line 2\nSQL statement \"SELECT public.record_quality_check_atomic('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','cccccccc-cccc-4ccc-8ccc-cccccccccccc','PASSED','dddddddd-dddd-4ddd-8ddd-dddddddddddd',NULL)\"\nPL/pgSQL function inline_code_block line 4 at PERFORM",
+        "sqlstate": "42704"
+      },
+      "messenger": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "b751ad4f-63f2-47d8-b90b-4ad3c5839aa3",
+          "is_duplicate_phone": false,
+          "phone_match_status": "NO_PHONE"
+        },
+        "sla_count": 1,
+        "customer_count": 2,
+        "interaction_count": 1
+      },
+      "website": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "2c71ddee-47d0-4b09-bc4a-5dacfc4397fe",
+          "is_duplicate_phone": false,
+          "phone_match_status": "NO_PHONE"
+        },
+        "sla_count": 0,
+        "customer_count": 2,
+        "interaction_count": 1
+      },
+      "meta": {
+        "ok": true,
+        "result": {
+          "ingest": {
+            "status": "ACCEPTED",
+            "customer_id": "5efe0abd-9ffe-4f34-9116-f02f9003c019",
+            "interaction_id": "3f933dcb-da26-40b3-aec9-9e5ed203a036",
+            "is_duplicate_phone": false,
+            "phone_match_status": "NEW_PHONE"
+          },
+          "status": "PROCESSED",
+          "campaign": "Synthetic campaign"
+        },
+        "sla_count": 0,
+        "customer_count": 2,
+        "interaction_count": 1
+      }
+    },
+    "C": {
+      "migrations": [
+        {
+          "file": "20261030090000_meta_ads_lead_attribution.sql",
+          "sha256": "f29e10fc5655bf9e2b736b87e49589a0be5ca55cb7c0cd185422f0af9a7fd95a",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 71
+        },
+        {
+          "file": "20261030100000_meta_ads_hardening.sql",
+          "sha256": "e40546e16cbb64216563c40808e73a8980c74c277764aa1df235006d567e8f7d",
+          "transactionMode": "NONE",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 72
+        },
+        {
+          "file": "20261030110000_meta_ads_final_remediation.sql",
+          "sha256": "504f300afdfc0add83a01bbd2804a976635907cf2dead4e5be1c61704477257a",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 57
+        },
+        {
+          "file": "20261030120000_meta_ads_attribution_rpc_security.sql",
+          "sha256": "a06d05072823d0a057cc48d8c15230ee57da6c6f4b388a5ccce8fb51c12aa9e1",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 52
+        },
+        {
+          "file": "20261030130000_meta_ads_phone_duplicate_history.sql",
+          "sha256": "65c656c9c852e8a1676295de7a11f088e4c8f2cfe1ff1aaa58796f60faa3b153",
+          "transactionMode": "OUTER",
+          "status": "APPLIED_LOCAL_ONLY",
+          "elapsedMs": 55
+        }
+      ],
+      "watched": {
+        "cron_job": null,
+        "meta_events": "private.meta_leadgen_events",
+        "page_helper": null,
+        "touchpoints": "lead_attribution_touchpoints",
+        "canary_table": null,
+        "seed_triggers": 0,
+        "sla_signature": "open_response_sla_window(uuid,uuid,uuid)",
+        "seed_functions": 1,
+        "canary_settings": null,
+        "zalo_oa_configs": null,
+        "pg_net_installed": false,
+        "pg_cron_installed": false
+      },
+      "catalog": [
+        {
+          "category": "columns",
+          "object_count": 569,
+          "fingerprint": "6f07edfa6623420f581afca78209d721"
+        },
+        {
+          "category": "constraints",
+          "object_count": 330,
+          "fingerprint": "581e964dc3e41a6ba57e993ac5cf29a8"
+        },
+        {
+          "category": "function_grants",
+          "object_count": 309,
+          "fingerprint": "699f223a10dc0bb0ef1c05e99efec38f"
+        },
+        {
+          "category": "functions",
+          "object_count": 103,
+          "fingerprint": "39b52ca5fd4a9053fc9be0be730433be"
+        },
+        {
+          "category": "indexes",
+          "object_count": 179,
+          "fingerprint": "0471b08adea53db6efe47c0520ae7b51"
+        },
+        {
+          "category": "policies",
+          "object_count": 91,
+          "fingerprint": "9418cf58c1f59fd935771eed60547554"
+        },
+        {
+          "category": "relations",
+          "object_count": 52,
+          "fingerprint": "79e553f298550d6461552aedf312082b"
+        },
+        {
+          "category": "schema_grants",
+          "object_count": 12,
+          "fingerprint": "1c53d2a350615ec413e271d3058a8533"
+        },
+        {
+          "category": "table_grants",
+          "object_count": 1092,
+          "fingerprint": "ef6ca2c9f33f46db23eaa266784e2ce6"
+        },
+        {
+          "category": "triggers",
+          "object_count": 63,
+          "fingerprint": "0ed008353955c866921cf3bc8b68b213"
+        }
+      ],
+      "messenger": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "47ea4dca-469c-48dc-845c-2d0fde4dc541",
+          "is_duplicate_phone": false,
+          "phone_match_status": "NO_PHONE"
+        },
+        "sla_count": 1,
+        "customer_count": 1,
+        "interaction_count": 1
+      },
+      "website": {
+        "ok": true,
+        "result": {
+          "status": "ACCEPTED",
+          "interaction_id": "7c950fc7-4aa2-4844-b866-01c4a231e424",
+          "is_duplicate_phone": false,
+          "phone_match_status": "NO_PHONE"
+        },
+        "sla_count": 0,
+        "customer_count": 1,
+        "interaction_count": 1
+      },
+      "meta": {
+        "ok": true,
+        "result": {
+          "ingest": {
+            "status": "ACCEPTED",
+            "customer_id": "6e0c7498-91d3-4ce4-95bc-e22b11cbfffc",
+            "interaction_id": "195871cb-699d-42e8-a304-f9b369c55197",
+            "is_duplicate_phone": false,
+            "phone_match_status": "NEW_PHONE"
+          },
+          "status": "PROCESSED",
+          "campaign": "Synthetic campaign"
+        },
+        "sla_count": 0,
+        "customer_count": 1,
+        "interaction_count": 1
+      },
+      "latentCanaryProbe": {
+        "ok": false,
+        "error": "record \"new\" has no field \"metadata\"",
+        "context": "PL/pgSQL assignment \"v_page_id := public.ai_messenger_page_id(NEW.external_conversation_id, NEW.metadata)\"\nPL/pgSQL function public.seed_messenger_pages_canary() line 9 at assignment\nSQL statement \"INSERT INTO public.conversations (\n      company_id, customer_id, channel,\n      external_conversation_id,\n      last_message_at, unread_count\n    )\n    VALUES (\n      p_company, v_customer, 'FACEBOOK',\n      p_external, p_occurred, 1\n    )\n    ON CONFLICT (\n      company_id, channel, external_conversation_id\n    )\n    DO UPDATE SET\n      last_message_at = greatest(\n        public.conversations.last_message_at,\n        excluded.last_message_at\n      ),\n      unread_count = public.conversations.unread_count + 1\n    RETURNING id\"\nPL/pgSQL function public.han_ingest(uuid,text,text,text,text,text,text,text,text,timestamp with time zone,jsonb) line 225 at SQL statement\nPL/pgSQL function inline_code_block line 4 at assignment",
+        "sqlstate": "42703"
+      },
+      "objectsChanged": [
+        "function:public.han_ingest(uuid,text,text,text,text,text,text,text,text,timestamp with time zone,jsonb)"
+      ],
+      "unsupportedHistory": "No ledger entry is written by these local probes. Successful CREATE does not authorize skipping 95 other pending canonical files."
+    }
+  },
+  "migrationFailures": [],
+  "postgresVersion": "17.11",
+  "completedAt": "2026-10-30T16:36:54.378Z",
+  "databasesRemoved": [
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_prefix",
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_full",
+    "crm_safe_1ca25c4a3f324746b63ea02c68b59cb1_meta"
+  ]
+}

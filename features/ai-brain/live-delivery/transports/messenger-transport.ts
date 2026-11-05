@@ -78,6 +78,9 @@ export class MessengerDeliveryTransport implements LiveDeliveryTransport {
     if (config.company !== claim.company_id || config.page !== pageId) {
       return { outcome: 'FAILED', errorCode: 'PAGE_COMPANY_MISMATCH' };
     }
+    if (config.leadAdsOnly) {
+      return { outcome: 'FAILED', errorCode: 'PAGE_NOT_ALLOWED' };
+    }
 
     const token = (process.env[config.tokenEnv] || '').trim();
     if (!token) {

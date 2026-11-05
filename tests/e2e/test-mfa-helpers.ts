@@ -58,9 +58,10 @@ export async function elevateClientToAal2(
 
   if (user?.id) {
     try {
+      const container = process.env.SUPABASE_DB_CONTAINER || 'supabase_db_ai-crm-cua-chong-ngap';
       execSync(
-        `docker exec -i supabase_db_ai-crm-cua-chong-ngap psql -U postgres -d postgres -c "DELETE FROM auth.mfa_factors WHERE user_id = '${user.id}';"`,
-        { encoding: 'utf8', stdio: 'pipe' }
+        `docker exec -i ${container} psql -U postgres -d postgres -c "DELETE FROM auth.mfa_factors WHERE user_id = '${user.id}';"`,
+        { encoding: 'utf8' }
       );
     } catch {
       // Ignore if docker container not reachable

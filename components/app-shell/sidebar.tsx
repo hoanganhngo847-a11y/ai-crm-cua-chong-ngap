@@ -117,7 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           roles: ['BOSS_ADMIN'],
         },
         {
-          label: 'Kết nối Facebook',
+          label: 'Kết nối Facebook & Meta Ads',
           href: '/admin/facebook',
           icon: <Share2 className="w-4 h-4 shrink-0" />,
           roles: ['BOSS_ADMIN'],

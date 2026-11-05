@@ -1,0 +1,111 @@
+{
+  "table_name": "pricing_policies",
+  "constraints": [
+    {
+      "name": "fk_pc_policy_version",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, pricing_policy_id, policy_version) REFERENCES pricing_policies(company_id, id, version) ON DELETE RESTRICT",
+      "referenced_table": "pricing_policies",
+      "referencing_table": "price_calculations"
+    },
+    {
+      "name": "pricing_policies_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "pricing_policies"
+    },
+    {
+      "name": "pricing_policies_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "pricing_policies"
+    },
+    {
+      "name": "pricing_policies_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['DRAFT'::text, 'ACTIVE'::text, 'SUPERSEDED'::text, 'RETIRED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "pricing_policies"
+    },
+    {
+      "name": "uq_pricing_policies_company_id_version",
+      "type": "u",
+      "definition": "UNIQUE (company_id, id, version)",
+      "referenced_table": null,
+      "referencing_table": "pricing_policies"
+    },
+    {
+      "name": "uq_pricing_policies_version",
+      "type": "u",
+      "definition": "UNIQUE (company_id, version)",
+      "referenced_table": null,
+      "referencing_table": "pricing_policies"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_pricing_policies_immutability",
+      "function": "enforce_pricing_policies_immutability()",
+      "definition": "CREATE TRIGGER trg_pricing_policies_immutability BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION enforce_pricing_policies_immutability()"
+    },
+    {
+      "name": "trg_tenant_mutation_pricing",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_pricing BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_pricing_policies",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_pricing_policies BEFORE UPDATE ON pricing_policies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_pricing_policies_active",
+      "definition": "CREATE INDEX idx_pricing_policies_active ON public.pricing_policies USING btree (company_id, status) WHERE (status = 'ACTIVE'::text)"
+    },
+    {
+      "name": "pricing_policies_pkey",
+      "definition": "CREATE UNIQUE INDEX pricing_policies_pkey ON public.pricing_policies USING btree (id)"
+    },
+    {
+      "name": "uq_pricing_policies_company_id_version",
+      "definition": "CREATE UNIQUE INDEX uq_pricing_policies_company_id_version ON public.pricing_policies USING btree (company_id, id, version)"
+    },
+    {
+      "name": "uq_pricing_policies_version",
+      "definition": "CREATE UNIQUE INDEX uq_pricing_policies_version ON public.pricing_policies USING btree (company_id, version)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "pricing_policies_insert_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "command": "INSERT",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    },
+    {
+      "name": "pricing_policies_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "pricing_policies_update_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    }
+  ]
+}

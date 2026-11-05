@@ -1,0 +1,180 @@
+{
+  "table_name": "appointments",
+  "constraints": [
+    {
+      "name": "appointments_assignee_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (assignee_id) REFERENCES user_profiles(id) ON DELETE RESTRICT",
+      "referenced_table": "user_profiles",
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "appointments_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "appointments_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (id)",
+      "referenced_table": null,
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "appointments_status_check",
+      "type": "c",
+      "definition": "CHECK (status = ANY (ARRAY['ASSIGNED'::text, 'ACCEPTED'::text, 'IN_PROGRESS'::text, 'COMPLETED'::text, 'CANCELLED'::text, 'REJECTED'::text]))",
+      "referenced_table": null,
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "appointments_type_check",
+      "type": "c",
+      "definition": "CHECK (type = ANY (ARRAY['SURVEY'::text, 'INSTALLATION'::text]))",
+      "referenced_table": null,
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "fk_appointments_customer",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id) REFERENCES customers(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "customers",
+      "referencing_table": "appointments"
+    },
+    {
+      "name": "fk_installations_appointment",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "appointments",
+      "referencing_table": "installations"
+    },
+    {
+      "name": "fk_surveys_appointment",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, customer_id, appointment_id) REFERENCES appointments(company_id, customer_id, id) ON DELETE RESTRICT",
+      "referenced_table": "appointments",
+      "referencing_table": "surveys"
+    },
+    {
+      "name": "survey_photo_operations_appointment_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (appointment_id) REFERENCES appointments(id)",
+      "referenced_table": "appointments",
+      "referencing_table": "survey_photo_operations"
+    },
+    {
+      "name": "uq_appointments_company_customer_id",
+      "type": "u",
+      "definition": "UNIQUE (company_id, customer_id, id)",
+      "referenced_table": null,
+      "referencing_table": "appointments"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "guard_survey_appointment_write",
+      "function": "guard_survey_appointment_write()",
+      "definition": "CREATE TRIGGER guard_survey_appointment_write BEFORE INSERT OR UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION guard_survey_appointment_write()"
+    },
+    {
+      "name": "trg_appointments_immutability",
+      "function": "enforce_appointments_immutability()",
+      "definition": "CREATE TRIGGER trg_appointments_immutability BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION enforce_appointments_immutability()"
+    },
+    {
+      "name": "trg_tenant_mutation_appointments",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_appointments BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_appointments",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_appointments BEFORE UPDATE ON appointments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "appointments_pkey",
+      "definition": "CREATE UNIQUE INDEX appointments_pkey ON public.appointments USING btree (id)"
+    },
+    {
+      "name": "idx_appointments_company_survey_created",
+      "definition": "CREATE INDEX idx_appointments_company_survey_created ON public.appointments USING btree (company_id, created_at) WHERE (type = 'SURVEY'::text)"
+    },
+    {
+      "name": "idx_appointments_technician",
+      "definition": "CREATE INDEX idx_appointments_technician ON public.appointments USING btree (company_id, assignee_id, start_time)"
+    },
+    {
+      "name": "uq_appointments_company_customer_id",
+      "definition": "CREATE UNIQUE INDEX uq_appointments_company_customer_id ON public.appointments USING btree (company_id, customer_id, id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "appointments_insert_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "command": "INSERT",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    },
+    {
+      "name": "appointments_insert_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "command": "INSERT",
+      "with_check": "has_company_role(company_id, 'SALE'::text)"
+    },
+    {
+      "name": "appointments_select_assigned_technician",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(has_company_role(company_id, 'TECHNICIAN'::text) AND (assignee_id = auth.uid()) AND (status = ANY (ARRAY['ASSIGNED'::text, 'ACCEPTED'::text, 'IN_PROGRESS'::text])))",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "appointments_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "appointments_select_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "name": "appointments_update_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'BOSS_ADMIN'::text)"
+    },
+    {
+      "name": "appointments_update_sale",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'SALE'::text)",
+      "command": "UPDATE",
+      "with_check": "has_company_role(company_id, 'SALE'::text)"
+    }
+  ]
+}

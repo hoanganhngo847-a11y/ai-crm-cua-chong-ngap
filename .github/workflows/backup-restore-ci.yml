@@ -1,0 +1,65 @@
+name: Backup & Restore CI (Helpers #1-#8)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/backup/**'
+      - 'tests/backup/**'
+      - '.github/workflows/backup-restore-ci.yml'
+      - 'package.json'
+  push:
+    branches: [main, meta_ads_integration, 'integration/*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-restore-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-backup-helpers:
+    name: Backup Helpers #1-#8 Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BACKUP_REQUIRE_LIVE_PG17: '1'
+      CRM_PG17_FALLBACK_IMAGE: postgres:17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Syntax & Lint Check
+        run: |
+          node --check scripts/backup/owner-map.mjs
+          node --check tests/backup/owner-map.test.mjs
+          node --check scripts/backup/storage-restore.mjs
+          node --check tests/backup/storage-restore.test.mjs
+          node --check scripts/backup/managed-customizations.mjs
+          node --check tests/backup/managed-customizations.test.mjs
+          node --check scripts/backup/catalog-compare.mjs
+          node --check tests/backup/catalog-compare.test.mjs
+          node --check tests/backup/docker-safety.test.mjs
+          ./node_modules/.bin/eslint scripts/backup/owner-map.mjs tests/backup/owner-map.test.mjs scripts/backup/storage-restore.mjs tests/backup/storage-restore.test.mjs scripts/backup/managed-customizations.mjs tests/backup/managed-customizations.test.mjs scripts/backup/catalog-compare.mjs tests/backup/catalog-compare.test.mjs tests/backup/docker-safety.test.mjs
+      - name: Start disposable PostgreSQL 17 (Helper #6)
+        run: ./scripts/backup/ci-postgres17.sh start
+      - name: Run JavaScript Helpers Tests (Helpers #1-#8)
+        run: npm run test:backup:helpers
+      - name: Run Python Safe Extract & Runbook Tests (Helper #4)
+        run: npm run test:backup:python
+        env:
+          SAFE_EXTRACT_EXPORT_HELPER: scripts/backup/storage-export.mjs
+      - name: PostgreSQL 17 diagnostics (on failure)
+        if: failure()
+        run: ./scripts/backup/ci-postgres17.sh logs
+      - name: Teardown disposable PostgreSQL 17
+        if: always()
+        run: ./scripts/backup/ci-postgres17.sh stop
+      - name: Check whitespace errors
+        run: git diff --check

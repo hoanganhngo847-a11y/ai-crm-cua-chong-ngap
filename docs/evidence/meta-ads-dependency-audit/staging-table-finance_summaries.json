@@ -1,0 +1,87 @@
+{
+  "table_name": "finance_summaries",
+  "constraints": [
+    {
+      "name": "finance_summaries_collected_amount_check",
+      "type": "c",
+      "definition": "CHECK (collected_amount >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "finance_summaries_company_id_fkey",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT",
+      "referenced_table": "companies",
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "finance_summaries_completed_revenue_check",
+      "type": "c",
+      "definition": "CHECK (completed_revenue >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "finance_summaries_contract_value_check",
+      "type": "c",
+      "definition": "CHECK (contract_value >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "finance_summaries_pkey",
+      "type": "p",
+      "definition": "PRIMARY KEY (order_id)",
+      "referenced_table": null,
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "finance_summaries_receivable_amount_check",
+      "type": "c",
+      "definition": "CHECK (receivable_amount >= 0::numeric)",
+      "referenced_table": null,
+      "referencing_table": "finance_summaries"
+    },
+    {
+      "name": "fk_finance_summaries_order",
+      "type": "f",
+      "definition": "FOREIGN KEY (company_id, order_id) REFERENCES orders(company_id, id) ON DELETE RESTRICT",
+      "referenced_table": "orders",
+      "referencing_table": "finance_summaries"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "trg_tenant_mutation_finance",
+      "function": "prevent_tenant_mutation()",
+      "definition": "CREATE TRIGGER trg_tenant_mutation_finance BEFORE UPDATE ON finance_summaries FOR EACH ROW EXECUTE FUNCTION prevent_tenant_mutation()"
+    },
+    {
+      "name": "trg_updated_at_finance_summaries",
+      "function": "update_updated_at_column()",
+      "definition": "CREATE TRIGGER trg_updated_at_finance_summaries BEFORE UPDATE ON finance_summaries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "finance_summaries_pkey",
+      "definition": "CREATE UNIQUE INDEX finance_summaries_pkey ON public.finance_summaries USING btree (order_id)"
+    },
+    {
+      "name": "idx_finance_summaries_company",
+      "definition": "CREATE INDEX idx_finance_summaries_company ON public.finance_summaries USING btree (company_id)"
+    }
+  ],
+  "policies": [
+    {
+      "name": "finance_summaries_select_boss_admin",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "has_company_role(company_id, 'BOSS_ADMIN'::text)",
+      "command": "SELECT",
+      "with_check": null
+    }
+  ]
+}

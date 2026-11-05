@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createClient } from '@supabase/supabase-js';
+import { reconcileAuthUserFixture } from '../helpers/auth-fixture';
 import {
   formatBasisPoints,
   formatMoneyVnd,
@@ -221,7 +222,16 @@ async function runTests() {
   // ==============================================================
   console.log('\n--- TEST GROUP 6: End-to-End Service Integration with Real Database ---');
 
-  // Login as BOSS_ADMIN fixture from M9.5A
+  // This suite must not depend on the deleted legacy analytics.test.ts to
+  // create its identities. Reconcile local-only fixtures on every invocation.
+  assert(['localhost', '127.0.0.1'].includes(new URL(SUPABASE_URL).hostname), 'Analytics fixtures require local Supabase');
+  const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
+  const { error: companyError } = await adminClient.from('companies').upsert({ id: COMPANY_A_ID, name: 'Analytics UI test company', status: 'ACTIVE' });
+  assert(!companyError, 'Analytics test company is available');
+  await reconcileAuthUserFixture(adminClient, { ...USER_BOSS_A, companyId: COMPANY_A_ID, role: 'BOSS_ADMIN', fullName: 'Analytics test admin' });
+  await reconcileAuthUserFixture(adminClient, { ...USER_SALE_A, companyId: COMPANY_A_ID, role: 'SALE', fullName: 'Analytics test sale' });
+
+  // Login using independently reconciled fixtures.
   const bossClient = createClient(SUPABASE_URL, ANON_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -264,10 +274,11 @@ async function runTests() {
   const saleClient = createClient(SUPABASE_URL, ANON_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  await saleClient.auth.signInWithPassword({
+  const { data: saleAuth, error: saleError } = await saleClient.auth.signInWithPassword({
     email: USER_SALE_A.email,
     password: USER_SALE_A.password,
   });
+  assert(!saleError && !!saleAuth.user, 'Logged in as SALE fixture before testing role denial');
 
   let saleRejected = false;
   try {

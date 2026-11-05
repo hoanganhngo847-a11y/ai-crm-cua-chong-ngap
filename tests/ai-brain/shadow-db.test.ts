@@ -83,7 +83,7 @@ async function provisionFixture(): Promise<void> {
           company_id: FIXTURE_COMPANY_A_ID,
           customer_id: FIXTURE_CUSTOMER_A_ID,
           channel: 'FACEBOOK',
-          external_conversation_id: 'ext-fb-shadow-a',
+          external_conversation_id: '987654321012345:880000000000001',
           status: 'OPEN',
         },
         {
@@ -99,7 +99,7 @@ async function provisionFixture(): Promise<void> {
           company_id: FIXTURE_COMPANY_B_ID,
           customer_id: FIXTURE_CUSTOMER_B_ID,
           channel: 'FACEBOOK',
-          external_conversation_id: 'ext-fb-shadow-b',
+          external_conversation_id: '987654321012345:880000000000002',
           status: 'OPEN',
         },
       ],
@@ -209,7 +209,7 @@ test('A: Default-off no settings; disabled / wrong tenant / wrong channel no enq
     company_id: freshCompanyId,
     customer_id: freshCustomerId,
     channel: 'FACEBOOK',
-    external_conversation_id: `ext-${randomUUID()}`,
+    external_conversation_id: `987654321012345:${BigInt("0x" + randomUUID().replaceAll("-", "")).toString().slice(0, 16)}`,
     status: 'OPEN',
   });
   assert.ifError(convInsert.error);

@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-30",
+  "workspaceId": "tea-db27ttjtqb8s73cdhrj0",
+  "groups": [
+    {
+      "id": "evg-db30b7u7bikc73b89io0",
+      "name": "hoanganhngo847-a11y's Org",
+      "fieldNames": [
+        "createdAt",
+        "id",
+        "name",
+        "ownerId",
+        "serviceLinks",
+        "updatedAt"
+      ],
+      "serviceLinks": []
+    }
+  ]
+}
