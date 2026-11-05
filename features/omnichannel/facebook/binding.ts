@@ -4,7 +4,7 @@ import { ChannelError, object, uuid } from './core';
 export type PageBinding = {
     page: string;
     company: string;
-    tokenEnv?: string;
+    tokenEnv: string;
     name?: string;
     leadAdsOnly?: boolean;
 };
@@ -52,13 +52,10 @@ export function pageBindings(): PageBinding[] {
                 seenInSource.add(row.page);
 
                 const company = uuid(row.company);
-                let tokenEnv: string | undefined;
-                if (row.tokenEnv !== undefined) {
-                    if (typeof row.tokenEnv !== 'string' || !/^META_[A-Z0-9_]+_TOKEN$/.test(row.tokenEnv)) {
-                        throw new Error();
-                    }
-                    tokenEnv = row.tokenEnv;
+                if (typeof row.tokenEnv !== 'string' || !/^META_[A-Z0-9_]+_TOKEN$/.test(row.tokenEnv)) {
+                    throw new Error();
                 }
+                const tokenEnv = row.tokenEnv;
                 if (
                     row.name !== undefined
                     && (typeof row.name !== 'string' || !row.name.trim() || row.name.trim().length > 120)
@@ -71,7 +68,7 @@ export function pageBindings(): PageBinding[] {
                 byPage.set(row.page, {
                     page: row.page,
                     company,
-                    tokenEnv: tokenEnv ?? existing?.tokenEnv,
+                    tokenEnv: existing?.tokenEnv ?? tokenEnv,
                     name: typeof row.name === 'string' ? row.name.trim() : existing?.name,
                     // A Page already configured for Messenger remains a Messenger Page
                     // when it is also selected for Lead Ads.
