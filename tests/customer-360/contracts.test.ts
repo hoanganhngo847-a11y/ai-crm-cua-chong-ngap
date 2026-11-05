@@ -55,6 +55,43 @@ test('list fails closed on query failure, never a silent zero', async () => {
   await assert.rejects(listCustomersForActor({ rpc: async () => ({ data: null, error: { code: 'failed' } }) } as unknown as SupabaseClient, actor, {}), /UNAVAILABLE/);
   for (const bad of [{ page: 0 }, { page: 10001 }, { companyId: 'untrusted' }, { sort: 'sql' }]) assert.equal(listFilters.safeParse(bad).success, false);
 });
+
+test('missing c360_list falls back to tenant-scoped, PII-free base customer rows', async () => {
+  const calls = [];
+  const row = {
+    id: context.customerId, company_id: context.companyId, name: 'Khách kiểm thử',
+    customer_code: 'KH-TEST-01', stage: 'LEAD_NEW', source: 'MANUAL',
+    updated_at: '2026-11-05T00:00:00.000Z',
+  };
+  const query = {};
+  for (const method of ['select', 'eq', 'or', 'in', 'order', 'range', 'limit']) {
+    query[method] = (...args) => { calls.push([method, args]); return query; };
+  }
+  query.then = (resolve, reject) =>
+    Promise.resolve({ data: [row], count: 1, error: null }).then(resolve, reject);
+  const db = {
+    rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.c360_list(p_company_id, p_search) in the schema cache' } }),
+    from: (table) => { assert.equal(table, 'customers'); return query; },
+  };
+
+  const result = await listCustomersForActor(db, actor, {});
+  assert.equal(result.readOnlyFallback, true);
+  assert.equal(result.total, 1);
+  assert.equal(result.items[0].id, context.customerId);
+  assert.equal(result.items[0].phone, null);
+  assert.equal(result.items[0].email, null);
+  assert.ok(calls.some(([method, args]) => method === 'eq' && args[0] === 'company_id' && args[1] === context.companyId));
+});
+
+test('missing c360_list does not silently ignore advanced or phone filters', async () => {
+  const db = {
+    rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.c360_list in the schema cache' } }),
+    from: () => { throw new Error('fallback must reject before querying for unsupported filters'); },
+  };
+  await assert.rejects(listCustomersForActor(db, actor, { owner: actor.userId }), /CUSTOMER_360_MIGRATION_REQUIRED/);
+  await assert.rejects(listCustomersForActor(db, actor, { search: '+84912345678' }), /CUSTOMER_360_MIGRATION_REQUIRED/);
+});
+
 test('cross-tenant/nonexistent detail returns 404; DB error stays unavailable', async () => {
   const eqs: unknown[] = [];
   const query = { select: () => query, eq: (...args: unknown[]) => { eqs.push(args); return query; }, maybeSingle: async () => ({ data: null, error: null }) };
