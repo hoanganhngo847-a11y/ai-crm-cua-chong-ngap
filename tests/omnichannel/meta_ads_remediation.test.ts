@@ -785,7 +785,7 @@ test('F-06: webhook isolates Lead Ads failures and processes Messenger messages 
     const company = '11111111-1111-4111-8111-111111111111';
     const testSecret = 'meta-test-secret-32-chars-long!!';
     process.env.META_APP_SECRET = testSecret;
-    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', name: 'Du Học Áo CHD' }]);
+    process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', leadAdsEnabled: true, name: 'Du Học Áo CHD' }]);
     process.env.META_PAGE_TEST_TOKEN = secret;
 
     let hanIngestCalls = 0;
