@@ -916,8 +916,8 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
     assert.deepEqual(approvedRows.map((row) => row.page_id), [pageMain, pageDuHoc]);
     assert.ok(approvedRows.every((row) => row.enabled === true));
 
-    const { rows: otherRows } = await db.query<{ id: string }>(
-      `SELECT id FROM public.ai_brain_live_canary_allowlist
+    const { rows: otherRows } = await db.query<{ conversation_id: string }>(
+      `SELECT conversation_id FROM public.ai_brain_live_canary_allowlist
        WHERE company_id = $1 AND channel = 'MESSENGER'`,
       [otherCompanyId],
     );
@@ -949,8 +949,8 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
     );
     assert.equal(targetSetting[0]?.enabled, false, 'Conversation trigger must not re-enable the tenant live kill switch');
 
-    const { rows: otherSetting } = await db.query<{ id: string }>(
-      `SELECT id FROM public.ai_brain_live_settings
+    const { rows: otherSetting } = await db.query<{ company_id: string }>(
+      `SELECT company_id FROM public.ai_brain_live_settings
        WHERE company_id = $1 AND channel = 'MESSENGER'`,
       [otherCompanyId],
     );
