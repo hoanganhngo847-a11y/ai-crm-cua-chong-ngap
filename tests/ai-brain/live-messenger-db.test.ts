@@ -6,7 +6,8 @@ import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 const COMPANY_ID = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
 const OTHER_COMPANY_ID = '00000000-0000-4000-8000-000000000099';
 const CUSTOMER_ID = '00000000-0000-4000-8000-000000000097';
-const PAGE_ID = '1343097708890171';
+const PAGE_ID = '987654321012345';
+const APPROVED_PAGE_ID = '1343097708890171';
 
 test('AI Brain Messenger Live DB: strict canary allowlist, enqueue trigger, dispatch fence, claim, and outbound recording', async () => {
   const harness = await createPgliteSupabase();
@@ -190,7 +191,7 @@ test('AI Brain Messenger Live DB: strict canary allowlist, enqueue trigger, disp
       p_customer_id: CUSTOMER_ID,
       p_conversation_id: convId,
       p_source_interaction_id: interactionEnabledId,
-      p_page_id: PAGE_ID,
+      p_page_id: APPROVED_PAGE_ID,
       p_min_confidence: 0.85,
       p_turn_confidence: 0.9,
     });
@@ -763,19 +764,11 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
       company_id: COMPANY_ID,
       customer_id: CUSTOMER_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: `${PAGE_ID}:87654321098765004`,
+      external_conversation_id: `${APPROVED_PAGE_ID}:87654321098765004`,
       status: 'PENDING_SALE',
       assigned_to: null,
       ai_mode: 'ACTIVE',
     });
-    await service.from('ai_brain_live_canary_allowlist').insert({
-      company_id: COMPANY_ID,
-      channel: 'MESSENGER',
-      conversation_id: pendingSaleConvId,
-      page_id: PAGE_ID,
-      enabled: true,
-    });
-
     const interactionPendingSaleId = randomUUID();
     await service.from('interactions').insert({
       id: interactionPendingSaleId,
