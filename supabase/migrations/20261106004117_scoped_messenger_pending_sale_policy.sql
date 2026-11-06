@@ -1,25 +1,25 @@
 -- Scoped Messenger PENDING_SALE policy rollout.
 --
--- Product decision (2026-11-06): Messenger may answer PENDING_SALE for the
--- explicitly approved tenant and two Pages below. Zalo retains its PENDING_SALE
+-- Product decision (2026-11-06): Messenger may answer PENDING_SALE only for
+-- the explicitly approved tenant and Pages below. Zalo retains its PENDING_SALE
 -- gate. This migration intentionally does NOT replay the legacy colliding SQL:
 -- the active funnel migration owns version 20261028130000, and later migrations
 -- have newer Messenger outbound/SLA and handover behavior.
 --
 -- Safety:
 -- - Keep the ledger-owning funnel migration and all prior migrations immutable.
--- - Update only the two Messenger enqueue/dispatch state gates; preserve all
---   current lock, confidence, source, tenant, Page, canary, and once-only checks.
+-- - Update only the Messenger enqueue/dispatch state gates; preserve current
+--   lock, confidence, source, tenant, Page, canary, and once-only checks.
+-- - PENDING_SALE is allowed only for the approved tenant and two Pages.
 -- - Backfill canary rows only for the approved tenant and Pages.
--- - Preserve pre-existing disabled canary rows and an operator-disabled live
---   setting. Create the setting only when the approved tenant has no row.
+-- - Preserve pre-existing disabled canary rows and operator-disabled settings.
 -- - Future conversations are allowlisted only for the approved tenant/Pages.
 -- - Do not rewrite the existing cron helper or scheduler cadence here.
 --
 -- Approved tenant: de6a7bf3-b5bc-418d-92d6-f9b241472598
 -- Approved Pages: 1343097708890171, 1026991374010112
 --
--- This is a normal additive migration for local/CI replay. It is NOT a command
+-- This is an additive migration for local/CI replay. It is NOT a command
 -- to apply this migration to Production.
 
 BEGIN;
@@ -39,8 +39,8 @@ BEGIN
 END
 $preflight$;
 
--- 1. Preserve the current dispatch fence and remove only the Messenger
--- PENDING_SALE block. Zalo is not handled by this RPC.
+-- 1. Keep the atomic dispatch fence and remove the Messenger PENDING_SALE gate
+--    only for the approved tenant and Pages.
 CREATE OR REPLACE FUNCTION public.start_ai_messenger_live_dispatch(
   p_delivery_id uuid,
   p_lock_token uuid,
@@ -243,7 +243,8 @@ GRANT EXECUTE ON FUNCTION public.start_ai_messenger_live_dispatch(uuid, uuid, uu
 -- 4. Update enqueue_ai_brain_live_delivery (PENDING_SALE allowed for Messenger)
 -- ------------------------------------------------------------------------------
 
--- 2. Permit enqueue for Messenger PENDING_SALE while retaining the Zalo gate.
+-- 2. Permit enqueue for Messenger PENDING_SALE only within the approved scope;
+--    retain the existing Zalo PENDING_SALE gate.
 CREATE OR REPLACE FUNCTION public.enqueue_ai_brain_live_delivery()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -335,76 +336,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.enqueue_ai_brain_live_delivery() FROM PUBLIC, anon, authenticated, service_role;
-
--- 3. Seed only the explicitly approved tenant/Page conversations. DO NOTHING
---    preserves an existing disabled canary row (operator kill switch).
-INSERT INTO public.ai_brain_live_canary_allowlist (
-  company_id, channel, conversation_id, page_id, enabled
-)
-SELECT
-  c.company_id,
-  'MESSENGER',
-  c.id,
-  public.ai_messenger_page_id(c.external_conversation_id, c.metadata),
-  true
-FROM public.conversations c
-WHERE c.company_id = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
-  AND c.channel = 'FACEBOOK'
-  AND public.ai_messenger_page_id(c.external_conversation_id, c.metadata)
-      IN ('1343097708890171', '1026991374010112')
-ON CONFLICT (company_id, channel, conversation_id, page_id) DO NOTHING;
-
--- 4. Replace the existing Page seeding trigger function with a tenant-scoped
---    version covering both approved Pages. Do not auto-create or re-enable the
---    live setting from this trigger.
-CREATE OR REPLACE FUNCTION public.seed_du_hoc_messenger_canary()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-  v_page_id text;
-BEGIN
-  IF NEW.channel IS DISTINCT FROM 'FACEBOOK'
-     OR NEW.company_id IS DISTINCT FROM 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid THEN
-    RETURN NEW;
-  END IF;
-
-  v_page_id := public.ai_messenger_page_id(NEW.external_conversation_id, NEW.metadata);
-  IF v_page_id IS NULL OR v_page_id NOT IN ('1343097708890171', '1026991374010112') THEN
-    RETURN NEW;
-  END IF;
-
-  INSERT INTO public.ai_brain_live_canary_allowlist (
-    company_id, channel, conversation_id, page_id, enabled
-  ) VALUES (
-    NEW.company_id, 'MESSENGER', NEW.id, v_page_id, true
-  )
-  ON CONFLICT (company_id, channel, conversation_id, page_id) DO NOTHING;
-
-  RETURN NEW;
-END;
-$$;
-
-COMMENT ON FUNCTION public.seed_du_hoc_messenger_canary() IS
-  'Seeds Messenger canary rows only for the approved tenant and Pages 1343097708890171 / 1026991374010112; never re-enables disabled canary or live-setting rows.';
-
--- 5. Create the tenant live setting only when the approved tenant exists and
---    has never had a Messenger setting. Existing enabled=false is an explicit
---    operator decision and is intentionally preserved.
-INSERT INTO public.ai_brain_live_settings (
-  company_id, channel, enabled, min_confidence
-)
-SELECT 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid, 'MESSENGER', true, 0.700
-WHERE EXISTS (
-  SELECT 1 FROM public.companies WHERE id = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
-)
-ON CONFLICT (company_id, channel) DO NOTHING;
-
-COMMIT;
- THEN
+REVOKE ALL ON FUNCTION public.enqueue_ai_brain_live_delivery() FROM PUBLIC, anon, authenticated, service_role; THEN
       RETURN NEW;
     END IF;
 
@@ -449,8 +381,8 @@ $$;
 
 REVOKE ALL ON FUNCTION public.enqueue_ai_brain_live_delivery() FROM PUBLIC, anon, authenticated, service_role;
 
--- 3. Seed only the explicitly approved tenant/Page conversations. DO NOTHING
---    preserves an existing disabled canary row (operator kill switch).
+-- 3. Seed existing canary rows only for the approved tenant and Pages. DO
+--    NOTHING preserves any existing disabled canary row.
 INSERT INTO public.ai_brain_live_canary_allowlist (
   company_id, channel, conversation_id, page_id, enabled
 )
@@ -467,9 +399,8 @@ WHERE c.company_id = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
       IN ('1343097708890171', '1026991374010112')
 ON CONFLICT (company_id, channel, conversation_id, page_id) DO NOTHING;
 
--- 4. Replace the existing Page seeding trigger function with a tenant-scoped
---    version covering both approved Pages. Do not auto-create or re-enable the
---    live setting from this trigger.
+-- 4. Scope the existing future-conversation seeding trigger to the approved
+--    tenant and Pages. It does not create/re-enable the tenant live setting.
 CREATE OR REPLACE FUNCTION public.seed_du_hoc_messenger_canary()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -503,9 +434,8 @@ $$;
 COMMENT ON FUNCTION public.seed_du_hoc_messenger_canary() IS
   'Seeds Messenger canary rows only for the approved tenant and Pages 1343097708890171 / 1026991374010112; never re-enables disabled canary or live-setting rows.';
 
--- 5. Create the tenant live setting only when the approved tenant exists and
---    has never had a Messenger setting. Existing enabled=false is an explicit
---    operator decision and is intentionally preserved.
+-- 5. Create the Messenger live setting only when the approved tenant exists and
+--    has no setting row. Existing enabled=false remains an explicit kill switch.
 INSERT INTO public.ai_brain_live_settings (
   company_id, channel, enabled, min_confidence
 )
