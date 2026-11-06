@@ -33,6 +33,14 @@ export const FROZEN_FOUNDATION_MIGRATIONS: Record<string, string> = {
   '20260916000001_private_call_transcripts.sql': '1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1',
 };
 
+// The ledger version belongs to the applied funnel migration. Preserve the stale colliding
+// Messenger SQL outside the executable directory; the approved rollout is a separate additive migration.
+export const PENDING_MESSENGER_MIGRATION = '20261028130000_remove_messenger_pending_sale_gate_and_enable_pages.sql';
+export const PENDING_MESSENGER_SHA256 = '8cdfd92019a15f4e3ca22a5f1906a40625332db83dd89712a248f19f851a55d1';
+const FUNNEL_MIGRATION = '20261028130000_customer_funnel_six_stages.sql';
+const FUNNEL_SHA256 = '44a5da682bd501210347b870731fc2260e82e881ef94b9481787ad15dec3c2b0';
+const sha256 = (content: string | Buffer) => crypto.createHash('sha256').update(content).digest('hex');
+
 export const MIGRATION_FILENAME_REGEX = /^\d{14}_[a-z0-9_]+\.sql$/;
 
 /**
@@ -118,10 +126,23 @@ export function verifyMigrationIntegrity(
 export function verifyFilesystemMigrations(
   migrationsDir = path.resolve(process.cwd(), 'supabase/migrations')
 ): MigrationIntegrityResult {
-  const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql'));
-  return verifyMigrationIntegrity(files, (filename) => {
+  const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
+  const result = verifyMigrationIntegrity(files, (filename) => {
     return fs.readFileSync(path.join(migrationsDir, filename), 'utf8');
   });
+  if (files.some((f) => f.endsWith('_remove_messenger_pending_sale_gate_and_enable_pages.sql'))) {
+    result.errors.push('Legacy colliding Messenger migration must remain archived outside active migrations');
+  }
+  try {
+    const pending = path.join(migrationsDir, '..', 'pending-migrations', PENDING_MESSENGER_MIGRATION);
+    if (sha256(fs.readFileSync(pending)) !== PENDING_MESSENGER_SHA256) {
+      result.errors.push('Pending Messenger migration checksum mismatch');
+    }
+  } catch {
+    result.errors.push('Complete pending Messenger migration must be preserved');
+  }
+  result.valid = result.errors.length === 0;
+  return result;
 }
 
 /**
@@ -225,6 +246,23 @@ export function verifyMigrationGitGuard(
     const status = parts[0]?.trim();
     const rawPath = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
     const filePath = rawPath.replace(/\\/g, '/');
+
+    // One audited relocation, never a general deletion/rename exemption. Both SQL
+    // blobs and the ledger-owning funnel must match their frozen baseline bytes.
+    if (status === 'D' && migrationsRelPath === 'supabase/migrations' &&
+        filePath === `${migrationsRelPath}/${PENDING_MESSENGER_MIGRATION}`) {
+      try {
+        const baseline = execFileSync('git', ['show', `${mergeBase}:${filePath}`], { cwd });
+        const baselineFunnel = execFileSync('git', ['show', `${mergeBase}:${migrationsRelPath}/${FUNNEL_MIGRATION}`], { cwd });
+        const archived = fs.readFileSync(path.join(cwd, 'supabase/pending-migrations', PENDING_MESSENGER_MIGRATION));
+        const funnel = fs.readFileSync(path.join(cwd, migrationsRelPath, FUNNEL_MIGRATION));
+        if (sha256(baseline) === PENDING_MESSENGER_SHA256 &&
+            sha256(archived) === PENDING_MESSENGER_SHA256 &&
+            sha256(baselineFunnel) === FUNNEL_SHA256 && sha256(funnel) === FUNNEL_SHA256) continue;
+      } catch {
+        // Fall through to the ordinary immutable-history rejection.
+      }
+    }
 
     if (status !== 'A') {
       errors.push(

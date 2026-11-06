@@ -374,7 +374,7 @@ test('Generic Engine: Messenger pre-send canary restriction halts delivery witho
   assert.equal(finishCall.params.p_error_code, 'CANARY_RESTRICTED');
 });
 
-test('Generic Engine: Messenger conversation in PENDING_SALE status is processed and auto-replied (remove pending sale gate)', async () => {
+test('Generic Engine: Messenger PENDING_SALE is sent only when the DB dispatch fence authorizes it', async () => {
   const mockDb = createMockEngineSupabase({
     claims: [
       {
@@ -387,7 +387,7 @@ test('Generic Engine: Messenger conversation in PENDING_SALE status is processed
         attempts: 1,
       },
     ],
-    convFbStatus: 'PENDING_SALE', // PENDING_SALE must NOT block Messenger AI auto-reply
+    convFbStatus: 'PENDING_SALE', // This unit mock simulates an approved DB fence; DB integration tests enforce tenant/Page scope.
   });
 
   const messengerTransport = new MockTransport('MESSENGER');

@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 
-const COMPANY_ID = '00000000-0000-4000-8000-000000000096';
+const COMPANY_ID = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
 const OTHER_COMPANY_ID = '00000000-0000-4000-8000-000000000099';
 const CUSTOMER_ID = '00000000-0000-4000-8000-000000000097';
 const PAGE_ID = '987654321012345';
+const APPROVED_PAGE_ID = '1343097708890171';
 
 test('AI Brain Messenger Live DB: strict canary allowlist, enqueue trigger, dispatch fence, claim, and outbound recording', async () => {
   const harness = await createPgliteSupabase();
@@ -190,7 +193,7 @@ test('AI Brain Messenger Live DB: strict canary allowlist, enqueue trigger, disp
       p_customer_id: CUSTOMER_ID,
       p_conversation_id: convId,
       p_source_interaction_id: interactionEnabledId,
-      p_page_id: PAGE_ID,
+      p_page_id: APPROVED_PAGE_ID,
       p_min_confidence: 0.85,
       p_turn_confidence: 0.9,
     });
@@ -763,19 +766,11 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
       company_id: COMPANY_ID,
       customer_id: CUSTOMER_ID,
       channel: 'FACEBOOK',
-      external_conversation_id: `${PAGE_ID}:87654321098765004`,
+      external_conversation_id: `${APPROVED_PAGE_ID}:87654321098765004`,
       status: 'PENDING_SALE',
       assigned_to: null,
       ai_mode: 'ACTIVE',
     });
-    await service.from('ai_brain_live_canary_allowlist').insert({
-      company_id: COMPANY_ID,
-      channel: 'MESSENGER',
-      conversation_id: pendingSaleConvId,
-      page_id: PAGE_ID,
-      enabled: true,
-    });
-
     const interactionPendingSaleId = randomUUID();
     await service.from('interactions').insert({
       id: interactionPendingSaleId,
@@ -814,12 +809,455 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
       p_customer_id: CUSTOMER_ID,
       p_conversation_id: pendingSaleConvId,
       p_source_interaction_id: interactionPendingSaleId,
-      p_page_id: PAGE_ID,
+      p_page_id: APPROVED_PAGE_ID,
       p_min_confidence: 0.85,
       p_turn_confidence: 0.9,
     });
     assert.ifError(fenceErrPending);
     assert.equal(fenceAcquiredPending, true, 'start_ai_messenger_live_dispatch fence must be acquired for PENDING_SALE conversation');
+    // Zalo keeps its existing PENDING_SALE SLA gate even though Messenger is allowed.
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'ZALO', true, 0.85)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [COMPANY_ID],
+    );
+    const pendingZaloConvId = randomUUID();
+    await service.from('conversations').insert({
+      id: pendingZaloConvId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-pending-sale-fixture',
+      status: 'PENDING_SALE',
+      assigned_to: null,
+      ai_mode: 'ACTIVE',
+    });
+    const pendingZaloInteractionId = randomUUID();
+    await service.from('interactions').insert({
+      id: pendingZaloInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: pendingZaloConvId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tôi cần tư vấn thêm',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: noZaloPendingDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', pendingZaloInteractionId)
+      .maybeSingle();
+    assert.equal(noZaloPendingDelivery, null, 'PENDING_SALE must continue to block Zalo enqueue');
+  } finally {
+    await harness.close();
+  }
+});
+
+
+
+test('AI Brain Messenger migration: seeds only a missing approved setting and preserves explicit off switches', async () => {
+  const migrationPrefix = '20261106004117';
+  const migrationPath = path.resolve(
+    __dirname,
+    '../../supabase/migrations/20261106004117_scoped_messenger_pending_sale_policy.sql',
+  );
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+  const harness = await createPgliteSupabase({ skipMigrations: [migrationPrefix] });
+  const { db, client: service } = harness;
+  const approvedCompanyId = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
+  const otherCompanyId = '00000000-0000-4000-8000-000000000199';
+  const customerId = randomUUID();
+  const conversationId = randomUUID();
+
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Approved Messenger Migration Fixture', 'ACTIVE'),
+              ($2, 'Non-approved Messenger Migration Fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCompanyId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'MIGRATION-MSGR-1', 'Migration Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [customerId, approvedCompanyId],
+    );
+
+    // First application creates the setting only for the approved tenant.
+    await db.exec(migrationSql);
+    const { rows: createdSetting } = await db.query<{ enabled: boolean; min_confidence: number }>(
+      `SELECT enabled, min_confidence FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    assert.equal(createdSetting.length, 1);
+    assert.equal(createdSetting[0].enabled, true);
+    assert.equal(Number(createdSetting[0].min_confidence), 0.700);
+
+    const { rows: otherSettings } = await db.query<{ company_id: string }>(
+      `SELECT company_id FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherSettings.length, 0, 'Migration must not create settings for other tenants');
+
+    // The new trigger creates the approved canary row. Simulate an operator
+    // disabling both controls, then replay the migration to prove DO NOTHING
+    // preserves the explicit off state.
+    const { error: conversationError } = await service.from('conversations').insert({
+      id: conversationId,
+      company_id: approvedCompanyId,
+      customer_id: customerId,
+      channel: 'FACEBOOK',
+      external_conversation_id: '1343097708890171:87654321098765107',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+    });
+    assert.ifError(conversationError);
+    await db.query(
+      `UPDATE public.ai_brain_live_canary_allowlist SET enabled = false
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = '1343097708890171'`,
+      [approvedCompanyId, conversationId],
+    );
+    await db.query(
+      `UPDATE public.ai_brain_live_settings SET enabled = false
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+
+    await db.exec(migrationSql);
+    const { rows: preservedSetting } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    const { rows: preservedCanary } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = '1343097708890171'`,
+      [approvedCompanyId, conversationId],
+    );
+    assert.equal(preservedSetting[0]?.enabled, false, 'Migration replay must not re-enable the tenant live kill switch');
+    assert.equal(preservedCanary[0]?.enabled, false, 'Migration replay must not re-enable a disabled canary row');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and preserves operator-off state', async () => {
+  const harness = await createPgliteSupabase();
+  const { db, client: service } = harness;
+  const approvedCompanyId = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
+  const otherCompanyId = '00000000-0000-4000-8000-000000000198';
+  const approvedCustomerId = randomUUID();
+  const otherCustomerId = randomUUID();
+  const pageDuHoc = '1343097708890171';
+  const pageMain = '1026991374010112';
+
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Approved Messenger Fixture', 'ACTIVE'),
+              ($2, 'Other Messenger Fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCompanyId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'APPROVED-MSGR-1', 'Approved Messenger Customer', 'MANUAL', 'LEAD_NEW'),
+              ($3, $4, 'OTHER-MSGR-1', 'Other Messenger Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCustomerId, approvedCompanyId, otherCustomerId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'MESSENGER', false, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = false`,
+      [approvedCompanyId],
+    );
+
+    const approvedOneId = randomUUID();
+    const approvedTwoId = randomUUID();
+    const otherTenantId = randomUUID();
+    const otherPageId = randomUUID();
+    for (const [id, companyId, customerId, pageId, psid] of [
+      [approvedOneId, approvedCompanyId, approvedCustomerId, pageDuHoc, '87654321098765101'],
+      [approvedTwoId, approvedCompanyId, approvedCustomerId, pageMain, '87654321098765102'],
+      [otherTenantId, otherCompanyId, otherCustomerId, pageDuHoc, '87654321098765103'],
+      [otherPageId, approvedCompanyId, approvedCustomerId, '987654321012345', '87654321098765104'],
+    ] as const) {
+      const { error } = await service.from('conversations').insert({
+        id, company_id: companyId, customer_id: customerId, channel: 'FACEBOOK',
+        external_conversation_id: `${pageId}:${psid}`, status: 'OPEN', ai_mode: 'ACTIVE',
+      });
+      assert.ifError(error);
+    }
+
+    const { rows: approvedRows } = await db.query<{ conversation_id: string; page_id: string; enabled: boolean }>(
+      `SELECT conversation_id, page_id, enabled
+       FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND channel = 'MESSENGER'
+       ORDER BY page_id`,
+      [approvedCompanyId],
+    );
+    assert.equal(approvedRows.length, 2, 'Only the two approved Page conversations are allowlisted');
+    assert.deepEqual(approvedRows.map((row) => row.page_id), [pageMain, pageDuHoc]);
+    assert.ok(approvedRows.every((row) => row.enabled === true));
+
+    const { rows: otherRows } = await db.query<{ conversation_id: string }>(
+      `SELECT conversation_id FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherRows.length, 0, 'Other tenants must not be auto-allowlisted');
+
+    await db.query(
+      `UPDATE public.ai_brain_live_canary_allowlist
+       SET enabled = false
+       WHERE company_id = $1 AND conversation_id = $2`,
+      [approvedCompanyId, approvedOneId],
+    );
+    await db.query(
+      `UPDATE public.conversations
+       SET metadata = coalesce(metadata, '{}'::jsonb) || '{"seed_replay":true}'::jsonb
+       WHERE id = $1`,
+      [approvedOneId],
+    );
+    const { rows: disabledCanary } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = $3`,
+      [approvedCompanyId, approvedOneId, pageDuHoc],
+    );
+    assert.equal(disabledCanary[0]?.enabled, false, 'Trigger replay must not re-enable a disabled canary row');
+
+    const { rows: targetSetting } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    assert.equal(targetSetting[0]?.enabled, false, 'Conversation trigger must not re-enable the tenant live kill switch');
+
+    const { rows: otherSetting } = await db.query<{ company_id: string }>(
+      `SELECT company_id FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherSetting.length, 0, 'Other tenants must not receive a Messenger live setting');
+
+    // Even with a manually present setting and canary row, another tenant must
+    // not inherit the approved tenant's PENDING_SALE exception.
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'MESSENGER', true, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [otherCompanyId],
+    );
+    const otherPendingId = randomUUID();
+    await service.from('conversations').insert({
+      id: otherPendingId, company_id: otherCompanyId, customer_id: otherCustomerId,
+      channel: 'FACEBOOK', external_conversation_id: `${pageDuHoc}:87654321098765105`,
+      status: 'PENDING_SALE', ai_mode: 'ACTIVE',
+    });
+    await db.query(
+      `INSERT INTO public.ai_brain_live_canary_allowlist
+       (company_id, channel, conversation_id, page_id, enabled)
+       VALUES ($1, 'MESSENGER', $2, $3, true)
+       ON CONFLICT DO NOTHING`,
+      [otherCompanyId, otherPendingId, pageDuHoc],
+    );
+    const otherPendingInteraction = randomUUID();
+    await service.from('interactions').insert({
+      id: otherPendingInteraction, company_id: otherCompanyId, customer_id: otherCustomerId,
+      conversation_id: otherPendingId, channel: 'FACEBOOK', type: 'MESSAGE',
+      direction: 'INBOUND', actor_type: 'CUSTOMER', sanitized_content: 'Xin tư vấn',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: otherPendingDelivery } = await service
+      .from('ai_brain_live_deliveries').select('id')
+      .eq('source_interaction_id', otherPendingInteraction).maybeSingle();
+    assert.equal(otherPendingDelivery, null, 'PENDING_SALE exception must not expand to another tenant');
+
+    // Simulate a stale/manual queue row: the atomic dispatch fence must still
+    // deny an out-of-scope PENDING_SALE delivery immediately before transport.
+    const outOfScopeDeliveryId = randomUUID();
+    await db.query(
+      `INSERT INTO public.ai_brain_live_deliveries
+       (id, company_id, customer_id, conversation_id, source_interaction_id, channel)
+       VALUES ($1, $2, $3, $4, $5, 'MESSENGER')`,
+      [outOfScopeDeliveryId, otherCompanyId, otherCustomerId, otherPendingId, otherPendingInteraction],
+    );
+    const outOfScopeLock = randomUUID();
+    const { data: outOfScopeClaims } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 5, p_lock_token: outOfScopeLock, p_channel: 'MESSENGER',
+    });
+    assert.ok((outOfScopeClaims as Array<{ id: string }>).some(row => row.id === outOfScopeDeliveryId));
+    const { data: outOfScopeFence, error: outOfScopeFenceError } = await service.rpc('start_ai_messenger_live_dispatch', {
+      p_delivery_id: outOfScopeDeliveryId,
+      p_lock_token: outOfScopeLock,
+      p_company_id: otherCompanyId,
+      p_customer_id: otherCustomerId,
+      p_conversation_id: otherPendingId,
+      p_source_interaction_id: otherPendingInteraction,
+      p_page_id: pageDuHoc,
+      p_min_confidence: 0.700,
+      p_turn_confidence: 0.9,
+    });
+    assert.ifError(outOfScopeFenceError);
+    assert.equal(outOfScopeFence, false, 'Dispatch fence must reject out-of-scope PENDING_SALE even if queued');
+
+    // The approved tenant cannot use the exception on an unapproved Page either.
+    await db.query(
+      `UPDATE public.ai_brain_live_settings SET enabled = true
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    const unsupportedPendingId = randomUUID();
+    await service.from('conversations').insert({
+      id: unsupportedPendingId, company_id: approvedCompanyId, customer_id: approvedCustomerId,
+      channel: 'FACEBOOK', external_conversation_id: `987654321012345:87654321098765106`,
+      status: 'PENDING_SALE', ai_mode: 'ACTIVE',
+    });
+    await db.query(
+      `INSERT INTO public.ai_brain_live_canary_allowlist
+       (company_id, channel, conversation_id, page_id, enabled)
+       VALUES ($1, 'MESSENGER', $2, '987654321012345', true)
+       ON CONFLICT DO NOTHING`,
+      [approvedCompanyId, unsupportedPendingId],
+    );
+    const unsupportedInteraction = randomUUID();
+    await service.from('interactions').insert({
+      id: unsupportedInteraction, company_id: approvedCompanyId, customer_id: approvedCustomerId,
+      conversation_id: unsupportedPendingId, channel: 'FACEBOOK', type: 'MESSAGE',
+      direction: 'INBOUND', actor_type: 'CUSTOMER', sanitized_content: 'Xin tư vấn',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: unsupportedDelivery } = await service
+      .from('ai_brain_live_deliveries').select('id')
+      .eq('source_interaction_id', unsupportedInteraction).maybeSingle();
+    assert.equal(unsupportedDelivery, null, 'PENDING_SALE exception must remain limited to the two approved Pages');
+
+    const unsupportedDeliveryId = randomUUID();
+    await db.query(
+      `INSERT INTO public.ai_brain_live_deliveries
+       (id, company_id, customer_id, conversation_id, source_interaction_id, channel)
+       VALUES ($1, $2, $3, $4, $5, 'MESSENGER')`,
+      [unsupportedDeliveryId, approvedCompanyId, approvedCustomerId, unsupportedPendingId, unsupportedInteraction],
+    );
+    const unsupportedLock = randomUUID();
+    const { data: unsupportedClaims } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 5, p_lock_token: unsupportedLock, p_channel: 'MESSENGER',
+    });
+    assert.ok((unsupportedClaims as Array<{ id: string }>).some(row => row.id === unsupportedDeliveryId));
+    const { data: unsupportedFence, error: unsupportedFenceError } = await service.rpc('start_ai_messenger_live_dispatch', {
+      p_delivery_id: unsupportedDeliveryId,
+      p_lock_token: unsupportedLock,
+      p_company_id: approvedCompanyId,
+      p_customer_id: approvedCustomerId,
+      p_conversation_id: unsupportedPendingId,
+      p_source_interaction_id: unsupportedInteraction,
+      p_page_id: '987654321012345',
+      p_min_confidence: 0.700,
+      p_turn_confidence: 0.9,
+    });
+    assert.ifError(unsupportedFenceError);
+    assert.equal(unsupportedFence, false, 'Dispatch fence must reject PENDING_SALE on an unapproved Page');
+  } finally {
+    await harness.close();
+  }
+});
+
+
+test('AI Brain Messenger rollout: latest Zalo group and history-ingest enqueue guards remain intact', async () => {
+  const harness = await createPgliteSupabase();
+  const { db, client: service } = harness;
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Zalo enqueue guard fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [COMPANY_ID],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'ZALO-GUARD-1', 'Zalo Guard Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [CUSTOMER_ID, COMPANY_ID],
+    );
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'ZALO', true, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [COMPANY_ID],
+    );
+
+    const groupConversationId = randomUUID();
+    await service.from('conversations').insert({
+      id: groupConversationId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-group-fixture',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+      metadata: { is_group: true },
+    });
+    const groupInteractionId = randomUUID();
+    await service.from('interactions').insert({
+      id: groupInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: groupConversationId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tin nhắn nhóm',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: groupDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', groupInteractionId)
+      .maybeSingle();
+    assert.equal(groupDelivery, null, 'Zalo group conversations must remain blocked');
+
+    const historyConversationId = randomUUID();
+    await service.from('conversations').insert({
+      id: historyConversationId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-history-fixture',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+      metadata: { is_group: false },
+    });
+    const historyInteractionId = randomUUID();
+    await db.exec("BEGIN; SET LOCAL app.zcajs_history_ingest = 'true';");
+    const { error: historyInsertError } = await service.from('interactions').insert({
+      id: historyInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: historyConversationId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tin nhắn lịch sử được nhập',
+      sanitization_status: 'SUCCEEDED',
+    });
+    assert.ifError(historyInsertError);
+    await db.exec('COMMIT;');
+    const { data: historyDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', historyInteractionId)
+      .maybeSingle();
+    assert.equal(historyDelivery, null, 'Zalo history-ingest interactions must not enqueue live replies');
   } finally {
     await harness.close();
   }
