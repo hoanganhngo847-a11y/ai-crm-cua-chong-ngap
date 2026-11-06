@@ -862,6 +862,111 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
   }
 });
 
+
+test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and preserves operator-off state', async () => {
+  const harness = await createPgliteSupabase();
+  const { db, client: service } = harness;
+  const approvedCompanyId = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
+  const otherCompanyId = '00000000-0000-4000-8000-000000000198';
+  const approvedCustomerId = randomUUID();
+  const otherCustomerId = randomUUID();
+  const pageDuHoc = '1343097708890171';
+  const pageMain = '1026991374010112';
+
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Approved Messenger Fixture', 'ACTIVE'),
+              ($2, 'Other Messenger Fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCompanyId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'APPROVED-MSGR-1', 'Approved Messenger Customer', 'MANUAL', 'LEAD_NEW'),
+              ($3, $4, 'OTHER-MSGR-1', 'Other Messenger Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCustomerId, approvedCompanyId, otherCustomerId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'MESSENGER', false, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = false`,
+      [approvedCompanyId],
+    );
+
+    const approvedOneId = randomUUID();
+    const approvedTwoId = randomUUID();
+    const otherTenantId = randomUUID();
+    const otherPageId = randomUUID();
+    for (const [id, companyId, customerId, pageId, psid] of [
+      [approvedOneId, approvedCompanyId, approvedCustomerId, pageDuHoc, '87654321098765101'],
+      [approvedTwoId, approvedCompanyId, approvedCustomerId, pageMain, '87654321098765102'],
+      [otherTenantId, otherCompanyId, otherCustomerId, pageDuHoc, '87654321098765103'],
+      [otherPageId, approvedCompanyId, approvedCustomerId, '987654321012345', '87654321098765104'],
+    ] as const) {
+      const { error } = await service.from('conversations').insert({
+        id, company_id: companyId, customer_id: customerId, channel: 'FACEBOOK',
+        external_conversation_id: `${pageId}:${psid}`, status: 'OPEN', ai_mode: 'ACTIVE',
+      });
+      assert.ifError(error);
+    }
+
+    const { rows: approvedRows } = await db.query(
+      `SELECT conversation_id, page_id, enabled
+       FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND channel = 'MESSENGER'
+       ORDER BY page_id`,
+      [approvedCompanyId],
+    );
+    assert.equal(approvedRows.length, 2, 'Only the two approved Page conversations are allowlisted');
+    assert.deepEqual(approvedRows.map((row: { page_id: string }) => row.page_id), [pageDuHoc, pageMain]);
+    assert.ok(approvedRows.every((row: { enabled: boolean }) => row.enabled === true));
+
+    const { rows: otherRows } = await db.query(
+      `SELECT id FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherRows.length, 0, 'Other tenants must not be auto-allowlisted');
+
+    await db.query(
+      `UPDATE public.ai_brain_live_canary_allowlist
+       SET enabled = false
+       WHERE company_id = $1 AND conversation_id = $2`,
+      [approvedCompanyId, approvedOneId],
+    );
+    await db.query(
+      `UPDATE public.conversations
+       SET metadata = coalesce(metadata, '{}'::jsonb) || '{"seed_replay":true}'::jsonb
+       WHERE id = $1`,
+      [approvedOneId],
+    );
+    const { rows: disabledCanary } = await db.query(
+      `SELECT enabled FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = $3`,
+      [approvedCompanyId, approvedOneId, pageDuHoc],
+    );
+    assert.equal(disabledCanary[0]?.enabled, false, 'Trigger replay must not re-enable a disabled canary row');
+
+    const { rows: targetSetting } = await db.query(
+      `SELECT enabled FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    assert.equal(targetSetting[0]?.enabled, false, 'Conversation trigger must not re-enable the tenant live kill switch');
+
+    const { rows: otherSetting } = await db.query(
+      `SELECT id FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherSetting.length, 0, 'Other tenants must not receive a Messenger live setting');
+  } finally {
+    await harness.close();
+  }
+});
+
 test('AI Brain Messenger Live DB: ACL and tenant isolation on canary allowlist', async () => {
   const harness = await createPgliteSupabase();
   const { db } = harness;
