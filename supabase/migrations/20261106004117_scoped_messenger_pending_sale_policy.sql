@@ -192,6 +192,15 @@ BEGIN
     RETURN false;
   END IF;
 
+  -- PENDING_SALE is approved only for the explicitly scoped tenant and Pages.
+  IF v_conv.status = 'PENDING_SALE'
+     AND (
+       p_company_id <> 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
+       OR v_conv_page_id NOT IN ('1343097708890171', '1026991374010112')
+     ) THEN
+    RETURN false;
+  END IF;
+
   -- 7. Canary allowlist verification
   SELECT a.id, a.enabled
   INTO v_canary
@@ -304,7 +313,113 @@ BEGIN
 
     v_page_id := public.ai_messenger_page_id(v_external_conv_id, v_conv_metadata);
 
-    IF v_page_id IS NULL OR v_page_id !~ '^[0-9]+$' THEN
+    IF v_page_id IS NULL OR v_page_id !~ '^[0-9]+
+      WHERE a.company_id = NEW.company_id
+        AND a.channel = 'MESSENGER'
+        AND a.conversation_id = NEW.conversation_id
+        AND a.page_id = v_page_id
+        AND a.enabled = true
+    ) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  INSERT INTO public.ai_brain_live_deliveries (
+    company_id, customer_id, conversation_id, source_interaction_id, channel
+  ) VALUES (
+    NEW.company_id, NEW.customer_id, NEW.conversation_id, NEW.id, v_live_channel
+  )
+  ON CONFLICT (source_interaction_id) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.enqueue_ai_brain_live_delivery() FROM PUBLIC, anon, authenticated, service_role;
+
+-- 3. Seed only the explicitly approved tenant/Page conversations. DO NOTHING
+--    preserves an existing disabled canary row (operator kill switch).
+INSERT INTO public.ai_brain_live_canary_allowlist (
+  company_id, channel, conversation_id, page_id, enabled
+)
+SELECT
+  c.company_id,
+  'MESSENGER',
+  c.id,
+  public.ai_messenger_page_id(c.external_conversation_id, c.metadata),
+  true
+FROM public.conversations c
+WHERE c.company_id = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
+  AND c.channel = 'FACEBOOK'
+  AND public.ai_messenger_page_id(c.external_conversation_id, c.metadata)
+      IN ('1343097708890171', '1026991374010112')
+ON CONFLICT (company_id, channel, conversation_id, page_id) DO NOTHING;
+
+-- 4. Replace the existing Page seeding trigger function with a tenant-scoped
+--    version covering both approved Pages. Do not auto-create or re-enable the
+--    live setting from this trigger.
+CREATE OR REPLACE FUNCTION public.seed_du_hoc_messenger_canary()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_page_id text;
+BEGIN
+  IF NEW.channel IS DISTINCT FROM 'FACEBOOK'
+     OR NEW.company_id IS DISTINCT FROM 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid THEN
+    RETURN NEW;
+  END IF;
+
+  v_page_id := public.ai_messenger_page_id(NEW.external_conversation_id, NEW.metadata);
+  IF v_page_id IS NULL OR v_page_id NOT IN ('1343097708890171', '1026991374010112') THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO public.ai_brain_live_canary_allowlist (
+    company_id, channel, conversation_id, page_id, enabled
+  ) VALUES (
+    NEW.company_id, 'MESSENGER', NEW.id, v_page_id, true
+  )
+  ON CONFLICT (company_id, channel, conversation_id, page_id) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.seed_du_hoc_messenger_canary() IS
+  'Seeds Messenger canary rows only for the approved tenant and Pages 1343097708890171 / 1026991374010112; never re-enables disabled canary or live-setting rows.';
+
+-- 5. Create the tenant live setting only when the approved tenant exists and
+--    has never had a Messenger setting. Existing enabled=false is an explicit
+--    operator decision and is intentionally preserved.
+INSERT INTO public.ai_brain_live_settings (
+  company_id, channel, enabled, min_confidence
+)
+SELECT 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid, 'MESSENGER', true, 0.700
+WHERE EXISTS (
+  SELECT 1 FROM public.companies WHERE id = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
+)
+ON CONFLICT (company_id, channel) DO NOTHING;
+
+COMMIT;
+ THEN
+      RETURN NEW;
+    END IF;
+
+    -- PENDING_SALE is a product exception only for the approved tenant and Pages.
+    -- Other Messenger tenants keep their prior state gate even if stale canary rows exist.
+    IF EXISTS (
+      SELECT 1
+      FROM public.conversations c
+      WHERE c.id = NEW.conversation_id
+        AND c.company_id = NEW.company_id
+        AND c.status = 'PENDING_SALE'
+    ) AND (
+      NEW.company_id <> 'de6a7bf3-b5bc-418d-92d6-f9b241472598'::uuid
+      OR v_page_id NOT IN ('1343097708890171', '1026991374010112')
+    ) THEN
       RETURN NEW;
     END IF;
 
