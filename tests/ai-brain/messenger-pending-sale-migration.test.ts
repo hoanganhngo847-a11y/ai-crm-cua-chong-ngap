@@ -13,27 +13,31 @@ test('Messenger PENDING_SALE migration seeds only approved Pages and preserves t
   const companyEnabled = randomUUID();
   const companyDisabled = randomUUID();
   const companyOther = randomUUID();
-  const customers = [randomUUID(), randomUUID(), randomUUID()];
+  const companyZalo = randomUUID();
+  const customers = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 
   try {
     await db.query(
       `INSERT INTO public.companies (id, name, status)
        VALUES ($1, 'Messenger approved Page A', 'ACTIVE'),
               ($2, 'Messenger approved Page B disabled', 'ACTIVE'),
-              ($3, 'Messenger unrelated Page', 'ACTIVE')`,
-      [companyEnabled, companyDisabled, companyOther],
+              ($3, 'Messenger unrelated Page', 'ACTIVE'),
+              ($4, 'Zalo pending-sale tenant', 'ACTIVE')`,
+      [companyEnabled, companyDisabled, companyOther, companyZalo],
     );
     await db.query(
       `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
        VALUES ($1, $2, 'MSGR-A', 'Messenger A', 'MANUAL', 'LEAD_NEW'),
               ($3, $4, 'MSGR-B', 'Messenger B', 'MANUAL', 'LEAD_NEW'),
-              ($5, $6, 'MSGR-C', 'Messenger C', 'MANUAL', 'LEAD_NEW')`,
-      [customers[0], companyEnabled, customers[1], companyDisabled, customers[2], companyOther],
+              ($5, $6, 'MSGR-C', 'Messenger C', 'MANUAL', 'LEAD_NEW'),
+              ($7, $8, 'ZALO-C', 'Zalo C', 'MANUAL', 'LEAD_NEW')`,
+      [customers[0], companyEnabled, customers[1], companyDisabled, customers[2], companyOther, customers[3], companyZalo],
     );
     await db.query(
       `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
-       VALUES ($1, 'MESSENGER', false, 0.700)`,
-      [companyDisabled],
+       VALUES ($1, 'MESSENGER', false, 0.700),
+              ($2, 'ZALO', true, 0.700)`,
+      [companyDisabled, companyZalo],
     );
 
     const conversations = [
@@ -95,6 +99,37 @@ test('Messenger PENDING_SALE migration seeds only approved Pages and preserves t
       [interactionId],
     );
     assert.equal(deliveries.length, 1, 'Messenger PENDING_SALE should enqueue on approved and enabled Page');
+
+    const zaloConversationId = randomUUID();
+    const { error: zaloConversationError } = await client.from('conversations').insert({
+      id: zaloConversationId,
+      company_id: companyZalo,
+      customer_id: customers[3],
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-pending-sale-fixture',
+      status: 'PENDING_SALE',
+      ai_mode: 'ACTIVE',
+    });
+    assert.ifError(zaloConversationError);
+    const zaloInteractionId = randomUUID();
+    const { error: zaloInteractionError } = await client.from('interactions').insert({
+      id: zaloInteractionId,
+      company_id: companyZalo,
+      customer_id: customers[3],
+      conversation_id: zaloConversationId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tôi cần hỗ trợ qua Zalo',
+      sanitization_status: 'SUCCEEDED',
+    });
+    assert.ifError(zaloInteractionError);
+    const { rows: zaloDeliveries } = await db.query(
+      `SELECT id FROM public.ai_brain_live_deliveries WHERE source_interaction_id = $1`,
+      [zaloInteractionId],
+    );
+    assert.equal(zaloDeliveries.length, 0, 'Zalo PENDING_SALE must remain blocked by the original SLA gate');
   } finally {
     await harness.close();
   }
