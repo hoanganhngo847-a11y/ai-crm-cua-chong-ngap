@@ -33,8 +33,8 @@ export const FROZEN_FOUNDATION_MIGRATIONS: Record<string, string> = {
   '20260916000001_private_call_transcripts.sql': '1a04b0988362e3ad04ddd6fdd775bb1331a7d6ec0065c159bde7574661d075b1',
 };
 
-// The ledger version belongs to the applied funnel migration. Preserve the colliding
-// Messenger SQL outside the executable directory until a new rollout is approved.
+// The ledger version belongs to the applied funnel migration. Preserve the stale colliding
+// Messenger SQL outside the executable directory; the approved rollout is a separate additive migration.
 export const PENDING_MESSENGER_MIGRATION = '20261028130000_remove_messenger_pending_sale_gate_and_enable_pages.sql';
 export const PENDING_MESSENGER_SHA256 = '8cdfd92019a15f4e3ca22a5f1906a40625332db83dd89712a248f19f851a55d1';
 const FUNNEL_MIGRATION = '20261028130000_customer_funnel_six_stages.sql';
@@ -131,7 +131,7 @@ export function verifyFilesystemMigrations(
     return fs.readFileSync(path.join(migrationsDir, filename), 'utf8');
   });
   if (files.some((f) => f.endsWith('_remove_messenger_pending_sale_gate_and_enable_pages.sql'))) {
-    result.errors.push('Messenger activation migration must remain pending product approval, outside active migrations');
+    result.errors.push('Legacy colliding Messenger migration must remain archived outside active migrations');
   }
   try {
     const pending = path.join(migrationsDir, '..', 'pending-migrations', PENDING_MESSENGER_MIGRATION);
