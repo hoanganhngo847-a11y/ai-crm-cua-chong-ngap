@@ -913,7 +913,7 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       [approvedCompanyId],
     );
     assert.equal(approvedRows.length, 2, 'Only the two approved Page conversations are allowlisted');
-    assert.deepEqual(approvedRows.map((row) => row.page_id), [pageDuHoc, pageMain]);
+    assert.deepEqual(approvedRows.map((row) => row.page_id), [pageMain, pageDuHoc]);
     assert.ok(approvedRows.every((row) => row.enabled === true));
 
     const { rows: otherRows } = await db.query<{ id: string }>(
