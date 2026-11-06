@@ -905,7 +905,7 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       assert.ifError(error);
     }
 
-    const { rows: approvedRows } = await db.query(
+    const { rows: approvedRows } = await db.query<{ conversation_id: string; page_id: string; enabled: boolean }>(
       `SELECT conversation_id, page_id, enabled
        FROM public.ai_brain_live_canary_allowlist
        WHERE company_id = $1 AND channel = 'MESSENGER'
@@ -913,10 +913,10 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       [approvedCompanyId],
     );
     assert.equal(approvedRows.length, 2, 'Only the two approved Page conversations are allowlisted');
-    assert.deepEqual(approvedRows.map((row: { page_id: string }) => row.page_id), [pageDuHoc, pageMain]);
-    assert.ok(approvedRows.every((row: { enabled: boolean }) => row.enabled === true));
+    assert.deepEqual(approvedRows.map((row) => row.page_id), [pageDuHoc, pageMain]);
+    assert.ok(approvedRows.every((row) => row.enabled === true));
 
-    const { rows: otherRows } = await db.query(
+    const { rows: otherRows } = await db.query<{ id: string }>(
       `SELECT id FROM public.ai_brain_live_canary_allowlist
        WHERE company_id = $1 AND channel = 'MESSENGER'`,
       [otherCompanyId],
@@ -935,21 +935,21 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
        WHERE id = $1`,
       [approvedOneId],
     );
-    const { rows: disabledCanary } = await db.query(
+    const { rows: disabledCanary } = await db.query<{ enabled: boolean }>(
       `SELECT enabled FROM public.ai_brain_live_canary_allowlist
        WHERE company_id = $1 AND conversation_id = $2 AND page_id = $3`,
       [approvedCompanyId, approvedOneId, pageDuHoc],
     );
     assert.equal(disabledCanary[0]?.enabled, false, 'Trigger replay must not re-enable a disabled canary row');
 
-    const { rows: targetSetting } = await db.query(
+    const { rows: targetSetting } = await db.query<{ enabled: boolean }>(
       `SELECT enabled FROM public.ai_brain_live_settings
        WHERE company_id = $1 AND channel = 'MESSENGER'`,
       [approvedCompanyId],
     );
     assert.equal(targetSetting[0]?.enabled, false, 'Conversation trigger must not re-enable the tenant live kill switch');
 
-    const { rows: otherSetting } = await db.query(
+    const { rows: otherSetting } = await db.query<{ id: string }>(
       `SELECT id FROM public.ai_brain_live_settings
        WHERE company_id = $1 AND channel = 'MESSENGER'`,
       [otherCompanyId],
