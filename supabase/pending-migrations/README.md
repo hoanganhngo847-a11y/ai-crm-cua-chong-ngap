@@ -12,6 +12,7 @@ On 2026-11-06, the product owner confirmed the Messenger policy: `PENDING_SALE` 
 
 The replacement is the additive migration `supabase/migrations/20261106004117_scoped_messenger_pending_sale_policy.sql` in the integrated Draft PR. It:
 - Updates only the current Messenger enqueue trigger and atomic dispatch-start fence to allow `PENDING_SALE` within the approved tenant/Page scope; the current lock, confidence, source, tenant, Page, canary and once-only checks remain.
+- Bases the enqueue replacement on the latest active definition from `20261029154410_zcajs_history_ingest.sql`, preserving the Zalo group-conversation block and `app.zcajs_history_ingest` suppression guard.
 - Seeds existing canary rows only for the approved tenant and two Pages.
 - Removes either historical canary-trigger name and installs one tenant/Page-scoped future-conversation trigger, preventing the stale broad trigger from re-enabling other tenants or settings.
 - Leaves existing non-target tenant settings and canary rows untouched; it does not grant those tenants the `PENDING_SALE` exception.
