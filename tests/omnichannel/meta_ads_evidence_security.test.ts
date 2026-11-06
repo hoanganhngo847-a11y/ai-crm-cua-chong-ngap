@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 import { processLeadAdsChange } from '../../features/omnichannel/facebook/lead-ads';
+import { encryptToken } from '../../features/omnichannel/facebook/token-vault';
 
 const company = 'd1111111-1111-4111-8111-111111111111';
 const page = '1026991374010112';
@@ -61,6 +62,56 @@ test('intake and retry fail closed on conflicting, missing, late or asserted att
     } finally { await supabase.close(); }
 });
 
+test('a legacy checkpoint without a creative snapshot never refetches Graph or manufactures late evidence during retry', async () => {
+    const saved = { ...process.env };
+    const original = globalThis.fetch;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'local-checkpoint-test-key';
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'd'.repeat(64);
+    const encrypted = encryptToken('synthetic-legacy-checkpoint-token');
+    let graphCalls = 0, tokenReads = 0;
+    const contexts: unknown[] = [];
+    globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input));
+        const args = JSON.parse(String(init?.body || '{}'));
+        if (url.hostname === 'graph.facebook.com') {
+            graphCalls++;
+            return Response.json({ id: ad, creative: { object_story_spec: { page_id: page } } });
+        }
+        assert.equal(url.hostname, '127.0.0.1');
+        if (url.pathname.endsWith('/meta_ads')) return Response.json({ ad_account_id: 'act_legacy' });
+        if (url.pathname.endsWith('/get_meta_ad_account_token')) {
+            tokenReads++;
+            return Response.json([{ encrypted_access_token: encrypted, token_expires_at: null }]);
+        }
+        if (url.pathname.endsWith('/claim_meta_leadgen_event')) return Response.json({
+            status: 'CLAIMED', claim_token: 'test-claim',
+            ingest_args: { lead_data: { id: '99002', ad_id: ad, field_data: [] }, payload: { ad_id: ad } },
+        });
+        if (url.pathname.endsWith('/ingest_meta_leadgen_event')) return Response.json({ customer_id: company, interaction_id: company });
+        if (url.pathname.endsWith('/record_lead_attribution_touchpoint')) { contexts.push(args.p_ads_context_data); return Response.json(company); }
+        if (url.pathname.endsWith('/mark_lead_attribution_phone_match') || url.pathname.endsWith('/finalize_meta_leadgen_event')) return Response.json(true);
+        throw new Error('UNEXPECTED_REQUEST');
+    };
+    try {
+        for (let attempt = 0; attempt < 2; attempt++) await processLeadAdsChange({
+            page, company, tokenEnv: 'META_LEGACY_TEST_TOKEN', leadAdsEnabled: true,
+        }, {
+            kind: 'LEADGEN', adgroupId: null, createdTime: 1793750400, page, leadgenId: '99002',
+            adId: ad, formId: '1', time: '2026-11-04T00:00:00Z', raw: {},
+        });
+        assert.equal(graphCalls, 0, 'recovery uses the immutable checkpoint even when older intake omitted creative evidence');
+        assert.equal(tokenReads, 0, 'neither Page nor Ad Account token is needed to replay persisted input');
+        assert.deepEqual(contexts, [null, null], 'retry cannot introduce signed or late creative evidence; scheduled backfill is separate');
+    } finally {
+        globalThis.fetch = original;
+        for (const key of ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'META_TOKEN_ENCRYPTION_KEY']) {
+            if (saved[key] === undefined) delete process.env[key];
+            else process.env[key] = saved[key];
+        }
+    }
+});
+
 test('a retry cannot manufacture signed proof absent from the immutable intake checkpoint', async () => {
     const saved = { ...process.env };
     const original = globalThis.fetch;
@@ -72,6 +123,10 @@ test('a retry cannot manufacture signed proof absent from the immutable intake c
     globalThis.fetch = (async (input, init) => {
         const url = new URL(String(input));
         const body = JSON.parse(String(init?.body || '{}'));
+        if (url.pathname.endsWith('/get_meta_ad_account_token')) {
+            // Exercise the documented legacy tokenEnv fallback when the vault RPC is absent.
+            return Response.json({ code: 'PGRST202', message: 'get_meta_ad_account_token is not installed in this test deployment' }, { status: 404 });
+        }
         if (url.pathname.endsWith('/claim_meta_leadgen_event')) return Response.json({ status: 'CLAIMED', claim_token: 'test-claim', ingest_args: { lead_data: { id: '99001', ad_id: ad, field_data: [] }, creative_snapshot: snapshot, payload: { ad_id: ad } } });
         if (url.pathname.endsWith('/ingest_meta_leadgen_event')) return Response.json({ customer_id: company, interaction_id: company });
         if (url.pathname.endsWith('/record_lead_attribution_touchpoint')) { context = body.p_ads_context_data; return Response.json(company); }

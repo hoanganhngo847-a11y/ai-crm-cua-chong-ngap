@@ -14,18 +14,45 @@ process.env.META_PAGE_BOTCAKE_TOKEN = 'test-token';
 
 type FetchHandler = (url: URL) => Response;
 
-function withFetch(handler: FetchHandler, run: (urls: URL[]) => Promise<void>) {
+function withFetch(
+    handler: FetchHandler,
+    run: (urls: URL[]) => Promise<void>,
+    vaultResponse: () => Response = () => jsonResponse([]),
+) {
     const originalFetch = globalThis.fetch;
+    const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    // Exercise the same vault path locally and in CI; missing process env must
+    // never make this fixture silently bypass the credential lookup.
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'synthetic-profile-test-key';
     const urls: URL[] = [];
+    const vaultRequests: unknown[] = [];
 
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input instanceof URL ? input : new URL(String(input));
+        if (url.hostname === '127.0.0.1') {
+            assert.equal(url.pathname, '/rest/v1/rpc/get_meta_ad_account_token');
+            assert.equal(init?.method, 'POST');
+            vaultRequests.push(JSON.parse(String(init?.body)));
+            return vaultResponse();
+        }
+        assert.equal(url.hostname, 'graph.facebook.com');
         urls.push(url);
         return handler(url);
     }) as typeof fetch;
 
-    return run(urls).finally(() => {
+    return run(urls).then(() => {
+        assert.deepEqual(vaultRequests, [{
+            p_company_id: binding.company,
+            p_ad_account_id: `__page__:${binding.page}`,
+        }], 'profile lookup must resolve only this tenant/Page credential');
+    }).finally(() => {
         globalThis.fetch = originalFetch;
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl;
+        if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+        else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
     });
 }
 
@@ -126,5 +153,16 @@ test('rejects profile names that contain a phone number', async () => {
 
             assert.equal(name, null);
         },
+    );
+});
+
+test('profile lookup fails closed before Graph when the Page vault denies access', async () => {
+    await withFetch(
+        () => { throw new Error('Graph is forbidden after a vault permission error'); },
+        async urls => {
+            assert.equal(await lookupFacebookDisplayName(binding, '55555555555555555'), null);
+            assert.equal(urls.length, 0, 'a legacy token cannot bypass an unexpected vault failure');
+        },
+        () => jsonResponse({ code: '42501', message: 'permission denied' }, 503),
     );
 });

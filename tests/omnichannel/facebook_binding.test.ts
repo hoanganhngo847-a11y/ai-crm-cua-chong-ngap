@@ -61,7 +61,7 @@ test('META_ADS_PAGE_BINDINGS adds the four approved Pages without replacing Mess
 test('duplicate Page bindings merge only when they retain the same tenant', () => {
     withBindings(
         JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN' }]),
-        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN_NEW', name: 'Ba Lan' }]),
+        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_NEW_TOKEN', name: 'Ba Lan' }]),
         () => {
             const pages = pageBindings();
             assert.equal(pages.length, 1);
@@ -77,6 +77,14 @@ test('a Page cannot be rebound to a different tenant through the additive config
     withBindings(
         JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN' }]),
         JSON.stringify([{ page: POLAND, company: OTHER_COMPANY, tokenEnv: 'META_PAGE_POLAND_OTHER_TOKEN' }]),
+        () => assert.throws(() => pageBindings()),
+    );
+});
+
+test('malformed legacy token environment names fail closed even for a same-tenant Page', () => {
+    withBindings(
+        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN' }]),
+        JSON.stringify([{ page: POLAND, company: COMPANY, tokenEnv: 'META_PAGE_POLAND_TOKEN_NEW' }]),
         () => assert.throws(() => pageBindings()),
     );
 });

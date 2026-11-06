@@ -53,11 +53,15 @@ function withFetch(
 
 function fakeClient(
     handler?: (name: string, args: Record<string, unknown>) => RpcResult,
+    tokenResult: RpcResult = { data: [], error: null },
 ): { client: SupabaseClient; calls: RpcCall[]; ingestCalls: () => RpcCall[] } {
     const calls: RpcCall[] = [];
     const client = {
         rpc: async (name: string, args: Record<string, unknown>) => {
             calls.push({ name, args });
+            // Credential reads are independent of the ingestion fault injected
+            // below. An empty vault result exercises the real legacy fallback.
+            if (name === 'get_meta_ad_account_token') return tokenResult;
             if (handler) {
                 return handler(name, args);
             }
@@ -395,7 +399,7 @@ test('handles folder pagination and stops client-side at the lookback boundary',
             assert.equal(summary.pages[0].conversations, 1);
             assert.equal(summary.pages[0].messages_ingested, 1);
             assert.equal(calls.filter((c) => c.name === 'han_ingest' || c.name === 'han_ingest_outbound').length, 1);
-            assert.equal(calls[0].args.p_key, `${PAGE_A}:m_recent`);
+            assert.equal(calls.find(c => c.name === 'han_ingest')?.args.p_key, `${PAGE_A}:m_recent`);
 
             // Verified t_old_boundary messages were NEVER queried
             assert.equal(
@@ -602,7 +606,7 @@ test('handles attachment placeholder and empty message gracefully', async () => 
     );
 });
 
-test('dry run mode tallies messages without calling database RPCs', async () => {
+test('dry run mode tallies messages with only a read-only Page-token lookup', async () => {
     const { client, calls } = fakeClient();
 
     await withFetch(
@@ -652,8 +656,11 @@ test('dry run mode tallies messages without calling database RPCs', async () => 
             assert.equal(summary.pages[0].messages_ingested, 2);
             assert.equal(summary.pages[0].inbound_ingested, 1);
             assert.equal(summary.pages[0].outbound_ingested, 1);
-            // ZERO database calls made in dry-run mode
-            assert.equal(calls.length, 0);
+            // Credential reads are required for Graph; no ingestion, checkpoint
+            // mutation or other domain RPC is allowed during a dry run.
+            assert.deepEqual(calls.map(call => call.name), ['get_meta_ad_account_token']);
+            assert.equal(calls[0].args.p_company_id, COMPANY);
+            assert.equal(calls[0].args.p_ad_account_id, `__page__:${PAGE_A}`);
         },
     );
 });
@@ -701,12 +708,14 @@ test('redacts a phone number from the public message and stores it privately', a
                 },
             );
 
-            assert.equal(calls[0].args.p_phone, '+84912345678');
+            const ingested = calls.filter(call => call.name === 'han_ingest');
+            assert.equal(ingested.length, 1);
+            assert.equal(ingested[0].args.p_phone, '+84912345678');
             assert.doesNotMatch(
-                String(calls[0].args.p_safe),
+                String(ingested[0].args.p_safe),
                 /0912345678/,
             );
-            assert.match(String(calls[0].args.p_safe), /số điện thoại đã ẩn/);
+            assert.match(String(ingested[0].args.p_safe), /số điện thoại đã ẩn/);
         },
     );
 });
@@ -736,13 +745,30 @@ test('returns a sanitized Graph failure without leaking the Page token', async (
                 'folder_failed:other:graph_status=401 code=190 subcode=463',
                 'folder_failed:pending:graph_status=401 code=190 subcode=463',
             ]);
-            assert.equal(calls.length, 0);
+            assert.deepEqual(calls.map(call => call.name), ['get_meta_ad_account_token']);
             assert.doesNotMatch(
                 JSON.stringify(summary),
                 /token-page-a|bad token/,
             );
         },
     );
+});
+
+test('a vault permission error stops Messenger polling even when a legacy token is configured', async () => {
+    const { client, calls, ingestCalls } = fakeClient(undefined, {
+        data: null, error: { code: '42501', message: 'permission denied' },
+    });
+    await withFetch(() => { throw new Error('Graph must not be contacted after credential failure'); }, async urls => {
+        const summary = await syncFacebookPages(
+            { lookbackMinutes: 60, pages: [PAGE_A], folders: ['inbox'] },
+            { client, now: new Date('2026-10-27T09:00:00Z') },
+        );
+        assert.equal(summary.ok, false);
+        assert.deepEqual(summary.pages[0].errors, ['page_token_missing']);
+        assert.deepEqual(calls.map(call => call.name), ['get_meta_ad_account_token']);
+        assert.equal(urls.length, 0);
+        assert.equal(ingestCalls().length, 0);
+    });
 });
 
 test('recovers from polling downtime exceeding 5 minutes via checkpoint expansion', async () => {
