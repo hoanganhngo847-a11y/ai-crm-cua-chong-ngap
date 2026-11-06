@@ -166,7 +166,7 @@ BEGIN
   END IF;
 
   -- 6. Validate conversation state:
-  -- PENDING_SALE is ALLOWED for Messenger (AI replies immediately without waiting for sale).
+  -- PENDING_SALE is allowed only for the approved Messenger tenant and Pages.
   -- CLOSED, assigned_to (human takeover), or ai_mode = 'PAUSED' still block.
   SELECT c.id, c.status, c.assigned_to, c.ai_mode, c.channel, c.external_conversation_id, c.metadata
   INTO v_conv
@@ -288,7 +288,7 @@ BEGIN
 
   -- Guard: Conversation state
   -- For ZALO: CLOSED, PENDING_SALE, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
-  -- For MESSENGER: PENDING_SALE is permitted; CLOSED, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
+  -- For MESSENGER: PENDING_SALE is permitted only in the approved tenant/Page scope; CLOSED, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
   IF EXISTS (
     SELECT 1
     FROM public.conversations c
