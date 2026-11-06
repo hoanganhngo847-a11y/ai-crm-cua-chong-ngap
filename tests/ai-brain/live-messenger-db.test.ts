@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 
 const COMPANY_ID = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
@@ -855,6 +857,96 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
   }
 });
 
+
+
+test('AI Brain Messenger migration: seeds only a missing approved setting and preserves explicit off switches', async () => {
+  const migrationPrefix = '20261106004117';
+  const migrationPath = path.resolve(
+    __dirname,
+    '../../supabase/migrations/20261106004117_scoped_messenger_pending_sale_policy.sql',
+  );
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+  const harness = await createPgliteSupabase({ skipMigrations: [migrationPrefix] });
+  const { db, client: service } = harness;
+  const approvedCompanyId = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
+  const otherCompanyId = '00000000-0000-4000-8000-000000000199';
+  const customerId = randomUUID();
+  const conversationId = randomUUID();
+
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Approved Messenger Migration Fixture', 'ACTIVE'),
+              ($2, 'Non-approved Messenger Migration Fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [approvedCompanyId, otherCompanyId],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'MIGRATION-MSGR-1', 'Migration Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [customerId, approvedCompanyId],
+    );
+
+    // First application creates the setting only for the approved tenant.
+    await db.exec(migrationSql);
+    const { rows: createdSetting } = await db.query<{ enabled: boolean; min_confidence: number }>(
+      `SELECT enabled, min_confidence FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    assert.equal(createdSetting.length, 1);
+    assert.equal(createdSetting[0].enabled, true);
+    assert.equal(Number(createdSetting[0].min_confidence), 0.700);
+
+    const { rows: otherSettings } = await db.query<{ company_id: string }>(
+      `SELECT company_id FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [otherCompanyId],
+    );
+    assert.equal(otherSettings.length, 0, 'Migration must not create settings for other tenants');
+
+    // The new trigger creates the approved canary row. Simulate an operator
+    // disabling both controls, then replay the migration to prove DO NOTHING
+    // preserves the explicit off state.
+    const { error: conversationError } = await service.from('conversations').insert({
+      id: conversationId,
+      company_id: approvedCompanyId,
+      customer_id: customerId,
+      channel: 'FACEBOOK',
+      external_conversation_id: '1343097708890171:87654321098765107',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+    });
+    assert.ifError(conversationError);
+    await db.query(
+      `UPDATE public.ai_brain_live_canary_allowlist SET enabled = false
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = '1343097708890171'`,
+      [approvedCompanyId, conversationId],
+    );
+    await db.query(
+      `UPDATE public.ai_brain_live_settings SET enabled = false
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+
+    await db.exec(migrationSql);
+    const { rows: preservedSetting } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_settings
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    const { rows: preservedCanary } = await db.query<{ enabled: boolean }>(
+      `SELECT enabled FROM public.ai_brain_live_canary_allowlist
+       WHERE company_id = $1 AND conversation_id = $2 AND page_id = '1343097708890171'`,
+      [approvedCompanyId, conversationId],
+    );
+    assert.equal(preservedSetting[0]?.enabled, false, 'Migration replay must not re-enable the tenant live kill switch');
+    assert.equal(preservedCanary[0]?.enabled, false, 'Migration replay must not re-enable a disabled canary row');
+  } finally {
+    await harness.close();
+  }
+});
 
 test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and preserves operator-off state', async () => {
   const harness = await createPgliteSupabase();
