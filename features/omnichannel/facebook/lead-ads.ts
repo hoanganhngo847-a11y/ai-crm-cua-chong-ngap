@@ -259,8 +259,6 @@ export async function processLeadAdsChange(
     customFetch?: typeof fetch,
 ): Promise<IngestedLeadResult> {
     if (!config.leadAdsEnabled) throw new ChannelError('PAGE_NOT_ALLOWED', 403);
-    const token = await getMetaPageToken(config.company, config.page, config.tokenEnv);
-
     const claim = await rpc('claim_meta_leadgen_event', {
         p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
         p_form_id: change.formId || null, p_ad_id: change.adId || null, p_occurred: change.time,
@@ -276,7 +274,14 @@ export async function processLeadAdsChange(
         // Reuse the immutable lead response AND creative snapshot after partial
         // intake. A retry must never replace the ad version first observed for this
         // submission with a newer version edited in Meta in the meantime.
-        const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(change.leadgenId, token, customFetch);
+        // Only the claim owner needing a fresh lead reads the Page token. Completed
+        // events and durable retries remain independent of token expiry/outages;
+        // a failed token read is finalized FAILED under this same fenced lease.
+        const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(
+            change.leadgenId,
+            await getMetaPageToken(config.company, config.page, config.tokenEnv),
+            customFetch,
+        );
         const fields = extractLeadFields(leadData.field_data || []);
         const webhookAdId = claim.ingest_args ? claim.ingest_args.payload?.ad_id || null : change.adId || null;
         const leadDetailsAdId = leadData.ad_id || null;
@@ -300,14 +305,15 @@ export async function processLeadAdsChange(
         const persistedCreativeSnapshot = isMetaAdCreativeSnapshot(claim.ingest_args?.creative_snapshot)
             ? claim.ingest_args.creative_snapshot
             : null;
+        // A legacy checkpoint may predate creative snapshots. Replay it as stored;
+        // scheduled attribution backfill can enrich it later without coupling a
+        // webhook retry to another Graph read or changing its intake evidence.
         const creativeSnapshot = adId
-            ? persistedCreativeSnapshot || await fetchMetaAdCreativeSnapshot(config.company, adId, {
+            ? persistedCreativeSnapshot || (claim.ingest_args ? null : await fetchMetaAdCreativeSnapshot(config.company, adId, {
                 customFetch,
-                // Existing durable intake without a snapshot is a late capture,
-                // not evidence of the creative served at the original lead time.
-                captureTiming: claim.ingest_args ? 'BACKFILL' : 'AT_LEAD_INTAKE',
+                captureTiming: 'AT_LEAD_INTAKE',
                 timeoutMs: 5000,
-            })
+            }))
             : null;
         const formId = leadData.form_id || change.formId || null;
         // Leadgen retrieval may omit optional campaign/ad-set fields even when

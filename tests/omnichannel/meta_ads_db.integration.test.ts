@@ -54,9 +54,11 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
     let graphCalls = 0;
     let creativeCalls = 0;
     let creativeText = 'Nội dung tại thời điểm tiếp nhận';
-    const previousTokenKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    const savedEnv = { ...process.env };
     process.env.META_TOKEN_ENCRYPTION_KEY = 'b'.repeat(64);
     const encryptedCreativeToken = encryptToken('EAA_creative_snapshot_test_token');
+    const encryptedPageToken = encryptToken('dummy-page-access-token');
+    let pageTokenReads = 0, pageTokenFault = false;
     let malformedClaim = false, finalizeRpcFault = false;
     let graphGate: Promise<void> | null = null;
     let releaseGraph: (() => void) | undefined;
@@ -65,6 +67,9 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         const stubs = PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '');
         const migrations = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
         sql(stubs + migrations.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        const version = Number(sql('SHOW server_version_num;'));
+        assert.ok(version >= 170000 && version < 180000, 'native integration requires PostgreSQL 17');
+        assert.equal(sql('SHOW transaction_isolation;'), 'read committed');
         assert.equal(sql("SELECT to_regclass('public.meta_insights_daily') IS NULL AND to_regclass('public.meta_ad_sets') IS NULL AND to_regprocedure('public.get_meta_ads_performance_report(uuid,timestamptz,timestamptz,text,text)') IS NULL;"), 't', 'the released schema contains no advertising reporting API or reporting-only tables');
         assert.equal(sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('meta_campaigns','meta_ads') AND column_name IN ('daily_budget','lifetime_budget','objective','creative_id','creative_title','creative_body');"), '0');
         sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Meta native test','ACTIVE'),(${q(other)},'Other tenant','ACTIVE');
@@ -76,7 +81,10 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
              INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status) VALUES (${q(company)},'act_snapshot','campaign_snapshot','adset_snapshot','ad_snapshot_1','Verified snapshot ad','ACTIVE');`);
 
         // True overlapping transactions on independent PostgreSQL connections.
-        const call = `SELECT public.claim_meta_leadgen_event(${q(company)},${q(page)},'10000');`;
+        sql(`SET ROLE service_role;
+             SELECT public.store_meta_ad_account_token(${q(company)},${q('__page__:' + page)},${q(encryptedPageToken)});
+             SELECT public.store_meta_ad_account_token(${q(company)},'act_snapshot',${q(encryptedCreativeToken)});`);
+        const call = `SET ROLE service_role; SELECT public.claim_meta_leadgen_event(${q(company)},${q(page)},'10000');`;
         const claims = await Promise.all(Array.from({ length: 8 }, () => query(call).then(JSON.parse)));
         assert.equal(claims.filter(c => c.status === 'CLAIMED').length, 1);
         assert.equal(claims.filter(c => c.status === 'BUSY').length, 7);
@@ -180,12 +188,14 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         process.env.META_APP_SECRET = appSecret;
         process.env.META_PAGE_TEST_TOKEN = 'dummy-page-access-token';
         process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', leadAdsEnabled: true }]);
+        delete process.env.META_ADS_PAGE_BINDINGS;
         sql(`INSERT INTO public.ai_brain_shadow_settings(company_id,channel,enabled) VALUES(${q(company)},'MESSENGER',true);`);
         process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
         process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy-service-key';
         globalThis.fetch = async (input, init) => {
             const url = new URL(String(input));
             if (url.hostname === 'graph.facebook.com') {
+                assert.equal(init?.method, 'GET', 'integration must never send messages or mutate Meta assets');
                 graphCalls++;
                 if (graphGate) await graphGate;
                 const leadId = url.pathname.split('/').at(-1)!;
@@ -237,16 +247,28 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
             }
             if (url.pathname.endsWith('/meta_ads') && (init?.method || 'GET') === 'GET') {
                 assert.equal(url.searchParams.get('company_id'), `eq.${company}`);
-                assert.equal(url.searchParams.get('meta_ad_id'), 'eq.ad_snapshot_1');
-                return Response.json({ ad_account_id: 'act_snapshot' });
+                const adId = url.searchParams.get('meta_ad_id');
+                assert.ok(adId);
+                assert.ok(adId.startsWith('eq.'));
+                return Response.json(JSON.parse(await query(`SET ROLE service_role;
+                    SELECT coalesce((SELECT to_json(a) FROM (SELECT ad_account_id FROM public.meta_ads
+                      WHERE company_id=${q(company)} AND meta_ad_id=${q(adId.slice(3))}) a),'null'::json);`)));
             }
             if (fn === 'get_meta_ad_account_token') {
                 assert.equal(args.p_company_id, company);
-                assert.equal(args.p_ad_account_id, 'act_snapshot');
-                return Response.json([{ encrypted_access_token: encryptedCreativeToken, token_expires_at: null }]);
+                assert.ok([`__page__:${page}`, 'act_snapshot'].includes(args.p_ad_account_id));
+                if (args.p_ad_account_id === `__page__:${page}`) {
+                    pageTokenReads++;
+                    if (pageTokenFault) return Response.json({ code: '42501', message: 'vault unavailable' }, { status: 503 });
+                }
+                // Execute the real table-valued vault RPC, including its service-role
+                // grant and tenant predicate, instead of substituting an Ad Account token.
+                return Response.json(JSON.parse(await query(`SET ROLE service_role;
+                    SELECT coalesce(json_agg(t),'[]'::json) FROM public.get_meta_ad_account_token(
+                      ${q(args.p_company_id)},${q(args.p_ad_account_id)}) t;`)));
             }
             if (fn === 'claim_meta_leadgen_event' && malformedClaim) return Response.json([]);
-            if (fn === 'finalize_meta_leadgen_event' && args.p_status === 'PROCESSED' && finalizeRpcFault) return Response.json({ message: 'offline' }, { status: 500 });
+            if (fn === 'finalize_meta_leadgen_event' && finalizeRpcFault) return Response.json({ message: 'offline' }, { status: 500 });
             if (fn === 'claim_meta_leadgen_event' && claimFault) return Response.json({ message: 'fault' }, { status: 500 });
             if (fn === 'ingest_meta_leadgen_event' && intakeFault) return Response.json({ message: 'IDEMPOTENCY_CONFLICT' }, { status: 409 });
             if (fn === 'record_lead_attribution_touchpoint' && attributionFault) return Response.json({ message: 'fault' }, { status: 500 });
@@ -263,10 +285,12 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         claimFault = true;
         assert.equal((await webhook('20000')).status, 503);
         assert.equal(graphCalls, 0, 'claim RPC error must prevent processing');
+        assert.equal(pageTokenReads, 0, 'claim RPC error must prevent unnecessary token reads');
         claimFault = false;
         malformedClaim = true;
         assert.equal((await webhook('20000')).status, 503);
         assert.equal(graphCalls, 0, 'unknown claim result must prevent processing');
+        assert.equal(pageTokenReads, 0, 'unknown claim result must prevent unnecessary token reads');
         malformedClaim = false;
         graphGate = new Promise<void>(resolve => { releaseGraph = resolve; });
         const timeout = setTimeout(() => releaseGraph?.(), 10_000);
@@ -274,7 +298,14 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         clearTimeout(timeout);
         graphGate = null;
         assert.deepEqual(responses.map(r => r.status).sort(), [200,503]);
+        assert.equal(graphCalls, 1, 'only the claim owner may read the lead from Graph');
+        assert.equal(pageTokenReads, 1, 'the BUSY request must not read the Page token');
+        const readsAfterProcessing = pageTokenReads;
+        pageTokenFault = true;
         assert.equal((await webhook('20001')).status, 200);
+        assert.equal(pageTokenReads, readsAfterProcessing, 'processed retries must not depend on a Page token');
+        assert.equal(graphCalls, 1, 'processed retries must not refetch the lead');
+        pageTokenFault = false;
         assert.equal(sql(`SELECT count(*) FROM public.ai_brain_live_canary_allowlist WHERE company_id=${q(company)};`), '0', 'Lead IDs must never become Messenger recipients');
         assert.equal(sql(`SELECT count(*) FROM public.response_sla_windows WHERE company_id=${q(company)};`), '0', 'Lead Ads do not open a Messenger reply SLA');
         for(const table of ['public.conversations','public.identities','public.ai_brain_shadow_runs','public.ai_brain_live_deliveries','public.ai_brain_live_settings','private.han_outbox','public.care_deliveries']) {
@@ -287,9 +318,13 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal((await webhook('20002')).status, 503);
         assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20002';`), 'FAILED');
         const beforeRetry = graphCalls;
+        const tokenReadsBeforeRetry = pageTokenReads;
         attributionFault = false;
+        pageTokenFault = true;
         assert.equal((await webhook('20002')).status, 200);
         assert.equal(graphCalls, beforeRetry, 'retry must use persisted input, without refetching changed Meta details');
+        assert.equal(pageTokenReads, tokenReadsBeforeRetry, 'checkpoint recovery must not read an unnecessary Page token');
+        pageTokenFault = false;
         assert.equal(sql(`SELECT count(*) FROM public.interactions WHERE company_id=${q(company)} AND external_ref=${q(page+':leadgen:20002')};`), '1');
 
         finalizeFault = true;
@@ -301,8 +336,18 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
 
         finalizeRpcFault = true;
         assert.equal((await webhook('20005')).status, 503, 'finalization RPC outage must never acknowledge success');
+        assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20005';`), 'PROCESSING');
+        const graphBeforeLeaseRecovery = graphCalls;
         finalizeRpcFault = false;
+        assert.equal((await webhook('20005')).status, 503, 'an unexpired lease still fences concurrent retries after a request dies');
+        sql(`UPDATE private.meta_leadgen_events SET lease_until=clock_timestamp()-interval '1 second'
+             WHERE company_id=${q(company)} AND leadgen_id='20005';`);
+        pageTokenFault = true;
         assert.equal((await webhook('20005')).status, 200);
+        assert.equal(graphCalls, graphBeforeLeaseRecovery, 'expired lease recovery reuses durable lead input');
+        assert.equal(sql(`SELECT status||'|'||(claim_token IS NULL)::text||'|'||(lease_until IS NULL)::text
+             FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20005';`), 'PROCESSED|true|true');
+        pageTokenFault = false;
 
         // Creative evidence is checkpointed with the durable intake. A retry after
         // the ad is edited must reuse the first snapshot, not fetch the new version.
@@ -337,6 +382,13 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.ok(persistedCreative.touchpoint.capturedAt, 'snapshot capture time is persisted');
         assert.equal(persistedCreative.adset_id, 'adset_snapshot', 'Ad Set ID is resolved from the synced Ad object');
 
+        pageTokenFault = true;
+        const graphBeforeTokenFailure = graphCalls;
+        assert.equal((await webhook('20004')).status, 503, 'fresh intake fails closed when Page credentials cannot be read');
+        assert.equal(graphCalls, graphBeforeTokenFailure, 'token failure cannot reach Graph');
+        assert.equal(sql(`SELECT status||'|'||(claim_token IS NULL)::text||'|'||(lease_until IS NULL)::text
+             FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20004';`), 'FAILED|true|true', 'token failure must release the owned lease for retry');
+        pageTokenFault = false;
         intakeFault = true;
         assert.equal((await webhook('20004')).status, 503, 'idempotency conflict is never successful finalization');
         assert.equal(sql(`SELECT status FROM private.meta_leadgen_events WHERE company_id=${q(company)} AND leadgen_id='20004';`), 'FAILED');
@@ -457,8 +509,11 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.equal(phoneSnapshots.attribution_status, 'ATTRIBUTED');
     } finally {
         globalThis.fetch = original;
-        if (previousTokenKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
-        else process.env.META_TOKEN_ENCRYPTION_KEY = previousTokenKey;
+        for (const key of ['META_TOKEN_ENCRYPTION_KEY', 'META_APP_SECRET', 'META_PAGE_TEST_TOKEN',
+            'META_PAGE_BINDINGS', 'META_ADS_PAGE_BINDINGS', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
+            if (savedEnv[key] === undefined) delete process.env[key];
+            else process.env[key] = savedEnv[key];
+        }
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
 });
@@ -546,10 +601,98 @@ test('token migration preserves ciphertext, expiry and linked rows; conflicts or
             assert.equal(sql(`SELECT has_table_privilege(${q(role)},'private.meta_ad_account_tokens','SELECT');`), 'f');
             assert.equal(sql(`SELECT has_function_privilege(${q(role)},'public.get_meta_ad_account_token(uuid,text)','EXECUTE');`), 'f');
         }
+        // Upgrade an existing populated schema through every remaining migration;
+        // ciphertext, expiry and account/Page linkage must survive unchanged.
+        const vaultBeforeUpgrade = vault(), accountsBeforeUpgrade = accounts();
+        const remaining = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql') && f > '20261030100000_meta_ads_hardening.sql').sort();
+        sql(remaining.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        assert.equal(vault(), vaultBeforeUpgrade);
+        assert.equal(accounts(), accountsBeforeUpgrade);
+        assert.equal(sql('SELECT jsonb_agg(to_jsonb(c)) FROM public.customers c;'), crm);
     } finally {
         if (oldKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
         else process.env.META_TOKEN_ENCRYPTION_KEY = oldKey;
         sql(`DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
+    }
+});
+
+test('PostgreSQL 17 dump/restore preserves Meta tokens, Page/account links, event checkpoints, attribution and security metadata', () => {
+    const restored = `${db}_restored`;
+    const oldKey = process.env.META_TOKEN_ENCRYPTION_KEY;
+    process.env.META_TOKEN_ENCRYPTION_KEY = 'c'.repeat(64);
+    sql(`CREATE DATABASE ${db}; CREATE DATABASE ${restored};`, 'postgres');
+    try {
+        const version = Number(sql('SHOW server_version_num;'));
+        assert.ok(version >= 170000 && version < 180000);
+        const files = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
+        sql(PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '') + files.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        const encrypted = encryptToken('synthetic-page-backup-token');
+        const expiry = '2027-01-01T01:02:03.456Z';
+        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Backup fixture','ACTIVE');
+            INSERT INTO public.meta_ad_accounts(company_id,ad_account_id,name) VALUES (${q(company)},'act_backup','Backup account');
+            INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status)
+              VALUES (${q(company)},'act_backup','backup_campaign','Backup campaign','ACTIVE');
+            INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_id,name,status)
+              VALUES (${q(company)},'act_backup','backup_campaign','backup_ad','Backup Ad','ACTIVE');
+            SET ROLE service_role;
+            SELECT public.store_meta_ad_account_token(${q(company)},${q('__page__:' + page)},${q(encrypted)},${q(expiry)});
+            SELECT public.store_meta_ad_account_token(${q(company)},'act_backup',${q(encrypted)},${q(expiry)});`);
+        const claim = JSON.parse(sql(`SET ROLE service_role; SELECT public.claim_meta_leadgen_event(${q(company)},${q(page)},'40001');`));
+        const input = { name: 'Backup lead', phone: null, content: 'Synthetic form', lead_data: { id: '40001', field_data: [] }, payload: { ad_id: 'backup_ad' } };
+        const intake = JSON.parse(sql(`SET ROLE service_role; SELECT public.ingest_meta_leadgen_event(${q(company)},'40001',${q(claim.claim_token)},${q(input)}::jsonb);`));
+        const evidence = { leadgen_event_binding: { source: 'SIGNED_META_WEBHOOK', leadgenId: '40001', pageId: page, adId: 'backup_ad' } };
+        sql(`SET ROLE service_role; SELECT public.record_lead_attribution_touchpoint(
+            p_company=>${q(company)},p_customer=>${q(intake.customer_id)},p_interaction=>${q(intake.interaction_id)},
+            p_page_id=>${q(page)},p_meta_leadgen_id=>'40001',p_meta_ad_id=>'backup_ad',p_ads_context_data=>${q(evidence)}::jsonb);`);
+        assert.equal(sql(`SET ROLE service_role; SELECT public.finalize_meta_leadgen_event(${q(company)},'40001',${q(claim.claim_token)},'PROCESSED');`), 't');
+        const tables = ['meta_ad_accounts', 'meta_campaigns', 'meta_ads', 'meta_lead_forms', 'lead_attribution_touchpoints', 'meta_ad_account_tokens', 'meta_leadgen_events', 'customers'];
+        const tableFilter = tables.map(q).join(',');
+        const security = `SELECT jsonb_build_object(
+            'tables',(SELECT jsonb_agg(jsonb_build_object('schema',n.nspname,'table',c.relname,'rls',c.relrowsecurity,
+              'force_rls',c.relforcerowsecurity,'owner',pg_get_userbyid(c.relowner),
+              'acl',(SELECT jsonb_agg(jsonb_build_array(grantee,privilege_type,is_grantable) ORDER BY grantee,privilege_type,is_grantable)
+                FROM aclexplode(c.relacl))) ORDER BY n.nspname,c.relname)
+              FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+              WHERE n.nspname IN ('public','private') AND c.relkind='r' AND c.relname IN (${tableFilter})),
+            'constraints',(SELECT jsonb_agg(jsonb_build_array(n.nspname,c.relname,k.conname,pg_get_constraintdef(k.oid),k.convalidated)
+              ORDER BY n.nspname,c.relname,k.conname) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
+              JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','private') AND c.relname IN (${tableFilter})),
+            'policies',(SELECT jsonb_agg(to_jsonb(p) ORDER BY schemaname,tablename,policyname) FROM pg_policies p
+              WHERE schemaname IN ('public','private') AND tablename IN (${tableFilter})),
+            'rpcs',(SELECT jsonb_agg(jsonb_build_object('name',p.proname,'signature',pg_get_function_identity_arguments(p.oid),
+              'definition',pg_get_functiondef(p.oid),'owner',pg_get_userbyid(p.proowner),'config',p.proconfig,
+              'acl',(SELECT jsonb_agg(jsonb_build_array(grantee,privilege_type,is_grantable) ORDER BY grantee,privilege_type,is_grantable)
+                FROM aclexplode(p.proacl))) ORDER BY p.proname,pg_get_function_identity_arguments(p.oid))
+              FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
+              AND (p.proname LIKE '%meta_%' OR p.proname LIKE '%lead_attribution%'))
+          );`;
+        const before = sql(security);
+        const rows = (table: string, database = db) => sql(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) FROM ${table} t;`, database);
+        const dataTables = ['private.meta_ad_account_tokens', 'private.meta_leadgen_events', 'private.han_intake_events',
+            'private.customer_private_contacts', 'private.interaction_raw_contents', 'public.meta_ad_accounts',
+            'public.meta_campaigns', 'public.meta_ads', 'public.lead_attribution_touchpoints', 'public.customers', 'public.interactions'];
+        const beforeData = new Map(dataTables.map(table => [table, rows(table)]));
+        const dump = execFileSync('docker', ['exec', container, 'pg_dump', '-U', 'postgres', '-d', db, '--format=custom'], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
+        assert.ok(dump.subarray(0, 5).equals(Buffer.from('PGDMP')), 'a real custom-format PostgreSQL backup is required');
+        execFileSync('docker', ['exec', '-i', container, 'pg_restore', '-U', 'postgres', '-d', restored, '--exit-on-error'], {
+            input: dump, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024, timeout: 90_000,
+        });
+        assert.equal(sql(security, restored), before, 'RLS, grants, owners, RPC bodies and constraints survive restore');
+        for (const table of dataTables) assert.equal(rows(table, restored), beforeData.get(table), `${table} survives restore byte-for-byte`);
+        const recovered = JSON.parse(sql(`SET ROLE service_role; SELECT row_to_json(t) FROM public.get_meta_ad_account_token(${q(company)},${q('__page__:' + page)}) t;`, restored));
+        assert.equal(recovered.encrypted_access_token, encrypted);
+        assert.equal(decryptToken(recovered.encrypted_access_token), 'synthetic-page-backup-token');
+        assert.equal(new Date(recovered.token_expires_at).toISOString(), expiry);
+        const replay = JSON.parse(sql(`SET ROLE service_role; SELECT public.claim_meta_leadgen_event(${q(company)},${q(page)},'40001');`, restored));
+        assert.equal(replay.status, 'ALREADY_PROCESSED', 'restored events retain idempotency');
+        for (const role of ['anon', 'authenticated']) {
+            assert.throws(() => sql(`SET ROLE ${role}; SELECT * FROM private.meta_ad_account_tokens;`, restored));
+            assert.throws(() => sql(`SET ROLE ${role}; SELECT * FROM public.get_meta_ad_account_token(${q(company)},${q('__page__:' + page)});`, restored));
+        }
+    } finally {
+        if (oldKey === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+        else process.env.META_TOKEN_ENCRYPTION_KEY = oldKey;
+        sql(`DROP DATABASE ${restored} WITH (FORCE); DROP DATABASE ${db} WITH (FORCE);`, 'postgres');
     }
 });
 
