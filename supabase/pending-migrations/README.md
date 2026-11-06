@@ -32,8 +32,9 @@ while a Facebook conversation is `PENDING_SALE`; Zalo keeps its existing
 the colliding historical SQL.
 
 Safety differences from the held historical SQL:
-- It derives from the active 20261023170000 enqueue/dispatch RPCs, changing only
-  the Messenger-vs-Zalo status predicate; it does not restore older RPC bodies.
+- It leaves the latest 20261029154410 enqueue RPC untouched, preserving its
+  Zalo group and history-ingest guards. It changes only the dispatch-fence
+  status predicate needed to allow Messenger PENDING_SALE.
 - It extends the existing page seeding trigger to only the two approved Page IDs.
 - Existing disabled tenant settings and disabled canary rows are preserved;
   only missing rows are seeded. Existing confidence thresholds are unchanged.
