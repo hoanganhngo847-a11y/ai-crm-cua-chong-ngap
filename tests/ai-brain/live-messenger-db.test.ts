@@ -820,6 +820,43 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
     });
     assert.ifError(fenceErrPending);
     assert.equal(fenceAcquiredPending, true, 'start_ai_messenger_live_dispatch fence must be acquired for PENDING_SALE conversation');
+    // Zalo keeps its existing PENDING_SALE SLA gate even though Messenger is allowed.
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'ZALO', true, 0.85)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [COMPANY_ID],
+    );
+    const pendingZaloConvId = randomUUID();
+    await service.from('conversations').insert({
+      id: pendingZaloConvId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-pending-sale-fixture',
+      status: 'PENDING_SALE',
+      assigned_to: null,
+      ai_mode: 'ACTIVE',
+    });
+    const pendingZaloInteractionId = randomUUID();
+    await service.from('interactions').insert({
+      id: pendingZaloInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: pendingZaloConvId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tôi cần tư vấn thêm',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: noZaloPendingDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', pendingZaloInteractionId)
+      .maybeSingle();
+    assert.equal(noZaloPendingDelivery, null, 'PENDING_SALE must continue to block Zalo enqueue');
   } finally {
     await harness.close();
   }
