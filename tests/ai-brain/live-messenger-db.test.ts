@@ -807,7 +807,7 @@ test('AI Brain Messenger Live DB: Handover / Paused AI / Human-assigned does not
       p_customer_id: CUSTOMER_ID,
       p_conversation_id: pendingSaleConvId,
       p_source_interaction_id: interactionPendingSaleId,
-      p_page_id: PAGE_ID,
+      p_page_id: APPROVED_PAGE_ID,
       p_min_confidence: 0.85,
       p_turn_confidence: 0.9,
     });
