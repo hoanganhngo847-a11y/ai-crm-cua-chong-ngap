@@ -434,6 +434,15 @@ $$;
 COMMENT ON FUNCTION public.seed_du_hoc_messenger_canary() IS
   'Seeds Messenger canary rows only for the approved tenant and Pages 1343097708890171 / 1026991374010112; never re-enables disabled canary or live-setting rows.';
 
+-- Remove either historical trigger name before installing one scoped trigger.
+-- This handles databases where the old colliding migration may have been applied
+-- despite the conflicting migration ledger.
+DROP TRIGGER IF EXISTS trg_seed_messenger_pages_canary ON public.conversations;
+DROP TRIGGER IF EXISTS trg_seed_du_hoc_messenger_canary ON public.conversations;
+CREATE TRIGGER trg_seed_du_hoc_messenger_canary
+  AFTER INSERT OR UPDATE OF external_conversation_id, metadata ON public.conversations
+  FOR EACH ROW EXECUTE FUNCTION public.seed_du_hoc_messenger_canary();
+
 -- 5. Create the Messenger live setting only when the approved tenant exists and
 --    has no setting row. Existing enabled=false remains an explicit kill switch.
 INSERT INTO public.ai_brain_live_settings (
