@@ -257,6 +257,9 @@ DECLARE
   v_conv_metadata jsonb;
   v_page_id text;
 BEGIN
+  IF NEW.channel = 'ZALO' AND current_setting('app.zcajs_history_ingest', true) = 'true' THEN
+    RETURN NEW;
+  END IF;
   IF NEW.type <> 'MESSAGE'
      OR NEW.direction <> 'INBOUND'
      OR NEW.actor_type <> 'CUSTOMER'
@@ -287,8 +290,8 @@ BEGIN
   END IF;
 
   -- Guard: Conversation state
-  -- For ZALO: CLOSED, PENDING_SALE, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
-  -- For MESSENGER: PENDING_SALE is permitted only within the approved tenant/Page scope; CLOSED, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
+  -- ZALO: CLOSED, PENDING_SALE, assigned_to, ai_mode = PAUSED, or a group block enqueue.
+  -- MESSENGER: PENDING_SALE is permitted only in the approved tenant/Page scope; the other guards still block.
   IF EXISTS (
     SELECT 1
     FROM public.conversations c
@@ -299,6 +302,7 @@ BEGIN
         OR (v_live_channel = 'ZALO' AND c.status = 'PENDING_SALE')
         OR c.assigned_to IS NOT NULL
         OR c.ai_mode = 'PAUSED'
+        OR (v_live_channel = 'ZALO' AND lower(coalesce(c.metadata->>'is_group', 'false')) = 'true')
       )
   ) THEN
     RETURN NEW;
