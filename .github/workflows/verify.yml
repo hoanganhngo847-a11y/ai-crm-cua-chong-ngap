@@ -42,6 +42,7 @@ jobs:
       - run: npx tsx --conditions=react-server --test tests/ai-brain/shadow-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/live-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/live-messenger-db.test.ts
+      - run: npx tsx --test tests/ai-brain/messenger-pending-sale-migration.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/live-messenger-supabase.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/handover-db.test.ts
       - run: npx tsx --conditions=react-server --test tests/ai-brain/grounding-db.test.ts

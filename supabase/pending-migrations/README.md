@@ -21,3 +21,27 @@ Before release, the owner must decide whether Messenger activation is intended n
 ## Regression gate
 
 `npm run test:migration-integrity` validates unique active versions, frozen foundations, the complete pending SQL checksum, and prevents returning the Messenger activation filename under any timestamp. Its immutable-history guard permits only this exact, checksum-verified relocation while preserving the ledger-owning funnel. Other modifications, renames and deletions remain rejected. Verify, Voice and Zalo run the gate before starting Supabase.
+
+
+## Approved product decision — forward migration prepared (2026-11-06)
+
+The product owner confirmed Messenger may enqueue and pass the atomic dispatch fence
+while a Facebook conversation is `PENDING_SALE`; Zalo keeps its existing
+`PENDING_SALE` SLA gate. The integrated Draft PR adds the new forward migration
+`20261106012800_messenger_pending_sale_scoped_activation.sql` instead of replaying
+the colliding historical SQL.
+
+Safety differences from the held historical SQL:
+- It derives from the active 20261023170000 enqueue/dispatch RPCs, changing only
+  the Messenger-vs-Zalo status predicate; it does not restore older RPC bodies.
+- It extends the existing page seeding trigger to only the two approved Page IDs.
+- Existing disabled tenant settings and disabled canary rows are preserved;
+  only missing rows are seeded. Existing confidence thresholds are unchanged.
+- It does not enable Botcake tenants outside those Pages or alter pg_cron cadence.
+- It leaves the original pending SQL byte-for-byte in the archive and does not
+  rewrite the applied funnel migration or the migration ledger.
+
+CI must prove clean Supabase reset, Messenger PENDING_SALE enqueue/fence, page
+scope and kill-switch preservation, Zalo PENDING_SALE rejection, plus the
+Customer 360 React DOM regression suite. This PR remains Draft and is not
+authorization to apply the migration to Production.
