@@ -72,6 +72,10 @@ test('a retry cannot manufacture signed proof absent from the immutable intake c
     globalThis.fetch = (async (input, init) => {
         const url = new URL(String(input));
         const body = JSON.parse(String(init?.body || '{}'));
+        if (url.pathname.endsWith('/get_meta_ad_account_token')) {
+            // Exercise the documented legacy tokenEnv fallback when the vault RPC is absent.
+            return Response.json({ code: 'PGRST202', message: 'get_meta_ad_account_token is not installed in this test deployment' }, { status: 404 });
+        }
         if (url.pathname.endsWith('/claim_meta_leadgen_event')) return Response.json({ status: 'CLAIMED', claim_token: 'test-claim', ingest_args: { lead_data: { id: '99001', ad_id: ad, field_data: [] }, creative_snapshot: snapshot, payload: { ad_id: ad } } });
         if (url.pathname.endsWith('/ingest_meta_leadgen_event')) return Response.json({ customer_id: company, interaction_id: company });
         if (url.pathname.endsWith('/record_lead_attribution_touchpoint')) { context = body.p_ads_context_data; return Response.json(company); }
