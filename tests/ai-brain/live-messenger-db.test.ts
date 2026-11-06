@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 
-const COMPANY_ID = '00000000-0000-4000-8000-000000000096';
+const COMPANY_ID = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
 const OTHER_COMPANY_ID = '00000000-0000-4000-8000-000000000099';
 const CUSTOMER_ID = '00000000-0000-4000-8000-000000000097';
-const PAGE_ID = '987654321012345';
+const PAGE_ID = '1343097708890171';
 
 test('AI Brain Messenger Live DB: strict canary allowlist, enqueue trigger, dispatch fence, claim, and outbound recording', async () => {
   const harness = await createPgliteSupabase();
@@ -962,6 +962,70 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       [otherCompanyId],
     );
     assert.equal(otherSetting.length, 0, 'Other tenants must not receive a Messenger live setting');
+
+    // Even with a manually present setting and canary row, another tenant must
+    // not inherit the approved tenant's PENDING_SALE exception.
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'MESSENGER', true, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [otherCompanyId],
+    );
+    const otherPendingId = randomUUID();
+    await service.from('conversations').insert({
+      id: otherPendingId, company_id: otherCompanyId, customer_id: otherCustomerId,
+      channel: 'FACEBOOK', external_conversation_id: `${pageDuHoc}:87654321098765105`,
+      status: 'PENDING_SALE', ai_mode: 'ACTIVE',
+    });
+    await db.query(
+      `INSERT INTO public.ai_brain_live_canary_allowlist
+       (company_id, channel, conversation_id, page_id, enabled)
+       VALUES ($1, 'MESSENGER', $2, $3, true)
+       ON CONFLICT DO NOTHING`,
+      [otherCompanyId, otherPendingId, pageDuHoc],
+    );
+    const otherPendingInteraction = randomUUID();
+    await service.from('interactions').insert({
+      id: otherPendingInteraction, company_id: otherCompanyId, customer_id: otherCustomerId,
+      conversation_id: otherPendingId, channel: 'FACEBOOK', type: 'MESSAGE',
+      direction: 'INBOUND', actor_type: 'CUSTOMER', sanitized_content: 'Xin tư vấn',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: otherPendingDelivery } = await service
+      .from('ai_brain_live_deliveries').select('id')
+      .eq('source_interaction_id', otherPendingInteraction).maybeSingle();
+    assert.equal(otherPendingDelivery, null, 'PENDING_SALE exception must not expand to another tenant');
+
+    // The approved tenant cannot use the exception on an unapproved Page either.
+    await db.query(
+      `UPDATE public.ai_brain_live_settings SET enabled = true
+       WHERE company_id = $1 AND channel = 'MESSENGER'`,
+      [approvedCompanyId],
+    );
+    const unsupportedPendingId = randomUUID();
+    await service.from('conversations').insert({
+      id: unsupportedPendingId, company_id: approvedCompanyId, customer_id: approvedCustomerId,
+      channel: 'FACEBOOK', external_conversation_id: `987654321012345:87654321098765106`,
+      status: 'PENDING_SALE', ai_mode: 'ACTIVE',
+    });
+    await db.query(
+      `INSERT INTO public.ai_brain_live_canary_allowlist
+       (company_id, channel, conversation_id, page_id, enabled)
+       VALUES ($1, 'MESSENGER', $2, '987654321012345', true)
+       ON CONFLICT DO NOTHING`,
+      [approvedCompanyId, unsupportedPendingId],
+    );
+    const unsupportedInteraction = randomUUID();
+    await service.from('interactions').insert({
+      id: unsupportedInteraction, company_id: approvedCompanyId, customer_id: approvedCustomerId,
+      conversation_id: unsupportedPendingId, channel: 'FACEBOOK', type: 'MESSAGE',
+      direction: 'INBOUND', actor_type: 'CUSTOMER', sanitized_content: 'Xin tư vấn',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: unsupportedDelivery } = await service
+      .from('ai_brain_live_deliveries').select('id')
+      .eq('source_interaction_id', unsupportedInteraction).maybeSingle();
+    assert.equal(unsupportedDelivery, null, 'PENDING_SALE exception must remain limited to the two approved Pages');
   } finally {
     await harness.close();
   }
