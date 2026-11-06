@@ -304,7 +304,7 @@ withTempGitFixture(({ dir }) => {
   testPass('Git guard: missing baseline fails closed');
 });
 
-// Exact historical collision: preserve SQL pending approval, never generalize renames.
+// Exact historical collision: preserve legacy SQL archive, never generalize renames.
 const archivedMessenger = fs.readFileSync(path.resolve('supabase/pending-migrations', PENDING_MESSENGER_MIGRATION));
 const funnelName = '20261028130000_customer_funnel_six_stages.sql';
 const funnelSql = fs.readFileSync(path.resolve('supabase/migrations', funnelName));
@@ -327,7 +327,7 @@ for (const scenario of ['preserved', 'missing', 'tampered', 'funnel-edited', 'ba
     const guard = verifyMigrationGitGuard({ cwd: dir });
     assert.equal(guard.valid, ['preserved', 'reactivated'].includes(scenario), `${scenario}: ${guard.errors.join(', ')}`);
     const filesystem = verifyFilesystemMigrations(migrationsDir);
-    if (scenario === 'reactivated') assert.ok(filesystem.errors.some(e => e.includes('pending product approval')));
+    if (scenario === 'reactivated') assert.ok(filesystem.errors.some(e => e.includes('Legacy colliding Messenger migration must remain archived')));
     if (scenario === 'missing' || scenario === 'tampered') assert.ok(filesystem.errors.some(e => /pending Messenger/i.test(e)));
     testPass(`Exact Messenger relocation: ${scenario}`);
   });
