@@ -54,7 +54,7 @@ test('Messenger PENDING_SALE migration seeds only approved Pages and preserves t
       assert.ifError(error);
     }
 
-    const { rows: canaries } = await db.query(
+    const { rows: canaries } = await db.query<{ company_id: string; page_id: string; enabled: boolean }>(
       `SELECT company_id, page_id, enabled FROM public.ai_brain_live_canary_allowlist
        WHERE conversation_id = ANY($1::uuid[])`,
       [conversations.map(c => c.id)],
@@ -64,7 +64,7 @@ test('Messenger PENDING_SALE migration seeds only approved Pages and preserves t
     assert.ok(canaries.some(c => c.company_id === companyEnabled && c.page_id === PAGE_B));
     assert.ok(canaries.some(c => c.company_id === companyDisabled && c.page_id === PAGE_A));
 
-    const { rows: settings } = await db.query(
+    const { rows: settings } = await db.query<{ company_id: string; enabled: boolean; min_confidence: number }>(
       `SELECT company_id, enabled, min_confidence FROM public.ai_brain_live_settings
        WHERE channel = 'MESSENGER' AND company_id = ANY($1::uuid[])`,
       [[companyEnabled, companyDisabled, companyOther]],
