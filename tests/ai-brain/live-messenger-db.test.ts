@@ -989,6 +989,34 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       .eq('source_interaction_id', otherPendingInteraction).maybeSingle();
     assert.equal(otherPendingDelivery, null, 'PENDING_SALE exception must not expand to another tenant');
 
+    // Simulate a stale/manual queue row: the atomic dispatch fence must still
+    // deny an out-of-scope PENDING_SALE delivery immediately before transport.
+    const outOfScopeDeliveryId = randomUUID();
+    await db.query(
+      `INSERT INTO public.ai_brain_live_deliveries
+       (id, company_id, customer_id, conversation_id, source_interaction_id, channel)
+       VALUES ($1, $2, $3, $4, $5, 'MESSENGER')`,
+      [outOfScopeDeliveryId, otherCompanyId, otherCustomerId, otherPendingId, otherPendingInteraction],
+    );
+    const outOfScopeLock = randomUUID();
+    const { data: outOfScopeClaims } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 5, p_lock_token: outOfScopeLock, p_channel: 'MESSENGER',
+    });
+    assert.ok((outOfScopeClaims as Array<{ id: string }>).some(row => row.id === outOfScopeDeliveryId));
+    const { data: outOfScopeFence, error: outOfScopeFenceError } = await service.rpc('start_ai_messenger_live_dispatch', {
+      p_delivery_id: outOfScopeDeliveryId,
+      p_lock_token: outOfScopeLock,
+      p_company_id: otherCompanyId,
+      p_customer_id: otherCustomerId,
+      p_conversation_id: otherPendingId,
+      p_source_interaction_id: otherPendingInteraction,
+      p_page_id: pageDuHoc,
+      p_min_confidence: 0.700,
+      p_turn_confidence: 0.9,
+    });
+    assert.ifError(outOfScopeFenceError);
+    assert.equal(outOfScopeFence, false, 'Dispatch fence must reject out-of-scope PENDING_SALE even if queued');
+
     // The approved tenant cannot use the exception on an unapproved Page either.
     await db.query(
       `UPDATE public.ai_brain_live_settings SET enabled = true
