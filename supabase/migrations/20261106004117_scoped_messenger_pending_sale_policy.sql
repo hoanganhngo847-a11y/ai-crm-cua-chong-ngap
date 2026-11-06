@@ -166,7 +166,7 @@ BEGIN
   END IF;
 
   -- 6. Validate conversation state:
-  -- PENDING_SALE is allowed only for the approved Messenger tenant and Pages.
+  -- PENDING_SALE is ALLOWED for Messenger (AI replies immediately without waiting for sale).
   -- CLOSED, assigned_to (human takeover), or ai_mode = 'PAUSED' still block.
   SELECT c.id, c.status, c.assigned_to, c.ai_mode, c.channel, c.external_conversation_id, c.metadata
   INTO v_conv
@@ -288,7 +288,7 @@ BEGIN
 
   -- Guard: Conversation state
   -- For ZALO: CLOSED, PENDING_SALE, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
-  -- For MESSENGER: PENDING_SALE is permitted only in the approved tenant/Page scope; CLOSED, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
+  -- For MESSENGER: PENDING_SALE is permitted; CLOSED, assigned_to IS NOT NULL, or ai_mode = 'PAUSED' block enqueue.
   IF EXISTS (
     SELECT 1
     FROM public.conversations c
@@ -314,29 +314,7 @@ BEGIN
 
     v_page_id := public.ai_messenger_page_id(v_external_conv_id, v_conv_metadata);
 
-    IF v_page_id IS NULL OR v_page_id !~ '^[0-9]+
-      WHERE a.company_id = NEW.company_id
-        AND a.channel = 'MESSENGER'
-        AND a.conversation_id = NEW.conversation_id
-        AND a.page_id = v_page_id
-        AND a.enabled = true
-    ) THEN
-      RETURN NEW;
-    END IF;
-  END IF;
-
-  INSERT INTO public.ai_brain_live_deliveries (
-    company_id, customer_id, conversation_id, source_interaction_id, channel
-  ) VALUES (
-    NEW.company_id, NEW.customer_id, NEW.conversation_id, NEW.id, v_live_channel
-  )
-  ON CONFLICT (source_interaction_id) DO NOTHING;
-
-  RETURN NEW;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.enqueue_ai_brain_live_delivery() FROM PUBLIC, anon, authenticated, service_role; THEN
+    IF v_page_id IS NULL OR v_page_id !~ '^[0-9]+$' THEN
       RETURN NEW;
     END IF;
 
