@@ -11,9 +11,10 @@ The Production ledger reported in [PR #148](https://github.com/hoanganhngo847-a1
 On 2026-11-06, the product owner confirmed the Messenger policy: `PENDING_SALE` is permitted for Messenger, while Zalo continues to block `PENDING_SALE`. The approved rollout scope is limited to tenant `de6a7bf3-b5bc-418d-92d6-f9b241472598` and Facebook Pages `1343097708890171` and `1026991374010112`.
 
 The replacement is the additive migration `supabase/migrations/20261106004117_scoped_messenger_pending_sale_policy.sql` in the integrated Draft PR. It:
-- Updates only the current Messenger enqueue trigger and atomic dispatch-start fence to allow `PENDING_SALE`; the current lock, confidence, source, tenant, Page, canary and once-only checks remain.
+- Updates only the current Messenger enqueue trigger and atomic dispatch-start fence to allow `PENDING_SALE` within the approved tenant/Page scope; the current lock, confidence, source, tenant, Page, canary and once-only checks remain.
 - Seeds existing canary rows only for the approved tenant and two Pages.
-- Scopes the existing future-conversation seeding trigger to that tenant and those Pages.
+- Removes either historical canary-trigger name and installs one tenant/Page-scoped future-conversation trigger, preventing the stale broad trigger from re-enabling other tenants or settings.
+- Leaves existing non-target tenant settings and canary rows untouched; it does not grant those tenants the `PENDING_SALE` exception.
 - Uses `ON CONFLICT DO NOTHING` so disabled canary rows and an existing disabled tenant setting are not re-enabled.
 - Creates the Messenger live setting only if the approved tenant exists and has no Messenger setting, using the current 0.700 confidence threshold.
 - Does not replace the current outbound/SLA RPC, handover RPC, claim/finish RPCs, cron helper, or scheduler cadence.
