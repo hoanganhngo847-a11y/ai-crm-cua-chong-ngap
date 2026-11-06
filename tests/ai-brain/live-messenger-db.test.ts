@@ -1078,6 +1078,99 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
   }
 });
 
+
+test('AI Brain Messenger rollout: latest Zalo group and history-ingest enqueue guards remain intact', async () => {
+  const harness = await createPgliteSupabase();
+  const { db, client: service } = harness;
+  try {
+    await db.query(
+      `INSERT INTO public.companies (id, name, status)
+       VALUES ($1, 'Zalo enqueue guard fixture', 'ACTIVE')
+       ON CONFLICT (id) DO NOTHING`,
+      [COMPANY_ID],
+    );
+    await db.query(
+      `INSERT INTO public.customers (id, company_id, customer_code, name, source, stage)
+       VALUES ($1, $2, 'ZALO-GUARD-1', 'Zalo Guard Customer', 'MANUAL', 'LEAD_NEW')
+       ON CONFLICT (id) DO NOTHING`,
+      [CUSTOMER_ID, COMPANY_ID],
+    );
+    await db.query(
+      `INSERT INTO public.ai_brain_live_settings (company_id, channel, enabled, min_confidence)
+       VALUES ($1, 'ZALO', true, 0.700)
+       ON CONFLICT (company_id, channel) DO UPDATE SET enabled = true`,
+      [COMPANY_ID],
+    );
+
+    const groupConversationId = randomUUID();
+    await service.from('conversations').insert({
+      id: groupConversationId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-group-fixture',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+      metadata: { is_group: true },
+    });
+    const groupInteractionId = randomUUID();
+    await service.from('interactions').insert({
+      id: groupInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: groupConversationId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tin nhắn nhóm',
+      sanitization_status: 'SUCCEEDED',
+    });
+    const { data: groupDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', groupInteractionId)
+      .maybeSingle();
+    assert.equal(groupDelivery, null, 'Zalo group conversations must remain blocked');
+
+    const historyConversationId = randomUUID();
+    await service.from('conversations').insert({
+      id: historyConversationId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      channel: 'ZALO',
+      external_conversation_id: 'zalo-history-fixture',
+      status: 'OPEN',
+      ai_mode: 'ACTIVE',
+      metadata: { is_group: false },
+    });
+    const historyInteractionId = randomUUID();
+    await db.exec("BEGIN; SET LOCAL app.zcajs_history_ingest = 'true';");
+    const { error: historyInsertError } = await service.from('interactions').insert({
+      id: historyInteractionId,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      conversation_id: historyConversationId,
+      channel: 'ZALO',
+      type: 'MESSAGE',
+      direction: 'INBOUND',
+      actor_type: 'CUSTOMER',
+      sanitized_content: 'Tin nhắn lịch sử được nhập',
+      sanitization_status: 'SUCCEEDED',
+    });
+    assert.ifError(historyInsertError);
+    await db.exec('COMMIT;');
+    const { data: historyDelivery } = await service
+      .from('ai_brain_live_deliveries')
+      .select('id')
+      .eq('source_interaction_id', historyInteractionId)
+      .maybeSingle();
+    assert.equal(historyDelivery, null, 'Zalo history-ingest interactions must not enqueue live replies');
+  } finally {
+    await harness.close();
+  }
+});
+
 test('AI Brain Messenger Live DB: ACL and tenant isolation on canary allowlist', async () => {
   const harness = await createPgliteSupabase();
   const { db } = harness;
