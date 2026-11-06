@@ -1047,6 +1047,32 @@ test('AI Brain Messenger rollout: canary seeding is tenant/Page scoped and prese
       .from('ai_brain_live_deliveries').select('id')
       .eq('source_interaction_id', unsupportedInteraction).maybeSingle();
     assert.equal(unsupportedDelivery, null, 'PENDING_SALE exception must remain limited to the two approved Pages');
+
+    const unsupportedDeliveryId = randomUUID();
+    await db.query(
+      `INSERT INTO public.ai_brain_live_deliveries
+       (id, company_id, customer_id, conversation_id, source_interaction_id, channel)
+       VALUES ($1, $2, $3, $4, $5, 'MESSENGER')`,
+      [unsupportedDeliveryId, approvedCompanyId, approvedCustomerId, unsupportedPendingId, unsupportedInteraction],
+    );
+    const unsupportedLock = randomUUID();
+    const { data: unsupportedClaims } = await service.rpc('claim_ai_brain_live_deliveries', {
+      p_limit: 5, p_lock_token: unsupportedLock, p_channel: 'MESSENGER',
+    });
+    assert.ok((unsupportedClaims as Array<{ id: string }>).some(row => row.id === unsupportedDeliveryId));
+    const { data: unsupportedFence, error: unsupportedFenceError } = await service.rpc('start_ai_messenger_live_dispatch', {
+      p_delivery_id: unsupportedDeliveryId,
+      p_lock_token: unsupportedLock,
+      p_company_id: approvedCompanyId,
+      p_customer_id: approvedCustomerId,
+      p_conversation_id: unsupportedPendingId,
+      p_source_interaction_id: unsupportedInteraction,
+      p_page_id: '987654321012345',
+      p_min_confidence: 0.700,
+      p_turn_confidence: 0.9,
+    });
+    assert.ifError(unsupportedFenceError);
+    assert.equal(unsupportedFence, false, 'Dispatch fence must reject PENDING_SALE on an unapproved Page');
   } finally {
     await harness.close();
   }
