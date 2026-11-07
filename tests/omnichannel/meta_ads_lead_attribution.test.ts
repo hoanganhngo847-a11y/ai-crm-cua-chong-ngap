@@ -28,7 +28,7 @@ import { POST as syncPost } from '../../app/api/admin/facebook/attribution-sync/
 import { requireBossAdmin, AuthError } from '../../lib/auth/context';
 import { createPgliteSupabase } from '../zalo/helpers/pglite-supabase';
 
-const TARGET_PAGE_ID = '1026991374010112';
+const TARGET_PAGE_ID = '199000000001001';
 const SECONDARY_PAGE_ID = '2222222222222222';
 const COMPANY_A = '11111111-1111-4111-8111-111111111111';
 const COMPANY_B = '22222222-2222-4222-8222-222222222222';

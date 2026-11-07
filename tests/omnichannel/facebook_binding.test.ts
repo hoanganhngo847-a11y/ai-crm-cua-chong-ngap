@@ -93,6 +93,13 @@ test('release tenant rejects extra Pages and Ad Accounts and requires six scoped
     withBindings(undefined, JSON.stringify([{ ...row, page: '999' }]), () => {
         assert.throws(() => leadAdsPageBindings(), /CHANNEL_NOT_CONFIGURED/);
     });
+    withBindings(undefined, JSON.stringify([{ ...row, company: OTHER_COMPANY }]), () => {
+        assert.throws(() => leadAdsPageBindings(), /CHANNEL_NOT_CONFIGURED/);
+    });
+    withBindings(undefined, JSON.stringify([{ ...row, page: '999', company: COMPANY.toUpperCase() }]), () => {
+        assert.throws(() => leadAdsPageBindings(), /CHANNEL_NOT_CONFIGURED/);
+    });
+    assert.equal(isLeadAdsAdAccountAllowed(OTHER_COMPANY, 'act_996324396811261'), false);
     assert.equal(isLeadAdsAdAccountAllowed(COMPANY, 'act_996324396811261'), true);
     assert.equal(isLeadAdsAdAccountAllowed(COMPANY, 'act_999'), false);
     const saved = process.env.META_ADS_APPROVED_FORMS;

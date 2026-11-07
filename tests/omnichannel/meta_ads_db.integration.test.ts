@@ -20,7 +20,7 @@ const db = `meta_ads_${randomUUID().replaceAll('-', '')}`;
 const company = randomUUID();
 const other = randomUUID();
 const customer = randomUUID();
-const page = '1026991374010112';
+const page = '199000000001001';
 const appSecret = 'dummy-webhook-secret';
 const q = (v: unknown) => v == null ? 'NULL' : `'${String(typeof v === 'object' ? JSON.stringify(v) : v).replaceAll("'", "''")}'`;
 function sql(value: string, database = db) {
@@ -66,15 +66,23 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         // Roles are cluster-wide and already provided by supabase start.
         const stubs = PLATFORM_STUBS.replace(/CREATE ROLE[^;]+;/g, '');
         const migrations = readdirSync('supabase/migrations').filter(f => f.endsWith('.sql')).sort();
-        sql(stubs + migrations.map(f => readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n'));
+        const metaStart = migrations.indexOf('20261030090000_meta_ads_lead_attribution.sql');
+        assert.ok(metaStart > 0, 'baseline CRM migrations must precede the candidate');
+        const replay = (files: string[]) => files.map(file => readFileSync(`supabase/migrations/${file}`, 'utf8')).join('\n');
+        sql(stubs + replay(migrations.slice(0, metaStart)));
+        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Meta native test','ACTIVE'),(${q(other)},'Other tenant','ACTIVE');
+             INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'First touch customer','FACEBOOK','LEAD_NEW');`);
+        const before = sql(`SELECT to_jsonb(c) FROM public.customers c WHERE id=${q(customer)};`);
+        sql(replay(migrations.slice(metaStart)));
+        assert.equal(sql(`SELECT to_jsonb(c) - ARRAY['first_campaign_name','first_ad_name','first_touch_at','latest_campaign_name',
+            'latest_ad_name','latest_touch_at','attribution_status'] FROM public.customers c WHERE id=${q(customer)};`), before,
+            'additive replay must preserve existing CRM customer data');
         const version = Number(sql('SHOW server_version_num;'));
         assert.equal(version, 170011, 'candidate integration requires native PostgreSQL 17.11');
         assert.equal(sql('SHOW transaction_isolation;'), 'read committed');
         assert.equal(sql("SELECT to_regclass('public.meta_insights_daily') IS NULL AND to_regclass('public.meta_ad_sets') IS NULL AND to_regprocedure('public.get_meta_ads_performance_report(uuid,timestamptz,timestamptz,text,text)') IS NULL;"), 't', 'the released schema contains no advertising reporting API or reporting-only tables');
         assert.equal(sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('meta_campaigns','meta_ads') AND column_name IN ('daily_budget','lifetime_budget','objective','creative_id','creative_title','creative_body');"), '0');
-        sql(`INSERT INTO public.companies(id,name,status) VALUES (${q(company)},'Meta native test','ACTIVE'),(${q(other)},'Other tenant','ACTIVE');
-             INSERT INTO public.customers(id,company_id,name,source,stage) VALUES (${q(customer)},${q(company)},'First touch customer','FACEBOOK','LEAD_NEW');
-             INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_1','campaign','Verified campaign','ACTIVE'),(${q(other)},'act_2','foreign','Foreign campaign','ACTIVE');
+        sql(`INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_1','campaign','Verified campaign','ACTIVE'),(${q(other)},'act_2','foreign','Foreign campaign','ACTIVE');
              INSERT INTO public.meta_ad_accounts(company_id,ad_account_id,name,currency,account_status) VALUES (${q(company)},'act_snapshot','Snapshot account','VND',1);
              INSERT INTO public.meta_ads(company_id,ad_account_id,meta_campaign_id,meta_ad_set_id,meta_ad_id,name,status) VALUES (${q(company)},'act_1','campaign','adset','ad','Verified ad','ACTIVE');
              INSERT INTO public.meta_campaigns(company_id,ad_account_id,meta_campaign_id,name,status) VALUES (${q(company)},'act_snapshot','campaign_snapshot','Verified snapshot campaign','ACTIVE');
@@ -108,9 +116,30 @@ test('PostgreSQL ownership, ACLs, verified attribution, webhook concurrency, and
         assert.throws(() => sql(`BEGIN; GRANT INSERT ON public.customers TO authenticated;
           CREATE POLICY meta_fixture_insert ON public.customers FOR INSERT TO authenticated WITH CHECK (true);
           SET ROLE authenticated;
-          INSERT INTO public.customers(company_id,name,source,stage,first_campaign_name)
-          VALUES (${q(company)},'Forged attribution','FACEBOOK','LEAD_NEW','Forgery'); ROLLBACK;`),
+          INSERT INTO public.customers(company_id,customer_code,name,source,stage,first_campaign_name)
+          VALUES (${q(company)},'RC-META-FORGE','Forged attribution','FACEBOOK','LEAD_NEW','Forgery'); ROLLBACK;`),
           (error: unknown) => String((error as { stderr?: string }).stderr).includes('META_ATTRIBUTION_SERVER_ONLY'));
+
+        const rpcNames = [
+            'store_meta_ad_account_token', 'get_meta_ad_account_token', 'claim_meta_leadgen_event',
+            'finalize_meta_leadgen_event', 'acquire_meta_ad_account_sync_lease', 'release_meta_ad_account_sync_lease',
+            'ingest_meta_leadgen_event', 'record_lead_attribution_touchpoint',
+            'mark_lead_attribution_phone_match', 'retry_pending_lead_attribution',
+        ];
+        const catalog = JSON.parse(sql(`SELECT json_agg(json_build_object('name',p.proname,'definer',p.prosecdef,
+            'config',p.proconfig,'anon',has_function_privilege('anon',p.oid,'EXECUTE'),
+            'authenticated',has_function_privilege('authenticated',p.oid,'EXECUTE'),
+            'service',has_function_privilege('service_role',p.oid,'EXECUTE')))
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE n.nspname='public' AND p.proname IN (${rpcNames.map(q).join(',')});`));
+        assert.equal(catalog.length, rpcNames.length, 'no old overload can retain public access');
+        for (const fn of catalog) {
+            assert.equal(fn.definer, true, fn.name);
+            assert.deepEqual(fn.config, ['search_path=""'], fn.name);
+            assert.equal(fn.anon, false, fn.name);
+            assert.equal(fn.authenticated, false, fn.name);
+            assert.equal(fn.service, true, fn.name);
+        }
 
         const protectedRpcs = [
             'claim_meta_leadgen_event(uuid,text,text,text,text,timestamptz)',

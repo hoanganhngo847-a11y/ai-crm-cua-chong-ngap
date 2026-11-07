@@ -66,7 +66,7 @@ test('all attribution and lead endpoints use independent supported versions and 
         assert.ok(requests.every(u => !/\/(insights|adsets)$/.test(u.pathname)));
         assert.equal(requests.find(u => u.pathname.endsWith('/campaigns'))?.searchParams.get('fields'), 'id,name,status');
         assert.equal(requests.find(u => u.pathname.endsWith('/ads'))?.searchParams.get('fields'), 'id,name,campaign_id,adset_id,status');
-        const scopeSource = readFileSync('app/api/facebook/connect/start/route.ts', 'utf8');
+        const scopeSource = readFileSync('app/api/facebook/lead-ads/connect/start/route.ts', 'utf8');
         assert.doesNotMatch(scopeSource, /ads_management|pages_manage_ads/);
         assert.match(scopeSource, /ads_read,leads_retrieval/);
         process.env.META_MARKETING_VERSION = 'v21.0';
@@ -318,11 +318,11 @@ test('discovered asset identifiers are accepted independently and the Page requi
     const page = '654520554683416';
     const form = '1698659958359492';
     const account = '996324396811261';
-    const company = '11111111-1111-4111-8111-111111111111';
+    const company = 'de6a7bf3-b5bc-418d-92d6-f9b241472598';
     const oldBindings = process.env.META_PAGE_BINDINGS;
     const original = globalThis.fetch;
     try {
-        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page: '123', company, tokenEnv: 'META_STAGING_PAGE_TOKEN', leadAdsEnabled: true }]);
+        process.env.META_PAGE_BINDINGS = JSON.stringify([{ page: '123', company, tokenEnv: 'META_STAGING_PAGE_TOKEN' }]);
         assert.throws(() => binding(page), /NOT_FOUND/);
         process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_STAGING_PAGE_TOKEN', leadAdsEnabled: true, name: 'Du Học Áo CHD' }]);
         assert.equal(binding(page).company, company);
@@ -535,7 +535,7 @@ test('FIX A: OAuth token exchange handles long-lived, explicit unsupported, tran
 });
 
 test('Lead Ads Page verification only reads subscription status and persists verified Page tokens', async () => {
-    const page = '654520554683416';
+    const page = '199000000001002';
     const company = '11111111-1111-4111-8111-111111111111';
     const appId = '123456';
     process.env.META_PAGE_BINDINGS = JSON.stringify([{ page, company, tokenEnv: 'META_PAGE_TEST_TOKEN', leadAdsEnabled: true }]);
@@ -571,7 +571,7 @@ test('F-06: webhook isolates Lead Ads failures and processes Messenger messages 
     const { POST: webhookPost } = await import('../../app/api/webhooks/meta/route');
     const { createHmac } = await import('node:crypto');
     const originalFetch = globalThis.fetch;
-    const page = '654520554683416';
+    const page = '199000000001002';
     const company = '11111111-1111-4111-8111-111111111111';
     const testSecret = 'meta-test-secret-32-chars-long!!';
     process.env.META_APP_SECRET = testSecret;

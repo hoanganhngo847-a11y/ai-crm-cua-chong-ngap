@@ -27,7 +27,8 @@ export async function GET(request: Request) {
   try {
     const actor = await getActorContext();
     if (!actor?.companyId) return back(request, 'NO_COMPANY');
-    await requireBossAdmin(actor.companyId, {
+    const { companyId, userId } = actor;
+    await requireBossAdmin(companyId, {
       requireAal2: true,
     });
 
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
     }
 
     const state = query.get('state') || '';
-    const validState = await verifyAndClearFacebookOAuthState(state, { companyId: actor.companyId, userId: actor.userId });
+    const validState = await verifyAndClearFacebookOAuthState(state, { companyId, userId });
     if (!validState) return back(request, 'FACEBOOK_INVALID_STATE');
 
     const code = query.get('code');
@@ -54,16 +55,16 @@ export async function GET(request: Request) {
       listManagedAdAccounts(userAccessToken),
     ]);
 
-    const allowedPages = configuredLeadAdsPageIds(actor.companyId);
+    const allowedPages = configuredLeadAdsPageIds(companyId);
     await storeFacebookConnectSession({
       userAccessToken,
       tokenExpiresAt: tokenResult.tokenExpiresAt,
       tokenType: tokenResult.tokenType,
       isLongLived: tokenResult.isLongLived,
       pages: pages.filter(page => allowedPages.has(page.id)),
-      adAccounts: adAccounts.filter(account => isLeadAdsAdAccountAllowed(actor.companyId, account.id)),
-      companyId: actor.companyId,
-      userId: actor.userId,
+      adAccounts: adAccounts.filter(account => isLeadAdsAdAccountAllowed(companyId, account.id)),
+      companyId,
+      userId,
     });
 
     const url = publicAdminUrl(request);

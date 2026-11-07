@@ -38,14 +38,15 @@ export function leadAdsPageBindings(): LeadAdsPageBinding[] {
         }
         for (const row of [...optedIn, ...explicit]) {
             const { page, tokenEnv, name } = row;
-            const company = uuid(row.company);
+            const company = uuid(row.company).toLowerCase();
             if (typeof page !== 'string' || !/^\d{1,100}$/.test(page) ||
                 typeof tokenEnv !== 'string' || !/^META_[A-Z0-9_]+_TOKEN$/.test(tokenEnv) ||
                 (name !== undefined && (typeof name !== 'string' || !name.trim() || name.trim().length > 120))) {
                 throw new Error('INVALID_PAGE_BINDING');
             }
             const existing = legacy.get(page);
-            if ((existing && existing.company !== company) || (company === RELEASE_COMPANY && !RELEASE_PAGES.has(page))) {
+            const releaseCompany = company === RELEASE_COMPANY;
+            if ((existing && existing.company.toLowerCase() !== company) || (releaseCompany !== RELEASE_PAGES.has(page))) {
                 throw new Error('PAGE_NOT_ALLOWED');
             }
             ads.set(page, {
@@ -61,7 +62,7 @@ export function leadAdsPageBindings(): LeadAdsPageBinding[] {
 }
 
 export function isLeadAdsAdAccountAllowed(company: string, adAccountId: string): boolean {
-    return company !== RELEASE_COMPANY || adAccountId === RELEASE_AD_ACCOUNT;
+    return (company.toLowerCase() === RELEASE_COMPANY) === (adAccountId === RELEASE_AD_ACCOUNT);
 }
 
 // The live IDs must come from the reviewed owner inventory. Fixtures for
