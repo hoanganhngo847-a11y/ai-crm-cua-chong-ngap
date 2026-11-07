@@ -216,6 +216,68 @@ export type MetaEvent = {
     watermark: number | null;
 };
 
+export type MetaLeadgenChange = {
+    kind: 'LEADGEN';
+    page: string;
+    time: string;
+    leadgenId: string;
+    formId: string;
+    adId: string | null;
+    adgroupId: string | null;
+    createdTime: number;
+    raw: Record<string, unknown>;
+};
+
+export function parseLeadgenChanges(body: unknown, page: string): MetaLeadgenChange[] {
+    const root = object(body);
+    if (root.object !== 'page' || !Array.isArray(root.entry)) {
+        throw new ChannelError('INVALID_WEBHOOK');
+    }
+
+    const result: MetaLeadgenChange[] = [];
+
+    for (const value of root.entry) {
+        const entry = object(value);
+        if (entry.id !== page) {
+            throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+        }
+
+        if (!Array.isArray(entry.changes)) continue;
+
+        for (const item of entry.changes) {
+            const change = object(item);
+            if (change.field !== 'leadgen') continue;
+
+            const val = object(change.value);
+            const leadgenId = text(val.leadgen_id, 100);
+            const formId = text(val.form_id, 100);
+            const pageId = text(val.page_id, 100);
+
+            if (pageId !== page) {
+                throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+            }
+
+            const adId = typeof val.ad_id === 'string' && val.ad_id.trim() ? val.ad_id.trim() : null;
+            const adgroupId = typeof val.adgroup_id === 'string' && val.adgroup_id.trim() ? val.adgroup_id.trim() : null;
+            const createdTime = typeof val.created_time === 'number' ? val.created_time : Math.floor(Date.now() / 1000);
+
+            result.push({
+                kind: 'LEADGEN',
+                page,
+                time: new Date(createdTime * 1000).toISOString(),
+                leadgenId,
+                formId,
+                adId,
+                adgroupId,
+                createdTime,
+                raw: change,
+            });
+        }
+    }
+
+    return result;
+}
+
 export function parseMeta(body: unknown, page: string): MetaEvent[] {
     const root = object(body);
 

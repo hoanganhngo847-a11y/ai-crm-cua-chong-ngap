@@ -23,17 +23,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3
         with:
-          version: latest
+          version: '2.119.0'
       - run: npm ci
+      - run: npm run test:migration-integrity
       - run: npm run test:customer-360
       - run: npm run test:campaigns
       - run: npm run test:ai-brain
       - run: npm run test:javis-brain
       - run: npm run build:javis-brain
       - run: supabase start -x studio,logflare,vector
-      - run: supabase db reset
+      - run: supabase db reset --local
       - run: npx tsx --conditions=react-server --test tests/ai-brain/zalo-sla-retry-db.test.ts
       - run: npm run test:customer-360:db
       - run: npm run test:campaigns:db
@@ -60,3 +61,64 @@ jobs:
       - run: npm run test:voice
       - run: npm run build
       - run: git diff --check
+
+  meta-ads-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-fixture-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: local-fixture-service-key
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - id: dependencies
+        run: npm ci
+      - run: npm run test:migration-integrity
+      - if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run test:meta-ads
+      - if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run test:omnichannel
+      - if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run typecheck
+      - if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run lint
+      - if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run build
+
+  meta-ads-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3
+        with:
+          version: '2.119.0'
+      - run: npm ci
+      - name: Replay active migrations in a disposable Supabase stack
+        id: replay
+        run: |
+          supabase start -x studio,logflare,vector
+          supabase db reset --local
+          pg_version=$(docker exec supabase_db_ai-crm-cua-chong-ngap psql -X -U postgres -d postgres -Atc 'show server_version_num')
+          test "$pg_version" = 170011
+          docker exec supabase_db_ai-crm-cua-chong-ngap psql -X -U postgres -d postgres -Atc 'select version()'
+      - run: npm run test:meta-ads:db
+      - if: ${{ !cancelled() && steps.replay.outcome == 'success' }}
+        run: npm run test:omnichannel:db

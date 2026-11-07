@@ -4,6 +4,7 @@ import {
     ChannelError,
     object,
     parseMeta,
+    parseLeadgenChanges,
     readBody,
     secureEqual,
     validSignature,
@@ -20,6 +21,8 @@ import {
     lookupFacebookDisplayName,
     promoteFacebookCustomerDisplayName,
 } from '@/features/omnichannel/facebook/profile';
+import { leadAdsPageBindings } from '@/features/omnichannel/facebook/lead-ads-binding';
+import { processLeadAdsChange } from '@/features/omnichannel/facebook/lead-ads';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import {
@@ -93,13 +96,35 @@ export async function POST(request: Request) {
         if (body.object !== 'page' || !Array.isArray(body.entry) || body.entry.length > 200) {
             throw new ChannelError('INVALID_WEBHOOK');
         }
-        const batches = body.entry.map((value) => {
+        const batches: Array<{ config: ReturnType<typeof binding>; events: ReturnType<typeof parseMeta> }> = [];
+        const leadgen: Array<{
+            config: ReturnType<typeof leadAdsPageBindings>[number];
+            change: ReturnType<typeof parseLeadgenChanges>[number];
+        }> = [];
+        for (const value of body.entry) {
             const entry = object(value);
             if (typeof entry.id !== 'string') throw new ChannelError('INVALID_WEBHOOK');
-            const config = binding(entry.id);
-            return { config, events: parseMeta({ object: 'page', entry: [entry] }, config.page) };
-        });
-        if (batches.reduce((count, batch) => count + batch.events.length, 0) > 200) {
+            const envelope = { object: 'page', entry: [entry] };
+            let messenger: ReturnType<typeof binding> | undefined;
+            let messengerBindingError: unknown;
+            try {
+                messenger = binding(entry.id);
+            } catch (error) {
+                messengerBindingError = error;
+            }
+            const hasLeadgen = Array.isArray(entry.changes) &&
+                entry.changes.some(change => change?.field === 'leadgen');
+            const ads = hasLeadgen
+                ? leadAdsPageBindings().find(config => config.page === entry.id)
+                : undefined;
+
+            if (!messenger && !ads) throw messengerBindingError;
+            if (messenger) batches.push({ config: messenger, events: parseMeta(envelope, messenger.page) });
+            if (ads && hasLeadgen) {
+                for (const change of parseLeadgenChanges(envelope, ads.page)) leadgen.push({ config: ads, change });
+            }
+        }
+        if (batches.reduce((count, batch) => count + batch.events.length, leadgen.length) > 200) {
             throw new ChannelError('TOO_MANY_EVENTS', 413);
         }
 
@@ -166,6 +191,16 @@ export async function POST(request: Request) {
                 });
             }
         }
+
+        let leadgenFailed = false;
+        for (const { config, change } of leadgen) {
+            try {
+                await processLeadAdsChange(config, change);
+            } catch {
+                leadgenFailed = true;
+            }
+        }
+        if (leadgenFailed) throw new ChannelError('LEAD_INGESTION_FAILED', 503);
 
         console.info('[meta-webhook] processed=true');
         return Response.json({ received: true });
