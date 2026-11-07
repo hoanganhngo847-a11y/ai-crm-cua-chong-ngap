@@ -1,0 +1,396 @@
+import 'server-only';
+
+import {
+    ChannelError,
+    normalizePhone,
+    type MetaLeadgenChange,
+} from './core';
+import { assertApprovedLeadAdsForm, type LeadAdsPageBinding } from './lead-ads-binding';
+import { rpc } from './server';
+import { graphVersion } from './graph-api';
+import { getMetaPageToken } from './page-token-vault';
+import { fetchMetaAdCreativeSnapshot, type MetaAdCreativeSnapshot } from './marketing-sync';
+
+export interface MetaLeadData {
+    id: string;
+    created_time?: string;
+    ad_id?: string;
+    ad_name?: string;
+    adset_id?: string;
+    adset_name?: string;
+    campaign_id?: string;
+    campaign_name?: string;
+    form_id?: string;
+    form_name?: string;
+    field_data?: Array<{
+        name: string;
+        values: string[];
+    }>;
+    attributionStatus?: 'PENDING_SYNC';
+}
+
+export interface IngestedLeadResult {
+    leadgenId: string;
+    customerId?: string;
+    interactionId?: string;
+    touchpointId?: string;
+    status: 'PROCESSED' | 'EXISTING' | 'FAILED';
+    error?: string;
+}
+
+/**
+ * Fetch lead details from Meta Graph API. Only an explicit optional-field
+ * rejection may degrade to the minimal field set. Generic HTTP 400 responses
+ * are not permission errors and must never trigger a second request.
+ */
+const LEAD_FIELDS_FULL =
+    'id,created_time,form_id,form_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data';
+const LEAD_FIELDS_MINIMAL = 'id,created_time,form_id,field_data';
+const OPTIONAL_LEAD_FIELDS = [
+    'form_name', 'ad_id', 'ad_name', 'adset_id', 'adset_name', 'campaign_id', 'campaign_name',
+] as const;
+
+interface MetaGraphError {
+    code: number | null;
+    message: string;
+}
+
+async function readMetaGraphError(response: Response): Promise<MetaGraphError> {
+    try {
+        const payload = await response.json() as { error?: { code?: unknown; message?: unknown } };
+        const graphError = payload?.error;
+        return {
+            code: typeof graphError?.code === 'number' ? graphError.code : null,
+            message: typeof graphError?.message === 'string' ? graphError.message : '',
+        };
+    } catch {
+        return { code: null, message: '' };
+    }
+}
+
+function isOptionalLeadFieldUnavailable(status: number, error: MetaGraphError): boolean {
+    if (status !== 400 || error.code !== 100) return false;
+    const message = error.message.toLowerCase();
+    const namesOptionalField = OPTIONAL_LEAD_FIELDS.some((field) => message.includes(field));
+    const explicitlyUnavailable = /non.?exist(?:ent|ing) field|unknown field|field.{0,60}(?:not available|does not exist|cannot be requested)|(?:not available|does not exist).{0,60}field/.test(message);
+    return namesOptionalField && explicitlyUnavailable;
+}
+
+function classifyLeadReadFailure(status: number, error: MetaGraphError): ChannelError {
+    const message = error.message.toLowerCase();
+    if (status === 429) return new ChannelError('PENDING_SYNC', 429);
+    if (status === 408 || status >= 500) return new ChannelError('PENDING_SYNC', 503);
+    if (status === 401 || status === 403 || [10, 190, 200].includes(error.code ?? -1)) {
+        return new ChannelError('PERMISSION_DENIED', 403);
+    }
+    if (status === 404 || error.code === 803
+        || (error.code === 100 && /does not exist|not found/.test(message) && !/permission/.test(message))) {
+        return new ChannelError('DATA_UNAVAILABLE', 404);
+    }
+    if (status >= 400 && status < 500) return new ChannelError('INVALID_REQUEST', 422);
+    return new ChannelError('PENDING_SYNC', 503);
+}
+
+export async function fetchMetaLeadDetails(
+    leadgenId: string,
+    pageAccessToken: string,
+    fetchDouble?: typeof fetch,
+): Promise<MetaLeadData> {
+    const fetchFn = fetchDouble || fetch;
+    const version = graphVersion();
+    let fields = LEAD_FIELDS_FULL;
+    let attributionPending = false;
+
+    for (;;) {
+        const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`);
+        url.searchParams.set('fields', fields);
+
+        let response: Response;
+        try {
+            response = await fetchFn(url.toString(), {
+                method: 'GET',
+                headers: { Authorization: `Bearer ${pageAccessToken}` },
+                redirect: 'error',
+                cache: 'no-store',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new ChannelError('PENDING_SYNC', 503);
+        }
+
+        if (response.ok) {
+            try {
+                const payload = await response.json() as MetaLeadData;
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload) || typeof payload.id !== 'string') {
+                    throw new Error('INVALID_META_LEAD_RESPONSE');
+                }
+                return attributionPending ? { ...payload, attributionStatus: 'PENDING_SYNC' } : payload;
+            } catch {
+                throw new ChannelError('PENDING_SYNC', 503);
+            }
+        }
+
+        const graphError = await readMetaGraphError(response);
+        if (!attributionPending && fields !== LEAD_FIELDS_MINIMAL
+            && isOptionalLeadFieldUnavailable(response.status, graphError)) {
+            attributionPending = true;
+            console.warn('[lead-ads] optional_attribution_fields_unavailable status=400 fallback=minimal');
+            fields = LEAD_FIELDS_MINIMAL;
+            continue;
+        }
+
+        const failure = classifyLeadReadFailure(response.status, graphError);
+        console.error(`[lead-ads] fetch_failed status=${response.status} code=${failure.code}`);
+        throw failure;
+    }
+}
+/**
+ * Normalize and extract fields from Lead Ads field_data.
+ *
+ * phoneStatus reports whether the form carried a usable canonical phone:
+ * 'VALID' (normalized), 'INVALID' (a phone field existed but failed
+ * normalization) or 'MISSING' (no phone field). Invalid and missing phones are
+ * preserved for review downstream; the raw value itself never leaves these
+ * production modules and is masked in every customer-visible representation.
+ */
+export function extractLeadFields(fieldData: Array<{ name: string; values: string[] }> = []) {
+    let rawPhone: string | null = null;
+    let normalizedPhone: string | null = null;
+    let fullName: string | null = null;
+    let email: string | null = null;
+    let city: string | null = null;
+    const otherAnswers: Array<{ label: string; value: string }> = [];
+
+    for (const field of fieldData) {
+        const name = (field.name || '').toLowerCase().trim();
+        const value = Array.isArray(field.values) && field.values.length > 0 ? String(field.values[0] || '').trim() : '';
+        if (!value) continue;
+
+        if (name === 'phone_number' || name === 'phone' || name.includes('phone') || name.includes('so_dien_thoai') || name.includes('sdt')) {
+            rawPhone = value;
+            try {
+                normalizedPhone = normalizePhone(value);
+            } catch {
+                // Invalid phone candidate: preserved for review, never used for identity.
+            }
+        } else if (name === 'full_name' || name === 'name' || name === 'ho_va_ten' || name === 'ho_ten') {
+            fullName = value;
+        } else if (name === 'email' || name.includes('email')) {
+            email = value;
+        } else if (name === 'city' || name === 'thanh_pho' || name.includes('city')) {
+            city = value;
+        } else {
+            otherAnswers.push({ label: field.name, value });
+        }
+    }
+
+    const phoneStatus: 'VALID' | 'INVALID' | 'MISSING' =
+        normalizedPhone !== null ? 'VALID' : rawPhone !== null ? 'INVALID' : 'MISSING';
+
+    return {
+        rawPhone,
+        normalizedPhone,
+        phoneStatus,
+        fullName,
+        email,
+        city,
+        otherAnswers,
+    };
+}
+
+/**
+ * Format lead form answers into a readable safe note (without exposing raw phone)
+ */
+export function formatLeadAdsSafeContent(
+    leadData: MetaLeadData,
+    fields: ReturnType<typeof extractLeadFields>,
+): string {
+    const lines: string[] = ['[Facebook Lead Ads - Biểu mẫu tức thì]'];
+
+    if (fields.fullName) lines.push(`Họ tên: ${fields.fullName}`);
+    if (fields.email) lines.push(`Email: [email đã ẩn]`);
+    if (fields.rawPhone) lines.push(`SĐT: [số liên hệ đã ẩn]`);
+    if (fields.city) lines.push(`Tỉnh/Thành: ${fields.city}`);
+
+    if (leadData.campaign_name) lines.push(`Chiến dịch: ${leadData.campaign_name}`);
+    if (leadData.ad_name) lines.push(`Quảng cáo: ${leadData.ad_name}`);
+
+    for (const item of fields.otherAnswers) {
+        lines.push(`${item.label}: ${item.value}`);
+    }
+
+    return lines.join('\n').slice(0, 5000);
+}
+
+
+function isMetaAdCreativeSnapshot(value: unknown): value is MetaAdCreativeSnapshot {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const snapshot = value as Record<string, unknown>;
+    return (snapshot.schemaVersion === 1 || snapshot.schemaVersion === 2)
+        && typeof snapshot.adId === 'string'
+        && (snapshot.pageId === undefined || typeof snapshot.pageId === 'string')
+        && (snapshot.pageIdConflict === undefined || typeof snapshot.pageIdConflict === 'boolean')
+        && typeof snapshot.capturedAt === 'string'
+        && ['AVAILABLE', 'PARTIAL', 'PENDING_SYNC', 'UNAVAILABLE'].includes(String(snapshot.status))
+        && ['META_MARKETING_API', 'NONE'].includes(String(snapshot.source))
+        && ['AT_LEAD_INTAKE', 'BACKFILL'].includes(String(snapshot.captureTiming))
+        && Array.isArray(snapshot.headlines)
+        && Array.isArray(snapshot.descriptions)
+        && Array.isArray(snapshot.carouselAssets)
+        && Array.isArray(snapshot.imageAssets)
+        && Array.isArray(snapshot.videoAssets);
+}
+
+interface LeadgenCheckpoint {
+    lead_data?: MetaLeadData;
+    creative_snapshot?: unknown;
+    leadgen_event_binding?: unknown;
+    leadgen_ad_id_conflict?: unknown;
+    leadgen_page_evidence_conflict?: unknown;
+    payload?: { ad_id?: string };
+}
+
+/**
+ * Ingest a Meta Lead Ads event into CRM with attribution touchpoint
+ */
+export async function processLeadAdsChange(
+    config: LeadAdsPageBinding,
+    change: MetaLeadgenChange,
+    customFetch?: typeof fetch,
+): Promise<IngestedLeadResult> {
+    if (!config.leadAdsEnabled || change.page !== config.page) throw new ChannelError('PAGE_NOT_ALLOWED', 403);
+    assertApprovedLeadAdsForm(config, change.formId);
+    const claim = await rpc('claim_meta_leadgen_event', {
+        p_company_id: config.company, p_page_id: config.page, p_leadgen_id: change.leadgenId,
+        p_form_id: change.formId || null, p_ad_id: change.adId || null, p_occurred: change.time,
+    }) as { status?: string; claim_token?: string; occurred_at?: string; form_id?: string; ingest_args?: LeadgenCheckpoint } | null;
+    if (claim?.status === 'ALREADY_PROCESSED') return { leadgenId: change.leadgenId, status: 'EXISTING' };
+    if (claim?.status !== 'CLAIMED' || !claim.claim_token) throw new ChannelError('LEADGEN_CLAIM_UNAVAILABLE', 503);
+    const claimToken = claim.claim_token;
+    const finalize = (status: 'PROCESSED' | 'FAILED', error?: string) => rpc('finalize_meta_leadgen_event', {
+        p_company_id: config.company, p_leadgen_id: change.leadgenId,
+        p_claim_token: claimToken, p_status: status, p_error: error || null,
+    });
+    try {
+        // Reuse the immutable lead response AND creative snapshot after partial
+        // intake. A retry must never replace the ad version first observed for this
+        // submission with a newer version edited in Meta in the meantime.
+        // Only the claim owner needing a fresh lead reads the Page token. Completed
+        // events and durable retries remain independent of token expiry/outages;
+        // a failed token read is finalized FAILED under this same fenced lease.
+        const leadData = claim.ingest_args?.lead_data || await fetchMetaLeadDetails(
+            change.leadgenId,
+            await getMetaPageToken(config.company, config.page, config.tokenEnv),
+            customFetch,
+        );
+        const formId = claim.form_id || change.formId;
+        if (leadData.id !== change.leadgenId || (leadData.form_id && leadData.form_id !== formId)) {
+            throw new ChannelError('LEADGEN_IDENTITY_MISMATCH', 422);
+        }
+        const fields = extractLeadFields(leadData.field_data || []);
+        const webhookAdId = claim.ingest_args ? claim.ingest_args.payload?.ad_id || null : change.adId || null;
+        const leadDetailsAdId = leadData.ad_id || null;
+        const adIdConflict = claim.ingest_args
+            ? claim.ingest_args.leadgen_ad_id_conflict !== undefined && claim.ingest_args.leadgen_ad_id_conflict !== false
+            : Boolean(webhookAdId && leadDetailsAdId && webhookAdId !== leadDetailsAdId);
+        const adId = leadDetailsAdId || webhookAdId;
+        // This module is called by the webhook route only after the request signature
+        // has been verified. Preserve that contemporaneous Page/Ad binding separately
+        // from creative snapshots, which may later be backfilled.
+        const leadgenEventBinding = claim.ingest_args
+            ? claim.ingest_args.leadgen_event_binding
+            : !adIdConflict && webhookAdId && adId === webhookAdId && change.page === config.page
+            ? {
+                source: 'SIGNED_META_WEBHOOK' as const,
+                leadgenId: change.leadgenId,
+                pageId: config.page,
+                adId: webhookAdId,
+            }
+            : null;
+        const persistedCreativeSnapshot = isMetaAdCreativeSnapshot(claim.ingest_args?.creative_snapshot)
+            ? claim.ingest_args.creative_snapshot
+            : null;
+        // A legacy checkpoint may predate creative snapshots. Replay it as stored;
+        // scheduled attribution backfill can enrich it later without coupling a
+        // webhook retry to another Graph read or changing its intake evidence.
+        const creativeSnapshot = adId
+            ? persistedCreativeSnapshot || (claim.ingest_args ? null : await fetchMetaAdCreativeSnapshot(config.company, adId, {
+                customFetch,
+                captureTiming: 'AT_LEAD_INTAKE',
+                timeoutMs: 5000,
+            }))
+            : null;
+        // Leadgen retrieval may omit optional campaign/ad-set fields even when
+        // the read-only Marketing API returns them on the exact Ad object.
+        // Only accept this fallback when the snapshot came from Meta itself;
+        // pending/unavailable snapshots must never manufacture attribution.
+        const verifiedCreative = creativeSnapshot?.source === 'META_MARKETING_API'
+            ? creativeSnapshot
+            : null;
+        const campaignId = leadData.campaign_id || verifiedCreative?.campaignId || null;
+        const campaignName = leadData.campaign_name || verifiedCreative?.campaignName || null;
+        const adsetId = leadData.adset_id || verifiedCreative?.adsetId || null;
+        const adsetName = leadData.adset_name || verifiedCreative?.adsetName || null;
+        const adName = leadData.ad_name || verifiedCreative?.adName || null;
+        const pageEvidenceConflict = claim.ingest_args
+            ? claim.ingest_args.leadgen_page_evidence_conflict !== undefined && claim.ingest_args.leadgen_page_evidence_conflict !== false
+            : Boolean(creativeSnapshot?.captureTiming === 'AT_LEAD_INTAKE' && (
+                creativeSnapshot.pageIdConflict
+                || (creativeSnapshot.pageId && creativeSnapshot.pageId !== config.page)
+                || (creativeSnapshot.source === 'META_MARKETING_API' && creativeSnapshot.adId !== adId)
+            ));
+        const attributionEvidence = {
+            ...(creativeSnapshot ? { creative_snapshot: creativeSnapshot } : {}),
+            ...(leadgenEventBinding ? { leadgen_event_binding: leadgenEventBinding } : {}),
+            ...(adIdConflict ? { leadgen_ad_id_conflict: true } : {}),
+            ...(pageEvidenceConflict ? { leadgen_page_evidence_conflict: true } : {}),
+        };
+        const adsContextData = Object.keys(attributionEvidence).length > 0 ? attributionEvidence : null;
+        const ingest = await rpc('ingest_meta_leadgen_event', {
+            p_company_id: config.company, p_leadgen_id: change.leadgenId, p_claim_token: claimToken,
+            p_ingest: {
+                name: (fields.fullName || 'Khách Lead Ads').slice(0, 100), phone: fields.normalizedPhone,
+                content: formatLeadAdsSafeContent(leadData, fields), lead_data: leadData,
+                ...attributionEvidence,
+                payload: { ...change.raw, leadgen_id: change.leadgenId, form_id: formId, ad_id: adId,
+                    campaign_id: campaignId, crm_lead_ads: true, field_data_keys: (leadData.field_data || []).map(f => f.name),
+                    ...(adIdConflict ? { crm_lead_ad_id_conflict: true } : {}),
+                    crm_phone_detection: { status: fields.phoneStatus } },
+            },
+        }) as { interaction_id?: string; customer_id?: string;
+            phone_match_status?: string; is_duplicate_phone?: boolean } | null;
+        if (!ingest?.interaction_id || !ingest.customer_id) throw new ChannelError('LEADGEN_INTAKE_INCOMPLETE', 503);
+        const touchpointId = await rpc('record_lead_attribution_touchpoint', {
+            p_company: config.company, p_customer: ingest.customer_id, p_interaction: ingest.interaction_id,
+            p_channel: 'FACEBOOK_LEAD_ADS', p_page_id: config.page, p_page_name: config.name || null,
+            p_meta_campaign_id: campaignId, p_campaign_name: campaignName,
+            p_meta_ad_set_id: adsetId, p_ad_set_name: adsetName,
+            p_meta_ad_id: adId, p_ad_name: adName, p_meta_form_id: formId,
+            p_form_name: leadData.form_name || null, p_meta_leadgen_id: change.leadgenId,
+            p_referral_source: 'LEAD_ADS', p_referral_type: 'INSTANT_FORM',
+            p_ads_context_data: adsContextData,
+            p_attribution_status: leadData.attributionStatus || 'UNATTRIBUTED', p_attribution_method: 'DIRECT_LEADGEN',
+            p_occurred: claim.occurred_at || change.time,
+        });
+        if (typeof touchpointId !== 'string' || !touchpointId) throw new ChannelError('LEADGEN_ATTRIBUTION_INCOMPLETE', 503);
+        // Persist the phone match verdict on the attribution event so the customer
+        // history can show every submission, including duplicate-phone indicators.
+        // Idempotent across webhook retries: the durable event replay yields the
+        // exact same verdict recorded at first admission.
+        await rpc('mark_lead_attribution_phone_match', {
+            p_company: config.company, p_meta_leadgen_id: change.leadgenId,
+            p_phone_match_status: typeof ingest.phone_match_status === 'string' && ingest.phone_match_status
+                ? ingest.phone_match_status : 'NO_PHONE',
+            p_is_duplicate_phone: typeof ingest.is_duplicate_phone === 'boolean' ? ingest.is_duplicate_phone : null,
+        });
+        if (await finalize('PROCESSED') !== true) throw new ChannelError('LEADGEN_FINALIZATION_FAILED', 503);
+        return { leadgenId: change.leadgenId, customerId: ingest.customer_id, interactionId: ingest.interaction_id,
+            touchpointId, status: 'PROCESSED' };
+    } catch (error) {
+        // Persist the underlying failure class for operator triage while keeping
+        // the webhook response retryable and the external error surface generic.
+        const failureCode = error instanceof ChannelError ? error.code : 'LEADGEN_PROCESSING_FAILED';
+        try { await finalize('FAILED', failureCode); } catch { /* Retry via lease expiry. */ }
+        throw new ChannelError('LEADGEN_PROCESSING_FAILED', 503);
+    }
+}

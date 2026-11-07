@@ -1,4 +1,5 @@
 import React from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getActorContext } from '../../../../lib/auth/context';
@@ -33,6 +34,234 @@ export const metadata = {
   title: 'Hồ sơ khách hàng 360 | AI CRM Cửa Chống Ngập',
   description: 'Hồ sơ chi tiết 360 độ và dòng thời gian hành trình khách hàng',
 };
+
+
+type MetaCreativeAssetView = {
+  kind?: string;
+  imageUrl?: string | null;
+  thumbnailUrl?: string | null;
+  videoId?: string | null;
+  title?: string | null;
+  description?: string | null;
+  primaryText?: string | null;
+  destinationUrl?: string | null;
+};
+
+type MetaCreativeSnapshotView = {
+  status?: string;
+  captureTiming?: string;
+  capturedAt?: string;
+  reason?: string;
+  adId?: string;
+  adName?: string;
+  campaignId?: string;
+  campaignName?: string;
+  adsetId?: string;
+  adsetName?: string;
+  creativeId?: string;
+  creativeName?: string;
+  format?: string;
+  primaryText?: string;
+  primaryTexts: string[];
+  headlines: string[];
+  descriptions: string[];
+  ctaType?: string;
+  destinationUrl?: string;
+  previewUrl?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
+  videoId?: string;
+  carouselAssets: MetaCreativeAssetView[];
+  imageAssets: MetaCreativeAssetView[];
+  videoAssets: MetaCreativeAssetView[];
+};
+
+
+type MetaRawAttributionView = {
+  campaignId?: string;
+  campaignName?: string;
+  adsetId?: string;
+  adsetName?: string;
+  adId?: string;
+  adName?: string;
+  formId?: string;
+  formName?: string;
+};
+
+function asMetaRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function metaString(value: unknown, maxLength = 4000): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text ? text.slice(0, maxLength) : undefined;
+}
+
+function safeMetaImageUrl(value: unknown): string | undefined {
+  const raw = metaString(value, 2048);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    const allowed =
+      host === 'fbcdn.net' || host.endsWith('.fbcdn.net') ||
+      host === 'fbsbx.com' || host.endsWith('.fbsbx.com') ||
+      host === 'facebook.com' || host.endsWith('.facebook.com');
+    if (url.protocol !== 'https:' || !allowed || url.username || url.password) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function safeMetaDestination(value: unknown): string | undefined {
+  const raw = metaString(value, 2048);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function safeMetaPreview(value: unknown): string | undefined {
+  const raw = metaString(value, 2048);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || !(host === 'facebook.com' || host.endsWith('.facebook.com')) || url.username || url.password) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function readMetaCreativeSnapshot(adsContextData: unknown): MetaCreativeSnapshotView | null {
+  const context = asMetaRecord(adsContextData);
+  const raw = asMetaRecord(context?.creative_snapshot);
+  if (!raw) return null;
+
+  const readAssets = (value: unknown): MetaCreativeAssetView[] => {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 10).map((item) => {
+      const asset = asMetaRecord(item) || {};
+      return {
+        kind: metaString(asset.kind, 20),
+        imageUrl: safeMetaImageUrl(asset.imageUrl) || null,
+        thumbnailUrl: safeMetaImageUrl(asset.thumbnailUrl) || null,
+        videoId: metaString(asset.videoId, 128) || null,
+        title: metaString(asset.title, 500) || null,
+        description: metaString(asset.description, 1000) || null,
+        primaryText: metaString(asset.primaryText, 2000) || null,
+        destinationUrl: safeMetaDestination(asset.destinationUrl) || null,
+      };
+    }).filter((asset) => Boolean(asset.imageUrl || asset.thumbnailUrl || asset.videoId || asset.title || asset.description));
+  };
+
+  const readList = (value: unknown): string[] => Array.isArray(value)
+    ? value.slice(0, 8).map((item) => metaString(item, 3000)).filter((item): item is string => Boolean(item))
+    : [];
+
+  return {
+    status: metaString(raw.status, 40),
+    captureTiming: metaString(raw.captureTiming, 40),
+    adId: metaString(raw.adId, 128),
+    adName: metaString(raw.adName, 500),
+    campaignId: metaString(raw.campaignId, 128),
+    campaignName: metaString(raw.campaignName, 500),
+    adsetId: metaString(raw.adsetId, 128),
+    adsetName: metaString(raw.adsetName, 500),
+    creativeId: metaString(raw.creativeId, 128),
+    creativeName: metaString(raw.creativeName, 500),
+    format: metaString(raw.format, 40),
+    capturedAt: metaString(raw.capturedAt, 64),
+    reason: metaString(raw.reason, 120),
+    primaryText: metaString(raw.primaryText, 5000),
+    primaryTexts: readList(raw.primaryTexts).length
+      ? readList(raw.primaryTexts)
+      : [metaString(raw.primaryText, 5000)].filter((item): item is string => Boolean(item)),
+    headlines: readList(raw.headlines),
+    descriptions: readList(raw.descriptions),
+    ctaType: metaString(raw.ctaType, 100),
+    destinationUrl: safeMetaDestination(raw.destinationUrl),
+    previewUrl: safeMetaPreview(raw.previewUrl),
+    imageUrl: safeMetaImageUrl(raw.imageUrl),
+    thumbnailUrl: safeMetaImageUrl(raw.thumbnailUrl),
+    videoId: metaString(raw.videoId, 128),
+    carouselAssets: readAssets(raw.carouselAssets),
+    imageAssets: readAssets(raw.imageAssets),
+    videoAssets: readAssets(raw.videoAssets),
+  };
+}
+
+
+
+function readMetaRawAttribution(adsContextData: unknown): MetaRawAttributionView {
+  const context = asMetaRecord(adsContextData);
+  const raw = asMetaRecord(context?.raw_meta);
+  if (!raw) return {};
+  return {
+    campaignId: metaString(raw.campaign_id, 128),
+    campaignName: metaString(raw.campaign_name, 500),
+    adsetId: metaString(raw.adset_id, 128),
+    adsetName: metaString(raw.adset_name, 500),
+    adId: metaString(raw.ad_id, 128),
+    adName: metaString(raw.ad_name, 500),
+    formId: metaString(raw.form_id, 128),
+    formName: metaString(raw.form_name, 500),
+  };
+}
+
+function formatMetaTimestamp(value: string | null | undefined): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function metaCreativeReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'AD_NOT_SYNCED':
+      return 'Chưa có mapping quảng cáo trong tài khoản Meta đã đồng bộ; hệ thống sẽ thử lại.';
+    case 'AD_LOOKUP_FAILED':
+      return 'Chưa tra được quảng cáo trong dữ liệu đồng bộ; chưa thể xác minh Campaign/Ad Set.';
+    case 'TOKEN_LOOKUP_FAILED':
+    case 'TOKEN_UNAVAILABLE':
+      return 'Chưa có token hợp lệ để đọc tài khoản quảng cáo Meta.';
+    case 'TOKEN_EXPIRED':
+    case 'META_TOKEN_INVALID_OR_EXPIRED':
+      return 'Token Meta hết hạn hoặc không hợp lệ; cần kết nối lại tài khoản quảng cáo.';
+    case 'TOKEN_DECRYPTION_FAILED':
+      return 'Không thể sử dụng token Meta đã lưu; cần kiểm tra cấu hình kết nối bảo mật.';
+    case 'META_PERMISSION_DENIED':
+      return 'Meta từ chối quyền đọc quảng cáo/creative; cần kiểm tra quyền đã cấp cho ứng dụng.';
+    case 'META_TEMPORARY_FAILURE':
+      return 'Meta tạm thời lỗi hoặc giới hạn tốc độ; hệ thống sẽ thử đồng bộ lại.';
+    case 'META_INVALID_RESPONSE':
+      return 'Meta trả về dữ liệu không hợp lệ; chưa thể tạo snapshot.';
+    case 'AD_NOT_FOUND_OR_DELETED':
+      return 'Không tìm thấy quảng cáo hoặc quảng cáo không còn khả dụng với quyền hiện tại.';
+    case 'META_CREATIVE_FIELDS_UNAVAILABLE':
+      return 'Meta không cung cấp các trường creative được yêu cầu.';
+    case 'META_CREATIVE_NOT_AVAILABLE':
+      return 'Meta không trả về creative object cho quảng cáo này.';
+    case 'META_CREATIVE_UNAVAILABLE':
+    case 'META_PERMISSION_OR_CREATIVE_UNAVAILABLE':
+      return 'Không lấy được nội dung creative; hiện chưa đủ bằng chứng để kết luận là thiếu quyền hay quảng cáo không còn khả dụng.';
+    default:
+      return 'Chưa lấy được creative từ Meta; thông tin này không được suy đoán.';
+  }
+}
 
 interface CustomerDetailPageProps {
   params: Promise<{ id: string }>;
@@ -83,6 +312,31 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       estimated_price?: string;
     };
     identities?: Array<{ channel: string; external_id: string; verified: boolean }>;
+    touchpoints?: Array<{
+      id: string;
+      touchpoint_type: string;
+      channel: string;
+      page_name: string | null;
+      page_id: string | null;
+      meta_form_id: string | null;
+      meta_leadgen_id: string | null;
+      meta_campaign_id: string | null;
+      campaign_name_snapshot: string | null;
+      meta_ad_set_id: string | null;
+      ad_set_name_snapshot: string | null;
+      meta_ad_id: string | null;
+      ad_name_snapshot: string | null;
+      form_name_snapshot: string | null;
+      ads_context_data: unknown;
+      attribution_status: string;
+      attribution_method: string;
+      normalized_phone_match_status: string | null;
+      is_duplicate_phone: boolean | null;
+      occurred_at: string;
+    }>;
+    first_campaign_name?: string | null;
+    latest_campaign_name?: string | null;
+    attribution_status?: string | null;
   } | null = null;
 
   try {
@@ -140,6 +394,44 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         console.warn('Lỗi khi nạp identities:', idErr);
       }
 
+      let touchpointsList: Array<{
+        id: string;
+        touchpoint_type: string;
+        channel: string;
+        page_name: string | null;
+        page_id: string | null;
+        meta_form_id: string | null;
+        meta_leadgen_id: string | null;
+        meta_campaign_id: string | null;
+        campaign_name_snapshot: string | null;
+        meta_ad_set_id: string | null;
+        ad_set_name_snapshot: string | null;
+        meta_ad_id: string | null;
+        ad_name_snapshot: string | null;
+        form_name_snapshot: string | null;
+        ads_context_data: unknown;
+        attribution_status: string;
+        attribution_method: string;
+        normalized_phone_match_status: string | null;
+        is_duplicate_phone: boolean | null;
+        occurred_at: string;
+      }> = [];
+
+      try {
+        const { data: tpRows } = await supabase
+          .from('lead_attribution_touchpoints')
+          .select('id, touchpoint_type, channel, page_id, page_name, meta_form_id, form_name_snapshot, meta_leadgen_id, meta_campaign_id, campaign_name_snapshot, meta_ad_set_id, ad_set_name_snapshot, meta_ad_id, ad_name_snapshot, ads_context_data, attribution_status, attribution_method, normalized_phone_match_status, is_duplicate_phone, occurred_at')
+          .eq('customer_id', id)
+          .eq('company_id', actor.companyId)
+          .order('occurred_at', { ascending: true });
+
+        if (tpRows) {
+          touchpointsList = tpRows;
+        }
+      } catch (tpErr) {
+        console.warn('Lỗi khi nạp attribution touchpoints:', tpErr);
+      }
+
       customerData = {
         id: dbCustomer.id,
         customer_code: dbCustomer.customer_code,
@@ -149,6 +441,10 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         stage: dbCustomer.stage,
         created_at: dbCustomer.created_at,
         identities: identitiesList,
+        touchpoints: touchpointsList,
+        first_campaign_name: dbCustomer.first_campaign_name,
+        latest_campaign_name: dbCustomer.latest_campaign_name,
+        attribution_status: dbCustomer.attribution_status,
       };
     }
   } catch (err: unknown) {
@@ -171,6 +467,27 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
   } catch (err) {
     console.error('Lỗi khi nạp timeline:', err);
   }
+
+  // Nguồn khách hàng & Lịch sử đăng ký: tổng hợp các lượt Lead Meta của khách.
+  // Touchpoints are ordered chronologically (oldest first) at query time.
+  const allTouchpoints = customerData.touchpoints || [];
+  const metaLeadTouchpoints = allTouchpoints.filter((tp) => tp.channel === 'FACEBOOK_LEAD_ADS');
+  const hasDuplicatePhoneLead = allTouchpoints.some((tp) => tp.is_duplicate_phone === true);
+  const distinctCampaignCount = new Set(
+    metaLeadTouchpoints
+      .map((tp) => tp.meta_campaign_id || tp.campaign_name_snapshot)
+      .filter(Boolean)
+  ).size;
+  const firstSubmission = metaLeadTouchpoints[0] ?? null;
+  const latestSubmission = metaLeadTouchpoints[metaLeadTouchpoints.length - 1] ?? null;
+  const CHANNEL_LABELS: Record<string, string> = {
+    FACEBOOK_LEAD_ADS: 'Facebook Ads',
+    FACEBOOK_MESSENGER: 'Messenger',
+    WEBSITE: 'Website',
+    ZALO: 'Zalo',
+    HOTLINE: 'Hotline',
+    OTHER: 'Khác',
+  };
 
   return (
     <div className="space-y-6">
@@ -281,6 +598,17 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   {new Date(customerData.created_at).toLocaleDateString('vi-VN')}
                 </span>
               </div>
+
+              {metaLeadTouchpoints.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Trạng thái Lead:</span>
+                  <Badge variant={hasDuplicatePhoneLead ? 'warning' : 'success'} size="xs">
+                    {hasDuplicatePhoneLead
+                      ? 'Đã có hồ sơ - Lead trùng số điện thoại'
+                      : 'Đã có hồ sơ - Lead mới'}
+                  </Badge>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -312,6 +640,319 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               ) : (
                 <div className="text-xs text-[var(--text-tertiary)] py-2 text-center">
                   Chưa có danh tính liên kết bổ sung.
+                </div>
+              )}
+            </div>
+          </Card>
+          {/* Nguồn khách hàng & Lịch sử đăng ký (Lead Attribution & Duplicate Phone History) */}
+          <Card className="p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Nguồn khách hàng &amp; Lịch sử đăng ký</CardTitle>
+              <Badge
+                variant={
+                  customerData.attribution_status === 'ATTRIBUTED'
+                    ? 'success'
+                    : customerData.attribution_status === 'INFERRED' || customerData.attribution_status === 'PENDING_SYNC'
+                      ? 'info'
+                      : 'neutral'
+                }
+                size="xs"
+              >
+                {customerData.attribution_status || 'UNATTRIBUTED'}
+              </Badge>
+            </div>
+
+            {metaLeadTouchpoints.length > 0 && (
+              <div className="p-2.5 rounded-lg bg-[var(--surface-secondary)] border border-[var(--border-subtle)] space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Tổng số lượt Lead Meta:</span>
+                  <span className="font-semibold text-[var(--text-primary)]">{metaLeadTouchpoints.length}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-secondary)]">Chiến dịch khác biệt:</span>
+                  <span className="font-semibold text-[var(--text-primary)]">{distinctCampaignCount}</span>
+                </div>
+                {firstSubmission && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-secondary)]">Đây là Lead đầu tiên:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {formatMetaTimestamp(firstSubmission.occurred_at)}
+                      {firstSubmission.campaign_name_snapshot ? ` • ${firstSubmission.campaign_name_snapshot}` : ''}
+                    </span>
+                  </div>
+                )}
+                {latestSubmission && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-secondary)]">Đây là Lead gần nhất:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {formatMetaTimestamp(latestSubmission.occurred_at)}
+                      {latestSubmission.campaign_name_snapshot ? ` • ${latestSubmission.campaign_name_snapshot}` : ''}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Lịch sử đăng ký (chronological) */}
+            <div className="space-y-1.5 pt-1 border-t border-[var(--border-subtle)]">
+              <div className="text-[11px] font-semibold text-text-secondary">
+                Lịch sử đăng ký ({allTouchpoints.length})
+              </div>
+              {allTouchpoints.length > 0 ? (
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {allTouchpoints.map((tp) => {
+                    const rowStatus = tp.is_duplicate_phone === true
+                      ? { label: 'Trùng số điện thoại', variant: 'warning' as const }
+                      : tp.touchpoint_type === 'FIRST_TOUCH'
+                        ? { label: 'Lần đăng ký đầu tiên', variant: 'success' as const }
+                        : { label: tp.channel === 'FACEBOOK_LEAD_ADS' ? 'Lần đăng ký tiếp theo' : 'Tương tác gần nhất', variant: 'neutral' as const };
+                    const attributionState = tp.attribution_status === 'ATTRIBUTED'
+                      ? { label: 'Đã đối chiếu', variant: 'success' as const }
+                      : tp.attribution_status === 'INFERRED'
+                        ? { label: 'Đối chiếu gián tiếp', variant: 'info' as const }
+                        : tp.attribution_status === 'PENDING_SYNC'
+                          ? { label: 'Chờ đối chiếu', variant: 'warning' as const }
+                          : { label: 'Không có attribution', variant: 'neutral' as const };
+                    const hasMetaAdAttribution = tp.channel === 'FACEBOOK_LEAD_ADS'
+                      || (tp.channel === 'FACEBOOK_MESSENGER' && Boolean(tp.meta_ad_id));
+                    const creativeSnapshot = hasMetaAdAttribution
+                      ? readMetaCreativeSnapshot(tp.ads_context_data)
+                      : null;
+                    const rawMeta = hasMetaAdAttribution ? readMetaRawAttribution(tp.ads_context_data) : {};
+                    const creativeAvailable = Boolean(creativeSnapshot && ['AVAILABLE', 'PARTIAL'].includes(creativeSnapshot.status || ''));
+                    const campaignId = tp.meta_campaign_id || (creativeAvailable ? creativeSnapshot?.campaignId : undefined) || rawMeta.campaignId;
+                    const campaignName = tp.campaign_name_snapshot || (creativeAvailable ? creativeSnapshot?.campaignName : undefined) || rawMeta.campaignName;
+                    const campaignIdVerified = Boolean(tp.meta_campaign_id || (creativeAvailable && creativeSnapshot?.campaignId));
+                    const campaignNameVerified = Boolean(tp.campaign_name_snapshot || (creativeAvailable && creativeSnapshot?.campaignName));
+                    const campaignLabel = tp.campaign_name_snapshot || (creativeAvailable ? creativeSnapshot?.campaignName : undefined)
+                      || (tp.attribution_status === 'PENDING_SYNC' ? 'Chờ đối chiếu chiến dịch' : 'Chưa có chiến dịch xác thực');
+                    const adSetId = tp.meta_ad_set_id || (creativeAvailable ? creativeSnapshot?.adsetId : undefined) || rawMeta.adsetId;
+                    const adSetName = tp.ad_set_name_snapshot || (creativeAvailable ? creativeSnapshot?.adsetName : undefined) || rawMeta.adsetName;
+                    const adSetIdVerified = Boolean(tp.meta_ad_set_id || (creativeAvailable && creativeSnapshot?.adsetId));
+                    const adSetNameVerified = Boolean(tp.ad_set_name_snapshot || (creativeAvailable && creativeSnapshot?.adsetName));
+                    const adId = (creativeAvailable ? creativeSnapshot?.adId : undefined) || tp.meta_ad_id || rawMeta.adId;
+                    const adName = tp.ad_name_snapshot || (creativeAvailable ? creativeSnapshot?.adName : undefined) || rawMeta.adName;
+                    const adIdVerified = Boolean(tp.ad_name_snapshot || (creativeAvailable && creativeSnapshot?.adId));
+                    const adNameVerified = Boolean(tp.ad_name_snapshot || (creativeAvailable && creativeSnapshot?.adName));
+                    const formId = tp.meta_form_id || rawMeta.formId;
+                    const formName = tp.form_name_snapshot || rawMeta.formName;
+                    const formNameVerified = Boolean(tp.form_name_snapshot);
+                    const primaryTexts = creativeSnapshot?.primaryTexts?.length
+                      ? creativeSnapshot.primaryTexts
+                      : creativeSnapshot?.primaryText ? [creativeSnapshot.primaryText] : [];
+                    const creativeMedia: Array<{ url: string; alt: string }> = [];
+                    if (creativeSnapshot?.imageUrl) creativeMedia.push({
+                      url: creativeSnapshot.imageUrl,
+                      alt: creativeSnapshot.format === 'VIDEO' ? 'Thumbnail video quảng cáo' : 'Ảnh quảng cáo',
+                    });
+                    if (creativeSnapshot?.thumbnailUrl && creativeSnapshot.thumbnailUrl !== creativeSnapshot.imageUrl) {
+                      creativeMedia.push({ url: creativeSnapshot.thumbnailUrl, alt: 'Thumbnail quảng cáo' });
+                    }
+                    return (
+                      <div
+                        key={tp.id}
+                        className="p-2 rounded bg-[var(--surface-primary)] border border-[var(--border-subtle)] text-[11px] space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-[10px] text-text-tertiary shrink-0">
+                              {new Date(tp.occurred_at).toLocaleDateString('vi-VN')}
+                            </span>
+                            <span className="font-semibold text-text-primary truncate">
+                              {CHANNEL_LABELS[tp.channel] || tp.channel}
+                            </span>
+                          </div>
+                          <Badge variant={rowStatus.variant} size="xs">
+                            {rowStatus.label}
+                          </Badge>
+                        </div>
+                        <div className="text-text-secondary">
+                          Chiến dịch: {campaignLabel}
+                        </div>
+                        {(tp.ad_name_snapshot || tp.form_name_snapshot) && (
+                          <div className="text-[10px] text-text-tertiary">
+                            {tp.ad_name_snapshot ? <span>Quảng cáo: {tp.ad_name_snapshot}</span> : null}
+                            {tp.ad_name_snapshot && tp.form_name_snapshot ? ' • ' : null}
+                            {tp.form_name_snapshot ? <span>Form: {tp.form_name_snapshot}</span> : null}
+                          </div>
+                        )}
+                        {tp.page_name && (
+                          <div className="text-[10px] text-text-tertiary">Trang: {tp.page_name}</div>
+                        )}
+                        {hasMetaAdAttribution && (
+                          <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-semibold text-text-primary">Nguồn quảng cáo Meta</div>
+                              <Badge variant={attributionState.variant} size="xs">{attributionState.label}</Badge>
+                            </div>
+                            {tp.channel === 'FACEBOOK_LEAD_ADS' && (
+                              <div className="text-[10px] text-text-tertiary space-y-0.5">
+                                <div>
+                                  Page: {tp.page_name || 'Facebook Page'}
+                                  <span className="ml-1 font-mono">({tp.page_id || 'Chưa có Page ID'})</span>
+                                </div>
+                                <div>Thời điểm gửi form: {formatMetaTimestamp(tp.occurred_at)}</div>
+                                <div>
+                                  Form: {formName || 'Chưa có tên Form'}
+                                  <span className="ml-1 font-mono">({formId || 'Chưa có Form ID'})</span>
+                                  {!formNameVerified && formName ? <span className="ml-1 text-amber-700">Tên từ Lead API, chưa đối chiếu</span> : null}
+                                </div>
+                                {tp.meta_leadgen_id && <div>Lead ID: <span className="font-mono">{tp.meta_leadgen_id}</span></div>}
+                              </div>
+                            )}
+                            <div className="text-[10px] text-text-secondary space-y-0.5">
+                              <div>
+                                Campaign: {campaignName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({campaignId || '—'})</span>
+                                {campaignId && <span className="ml-1 text-[9px] text-text-tertiary">{campaignIdVerified ? 'Đã đối chiếu' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {campaignName && !campaignNameVerified && <div className="text-amber-700">Tên Campaign do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              <div>
+                                Ad Set: {adSetName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({adSetId || '—'})</span>
+                                {adSetId && <span className="ml-1 text-[9px] text-text-tertiary">{adSetIdVerified ? 'Đã đối chiếu' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {adSetName && !adSetNameVerified && <div className="text-amber-700">Tên Ad Set do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              <div>
+                                Ad: {adName || 'Chưa có tên xác thực'}
+                                <span className="ml-1 font-mono text-[9px] text-text-tertiary">({adId || '—'})</span>
+                                {adId && <span className="ml-1 text-[9px] text-text-tertiary">{adIdVerified ? 'Đã đối chiếu qua dữ liệu quảng cáo' : 'Meta trả về · chưa đối chiếu'}</span>}
+                                {adName && !adNameVerified && <div className="text-amber-700">Tên Ad do Lead API trả về, chưa xác minh bằng dữ liệu tài khoản quảng cáo.</div>}
+                              </div>
+                              {creativeSnapshot?.creativeName && <div>Creative: {creativeSnapshot.creativeName}</div>}
+                              {creativeSnapshot?.creativeId && <div>Creative ID: <span className="font-mono">{creativeSnapshot.creativeId}</span></div>}
+                              {creativeSnapshot?.format && creativeSnapshot.format !== 'UNKNOWN' && <div>Định dạng: {creativeSnapshot.format}</div>}
+                              {creativeSnapshot?.ctaType && <div>CTA: {creativeSnapshot.ctaType}</div>}
+                            </div>
+                            {!campaignId && !adSetId && !adId && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Meta không trả về Campaign ID, Ad Set ID hoặc Ad ID cho lần đăng ký này. Không gán quảng cáo bằng suy đoán.
+                              </div>
+                            )}
+                            {!adId && (campaignId || adSetId) && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Không có Ad ID; chưa thể xác định quảng cáo hoặc creative cụ thể cho lần đăng ký này.
+                              </div>
+                            )}
+                            {creativeSnapshot?.status === 'PENDING_SYNC' && (
+                              <div className="text-[10px] text-amber-700">
+                                Chưa lấy được creative: {metaCreativeReasonLabel(creativeSnapshot.reason)} Lead và touchpoint vẫn được lưu.
+                              </div>
+                            )}
+                            {creativeSnapshot?.status === 'UNAVAILABLE' && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Creative không khả dụng: {metaCreativeReasonLabel(creativeSnapshot.reason)}
+                              </div>
+                            )}
+                            {!creativeSnapshot && adId && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Chưa có snapshot creative cho Ad ID này.
+                              </div>
+                            )}
+                            {creativeSnapshot?.capturedAt && (
+                              <div className="text-[10px] text-text-tertiary">
+                                Snapshot được thu thập lúc {formatMetaTimestamp(creativeSnapshot.capturedAt)}.
+                              </div>
+                            )}
+                            {creativeSnapshot && (
+                              <div className={creativeSnapshot.captureTiming === 'BACKFILL' ? 'text-[10px] text-amber-700' : 'text-[10px] text-text-tertiary'}>
+                                {creativeSnapshot.captureTiming === 'BACKFILL'
+                                  ? 'Snapshot được thu thập sau thời điểm Lead; có thể phản ánh phiên bản quảng cáo tại lúc thu thập, không phải bằng chứng chắc chắn về nội dung khách đã nhìn thấy.'
+                                  : creativeSnapshot.captureTiming === 'AT_LEAD_INTAKE'
+                                    ? 'Snapshot được thu thập trong quá trình tiếp nhận webhook; không chứng minh tuyệt đối đúng tổ hợp quảng cáo đã phân phối cho khách.'
+                                    : 'Không xác định được thời điểm thu thập snapshot; không dùng làm bằng chứng về nội dung đã phân phối.'}
+                              </div>
+                            )}
+                            {creativeAvailable && creativeSnapshot && (
+                              <>
+                                {creativeMedia.length > 0 && (
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {creativeMedia.map((asset) => (
+                                      <div key={asset.url} className="overflow-hidden rounded border border-[var(--border-subtle)] bg-[var(--surface-secondary)]">
+                                        <Image src={asset.url} alt={asset.alt} width={640} height={360} unoptimized className="h-24 w-full object-cover" />
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {creativeSnapshot.carouselAssets.length > 0 && (
+                                  <div className="space-y-1">
+                                    <div className="font-semibold text-text-secondary">Carousel ({creativeSnapshot.carouselAssets.length} thẻ)</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {creativeSnapshot.carouselAssets.map((asset, index) => (
+                                        <div key={`carousel-${index}`} className="rounded border border-[var(--border-subtle)] p-1.5 space-y-1">
+                                          {(asset.imageUrl || asset.thumbnailUrl) && (
+                                            <Image src={(asset.imageUrl || asset.thumbnailUrl)!} alt={asset.title || 'Thẻ Carousel'} width={640} height={360} unoptimized className="h-20 w-full rounded object-cover" />
+                                          )}
+                                          {asset.title && <div className="font-semibold text-text-primary">{asset.title}</div>}
+                                          {asset.description && <div className="text-text-tertiary">{asset.description}</div>}
+                                          {asset.videoId && <div className="font-mono text-text-tertiary">Video ID: {asset.videoId}</div>}
+                                          {asset.destinationUrl && <a href={asset.destinationUrl} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline">Mở đích thẻ</a>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {creativeSnapshot.format === 'DYNAMIC' && (
+                                  <div className="space-y-1">
+                                    <div className="font-semibold text-text-secondary">Thành phần Dynamic Creative</div>
+                                    <div className="text-[10px] text-amber-700">Các mục dưới đây là tập biến thể Meta cung cấp; không chứng minh tổ hợp cụ thể đã được phân phối cho khách.</div>
+                                    {creativeSnapshot.imageAssets.map((asset, index) => (
+                                      <div key={`dynamic-image-${index}`} className="flex items-center gap-2">
+                                        {asset.imageUrl && <Image src={asset.imageUrl} alt="Ảnh biến thể Dynamic Creative" width={160} height={90} unoptimized className="h-12 w-20 rounded object-cover" />}
+                                        <span className="text-text-tertiary">Ảnh biến thể {index + 1}</span>
+                                      </div>
+                                    ))}
+                                    {creativeSnapshot.videoAssets.map((asset, index) => (
+                                      <div key={`dynamic-video-${index}`} className="flex items-center gap-2">
+                                        {asset.thumbnailUrl && <Image src={asset.thumbnailUrl} alt="Thumbnail video biến thể" width={160} height={90} unoptimized className="h-12 w-20 rounded object-cover" />}
+                                        <span className="text-text-tertiary">Video biến thể {index + 1}{asset.videoId ? ` · ID ${asset.videoId}` : ''}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {primaryTexts.length > 0 && (
+                                  <div className="text-[10px] text-text-secondary space-y-1">
+                                    <span className="font-semibold">{creativeSnapshot.format === 'DYNAMIC' ? 'Các biến thể nội dung chính' : 'Nội dung chính'}:</span>
+                                    {primaryTexts.map((text, index) => <div key={`primary-${index}`} className="whitespace-pre-wrap">{text}</div>)}
+                                  </div>
+                                )}
+                                {creativeSnapshot.headlines.length > 0 && (
+                                  <div className="text-[10px] text-text-secondary">
+                                    <span className="font-semibold">Tiêu đề:</span> {creativeSnapshot.headlines.join(' • ')}
+                                  </div>
+                                )}
+                                {creativeSnapshot.descriptions.length > 0 && (
+                                  <div className="text-[10px] text-text-secondary">
+                                    <span className="font-semibold">Mô tả:</span> {creativeSnapshot.descriptions.join(' • ')}
+                                  </div>
+                                )}
+                                {creativeSnapshot.destinationUrl && (
+                                  <a href={creativeSnapshot.destinationUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-[10px] text-[var(--accent)] underline">
+                                    Mở trang đích quảng cáo
+                                  </a>
+                                )}
+                                {creativeSnapshot.previewUrl && (
+                                  <a href={creativeSnapshot.previewUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-[10px] text-[var(--accent)] underline ml-3">
+                                    Mở bản xem trước quảng cáo Meta
+                                  </a>
+                                )}
+                                {creativeSnapshot.videoId && (
+                                  <div className="text-[10px] text-text-tertiary">Video ID: <span className="font-mono">{creativeSnapshot.videoId}</span></div>
+                                )}
+                                {creativeSnapshot.status === 'PARTIAL' && (
+                                  <div className="text-[10px] text-text-tertiary">Meta chỉ trả về một phần thông tin creative.</div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-[var(--text-tertiary)] py-1 text-center">
+                  Chưa có lịch sử đăng ký qua quảng cáo.
                 </div>
               )}
             </div>
