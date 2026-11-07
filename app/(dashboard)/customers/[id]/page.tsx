@@ -5,7 +5,6 @@ import { notFound, redirect } from 'next/navigation';
 import { getActorContext } from '../../../../lib/auth/context';
 import { createClient as createServerClient } from '../../../../lib/supabase/server';
 import { APPLICATION_ROLES } from '../../../../shared/constants/roles';
-import { maskPhone } from '../../../../features/crm/services/customer.service';
 import { InboxService } from '../../../../features/inbox/services/inbox.service';
 import CustomerTimeline from '../../../../features/crm/components/customer-timeline';
 import ZaloCallButton from '../../calls/components/ZaloCallButton';
@@ -263,6 +262,17 @@ function metaCreativeReasonLabel(reason?: string): string {
   }
 }
 
+interface CustomerDetailRow {
+  id: string;
+  customer_code: string;
+  name: string;
+  source: string;
+  stage: string;
+  created_at: string;
+  attribution_status: string;
+  masked_phone: string | null;
+}
+
 interface CustomerDetailPageProps {
   params: Promise<{ id: string }>;
 }
@@ -334,18 +344,14 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
       is_duplicate_phone: boolean | null;
       occurred_at: string;
     }>;
-    first_campaign_name?: string | null;
-    latest_campaign_name?: string | null;
     attribution_status?: string | null;
   } | null = null;
 
   try {
     const { data: dbCustomer, error: dbQueryErr } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', actor.companyId)
-      .eq('id', id)
-      .maybeSingle();
+      .rpc('read_customer_detail', { p_customer_id: id })
+      .maybeSingle()
+      .overrideTypes<CustomerDetailRow, { merge: false }>();
 
     if (dbQueryErr) {
       if (!isDemoMode) {
@@ -373,7 +379,7 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         }
       }
 
-      displayPhone = isBossAdmin ? rawPhone || '' : maskPhone(dbCustomer.phone || '');
+      displayPhone = isBossAdmin ? rawPhone : dbCustomer.masked_phone ?? '';
 
       let identitiesList: Array<{ channel: string; external_id: string; verified: boolean }> = [];
       try {
@@ -442,8 +448,6 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
         created_at: dbCustomer.created_at,
         identities: identitiesList,
         touchpoints: touchpointsList,
-        first_campaign_name: dbCustomer.first_campaign_name,
-        latest_campaign_name: dbCustomer.latest_campaign_name,
         attribution_status: dbCustomer.attribution_status,
       };
     }
@@ -539,7 +543,11 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               <div className="flex items-center justify-between">
                 <span className="text-[var(--text-secondary)]">Số điện thoại:</span>
                 <div className="flex items-center gap-1.5">
-                  <SecurePhoneRow customerId={customerData.id} maskedPhone={displayPhone} />
+                  {isBossAdmin ? (
+                    <SecurePhoneRow customerId={customerData.id} maskedPhone={displayPhone} />
+                  ) : (
+                    <span className="font-mono">{displayPhone || '—'}</span>
+                  )}
                   {isBossAdmin ? (
                     <Badge variant="success" size="xs">
                       RAW
