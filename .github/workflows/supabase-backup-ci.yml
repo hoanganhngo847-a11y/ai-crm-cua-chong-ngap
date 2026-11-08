@@ -1,6 +1,7 @@
 name: Supabase Backup CI (synthetic only)
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - '.github/workflows/supabase-production-backup.yml'
@@ -9,7 +10,7 @@ on:
       - 'tests/production_backup/**'
       - 'docs/SUPABASE_PRODUCTION_BACKUP.md'
   push:
-    branches: [codex/supabase-production-backup]
+    branches: [codex/supabase-production-backup, codex/final-production-backup-preflight-ci]
     paths:
       - '.github/workflows/supabase-production-backup.yml'
       - '.github/workflows/supabase-backup-ci.yml'
@@ -34,7 +35,7 @@ jobs:
       - name: Install test tools (no Production secrets)
         run: |
           python -m pip install --require-hashes -r scripts/production_backup/requirements.txt
-          python -m pip install ruff==0.14.3 PyYAML==6.0.3
+          python -m pip install ruff==0.14.3
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends age
       - name: Python lint and compile
@@ -45,6 +46,8 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/supabase-production-backup.yml .github/workflows/supabase-backup-ci.yml
       - name: YAML and workflow security contracts
         run: python -m unittest discover -s tests/production_backup -p 'test_*.py' -v
-      - name: Real age and PostgreSQL 17.11 synthetic roundtrip
+      - name: Prepare pinned PostgreSQL 17.11 image
+        run: docker pull public.ecr.aws/supabase/postgres:17.11.0.002@sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53
+      - name: PostgreSQL 17.11, age, loopback S3 and restore with synthetic data
         run: python tests/production_backup/fixture_roundtrip.py
       - run: git diff --check

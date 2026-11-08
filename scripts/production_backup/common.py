@@ -3,33 +3,26 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import tarfile
-from datetime import datetime, timezone
 from urllib.parse import urlsplit, unquote
 
 PROJECT = 'yrauljxzyklhisxijeim'
-TENANT = 'de6a7bf3-b5bc-418d-92d6-f9b241472598'
-IMAGE = 'supabase/postgres:17.11.0.002@sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53'
-LIMITATIONS = [
-    'Auth provider/SMTP/JWT and platform settings are not exported by database credentials.',
-    'Edge Function source and deployment secrets require a separate Management API export.',
-    'Vault/column-encryption external key custody and role passwords require owner recovery procedures.',
-    'PostgreSQL rehearsal does not verify Auth, Storage, Realtime or application service recovery.',
-    'Storage binaries are verified locally; no Storage service import is performed.',
-    'Database locale and per-database role settings are captured but not reapplied; rehearsal initializes UTF8/C and does not prove locale-dependent behavior.',
-]
+IMAGE = 'public.ecr.aws/supabase/postgres:17.11.0.002@sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53'
+REPO = Path(__file__).resolve().parents[2]
+GIB = 1024**3
+MAX_CIPHERTEXT = 4 * GIB
+PROCESS_ENV = {key: os.environ[key] for key in ('PATH', 'HOME', 'SYSTEMROOT') if key in os.environ}
+PROCESS_ENV.update(LC_ALL='C', TZ='UTC')
 
 
 class Failure(Exception):
     def __init__(self, code, status='FAIL'):
         super().__init__(code)
         self.code, self.status = code, status
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def digest(path):
@@ -63,7 +56,7 @@ def load_json(path):
 def run(args, *, env=None, input_bytes=None, timeout=1800):
     # Never expose stderr/SQL/passwords to logs, including CalledProcessError.
     try:
-        r = subprocess.run(args, input=input_bytes, env=env, capture_output=True,
+        r = subprocess.run(args, input=input_bytes, env=PROCESS_ENV | (env or {}), capture_output=True,
                            timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
         raise Failure('PROCESS_UNAVAILABLE_OR_TIMEOUT') from None
@@ -75,27 +68,28 @@ def run(args, *, env=None, input_bytes=None, timeout=1800):
     return r.stdout
 
 
-def require(names):
-    missing = [name for name in names if not os.environ.get(name, '').strip()]
-    if missing:
-        raise Failure('MISSING_SECRET_' + '_AND_'.join(missing), 'BLOCKED')
-
-
-def age_recipient():
-    require(['BACKUP_AGE_RECIPIENT'])
-    value = os.environ['BACKUP_AGE_RECIPIENT'].strip()
+def age_recipient(value):
     if not re.fullmatch(r'age1[0-9a-z]{58}',value):
         raise Failure('RECIPIENT_MUST_BE_ONE_NATIVE_AGE_X25519_KEY','BLOCKED')
     return value
 
 
-def workspace():
-    parent = Path(os.environ['RUNNER_TEMP']).resolve()
-    root = Path(os.environ['BACKUP_WORK_ROOT']).resolve()
-    if root.parent != parent or not root.name.startswith('crm-backup-'):
-        raise Failure('UNSAFE_WORKSPACE')
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+def private_scratch(path):
+    root = Path(path).resolve(strict=True)
+    if (root.is_relative_to(REPO) or not root.is_dir()
+            or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077):
+        raise Failure('UNSAFE_SCRATCH', 'BLOCKED')
+    if (shutil.disk_usage(root).free < 5 * GIB
+            or (sys.platform == 'darwin' and shutil.disk_usage('/System/Volumes/Data').free < 5 * GIB)):
+        raise Failure('INSUFFICIENT_SCRATCH_SPACE', 'BLOCKED')
     return root
+
+
+def verified_age(path, expected_sha256):
+    path = Path(path).resolve(strict=True)
+    if not path.is_file() or not os.access(path, os.X_OK) or digest(path) != expected_sha256:
+        raise Failure('AGE_BINARY_CHECKSUM_MISMATCH', 'BLOCKED')
+    return path
 
 
 def object_path(name):
@@ -106,7 +100,7 @@ def object_path(name):
     return PurePosixPath(name)
 
 
-def db_environment(url):
+def db_environment(url, ca_file):
     try:
         p = urlsplit(url)
         host, port = p.hostname, p.port or 5432
@@ -121,13 +115,14 @@ def db_environment(url):
     except (ValueError, TypeError):
         raise Failure('INVALID_PRODUCTION_DB_TARGET', 'BLOCKED') from None
     # Do not pass URL query options through; they can override host/options.
-    result = os.environ.copy()
-    result.update(PGHOST=host, PGPORT=str(port), PGUSER=user, PGPASSWORD=password,
-                  PGDATABASE='postgres', PGSSLMODE='verify-full',
-                  PGSSLROOTCERT='/etc/ssl/certs/ca-certificates.crt',
-                  PGCONNECT_TIMEOUT='20', PGAPPNAME='crm-production-backup-readonly',
-                  PGOPTIONS='-c default_transaction_read_only=on -c lock_timeout=10000')
-    return result
+    ca_file = Path(ca_file).resolve(strict=True)
+    if not ca_file.is_file() or not os.access(ca_file, os.R_OK):
+        raise Failure('UNAVAILABLE_POSTGRES_CA_FILE', 'BLOCKED')
+    return dict(PGHOST=host, PGPORT=str(port), PGUSER=user, PGPASSWORD=password,
+                PGDATABASE='postgres', PGSSLMODE='verify-full', PGSSLROOTCERT=str(ca_file),
+                PGCONNECT_TIMEOUT='20', PGAPPNAME='crm-production-backup-readonly',
+                PGOPTIONS='-c default_transaction_read_only=on -c row_security=off '
+                          '-c lock_timeout=10000 -c statement_timeout=2400000')
 
 
 def checksums(root):
@@ -163,21 +158,22 @@ def verify_checksums(root):
 
 def extract_archive(archive, destination):
     destination = Path(destination)
-    with tarfile.open(archive, 'r:gz') as t:
-        members, seen, total = t.getmembers(), set(), 0
-        for m in members:
+    destination.mkdir(mode=0o700)
+    budget = min(8 * GIB, shutil.disk_usage(destination).free - GIB)
+    with tarfile.open(archive, 'r|gz') as t:
+        seen, total = set(), 0
+        for m in t:
             object_path(m.name)
             if (m.name.split('/')[0] != 'production-backup' or m.name in seen
                     or not (m.isfile() or m.isdir())):
                 raise Failure('UNSAFE_ARCHIVE_MEMBER')
             seen.add(m.name)
             total += m.size
-            if total > 48 * 1024**3:
+            if total > budget:
                 raise Failure('ARCHIVE_SIZE_LIMIT')
-        # No links/devices, no traversal, duplicate paths or unbounded members.
-        if len(members) > 1000000:
-            raise Failure('ARCHIVE_MEMBER_LIMIT')
-        t.extractall(destination, members=members, filter='data')
+            if len(seen) > 10000:
+                raise Failure('ARCHIVE_MEMBER_LIMIT')
+            t.extract(m, destination, filter='data')
     root = destination / 'production-backup'
     verify_checksums(root)
     return root

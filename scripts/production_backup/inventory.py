@@ -1,7 +1,6 @@
 """The same SQL inventory runs in the exported source snapshot and restore."""
 import hashlib
 import json
-from common import TENANT
 
 NS = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'"
 
@@ -14,7 +13,8 @@ def inventory(query):
     version = query("SELECT current_setting('server_version') AS version, "
                     "current_setting('server_version_num')::int AS version_num")[0]
     relations = query(f"""SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind,
-        pg_get_userbyid(c.relowner) AS owner, c.relrowsecurity AS rls,
+        pg_get_userbyid(c.relowner) AS owner, c.relpersistence AS persistence,
+        c.relrowsecurity AS rls,
         c.relforcerowsecurity AS force_rls,
         EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass
           AND d.objid=c.oid AND d.refclassid='pg_extension'::regclass AND d.deptype='e') AS extension_member
@@ -66,7 +66,7 @@ def inventory(query):
           a.privilege_type,a.is_grantable FROM pg_class c
           JOIN pg_namespace n ON n.oid=c.relnamespace,
           LATERAL aclexplode(coalesce(c.relacl,acldefault(
-            CASE WHEN c.relkind='S' THEN 'S'::"char" ELSE 'r'::"char" END,c.relowner))) a
+            CASE WHEN c.relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,c.relowner))) a
           WHERE {NS} AND c.relkind IN ('r','p','S','v','m','f')""",
         'routine_grants': f"""SELECT n.nspname AS schema,p.proname AS name,
           pg_get_function_identity_arguments(p.oid) AS arguments,
@@ -129,21 +129,40 @@ def inventory(query):
       md5(coalesce(string_agg(md5(loid::text || ':' || pageno::text || ':' || encode(data,'hex')),
                             '' ORDER BY loid,pageno),'')) AS content_digest
       FROM pg_largeobject""")[0]
-    counts = {f"{x['schema']}.{x['name']}": x['count'] for x in tables}
-    tenant_counts = {}
-    for schema, name in [('public','customers'),('public','interactions'),('private','customer_private_contacts')]:
-        if f'{schema}.{name}' in counts:
-            tenant_counts[f'{schema}.{name}'] = query(
-                f"SELECT count(*) AS count FROM {ident(schema)}.{ident(name)} WHERE company_id='{TENANT}'::uuid")[0]['count']
+    large_object_owners = query("""SELECT oid::bigint AS id,pg_get_userbyid(lomowner) AS owner,
+        lomacl::text AS acl FROM pg_largeobject_metadata ORDER BY oid""")
     return {'postgres': version, 'catalog': catalog, 'tables': tables, 'sequences': sequences,
             'extensions': extensions, 'large_objects': large_objects,
-            'row_fingerprints': fingerprints, 'tenant_counts': tenant_counts,
+            'large_object_owners': large_object_owners, 'row_fingerprints': fingerprints,
+            'database': database_inventory(query),
             'catalog_sha256': hashlib.sha256(json.dumps(catalog,sort_keys=True).encode()).hexdigest()}
+
+
+def database_inventory(query):
+    properties = query("""SELECT d.datname AS name,pg_get_userbyid(d.datdba) AS owner,
+        pg_encoding_to_char(d.encoding) AS encoding, d.datlocprovider AS locale_provider,
+        d.datlocale AS locale,d.datcollate AS lc_collate,d.datctype AS lc_ctype,
+        d.datcollversion AS collation_version,d.daticurules AS icu_rules,
+        d.datconnlimit AS connection_limit,d.datallowconn AS allow_connections,
+        d.datistemplate AS is_template,t.spcname AS tablespace
+        FROM pg_database d JOIN pg_tablespace t ON t.oid=d.dattablespace
+        WHERE d.datname=current_database()""")[0]
+    grants = query("""SELECT pg_get_userbyid(a.grantor) AS grantor,
+        CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
+        a.privilege_type,a.is_grantable FROM pg_database d,
+        LATERAL aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a
+        WHERE d.datname=current_database() ORDER BY 1,2,3,4""")
+    settings = query("""SELECT CASE WHEN s.setrole=0 THEN NULL ELSE pg_get_userbyid(s.setrole) END AS role,
+        ARRAY(SELECT v FROM unnest(s.setconfig) v ORDER BY v COLLATE "C") AS settings
+        FROM pg_db_role_setting s JOIN pg_database d ON d.oid=s.setdatabase
+        WHERE d.datname=current_database() ORDER BY 1 NULLS FIRST""")
+    return {'properties': properties, 'grants': grants, 'settings': settings}
 
 
 def role_inventory(query):
     roles = query("""SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,
-      rolreplication,rolconnlimit,rolbypassrls,rolconfig FROM pg_roles ORDER BY rolname""")
+      rolreplication,rolconnlimit,rolbypassrls,rolconfig,rolvaliduntil::text AS valid_until
+      FROM pg_roles ORDER BY rolname""")
     memberships = query("""SELECT pg_get_userbyid(roleid) AS role,pg_get_userbyid(member) AS member,
       pg_get_userbyid(grantor) AS grantor,admin_option,inherit_option,set_option
       FROM pg_auth_members ORDER BY 1,2,3""")

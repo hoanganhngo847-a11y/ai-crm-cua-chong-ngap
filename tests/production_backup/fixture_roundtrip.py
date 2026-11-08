@@ -1,194 +1,246 @@
-"""Real SQL/age rehearsal on synthetic data only; no Production access or secrets."""
-import hashlib
-import json
+"""Same PostgreSQL, age, PUT/GET, and restore path with a disposable fixture."""
+import argparse
+from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
+import resource
 import shutil
 import subprocess
 import sys
-import tempfile
+from tempfile import TemporaryDirectory, gettempdir
 import time
 from unittest.mock import patch
-from urllib.parse import unquote
+from uuid import uuid4
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0,str(REPO/'scripts/production_backup'))
+sys.path.insert(0, str(REPO / 'scripts/production_backup'))
 import main  # noqa: E402
-from common import IMAGE, TENANT, Failure, digest, load_json, run  # noqa: E402
-from storage import Storage  # noqa: E402
+from common import IMAGE, PROCESS_ENV, Failure, private_scratch, run, verified_age  # noqa: E402
+from r2 import R2  # noqa: E402
+from r2_fixture import local_r2  # noqa: E402
 
-SOURCE = 'crm-backup-synthetic-source'
-FILES = {'company/nested/a.mp4':b'synthetic-audio-a',
-         'company/nested/b.mp4':b'synthetic-audio-b',
-         'company/công-ty/empty.mp4':b''}
+TENANT = '00000000-0000-0000-0000-000000000101'
+OTHER = '00000000-0000-0000-0000-000000000102'
+ADMIN = 'fixture_admin'
+
+FIXTURE_SQL = f"""
+CREATE ROLE anon NOLOGIN;
+CREATE ROLE authenticated LOGIN PASSWORD 'synthetic-password-never-exported' VALID UNTIL '2035-01-01T00:00:00Z';
+GRANT anon TO authenticated WITH ADMIN OPTION;
+REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE postgres TO authenticated;
+ALTER DATABASE postgres SET work_mem TO '7MB';
+ALTER DATABASE postgres CONNECTION LIMIT 30;
+ALTER ROLE authenticated IN DATABASE postgres SET statement_timeout TO '3s';
+ALTER ROLE authenticated SET application_name TO 'synthetic role setting';
+
+CREATE SCHEMA extensions;
+CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
+CREATE EXTENSION "uuid-ossp" WITH SCHEMA extensions;
+CREATE EXTENSION pg_trgm WITH SCHEMA public;
+CREATE EXTENSION pg_stat_statements WITH SCHEMA extensions;
+CREATE EXTENSION pg_cron;
+CREATE EXTENSION pg_net;
+CREATE EXTENSION supabase_vault;
+INSERT INTO net.http_request_queue(method,url,headers,timeout_milliseconds)
+  VALUES ('GET','https://example.invalid/synthetic-never-execute','{{}}'::jsonb,100);
+INSERT INTO net._http_response(id,content,created) VALUES (4242,'SYNTHETIC_RESPONSE','2000-01-01');
+CREATE SCHEMA auth;
+CREATE SCHEMA private;
+CREATE SCHEMA storage;
+CREATE SCHEMA supabase_migrations;
+CREATE TABLE auth.users(id uuid PRIMARY KEY, encrypted_password text);
+CREATE TABLE public.customers(id uuid PRIMARY KEY, company_id uuid NOT NULL, name text);
+CREATE INDEX customer_company_idx ON public.customers(company_id);
+CREATE TABLE public.interactions(id uuid PRIMARY KEY, company_id uuid NOT NULL,
+  customer_id uuid REFERENCES public.customers(id), content text);
+CREATE TABLE private.customer_private_contacts(id uuid PRIMARY KEY, company_id uuid NOT NULL,
+  customer_id uuid REFERENCES public.customers(id), private_value text);
+CREATE TABLE public.identities(id uuid PRIMARY KEY, customer_id uuid REFERENCES public.customers(id));
+CREATE TABLE supabase_migrations.schema_migrations(version text PRIMARY KEY, name text, statements text[]);
+CREATE SEQUENCE public.fixture_sequence START 42;
+SELECT nextval('public.fixture_sequence');
+SELECT lo_from_bytea(4242, convert_to('SYNTHETIC LARGE OBJECT PAYLOAD','UTF8'));
+GRANT SELECT ON LARGE OBJECT 4242 TO authenticated;
+CREATE TABLE storage.buckets(id text PRIMARY KEY, name text, public bool DEFAULT false);
+CREATE TABLE storage.objects(id uuid PRIMARY KEY, bucket_id text REFERENCES storage.buckets(id), name text);
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_policy ON public.customers TO authenticated
+  USING (company_id::text = current_setting('app.company_id', true));
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT SELECT (id,company_id,name) ON public.customers TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA private GRANT SELECT ON TABLES TO anon;
+CREATE FUNCTION public.synthetic_trigger() RETURNS trigger LANGUAGE plpgsql AS
+  $$ BEGIN RETURN NEW; END; $$;
+CREATE TRIGGER synthetic_insert BEFORE INSERT ON public.customers
+  FOR EACH ROW EXECUTE FUNCTION public.synthetic_trigger();
+INSERT INTO auth.users VALUES ('00000000-0000-0000-0000-000000000001','SYNTHETIC_HASH');
+INSERT INTO public.customers VALUES ('00000000-0000-0000-0000-000000000002','{TENANT}','SYNTHETIC CUSTOMER'),
+  ('00000000-0000-0000-0000-000000000006','{OTHER}','SYNTHETIC OTHER TENANT');
+INSERT INTO public.interactions VALUES ('00000000-0000-0000-0000-000000000003','{TENANT}',
+  '00000000-0000-0000-0000-000000000002','SYNTHETIC MESSAGE');
+INSERT INTO private.customer_private_contacts VALUES ('00000000-0000-0000-0000-000000000004','{TENANT}',
+  '00000000-0000-0000-0000-000000000002','SYNTHETIC PRIVATE VALUE');
+INSERT INTO public.identities VALUES ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000002');
+INSERT INTO supabase_migrations.schema_migrations VALUES ('20260101000000','synthetic',ARRAY['SYNTHETIC DDL']);
+INSERT INTO storage.buckets VALUES ('synthetic-private-bucket','synthetic-private-bucket',false);
+INSERT INTO storage.objects VALUES ('00000000-0000-0000-0000-000000000007','synthetic-private-bucket','synthetic.txt');
+"""
 
 
 def synthetic_run(args, *, env=None, input_bytes=None, timeout=1800):
-    """Synthetic fixture diagnostics are safe; production run() always redacts."""
-    r = subprocess.run(args,env=env,input=input_bytes,capture_output=True,timeout=timeout,check=False)
-    if r.returncode:
-        print('SYNTHETIC TEST COMMAND FAILED:',args[0],file=sys.stderr)
-        print(r.stderr.decode(errors='replace')[:12000],file=sys.stderr)
-        raise Failure('SYNTHETIC_PROCESS_EXIT_NONZERO')
-    return r.stdout
+    # Only fixture data enters these commands. Useful diagnostics for the CI fixture.
+    result = subprocess.run(args, env=PROCESS_ENV | (env or {}), input=input_bytes,
+                            capture_output=True, timeout=timeout, check=False)
+    if result.returncode:
+        print('SYNTHETIC TOOL FAILED:', Path(args[0]).name, file=sys.stderr)
+        print(result.stderr.decode(errors='replace')[:6000], file=sys.stderr)
+        raise Failure('SYNTHETIC_TOOL_FAILED')
+    return result.stdout
 
 
-def execute(sql):
-    return synthetic_run(['docker','exec','-i',SOURCE,'psql','-X','-q','-h','/tmp','-p','55432','-U','fixture_admin',
-                          '-d','postgres','--set=ON_ERROR_STOP=1'],input_bytes=sql.encode())
-
-
-def main_test():
-    if os.environ.get('SUPABASE_DB_URL') or os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('BACKUP_AGE_IDENTITY'):
-        raise RuntimeError('Fixture refuses Production credentials')
-    parent = Path(os.environ.get('RUNNER_TEMP',tempfile.gettempdir()))
-    root = Path(tempfile.mkdtemp(prefix='crm-backup-fixture-',dir=parent))
-    owner = root/'synthetic-owner.txt'
+@contextmanager
+def fixture_source():
+    main.check_local_docker()
+    run_id = uuid4().hex
+    name = 'crm-backup-fixture-' + run_id
+    script = ('initdb -D /tmp/fixture-source -U fixture_admin --auth=trust --encoding=UTF8 '
+              '--locale=C --locale-provider=icu --icu-locale=en-US '
+              '--lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8 >/tmp/initdb.log 2>&1; '
+              'exec postgres -D /tmp/fixture-source -k /tmp -c listen_addresses=* '
+              '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
+              '-c cron.database_name=postgres -c cron.launch_active_jobs=off -c pg_net.database_name=template1')
     try:
-        synthetic_run(['docker','pull',IMAGE],timeout=600)
-        script = ('initdb -D /tmp/source -U fixture_admin --auth=trust --encoding=UTF8 --locale=C '
-                  '>/tmp/initdb.log 2>&1; exec postgres -D /tmp/source -k /tmp '
-                  '-c listen_addresses=127.0.0.1 -c port=55432 '
-                  '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
-                  '-c cron.database_name=postgres -c cron.launch_active_jobs=off -c pg_net.database_name=template1')
-        synthetic_run(['docker','run','--detach','--name',SOURCE,'--user','postgres',
-                       '--network','host','--entrypoint','sh',IMAGE,'-ceu',script])
-        for _ in range(90):
+        container = synthetic_run(['docker', 'run', '--detach', '--pull=never', '--name', name,
+                                   '--label', 'crm.fixture=' + run_id, '--publish', '127.0.0.1::5432',
+                                   '--user', 'postgres', '--entrypoint', 'sh', IMAGE, '-ceu', script]).decode().strip()
+        for _ in range(60):
             try:
-                run(['docker','exec',SOURCE,'pg_isready','-h','/tmp','-p','55432','-U','fixture_admin'],timeout=5)
+                run(['docker', 'exec', container, 'pg_isready', '-h', '/tmp', '-U', ADMIN], timeout=5)
                 break
             except Failure:
                 time.sleep(1)
         else:
-            raise RuntimeError('Synthetic database not ready')
-        execute(f"""
-          CREATE ROLE anon NOLOGIN;
-          CREATE ROLE authenticated NOLOGIN;
-          GRANT anon TO authenticated;
-          CREATE SCHEMA extensions;
-          CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
-          CREATE EXTENSION "uuid-ossp" WITH SCHEMA extensions;
-          CREATE EXTENSION pg_trgm WITH SCHEMA public;
-          CREATE EXTENSION pg_stat_statements WITH SCHEMA extensions;
-          CREATE EXTENSION pg_cron;
-          CREATE EXTENSION pg_net;
-          CREATE EXTENSION supabase_vault;
-          INSERT INTO net.http_request_queue(method,url,headers,timeout_milliseconds)
-            VALUES ('GET','https://example.invalid/synthetic-never-execute','{{}}'::jsonb,100);
-          INSERT INTO net._http_response(id,content,created) VALUES (4242,'SYNTHETIC_RESPONSE','2000-01-01');
-          CREATE SCHEMA auth;
-          CREATE SCHEMA private;
-          CREATE SCHEMA storage;
-          CREATE SCHEMA supabase_migrations;
-          CREATE TABLE auth.users(id uuid PRIMARY KEY,encrypted_password text);
-          CREATE TABLE public.customers(id uuid PRIMARY KEY,company_id uuid NOT NULL,name text);
-          CREATE INDEX customer_company_idx ON public.customers(company_id);
-          CREATE TABLE public.interactions(id uuid PRIMARY KEY,company_id uuid NOT NULL,
-            customer_id uuid REFERENCES public.customers(id),content text);
-          CREATE TABLE private.customer_private_contacts(id uuid PRIMARY KEY,company_id uuid NOT NULL,
-            customer_id uuid REFERENCES public.customers(id),private_value text);
-          CREATE TABLE public.identities(id uuid PRIMARY KEY,customer_id uuid REFERENCES public.customers(id));
-          CREATE TABLE supabase_migrations.schema_migrations(version text PRIMARY KEY,name text,statements text[]);
-          CREATE SEQUENCE public.fixture_sequence START 42;
-          SELECT nextval('public.fixture_sequence');
-          SELECT lo_from_bytea(0, convert_to('SYNTHETIC LARGE OBJECT PAYLOAD','UTF8'));
-          CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,type text DEFAULT 'STANDARD',public bool DEFAULT false);
-          CREATE TABLE storage.objects(id uuid PRIMARY KEY,bucket_id text REFERENCES storage.buckets(id),
-            name text,metadata jsonb,version text,updated_at timestamptz DEFAULT '2026-01-01T00:00:00Z');
-          ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
-          CREATE POLICY tenant_policy ON public.customers TO authenticated USING(company_id='{TENANT}');
-          GRANT USAGE ON SCHEMA public TO authenticated;
-          GRANT SELECT ON public.customers TO authenticated;
-          CREATE FUNCTION public.synthetic_trigger() RETURNS trigger LANGUAGE plpgsql AS
-            $$ BEGIN RETURN NEW; END; $$;
-          CREATE TRIGGER synthetic_insert BEFORE INSERT ON public.customers
-            FOR EACH ROW EXECUTE FUNCTION public.synthetic_trigger();
-          INSERT INTO auth.users VALUES ('00000000-0000-0000-0000-000000000001','SYNTHETIC_HASH');
-          INSERT INTO public.customers VALUES ('00000000-0000-0000-0000-000000000002','{TENANT}','SYNTHETIC CUSTOMER');
-          INSERT INTO public.interactions VALUES ('00000000-0000-0000-0000-000000000003','{TENANT}',
-            '00000000-0000-0000-0000-000000000002','SYNTHETIC MESSAGE');
-          INSERT INTO private.customer_private_contacts VALUES ('00000000-0000-0000-0000-000000000004','{TENANT}',
-            '00000000-0000-0000-0000-000000000002','SYNTHETIC PRIVATE VALUE');
-          INSERT INTO public.identities VALUES ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000002');
-          INSERT INTO supabase_migrations.schema_migrations VALUES ('20260101000000','synthetic',ARRAY['SYNTHETIC DDL']);
-          INSERT INTO storage.buckets(id,name) VALUES ('private-bucket','private-bucket'),('empty-private-bucket','empty-private-bucket');
-        """)
-        for i,(name,data) in enumerate(FILES.items(),10):
-            md = json.dumps({'size':len(data),'eTag':hashlib.md5(data,usedforsecurity=False).hexdigest()})
-            execute("INSERT INTO storage.objects(id,bucket_id,name,metadata,version) VALUES "
-                    f"('00000000-0000-0000-0000-{i:012d}','private-bucket','{name}','{md}','v1');")
-        run(['age-keygen','-o',str(owner)])
-        recipient = run(['age-keygen','-y',str(owner)]).decode().strip()
-        env = os.environ.copy()
-        env.update(PGHOST='127.0.0.1',PGPORT='55432',PGUSER='fixture_admin',PGPASSWORD='synthetic',
-                   PGDATABASE='postgres',PGSSLMODE='disable',PGSSLROOTCERT='/etc/ssl/certs/ca-certificates.crt',
-                   PGCONNECT_TIMEOUT='10',PGOPTIONS='-c default_transaction_read_only=on',PGAPPNAME='synthetic')
+            raise Failure('SYNTHETIC_SOURCE_NOT_READY')
+        endpoint = synthetic_run(['docker', 'port', container, '5432/tcp']).decode().strip()
+        match = re.fullmatch(r'127\.0\.0\.1:(\d+)', endpoint)
+        if not match:
+            raise Failure('SYNTHETIC_SOURCE_NOT_LOOPBACK')
+        env = dict(PGHOST='127.0.0.1', PGPORT=match[1], PGUSER=ADMIN, PGPASSWORD='synthetic',
+                   PGSSLMODE='disable', PGOPTIONS='-c default_transaction_read_only=on -c row_security=off')
+        synthetic_run(main.psql(container, ADMIN, 'postgres'), input_bytes=FIXTURE_SQL.encode())
+        remote_files = {}
 
-        class SyntheticStorage(Storage):
-            def enumerate(self,buckets):
-                with main.connect(env) as c:
-                    return main.snapshot_storage(main.source_query(c))[1]
+        def client(tool, args):
+            remote_args = []
+            output = None
+            for arg in args:
+                if arg.startswith('--file='):
+                    output = arg.removeprefix('--file=')
+                    remote_files[output] = f'/tmp/fixture-export-{len(remote_files)}'
+                    remote_args.append('--file=' + remote_files[output])
+                else:
+                    remote_args.append(remote_files.get(arg, arg))
+            result = synthetic_run(['docker', 'exec', '--user', 'postgres', container, 'env',
+                                    'PGHOST=/tmp', 'PGUSER=' + ADMIN, 'PGDATABASE=postgres',
+                                    'PGOPTIONS=-c default_transaction_read_only=on -c row_security=off',
+                                    tool, *remote_args])
+            if output is not None:
+                synthetic_run(['docker', 'cp', container + ':' + remote_files[output], output])
+                Path(output).chmod(0o600)
+            return result
 
-            def request(self,path,payload=None,destination=None):
-                name = unquote(path.split('/private-bucket/',1)[1])
-                data = FILES[name]
-                Path(destination).write_bytes(data)
-                return {'bytes':len(data),'sha256':digest(destination)}
-
-        with patch.dict(os.environ,{'SUPABASE_DB_URL':'synthetic-only','SUPABASE_SERVICE_ROLE_KEY':'synthetic-only',
-                                    'BACKUP_AGE_RECIPIENT':recipient}), \
-             patch.object(main,'db_environment',return_value=env), \
-             patch.object(main,'Storage',SyntheticStorage),patch.object(main,'run',side_effect=synthetic_run):
-            main.backup(root)
-            main.seal(root)
-        published = load_json(root/'publish/backup-report.json')
-        assert published['database_export_complete']
-        baseline = load_json(root/'production-backup/configuration/baseline.json')
-        assert baseline['large_objects']['objects'] == 1
-        assert baseline['large_objects']['bytes'] > 0
-        assert published['storage']['files_succeeded'] == len(FILES)
-        assert published['status'] == 'PARTIAL'  # Explicit platform gaps, never false PASS.
-        rehearsal = root/'rehearsal'
-        rehearsal.mkdir()
-        shutil.copytree(root/'publish',rehearsal/'incoming')
-        with patch.dict(os.environ,{'BACKUP_AGE_IDENTITY':owner.read_text()}), \
-             patch.object(main,'run',side_effect=synthetic_run):
-            try:
-                main.restore(rehearsal)
-            except Failure:
-                diagnostic = rehearsal/'restore-actual-inventory.json'
-                if diagnostic.exists():
-                    expected = load_json(root/'production-backup/configuration/baseline.json')
-                    actual = load_json(diagnostic)
-                    for key in expected:
-                        if expected[key] != actual[key]:
-                            if key == 'catalog':
-                                for section in expected[key]:
-                                    left,right = expected[key][section],actual[key][section]
-                                    if left != right:
-                                        print('SYNTHETIC CATALOG MISMATCH',section,
-                                              json.dumps([x for x in left if x not in right][:3]),
-                                              json.dumps([x for x in right if x not in left][:3]))
-                            else:
-                                print('SYNTHETIC INVENTORY MISMATCH',key,json.dumps(expected[key]),json.dumps(actual[key]))
-                raise
-        restored = load_json(rehearsal/'restore-publish/restore-report.json')
-        assert restored['restore_status'] == 'PASS',restored
-        assert restored['status'] == 'PARTIAL'
-        assert restored['counts']['customers'] == 1
-        restored_baseline = load_json(rehearsal/'extracted/production-backup/configuration/baseline.json')
-        assert restored_baseline['large_objects']['objects'] == 1
-        assert restored['verification']['storage']['objects_verified'] == len(FILES)
-        print('SYNTHETIC PASS: PostgreSQL 17.11 dump/restore, roles, schema/catalog, tenant counts, '
-              'private row fingerprints, extension data, age owner decryption and Storage checksums.')
+        yield lambda: main.connect(env), client
     finally:
-        for container in [SOURCE,main.container_name()]:
-            try:
-                run(['docker','rm','--force',container],timeout=60)
-            except Failure:
-                pass
-        shutil.rmtree(root)
+        try:
+            label = run(['docker', 'inspect', '--format', '{{index .Config.Labels "crm.fixture"}}', name], timeout=10)
+            if label.decode().strip() == run_id:
+                run(['docker', 'rm', '--force', name], timeout=60)
+        except Failure:
+            pass
+
+
+def verify_fixture(container, admin):
+    query = main.restore_query(container, admin, 'postgres')
+    assert query("SELECT rolpassword IS NULL AS password_omitted FROM pg_authid WHERE rolname='authenticated'") == [
+        {'password_omitted': True},
+    ]
+    assert query("""SELECT current_setting('work_mem') AS work_mem,
+        has_database_privilege('authenticated','postgres','CONNECT') AS can_connect,
+        has_database_privilege('anon','postgres','CONNECT') AS anon_can_connect""") == [
+        {'work_mem': '7MB', 'can_connect': True, 'anon_can_connect': False},
+    ]
+    sql = f"""BEGIN;
+    SET LOCAL ROLE authenticated;
+    SET LOCAL app.company_id = '{TENANT}';
+    SELECT count(*) FROM public.customers WHERE company_id IN ('{TENANT}','{OTHER}');
+    SELECT count(*) FROM public.customers WHERE company_id = '{OTHER}';
+    ROLLBACK;
+    """
+    assert synthetic_run([*main.psql(container, admin, 'postgres'), '-At'], input_bytes=sql.encode()).splitlines() == [
+        b'1', b'0',
+    ]
+    assert query('SELECT count(*) AS count FROM supabase_migrations.schema_migrations') == [{'count': 1}]
+
+
+def fixture_roundtrip(args):
+    prohibited = ('SUPABASE_DB_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'BACKUP_AGE_IDENTITY')
+    if any(os.environ.get(key) for key in prohibited):
+        raise Failure('SYNTHETIC_RUN_REFUSES_PRODUCTION_CREDENTIALS', 'BLOCKED')
+    if args.live_r2 and (os.environ.get('GITHUB_ACTIONS', '').lower() == 'true'
+                         or not (args.scratch and args.age_dir and args.age_sha256 and args.age_keygen_sha256)):
+        raise Failure('LIVE_SMOKE_REQUIRES_OWNER_SCRATCH_AND_PINNED_AGE', 'BLOCKED')
+    age = args.age_dir / 'age' if args.age_dir else Path(shutil.which('age') or 'age')
+    age_keygen = args.age_dir / 'age-keygen' if args.age_dir else Path(shutil.which('age-keygen') or 'age-keygen')
+    if args.age_sha256:
+        age = verified_age(age, args.age_sha256)
+    if args.age_keygen_sha256:
+        age_keygen = verified_age(age_keygen, args.age_keygen_sha256)
+    parent = private_scratch(args.scratch) if args.scratch else Path(os.environ.get('RUNNER_TEMP', gettempdir()))
+    with TemporaryDirectory(prefix='crm-backup-synthetic-', dir=parent) as temporary:
+        scratch = private_scratch(temporary)
+        identity = scratch / 'synthetic.agekey'
+        run([age_keygen, '--output', identity])
+        recipient = run([age_keygen, '--y', identity]).decode().strip()
+        with patch.object(main, 'run', side_effect=synthetic_run):
+            with fixture_source() as (open_source, client):
+                sealed, receipt = main.export_archive(scratch, 'synthetic', recipient, age, open_source, client, ADMIN)
+            print('Export PASS. Age encryption PASS.', flush=True)
+            print('Synthetic object key', receipt['key'], 'SHA-256', receipt['sha256'], flush=True)
+            ciphertext = sealed / 'backup.tar.gz.age'
+            if args.live_r2:
+                r2 = R2.prompt()
+                outcome = r2.publish(ciphertext, receipt)
+                restore_verified = main.restore_from_r2(scratch, receipt, age, identity, r2, verify_fixture)
+            else:
+                with local_r2() as server:
+                    server.drop_after_commit = True
+                    r2 = R2('a' * 32, 'b' * 64)
+                    outcome = r2.publish(ciphertext, receipt)
+                    assert outcome == 'RECONCILED'
+                    assert [method for method, _ in server.requests] == ['PUT', 'GET']
+                    restore_verified = main.restore_from_r2(scratch, receipt, age, identity, r2, verify_fixture)
+            print(outcome, 'Download PASS. SHA-256 PASS. Lifecycle header PASS.', flush=True)
+            print('Age decrypt PASS. PostgreSQL 17.11 DB-only restore PASS.', restore_verified)
+            print('Cloudflare R2 smoke PASS.' if args.live_r2 else 'Loopback S3 fixture PASS.')
 
 
 if __name__ == '__main__':
-    main_test()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--live-r2', action='store_true')
+    parser.add_argument('--scratch', type=Path)
+    parser.add_argument('--age-dir', type=Path)
+    parser.add_argument('--age-sha256')
+    parser.add_argument('--age-keygen-sha256')
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    try:
+        fixture_roundtrip(parser.parse_args())
+    except Failure as error:
+        print(error.status, error.code, file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print('BLOCKED INTERRUPTED_CHECK_SYNTHETIC_OBJECT_KEY', file=sys.stderr)
+        sys.exit(1)

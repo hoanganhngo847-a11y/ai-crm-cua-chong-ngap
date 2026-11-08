@@ -1,237 +1,188 @@
+import hashlib
 import io
-import json
 import os
 from pathlib import Path
-import shutil
+import subprocess
 import sys
 import tarfile
-import tempfile
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
-import urllib.error
-
-import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'scripts/production_backup'))
-from common import (Failure, PROJECT, age_recipient, checksums, db_environment, extract_archive,  # noqa: E402
-                    load_json, object_path, run, verify_checksums, write_json)  # noqa: E402
 import main  # noqa: E402
-import storage  # noqa: E402
+import r2  # noqa: E402
+from common import IMAGE, PROJECT, Failure, checksums, db_environment, extract_archive, run, verify_checksums  # noqa: E402
+from r2_fixture import local_r2  # noqa: E402
+
+STAMP = '2026-11-08T00:00:00+00:00'
+CIPHERTEXT = r2.AGE_MAGIC + b'synthetic bytes for the R2 transport contract'
+TOC = """; archive listing
+1; 1262 5 DATABASE - postgres fixture_admin
+2; 0 0 DATABASE PROPERTIES - postgres fixture_admin
+3; 0 0 ACL - DATABASE postgres fixture_admin
+4; 0 0 COMMENT - DATABASE postgres fixture_admin
+5; 1259 10 TABLE public customers fixture_admin
+6; 0 0 ACL public TABLE customers fixture_admin
+"""
 
 
-class BackupSecurityTests(unittest.TestCase):
+class BackupTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.scratch = TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.ciphertext = self.root / 'test.age'
+        self.ciphertext.write_bytes(CIPHERTEXT)
+        self.receipt = dict(format=1, scope='db-only', export_status='complete', source='synthetic',
+                            project_ref='synthetic-fixture', image=IMAGE,
+                            snapshot_utc=STAMP, recipient_sha256='0' * 64, key=r2.new_key('synthetic'),
+                            bytes=len(CIPHERTEXT), sha256=hashlib.sha256(CIPHERTEXT).hexdigest())
+        self.r2 = r2.R2('a' * 32, 'b' * 64)
+        self.object_path = f"/{r2.BUCKET}/{self.receipt['key']}"
 
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def assert_failure(self, callable_):
-        with self.assertRaises((Failure, ValueError, FileNotFoundError)):
-            callable_()
-
-    def test_production_target_and_tls_are_pinned(self):
-        env = db_environment(f'postgresql://postgres.{PROJECT}:fixture@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=disable&host=evil.test')
-        self.assertEqual(env['PGHOST'], 'aws-0-ap-southeast-1.pooler.supabase.com')
+    def test_production_uri_strict_and_env_does_not_inherit_libpq_overrides(self):
+        ca = self.root / 'test-ca.pem'
+        ca.touch()
+        direct = f'postgresql://postgres:fake@db.{PROJECT}.supabase.co:5432/postgres?sslmode=disable'
+        with patch.dict(os.environ, {'PGHOSTADDR': '192.0.2.1', 'PGSERVICE': 'invalid'}):
+            env = db_environment(direct, ca)
         self.assertEqual(env['PGSSLMODE'], 'verify-full')
         self.assertIn('default_transaction_read_only=on', env['PGOPTIONS'])
-        for value in ['postgresql://postgres:pw@evil.test/postgres',
-                      'postgresql://postgres.other:pw@aws-0-ap-southeast-1.pooler.supabase.com/postgres',
-                      f'postgresql://postgres:pw@db.{PROJECT}.supabase.co:6543/postgres',
-                      f'postgresql://postgres:pw@db.{PROJECT}.supabase.co/notpostgres']:
-            self.assert_failure(lambda: db_environment(value))
+        self.assertIn('row_security=off', env['PGOPTIONS'])
+        self.assertNotIn('PGHOSTADDR', env)
+        self.assertNotIn('PGSERVICE', env)
+        with self.assertRaisesRegex(Failure, 'INVALID_PRODUCTION_DB_TARGET'):
+            db_environment(direct.replace(':5432/', ':6543/'), ca)
+        with self.assertRaisesRegex(Failure, 'INVALID_PRODUCTION_DB_TARGET'):
+            db_environment(direct.replace(PROJECT, 'wrong'), ca)
 
-    def test_paths_reject_traversal_and_control_characters(self):
-        for value in ['../x', '/abs', 'a//b', 'a/./b', 'a/../b', 'a\\b', 'a\nx', '']:
-            self.assert_failure(lambda: object_path(value))
-        self.assertEqual(str(object_path('bucket/công-ty/recording.mp4')), 'bucket/công-ty/recording.mp4')
+    def test_failed_export_never_creates_receipt_or_sealed_bundle(self):
+        def partial_export(payload, *_):
+            (payload / 'partial.dump').write_bytes(b'synthetic partial')
+            raise Failure('SEQUENCE_DRIFT', 'BLOCKED')
 
-    def test_age_recipient_refuses_ssh_and_multiple_keys(self):
-        for value in ['ssh-ed25519 synthetic', 'age1'+('a'*58)+'\nage1'+('b'*58)]:
-            with patch.dict(os.environ,{'BACKUP_AGE_RECIPIENT':value}):
-                self.assert_failure(age_recipient)
+        with patch.object(main, 'private_scratch', return_value=self.root), \
+                patch.object(main, 'run'), patch.object(main, 'export_database', side_effect=partial_export):
+            with self.assertRaisesRegex(Failure, 'SEQUENCE_DRIFT'):
+                main.export_archive(self.root, 'synthetic', 'age1' + 'a' * 58, 'age', None, None, 'test')
+        self.assertEqual(list(self.root.iterdir()), [self.ciphertext])
 
-    def test_storage_retries_transient_429_without_printing_body(self):
-        client = storage.Storage('synthetic-token')
-        limited = urllib.error.HTTPError('https://example.invalid',429,'rate limited',{},None)
-        with patch.object(client.opener,'open',side_effect=[limited,limited,io.BytesIO(b'[]')]) as calls, \
-             patch.object(storage.time,'sleep'):
-            self.assertEqual(client.request('/bucket'),[])
-        self.assertEqual(calls.call_count,3)
+    def test_database_toc_only_selects_database_definition_properties_and_acl(self):
+        selected = main.database_toc(TOC)
+        self.assertEqual(selected.splitlines(), TOC.splitlines()[1:5])
+        with self.assertRaisesRegex(Failure, 'SCHEMA_ARCHIVE_DATABASE_TOC_MISSING'):
+            main.database_toc(TOC.replace('postgres fixture_admin', 'otherdb fixture_admin'))
 
-    def test_checksum_exact_set_and_corruption(self):
-        (self.root / 'payload').write_bytes(b'synthetic')
-        checksums(self.root)
-        verify_checksums(self.root)
-        (self.root / 'extra').write_text('unexpected')
-        self.assert_failure(lambda: verify_checksums(self.root))
-        (self.root / 'extra').unlink()
-        (self.root / 'payload').write_bytes(b'corrupted')
-        self.assert_failure(lambda: verify_checksums(self.root))
+    def test_production_and_synthetic_prefixes_cannot_mix(self):
+        for replacement in (r2.new_key('production'), '../file', self.receipt['key'].replace('17.11', '17x11')):
+            with self.subTest(key=replacement), self.assertRaisesRegex(Failure, 'INVALID_RECEIPT'):
+                r2.validate_receipt({**self.receipt, 'key': replacement})
 
-    def test_duplicate_checksum_and_symlink_rejected(self):
-        (self.root / 'payload').write_text('synthetic')
-        checksums(self.root)
-        p = self.root / 'checksums.sha256'
-        p.write_text(p.read_text() * 2)
-        self.assert_failure(lambda: verify_checksums(self.root))
-        (self.root / 'link').symlink_to(self.root / 'payload')
-        self.assert_failure(lambda: checksums(self.root))
+    def test_publish_readback_independent_download_and_no_overwrite(self):
+        with local_r2() as service:
+            self.assertEqual(self.r2.publish(self.ciphertext, self.receipt), 'PUBLISHED')
+            output = self.root / 'download.age'
+            self.r2.readback(self.receipt, output)
+            self.assertEqual(output.read_bytes(), CIPHERTEXT)
+            with self.assertRaises(FileExistsError):
+                self.r2.readback(self.receipt, output)
+            self.assertEqual(output.read_bytes(), CIPHERTEXT)
+            self.assertEqual(self.r2.publish(self.ciphertext, self.receipt), 'RECONCILED')
+            self.assertEqual(service.objects[self.object_path], CIPHERTEXT)
+            self.assertEqual([method for method, _ in service.requests], ['PUT', 'GET', 'GET', 'PUT', 'GET'])
 
-    def test_archive_traversal_links_and_duplicate_members_rejected(self):
-        for case in ['traversal','symlink','duplicate']:
-            archive = self.root / (case + '.tgz')
-            with tarfile.open(archive,'w:gz') as t:
-                item = tarfile.TarInfo('production-backup/../escape' if case=='traversal' else 'production-backup/x')
-                if case == 'symlink':
-                    item.type, item.linkname = tarfile.SYMTYPE, '/etc/passwd'
-                t.addfile(item, io.BytesIO())
-                if case == 'duplicate':
-                    t.addfile(item, io.BytesIO())
-            self.assert_failure(lambda: extract_archive(archive,self.root / 'extracted'))
+    def test_lost_put_after_commit_verifies_without_retry(self):
+        with local_r2() as service:
+            service.drop_after_commit = True
+            self.assertEqual(self.r2.publish(self.ciphertext, self.receipt), 'RECONCILED')
+            self.assertEqual(service.requests, [('PUT', self.object_path), ('GET', self.object_path)])
 
-    def test_duplicate_json_keys_rejected(self):
-        p = self.root / 'bad.json'
-        p.write_text('{"status":"PASS","status":"FAIL"}')
-        self.assert_failure(lambda: load_json(p))
+    def test_lost_put_without_commit_blocks_without_retry(self):
+        with local_r2() as service:
+            service.drop_before_commit = True
+            with self.assertRaisesRegex(Failure, 'R2_PUT_OUTCOME_UNCERTAIN_OBJECT_NOT_VISIBLE'):
+                self.r2.publish(self.ciphertext, self.receipt)
+            self.assertEqual(service.requests, [('PUT', self.object_path), ('GET', self.object_path)])
+            self.assertFalse(service.objects)
 
-    def test_failed_process_redacts_output(self):
-        with self.assertRaises(Failure) as context:
-            run([sys.executable,'-c','import sys; print("synthetic-private-value",file=sys.stderr);sys.exit(2)'])
-        self.assertNotIn('synthetic-private-value',str(context.exception))
+    def test_existing_object_with_wrong_hash_is_never_replaced(self):
+        with local_r2() as service:
+            service.objects[self.object_path] = b'X' * len(CIPHERTEXT)
+            with self.assertRaisesRegex(Failure, 'R2_OBJECT_SHA256_MISMATCH'):
+                self.r2.publish(self.ciphertext, self.receipt)
+            self.assertEqual(service.objects[self.object_path], b'X' * len(CIPHERTEXT))
+            self.assertEqual(service.requests, [('PUT', self.object_path), ('GET', self.object_path)])
 
-    def test_missing_secrets_reports_blocked_without_export(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(Failure):
-                main.backup(self.root)
-        report = load_json(self.root / 'publish/backup-report.json')
-        self.assertEqual(report['status'], 'BLOCKED')
-        self.assertFalse(report['database_export_complete'])
-        self.assertFalse((self.root / 'production-backup/database/schema.dump').exists())
+    def test_wrong_local_hash_never_sends_request(self):
+        with local_r2() as service:
+            with self.assertRaisesRegex(Failure, 'LOCAL_CIPHERTEXT_SHA256_MISMATCH'):
+                self.r2.publish(self.ciphertext, {**self.receipt, 'sha256': '1' * 64})
+            self.assertFalse(service.requests)
 
-    def test_restore_rejects_any_production_credentials(self):
-        with patch.dict(os.environ, {'SUPABASE_DB_URL':'synthetic-forbidden'}, clear=True):
-            with patch.object(main,'run',return_value=b''):
-                with self.assertRaises(Failure):
-                    main.restore(self.root)
-        report = load_json(self.root / 'restore-publish/restore-report.json')
-        self.assertEqual(report['error_code'],'PRODUCTION_CREDENTIAL_PRESENT_IN_RESTORE')
+    def test_incomplete_receipt_never_sends_request(self):
+        with local_r2() as service:
+            with self.assertRaisesRegex(Failure, 'INVALID_RECEIPT'):
+                self.r2.publish(self.ciphertext, {**self.receipt, 'export_status': 'partial'})
+            self.assertFalse(service.requests)
 
-    def test_storage_pagination_includes_private_nested_objects(self):
-        client = storage.Storage('synthetic-token')
-        seen = []
-        def request(path, payload):
-            seen.append((payload['prefix'],payload['offset']))
-            if payload['prefix'] == '':
-                return [{'id':None,'name':'company'}]
-            if payload['offset'] == 0:
-                return [{'id':'1','name':'a'},{'id':'2','name':'b'}]
-            return [{'id':'3','name':'c'}]
-        with patch.object(storage,'PAGE_SIZE',2),patch.object(client,'request',side_effect=request):
-            result = client.enumerate([{'id':'private-bucket','public':False}])
-        self.assertEqual(len(result),3)
-        self.assertIn(('company/',2),seen)
-        self.assertIn(('private-bucket','company/c'),result)
+    def test_lifecycle_absence_is_not_pass_and_download_is_cleaned(self):
+        with local_r2() as service:
+            service.lifecycle = False
+            service.objects[self.object_path] = CIPHERTEXT
+            output = self.root / 'download.age'
+            with self.assertRaisesRegex(Failure, 'R2_LIFECYCLE_NOT_VERIFIED'):
+                self.r2.readback(self.receipt, output)
+            self.assertFalse(output.exists())
 
-    def test_storage_duplicate_page_and_unsafe_names_fail(self):
-        client = storage.Storage('synthetic')
-        for page in [[{'id':'1','name':'a'},{'id':'1','name':'a'}],[{'id':'x','name':'../evil'}]]:
-            with patch.object(client,'request',return_value=page):
-                self.assert_failure(lambda: client.enumerate([{'id':'private'}]))
+    def test_archive_checksums_and_safe_extraction(self):
+        bundle = self.root / 'production-backup'
+        bundle.mkdir()
+        (bundle / 'data').write_bytes(b'synthetic plain')
+        checksums(bundle)
+        archive = self.root / 'bundle.tgz'
+        with tarfile.open(archive, 'w:gz') as tar:
+            tar.add(bundle, arcname=bundle.name)
+        restored = extract_archive(archive, self.root / 'safe')
+        self.assertEqual((restored / 'data').read_bytes(), b'synthetic plain')
+        (restored / 'data').write_bytes(b'tampered')
+        with self.assertRaisesRegex(Failure, 'CHECKSUM_MISMATCH'):
+            verify_checksums(restored)
 
-    def test_storage_one_failed_download_prevents_success(self):
-        expected = {('b','a'):{'id':'1','name':'a','bucket_id':'b','updated_at':'2026-01-01T00:00:00Z','metadata':{'size':1}}}
-        client = storage.Storage('synthetic')
-        with patch.object(client,'enumerate',return_value=expected),patch.object(client,'request',side_effect=Failure('RETRY_EXHAUSTED','PARTIAL')):
-            with self.assertRaises(Failure):
-                storage.export_storage(self.root,[{'id':'b'}],expected,client)
-        self.assertEqual(load_json(self.root/'objects-manifest.json')[0]['status'],'PARTIAL')
+    def test_tar_traversal_and_symlinks_rejected(self):
+        for index, (name, kind) in enumerate([('production-backup/../escape', tarfile.REGTYPE),
+                                               ('production-backup/unsafe', tarfile.SYMTYPE)]):
+            archive = self.root / f'bad-{index}.tgz'
+            with tarfile.open(archive, 'w:gz') as tar:
+                member = tarfile.TarInfo(name)
+                member.type = kind
+                member.linkname = '/tmp/escape'
+                tar.addfile(member, io.BytesIO())
+            with self.subTest(name=name), self.assertRaises(Failure):
+                extract_archive(archive, self.root / f'extract-{index}')
 
-    def test_storage_timestamp_normalization_and_mutation_detection(self):
-        a = {'id':'1','updated_at':'2026-01-01 00:00:00+00','metadata':{'size':3,'eTag':'one'}}
-        b = {**a,'updated_at':'2026-01-01T00:00:00.000Z'}
-        self.assertTrue(storage.same_objects({('b','n'):a},{('b','n'):b}))
-        b['metadata'] = {'size':3,'eTag':'changed'}
-        self.assertFalse(storage.same_objects({('b','n'):a},{('b','n'):b}))
+    def test_tool_error_does_not_expose_stderr(self):
+        with patch('common.subprocess.run', return_value=subprocess.CompletedProcess(
+                [], 1, b'', b'password=synthetic-secret Authorization: synthetic-signature')):
+            with self.assertRaisesRegex(Failure, '^PROCESS_EXIT_NONZERO$'):
+                run(['fixture-tool'])
 
-    def test_publish_summary_does_not_include_payload(self):
-        redacted = main.summary({'status':'FAIL','raw_sql':'private','files':[{'path':'private'}],
-                                 'error_code':'FIXED_CODE','counts':{'customers':1}})
-        self.assertNotIn('raw_sql',redacted)
-        self.assertNotIn('files',redacted)
-
-    @unittest.skipUnless(shutil.which('age'),'age required for real encryption test')
-    def test_real_age_owner_decryption_wrong_key_and_tamper(self):
-        key = self.root / 'owner.txt'
-        run(['age-keygen','--output',str(key)])
-        recipient = run(['age-keygen','--y',str(key)]).decode().strip()
-        payload = self.root/'production-backup'
-        payload.mkdir()
-        (self.root/'publish').mkdir()
-        (payload/'private.txt').write_text('synthetic-private-content')
-        write_json(payload/'backup-report.json',main.base_report())
-        with patch.dict(os.environ,{'BACKUP_AGE_RECIPIENT':recipient}):
-            main.seal(self.root)
-        encrypted = self.root/'publish/production-backup.tar.gz.age'
-        verify_checksums(self.root/'publish')
-        out = self.root/'owner-decrypted.tgz'
-        run(['age','-d','-i',str(key),'-o',str(out),str(encrypted)])
-        restored = extract_archive(out,self.root/'owner-extracted')
-        self.assertEqual((restored/'private.txt').read_text(),'synthetic-private-content')
-        self.assertFalse((self.root/'keys/ephemeral-test-identity.txt').exists())
-        wrong = self.root/'wrong.txt'
-        run(['age-keygen','-o',str(wrong)])
-        self.assert_failure(lambda: run(['age','-d','-i',str(wrong),str(encrypted)]))
-        encrypted.write_bytes(encrypted.read_bytes()[:-1] + b'X')
-        self.assert_failure(lambda: verify_checksums(self.root/'publish'))
-
-
-class WorkflowContracts(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.workflow = yaml.load((REPO/'.github/workflows/supabase-production-backup.yml').read_text(),Loader=yaml.BaseLoader)
-
-    def test_only_manual_main_and_single_global_lock(self):
-        self.assertEqual(set(self.workflow['on']),{'workflow_dispatch'})
-        self.assertEqual(self.workflow['concurrency']['cancel-in-progress'],'false')
-        for job in self.workflow['jobs'].values():
-            self.assertIn("github.ref == 'refs/heads/main'",job['if'])
-            self.assertIn('timeout-minutes',job)
-            self.assertEqual(job['runs-on'],'ubuntu-24.04')
-
-    def test_restore_secret_isolation_and_no_deploy(self):
-        restore = self.workflow['jobs']['restore-rehearsal']
-        text = json.dumps(restore)
-        self.assertNotIn('secrets.SUPABASE',text)
-        self.assertEqual(restore['environment'],'backup-rehearsal')
-        self.assertIn('secrets.BACKUP_AGE_IDENTITY',text)
-        self.assertEqual(self.workflow['permissions'],{'contents':'read'})
-        self.assertEqual(restore['permissions'],{'contents':'read','actions':'read'})
-        for value in ['db push','apply_migration','render deploy','pull_request_target','secrets: inherit']:
-            self.assertNotIn(value,(REPO/'.github/workflows/supabase-production-backup.yml').read_text())
-
-    def test_actions_pinned_cleanup_and_upload_scope(self):
-        for job in self.workflow['jobs'].values():
-            last = job['steps'][-1]
-            self.assertEqual(last['if'],'always()')
-            self.assertIn('cleanup.py',last['run'])
-            for step in job['steps']:
-                if 'uses' in step:
-                    self.assertRegex(step['uses'],r'@[0-9a-f]{40}$')
-                if 'upload-artifact@' in step.get('uses',''):
-                    self.assertIn('publish',step['with']['path'])
-                    self.assertNotIn('production-backup/',step['with']['path'])
-                    self.assertEqual(step['with']['retention-days'],'14')
-
-    def test_no_shell_execution_or_production_rehearsal_ports(self):
-        text = (REPO/'scripts/production_backup/main.py').read_text()
-        self.assertNotIn('shell=True',text)
-        self.assertIn("'--network','none'",text)
-        self.assertNotIn("'--publish'",text)
-        self.assertNotIn('DROP ',text)
-        self.assertNotIn('ALTER SYSTEM',text)
+    def test_workflows_allow_synthetic_only_and_never_publish_artifacts(self):
+        directory = REPO / '.github/workflows'
+        manual = (directory / 'supabase-production-backup.yml').read_text()
+        ci = (directory / 'supabase-backup-ci.yml').read_text()
+        self.assertIn('workflow_dispatch:', manual)
+        self.assertIn('uses: ./.github/workflows/supabase-backup-ci.yml', manual)
+        self.assertIn('workflow_call:', ci)
+        self.assertIn('run: python tests/production_backup/fixture_roundtrip.py', ci)
+        for forbidden in ('upload-artifact', 'download-artifact', 'secrets.', 'secrets: inherit',
+                          'SUPABASE_DB_URL', '--live-r2', 'db push', 'apply_migration'):
+            self.assertNotIn(forbidden, manual + ci)
+        runner = (REPO / 'scripts/production_backup/main.py').read_text()
+        self.assertIn('GITHUB_ACTIONS_OPERATION_DISABLED', runner)
+        self.assertIn("'--network', 'none'", runner)
+        self.assertNotIn("'--publish'", runner)
 
 
 if __name__ == '__main__':
