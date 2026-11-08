@@ -4,7 +4,6 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
-import resource
 import shutil
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from uuid import uuid4
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'scripts/production_backup'))
 import main  # noqa: E402
-from common import IMAGE, PROCESS_ENV, Failure, private_scratch, run, verified_age  # noqa: E402
+from common import IMAGE, PROCESS_ENV, Failure, private_scratch, protect_process, run, verified_age  # noqa: E402
 from r2 import R2  # noqa: E402
 from r2_fixture import local_r2  # noqa: E402
 
@@ -249,8 +248,7 @@ if __name__ == '__main__':
     parser.add_argument('--age-dir', type=Path)
     parser.add_argument('--age-sha256')
     parser.add_argument('--age-keygen-sha256')
-    os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    protect_process()
     try:
         fixture_roundtrip(parser.parse_args())
     except Failure as error:

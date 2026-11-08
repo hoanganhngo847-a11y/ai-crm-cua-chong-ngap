@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 import re
+import resource
 import shutil
+import signal
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -23,6 +25,17 @@ class Failure(Exception):
     def __init__(self, code, status='FAIL'):
         super().__init__(code)
         self.code, self.status = code, status
+
+
+def protect_process():
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+    def interrupted(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGHUP, interrupted)
+    signal.signal(signal.SIGTERM, interrupted)
 
 
 def digest(path):

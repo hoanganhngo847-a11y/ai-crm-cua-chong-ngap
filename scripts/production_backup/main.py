@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import resource
 import shutil
 import sys
 import tarfile
@@ -17,7 +16,7 @@ import time
 from uuid import uuid4
 
 from common import (GIB, IMAGE, PROJECT, REPO, Failure, age_recipient, checksums, db_environment, digest,
-                    extract_archive, load_json, private_scratch, run, verified_age, write_json)
+                    extract_archive, load_json, private_scratch, protect_process, run, verified_age, write_json)
 from inventory import database_inventory, ident, inventory, role_inventory
 from r2 import R2, SOURCE_PROJECTS, hidden, load_receipt, new_key, validate_receipt
 
@@ -160,7 +159,8 @@ def export_database(payload, open_source, client, expected_role):
 
     if not all((db / name).is_file() and (db / name).stat().st_size for name in DB_FILES):
         raise Failure('INCOMPLETE_DATABASE_EXPORT')
-    database_toc(client('pg_restore', ['--list', str(db / 'schema.dump')]).decode())
+    # The listing omits database entries unless --create is requested.
+    database_toc(client('pg_restore', ['--list', '--create', str(db / 'schema.dump')]).decode())
     toc = client('pg_restore', ['--list', str(db / 'data.dump')])
     physical_tables = sum(r['kind'] == 'r' and not r['extension_member'] for r in relations)
     if len(re.findall(rb'(?m)^\d+; \d+ \d+ TABLE DATA ', toc)) != physical_tables:
@@ -305,7 +305,7 @@ def restore_payload(payload, work, verify_fixture=None):
         data = dump_dir + 'data.dump'
         pg_restore = ['docker', 'exec', '--user', 'postgres', container, 'pg_restore', '--exit-on-error',
                       '--host=/tmp', '--username=' + admin]
-        toc = database_toc(run([*pg_restore, '--list', schema]).decode())
+        toc = database_toc(run([*pg_restore, '--list', '--create', schema]).decode())
         toc_path = work / 'database.toc'
         toc_path.write_text(toc)
         toc_path.chmod(0o644)
@@ -379,8 +379,7 @@ def main():
     publish.add_argument('--ciphertext', required=True, type=Path)
     restore.add_argument('--identity', required=True, type=Path)
     args = parser.parse_args()
-    os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    protect_process()
     try:
         if os.environ.get('GITHUB_ACTIONS', '').lower() == 'true':
             raise Failure('GITHUB_ACTIONS_OPERATION_DISABLED', 'BLOCKED')
