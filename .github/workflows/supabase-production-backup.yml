@@ -1,0 +1,15 @@
+name: Supabase Backup Rehearsal (synthetic only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-backup-rehearsal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  synthetic-rehearsal:
+    uses: ./.github/workflows/supabase-backup-ci.yml
