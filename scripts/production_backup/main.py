@@ -310,9 +310,10 @@ def restore_payload(payload, work, verify_fixture=None):
         toc_path.write_text(toc)
         toc_path.chmod(0o644)
         run(['docker', 'cp', str(toc_path), container + ':/tmp/database.toc'])
-        # This replaces only the empty postgres DB of the disposable local container.
-        run([*pg_restore, '--create', '--clean', '--if-exists', '--dbname=template1',
-             '--use-list=/tmp/database.toc', schema])
+        # This cluster was created for this run. Its empty postgres DB may
+        # already have a pg_cron worker session even with job dispatch off.
+        run([*psql(container, admin, 'template1'), '--command=DROP DATABASE postgres WITH (FORCE)'])
+        run([*pg_restore, '--create', '--dbname=template1', '--use-list=/tmp/database.toc', schema])
         restore = [*pg_restore, '--single-transaction', '--dbname=postgres']
         run([*restore, '--section=pre-data', schema])
         run([*restore, data])
