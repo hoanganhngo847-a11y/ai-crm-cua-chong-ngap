@@ -106,16 +106,21 @@ def fixture_source():
     main.check_local_docker()
     run_id = uuid4().hex
     name = 'crm-backup-fixture-' + run_id
-    script = ('initdb -D /tmp/fixture-source -U fixture_admin --auth=trust --encoding=UTF8 '
+    password = uuid4().hex
+    script = ('umask 077; printf "%s\\n" "$1" >/tmp/fixture-password; '
+              'initdb -D /tmp/fixture-source -U fixture_admin --auth-local=trust '
+              '--auth-host=scram-sha-256 --pwfile=/tmp/fixture-password --encoding=UTF8 '
               '--locale=C --locale-provider=icu --icu-locale=en-US '
               '--lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8 >/tmp/initdb.log 2>&1; '
+              'printf "%s\\n" "host postgres fixture_admin all scram-sha-256" >>/tmp/fixture-source/pg_hba.conf; '
               'exec postgres -D /tmp/fixture-source -k /tmp -c listen_addresses=* '
               '-c shared_preload_libraries=pg_cron,pg_stat_statements,pg_net '
               '-c cron.database_name=postgres -c cron.launch_active_jobs=off -c pg_net.database_name=template1')
     try:
         container = synthetic_run(['docker', 'run', '--detach', '--pull=never', '--name', name,
                                    '--label', 'crm.fixture=' + run_id, '--publish', '127.0.0.1::5432',
-                                   '--user', 'postgres', '--entrypoint', 'sh', IMAGE, '-ceu', script]).decode().strip()
+                                   '--user', 'postgres', '--entrypoint', 'sh',
+                                   IMAGE, '-ceu', script, 'fixture', password]).decode().strip()
         for _ in range(60):
             try:
                 run(['docker', 'exec', container, 'pg_isready', '-h', '/tmp', '-U', ADMIN], timeout=5)
@@ -128,7 +133,7 @@ def fixture_source():
         match = re.fullmatch(r'127\.0\.0\.1:(\d+)', endpoint)
         if not match:
             raise Failure('SYNTHETIC_SOURCE_NOT_LOOPBACK')
-        env = dict(PGHOST='127.0.0.1', PGPORT=match[1], PGUSER=ADMIN, PGPASSWORD='synthetic',
+        env = dict(PGHOST='127.0.0.1', PGPORT=match[1], PGUSER=ADMIN, PGPASSWORD=password,
                    PGSSLMODE='disable', PGOPTIONS='-c default_transaction_read_only=on -c row_security=off')
         synthetic_run(main.psql(container, ADMIN, 'postgres'), input_bytes=FIXTURE_SQL.encode())
         remote_files = {}
@@ -152,7 +157,17 @@ def fixture_source():
                 Path(output).chmod(0o600)
             return result
 
-        yield lambda: main.connect(env), client
+        def open_source():
+            try:
+                return main.connect(env)
+            except Failure:
+                logs = subprocess.run(['docker', 'logs', '--tail=12', container], env=PROCESS_ENV,
+                                      capture_output=True, timeout=10, check=False)
+                detail = (logs.stdout + logs.stderr).decode(errors='replace').replace(password, '[fixture-password]')
+                print(detail[:6000], file=sys.stderr)
+                raise
+
+        yield open_source, client
     finally:
         try:
             label = run(['docker', 'inspect', '--format', '{{index .Config.Labels "crm.fixture"}}', name], timeout=10)
